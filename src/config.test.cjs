@@ -1,7 +1,7 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {validateConfig} = require('./config.cjs');
+const {validateConfig, loadConfig} = require('./config.cjs');
 const valid = require('../examples/colombo.json');
 
 test('configuration is explicit and cannot omit technical or owner requirements', () => {
@@ -23,4 +23,22 @@ test('configuration is explicit and cannot omit technical or owner requirements'
     assert.throws(() => validateConfig(config), /Invalid Clouseau/);
   }
   assert.equal(validateConfig({...valid, deployment: null}).deployment, null);
+});
+
+test('trusted configuration loading validates files and rejects missing or malformed input', () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-config-'));
+  try {
+    const filename = path.join(directory, 'config.json');
+    fs.writeFileSync(filename, JSON.stringify(valid));
+    assert.deepEqual(loadConfig(filename), valid);
+    assert.throws(() => loadConfig(), /trusted repository configuration/);
+    assert.throws(() => loadConfig(path.join(directory, 'missing.json')), /ENOENT/);
+    fs.writeFileSync(filename, 'invalid');
+    assert.throws(() => loadConfig(filename), SyntaxError);
+    fs.writeFileSync(filename, '{}');
+    assert.throws(() => loadConfig(filename), /Invalid Clouseau/);
+  } finally { fs.rmSync(directory, {recursive: true}); }
 });

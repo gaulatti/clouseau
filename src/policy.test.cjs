@@ -342,3 +342,125 @@ test('consumer configuration controls the branch, verification job, owner and de
   };
   assert.ok((await policy.technicalRun(f.github, repo, f.state.pr)).url);
 });
+
+test('assessment refuses missing identity, bot authors and incomplete precedent before provider use', async () => {
+  const originalKey = process.env.DEEPSEEK_API_KEY;
+  const originalNumber = process.env.PR_NUMBER;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+    process.env.PR_NUMBER = 'invalid';
+    await assert.rejects(assess({github: fixture().github, context: {...context, payload: {}}}), /PR number/);
+    process.env.PR_NUMBER = '8';
+    const provider = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(assessmentJson())}}]})});
+    assert.equal((await assess({github: fixture().github, context: {...context, payload: {}}, fetchImpl: provider})).decision, 'auto_approve');
+    for (const mutate of [
+      f => {f.state.pr.base.ref = 'other';},
+      f => {f.state.pr.user = bot;},
+      f => {f.state.files = [{...file, filename: '.github/contract.json'}];},
+      f => {f.github.rest.repos.getContent = async () => ({data: {}});},
+      f => {f.github.rest.repos.getContent = async () => ({data: {content: 'x', encoding: 'utf8'}});},
+      f => {f.github.graphql = async () => ({repository: {pullRequest: {closingIssuesReferences: {pageInfo: {hasNextPage: true}}}}});},
+      f => {f.state.pr.body = 'x'.repeat(160001);},
+    ]) {
+      const f = fixture(); mutate(f);
+      assert.notEqual((await assess({github: f.github, context, fetchImpl: () => assert.fail('provider must not run')})).decision, 'auto_approve');
+    }
+    for (const fetchImpl of [async () => {throw new Error('fixture network failure');}, async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: 'invalid'}}]})}), async () => ({ok: true, json: async () => ({})})]) {
+      assert.equal((await assess({github: fixture().github, context, fetchImpl})).decision, 'second_opinion');
+    }
+    const f = fixture({files: [{...file, status: 'added'}]});
+    assert.equal((await assess({github: f.github, context, fetchImpl: provider})).decision, 'auto_approve');
+    assert.ok(scopeReason(Array.from({length: 6}, () => file), {...small, changed_files: 6}));
+    assert.ok(scopeReason([], {...small, changed_files: 0}));
+    assert.ok(scopeReason([{...file, previous_filename: '.github/workflows/previous.yml'}], small));
+    for (const raw of [null, {...assessmentJson(), reason: ''}, {...assessmentJson(), reason: 'x'.repeat(2001)}]) assert.throws(() => assessmentResult(raw, SHA), /Invalid/);
+    assert.equal(assessmentResult(JSON.stringify(assessmentJson()), SHA).decision, 'auto_approve');
+  } finally {
+    if (originalKey === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = originalKey;
+    if (originalNumber === undefined) delete process.env.PR_NUMBER; else process.env.PR_NUMBER = originalNumber;
+  }
+});
+
+test('technical verification selects the newest matching PR run and refuses absent or failed jobs', async () => {
+  const f = fixture();
+  f.github.rest.actions.listWorkflowRuns = async () => ({data: {workflow_runs: [f.state.run, {...f.state.run, id: 23, pull_requests: [{number: 8}]}]}});
+  const jobs = f.github.rest.actions.listJobsForWorkflowRun;
+  f.github.rest.actions.listJobsForWorkflowRun = Object.assign(async args => {assert.equal(args.run_id, 23); return jobs(args);}, {endpointName: 'jobs'});
+  assert.ok((await technicalRun(f.github, repo, small)).url);
+  const absent = fixture({run: null}); assert.equal((await technicalRun(absent.github, repo, small)).pending, true);
+  f.state.jobs[0].conclusion = 'failure'; assert.ok((await technicalRun(f.github, repo, small)).failure);
+});
+
+test('human confirmation ignores pending, comment-only, anonymous and stale reviews', async () => {
+  const f = fixture({reviews: [
+    {state: 'COMMENTED', user: human}, {state: 'PENDING', user: human},
+    {state: 'APPROVED', commit_id: BASE, user: human},
+    {state: 'APPROVED', commit_id: SHA},
+  ], comments: [{body: `/approve-intent ${SHA}`}]});
+  assert.equal(await maintainerConfirmed(f.github, repo, small), false);
+});
+
+test('the gate refuses stale comments, changed revisions and withdrawn human confirmation', async () => {
+  for (const comment of [{user: human, body: `/approve-intent ${BASE}`}, {user: bot, body: `/approve-intent ${SHA}`}]) {
+    const f = fixture();
+    await assert.rejects(f.run({context: {...context, eventName: 'issue_comment', payload: {issue: {number: 8, pull_request: {}}, comment}}}));
+  }
+  const disabled = fixture(); disabled.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  await assert.rejects(disabled.run(), /auto-merge/);
+  const staleArm = fixture(); staleArm.state.pr.auto_merge = null;
+  staleArm.github.graphql = async () => ({});
+  await assert.rejects(staleArm.run(), /Auto-merge was not enabled/);
+  const blocked = fixture(); await assert.rejects(blocked.run({assessment: {...automatic, decision: 'blocked_technical', reason: 'fixture technical failure'}}), /fixture technical/);
+  const pending = fixture({run: null}); await assert.rejects(pending.run(), /Verification is pending/);
+  await assert.rejects(fixture().run({maxPolls: 0}), /Verification is pending/);
+  const changed = fixture();
+  let gets = 0;
+  changed.github.rest.pulls.get = async () => ({data: {...structuredClone(small), head: {...small.head, sha: ++gets === 4 ? BASE : SHA}}});
+  await assert.rejects(changed.run(), /PR changed before approval/);
+  const withdrawn = fixture({comments: [{user: human, body: `/approve-intent ${SHA}`}]});
+  let comments = 0;
+  withdrawn.github.rest.issues.listComments = Object.assign(async () => ({data: ++comments === 1 ? withdrawn.state.comments : []}), {endpointName: 'comments'});
+  await assert.rejects(withdrawn.run({assessment: {...automatic, decision: 'second_opinion'}}), /withdrawn/);
+  const mergeChanged = fixture();
+  const get = mergeChanged.github.rest.pulls.get;
+  mergeChanged.github.rest.pulls.get = async args => {
+    const result = await get(args);
+    if (mergeChanged.writes.some(write => write.args.conclusion === 'success')) result.data.auto_merge = null;
+    return result;
+  };
+  await assert.rejects(mergeChanged.run(), /Auto-merge was disabled/);
+});
+
+test('the default polling timer and environment assessment wait for the technical result', async t => {
+  const f = fixture(); f.state.run.status = 'in_progress';
+  const original = process.env.ASSESSMENT;
+  process.env.ASSESSMENT = JSON.stringify(automatic);
+  t.mock.method(global, 'setTimeout', callback => {f.state.run.status = 'completed'; callback(); return 0;});
+  try {await f.run({wait: undefined, assessment: undefined, maxPolls: 2, mergePolls: 0});}
+  finally {if (original === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = original;}
+  assert.ok(f.writes.some(write => write.name === 'review'));
+});
+
+test('merge handoff refuses advanced main, avoids duplicate deployments and skips non-deployment changes', async () => {
+  for (const mode of ['advanced', 'existing', 'docs']) {
+    const f = fixture(mode === 'docs' ? {files: [{...file, filename: 'README.md'}]} : {});
+    const get = f.github.rest.pulls.get;
+    f.github.rest.pulls.get = async args => {
+      if (f.writes.some(write => write.args.conclusion === 'success')) return {data: {...structuredClone(small), merged: true, merge_commit_sha: mode === 'advanced' ? SHA : BASE}};
+      return get(args);
+    };
+    if (mode === 'existing') f.github.rest.actions.listWorkflowRuns = async args => ({data: {workflow_runs: args.workflow_id === 'backend-deploy.yml' ? [{event: 'push'}] : [f.state.run]}});
+    if (mode === 'advanced') await assert.rejects(f.run(), /Main advanced/);
+    else await f.run();
+    assert.ok(!f.writes.some(write => write.name === 'dispatch'));
+  }
+});
+
+test('confirmed intent produces a technical review and repeated handoffs do not duplicate bot comments', async () => {
+  const confirmed = fixture({comments: [{user: human, body: `/approve-intent ${SHA}`}]});
+  await confirmed.run({assessment: {...automatic, decision: 'second_opinion'}});
+  assert.match(confirmed.writes.find(write => write.name === 'review').args.body, /confirmed by a maintainer/);
+  const repeated = fixture({comments: [{user: bot, body: `<!-- clouseau-intent:${SHA} -->`} ]});
+  await repeated.run({assessment: {...automatic, decision: 'second_opinion'}});
+  assert.ok(!repeated.writes.some(write => write.name === 'comment'));
+});

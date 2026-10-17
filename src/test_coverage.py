@@ -1,8 +1,13 @@
 import contextlib
 import copy
 import io
+import json
 from pathlib import Path
+import runpy
+import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from check_coverage import check
 
@@ -74,6 +79,30 @@ class CoverageGateTests(unittest.TestCase):
             self.assertEqual(check(value, 'application'), {'lines': [10, 10], 'branches': [4, 4]})
         with self.assertRaisesRegex(ValueError, 'No application source'):
             self.run_check(value)
+
+    def test_no_line_measurement_and_malformed_file_groups_fail(self):
+        with self.assertRaisesRegex(ValueError, 'No lines measured'):
+            self.run_check(report(lines=0, covered_lines=0))
+        value = report()
+        value['data'][0]['files'] = None
+        with self.assertRaisesRegex(ValueError, 'Per-file coverage is missing'):
+            self.run_check(value)
+
+    def test_cli_checks_reports_and_returns_nonzero_for_invalid_input(self):
+        script = str(Path(__file__).with_name('check_coverage.py'))
+        with tempfile.TemporaryDirectory() as directory:
+            filename = Path(directory, 'coverage.json')
+            filename.write_text(json.dumps(report()))
+            with patch.object(sys, 'argv', [script, str(filename), 'src']), contextlib.redirect_stdout(io.StringIO()):
+                runpy.run_path(script, run_name='__main__')
+            for args, contents in [([], '{}'), ([str(filename), 'src'], 'invalid'),
+                                   ([str(filename), 'src'], '{}'), ([str(filename), 'src'], '[]')]:
+                filename.write_text(contents)
+                with patch.object(sys, 'argv', [script, *args]), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as error:
+                    runpy.run_path(script, run_name='__main__')
+                self.assertEqual(error.exception.code, 1)
+            with patch.object(sys, 'argv', [script, str(filename.with_name('missing.json')), 'src']), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                runpy.run_path(script, run_name='__main__')
 
 
 if __name__ == "__main__":
