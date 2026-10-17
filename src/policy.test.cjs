@@ -363,7 +363,9 @@ test('assessment refuses missing identity, bot authors and incomplete precedent 
       f => {f.state.pr.body = 'x'.repeat(160001);},
     ]) {
       const f = fixture(); mutate(f);
-      assert.notEqual((await assess({github: f.github, context, fetchImpl: () => assert.fail('provider must not run')})).decision, 'auto_approve');
+      let providerCalls = 0;
+      assert.notEqual((await assess({github: f.github, context, fetchImpl: () => {providerCalls++; throw new Error('provider must not run');}})).decision, 'auto_approve');
+      assert.equal(providerCalls, 0);
     }
     for (const fetchImpl of [async () => {throw new Error('fixture network failure');}, async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: 'invalid'}}]})}), async () => ({ok: true, json: async () => ({})})]) {
       assert.equal((await assess({github: fixture().github, context, fetchImpl})).decision, 'second_opinion');

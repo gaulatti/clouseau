@@ -7,5 +7,8 @@ python3 -m coverage report
 node --experimental-test-coverage --test \
   --test-coverage-lines=100 --test-coverage-branches=100 \
   --test-coverage-include='src/**/*.cjs' \
-  --test-coverage-exclude='src/**/*.test.cjs' \
-  --import ./test/load-sources.cjs src/*.test.cjs
+  --test-coverage-include='src/**/*.js' \
+  --test-coverage-include='src/**/*.mjs' \
+  --test-coverage-exclude='src/**/*.test.*' \
+  --test-coverage-exclude='src/**/*.spec.*' \
+  --import ./test/load-sources.mjs src/*.test.cjs
