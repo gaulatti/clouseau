@@ -104,6 +104,44 @@ async function assess({github, context, fetchImpl = fetch}) {
   }
 }
 
+async function assessWhenReady({wait = sleep, maxPolls = 260, ...options}) {
+  for (let attempt = 0; attempt < maxPolls; attempt++) {
+    const result = await assess(options);
+    if (result.decision !== 'pending_technical') return result;
+    await wait(15000);
+  }
+  throw new Error('Verification did not finish before the assessment deadline');
+}
+
+async function requestReassessment({github, context, core, wait = sleep}) {
+  const repo = context.repo;
+  const pull_number = numberFor(context);
+  const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
+  const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
+  if (context.eventName === 'issue_comment' && context.payload.comment.body.trim() !== `/approve-intent ${pr.head.sha}`) {
+    throw new Error('Stale or malformed intent confirmation');
+  }
+  const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
+  if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
+  if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
+  const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
+    event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100});
+  const runs = data.workflow_runs.filter(run => run.event === 'pull_request_target' && run.head_sha === pr.head.sha &&
+    (run.pull_requests.some(pull => pull.number === pull_number) ||
+      (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
+  runs.sort((a, b) => b.id - a.id);
+  if (!runs.length) throw new Error('No trusted PR metadata run exists for this revision');
+  // Let an already-finishing gate consume the new comment or finish before rerun.
+  await wait(5000);
+  const {data: latest} = await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id});
+  if (latest.status !== 'completed') {
+    core.info('The trusted review is still running and will read the current intent confirmation.');
+    return;
+  }
+  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
+  core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
+}
+
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
   const canConfirm = async user => {
     if (!user || user.type !== 'User') return false;
@@ -146,19 +184,19 @@ async function technicalRun(github, repo, pr) {
   return {url: run.html_url};
 }
 
-async function assertProtection(github, repo) {
+async function assertProtection(github, repo, policyJob = CHECK) {
   // Ruleset inspection needs metadata read, not an administrative credential.
   const {data: rules} = await github.request('GET /repos/{owner}/{repo}/rules/branches/{branch}',
     {...repo, branch: config.base_branch, per_page: 100});
   const checks = rules.find(rule => rule.type === 'required_status_checks')?.parameters;
   const reviews = rules.find(rule => rule.type === 'pull_request')?.parameters;
   if (!checks?.strict_required_status_checks_policy ||
-    [config.verification.job, CHECK].some(name => !checks.required_status_checks.some(check =>
+    [config.verification.job, policyJob].some(name => !checks.required_status_checks.some(check =>
       check.context === name && check.integration_id === 15368)) ||
     !reviews || reviews.required_approving_review_count < 1 ||
     !reviews.dismiss_stale_reviews_on_push || !reviews.require_last_push_approval ||
     !rules.some(rule => rule.type === 'deletion') || !rules.some(rule => rule.type === 'non_fast_forward')) {
-    throw new Error('Main must enforce verify, approval-policy, fresh approval, up-to-date checks, and protection from deletion/force pushes');
+    throw new Error(`Main must enforce ${config.verification.job}, ${policyJob}, fresh approval, up-to-date checks, and protection from deletion/force pushes`);
   }
 }
 
@@ -172,7 +210,7 @@ function needsDeployment(files) {
 }
 
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
-  wait = sleep, maxPolls = 180, mergePolls = 30}) {
+  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
   const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
@@ -194,8 +232,8 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   const {data: settings} = await github.rest.repos.get(repo);
   const {data: branch} = await github.rest.repos.getBranch({...repo, branch: config.base_branch});
   if (!settings.allow_auto_merge || !branch.protected) throw new Error('Repository auto-merge and main protection must be enabled');
-  await assertProtection(github, repo);
-  const {data: check} = await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
+  await assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK);
+  const {data: check} = await github.rest.checks.create({...repo, name: nativeGate ? 'clouseau-review' : CHECK, head_sha: pr.head.sha,
     status: 'in_progress', external_id: `clouseau:${pull_number}:${pr.head.sha}`,
     details_url: `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`});
   const finish = async (conclusion, summary) => github.rest.checks.update({...repo, check_run_id: check.id,
@@ -213,6 +251,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     const selfAuthored = pr.user?.login === 'github-actions[bot]';
     if (assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity') throw new Error(assessment.reason);
     const intentPending = assessment.decision === 'pending_technical';
+    if (nativeGate && intentPending) throw new Error('AI assessment must finish after successful verification before the native policy job can pass');
     const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr));
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) {
       if (!pr.assignees?.some(user => user.login === MANUAL_REVIEWER)) {
@@ -235,6 +274,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
         await github.rest.issues.createComment({...repo, issue_number: pull_number, body: `${marker}\n${summary}`});
       }
       core.info('Auto-merge is armed; waiting for a maintainer intent confirmation.');
+      if (nativeGate) throw new Error('A maintainer intent confirmation is required');
       return;
     }
     let technical;
@@ -270,36 +310,49 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     }
     await finish('success', `All required tests and coverage passed. Intent ${humanRequired ? 'confirmed by a maintainer' : 'supported by repository fit and evidence'}.\n\n${technical.url}`);
 
-    for (let attempt = 0; attempt < mergePolls; attempt++) {
-      pr = await getPr();
-      if (pr.merged) break;
-      if (pr.head.sha !== assessment.head_sha || !pr.auto_merge) throw new Error('Auto-merge was disabled or the PR changed');
-      await wait(4000);
-    }
-    if (!pr.merged) {
-      core.info('Approval and auto-merge are enabled; GitHub is waiting for branch requirements.');
-      return;
-    }
-    // GITHUB_TOKEN merges suppress push workflows; explicitly preserve CD.
-    if (needsDeployment(files)) {
-      const {data: main} = await github.rest.repos.getBranch({...repo, branch: config.base_branch});
-      if (main.commit.sha !== pr.merge_commit_sha) {
-        throw new Error('Main advanced before CD dispatch: verify deployment of the latest main revision');
-      }
-      const {data: deployments} = await github.rest.actions.listWorkflowRuns({...repo,
-        workflow_id: config.deployment.workflow, head_sha: pr.merge_commit_sha, per_page: 100});
-      if (!deployments.workflow_runs.some(run => ['push', 'workflow_dispatch'].includes(run.event))) {
-        await github.rest.actions.createWorkflowDispatch({...repo, workflow_id: config.deployment.workflow, ref: config.base_branch});
-      }
-      core.info(`Merged ${pr.merge_commit_sha}; deployment workflow requested. Deployment health is a separate result.`);
-    }
+    if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
   } catch (error) {
     await finish('failure', error.message);
     throw error;
   }
 }
 
-return {assess, gate, scopeReason, assessmentResult, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
+async function finalize({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
+  wait = sleep, mergePolls = 75, pr, files}) {
+  const repo = context.repo;
+  const pull_number = numberFor(context);
+  const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+  if (!pr) pr = await getPr();
+  if (assessment.number !== pull_number || pr.head.sha !== assessment.head_sha || pr.base.ref !== config.base_branch) {
+    throw new Error('PR changed before merge finalization');
+  }
+  for (let attempt = 0; attempt < mergePolls; attempt++) {
+    pr = await getPr();
+    if (pr.merged) break;
+    if (pr.head.sha !== assessment.head_sha || !pr.auto_merge) throw new Error('Auto-merge was disabled or the PR changed');
+    await wait(4000);
+  }
+  if (!pr.merged) {
+    core.info('Approval and auto-merge are enabled; GitHub is waiting for branch requirements.');
+    return;
+  }
+  // GITHUB_TOKEN merges suppress push workflows; explicitly preserve CD.
+  if (!files) files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
+  if (needsDeployment(files)) {
+    const {data: main} = await github.rest.repos.getBranch({...repo, branch: config.base_branch});
+    if (main.commit.sha !== pr.merge_commit_sha) {
+      throw new Error('Main advanced before CD dispatch: verify deployment of the latest main revision');
+    }
+    const {data: deployments} = await github.rest.actions.listWorkflowRuns({...repo,
+      workflow_id: config.deployment.workflow, head_sha: pr.merge_commit_sha, per_page: 100});
+    if (!deployments.workflow_runs.some(run => ['push', 'workflow_dispatch'].includes(run.event))) {
+      await github.rest.actions.createWorkflowDispatch({...repo, workflow_id: config.deployment.workflow, ref: config.base_branch});
+    }
+    core.info(`Merged ${pr.merge_commit_sha}; deployment workflow requested. Deployment health is a separate result.`);
+  }
+}
+
+return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
 
 }
 

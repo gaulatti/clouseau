@@ -2,8 +2,14 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, assess, gate, check-provider, or evaluate-review
+    description: test, coverage, assess, gate, check-provider, evaluate-review, request-reassessment, or finalize
     required: true
+  wait-for-verification:
+    description: Keep the read-only assessment pending until real PR verification completes
+    default: 'true'
+  native-gate:
+    description: Require the native approve-and-merge job; finalize merge in a separate job
+    default: 'true'
   config:
     description: Trusted repository configuration path (assess and gate)
     default: .github/clouseau.json
@@ -20,7 +26,7 @@ inputs:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
   provider-key:
-    description: DeepSeek API key; supply only to assess, check-provider, or evaluate-review
+    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, request-reassessment, or finalize
     default: ''
   github-token:
     description: Caller-scoped GitHub token; permissions belong to the calling job
@@ -38,7 +44,7 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|assess|gate|check-provider|evaluate-review) ;;
+          test|coverage|assess|gate|check-provider|evaluate-review|request-reassessment|finalize) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
     - name: Test approval policy
@@ -67,6 +73,7 @@ runs:
         CLOUSEAU_CONFIG: ${{ inputs.config }}
         DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
         PR_NUMBER: ${{ inputs.pull-request }}
+        CLOUSEAU_WAIT_FOR_VERIFICATION: ${{ inputs.wait-for-verification }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -74,7 +81,8 @@ runs:
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
-          core.setOutput('assessment', JSON.stringify(await policy.assess({github, context})));
+          const assess = process.env.CLOUSEAU_WAIT_FOR_VERIFICATION === 'true' ? policy.assessWhenReady : policy.assess;
+          core.setOutput('assessment', JSON.stringify(await assess({github, context})));
     - name: Approve and ensure auto-merge
       if: inputs.operation == 'gate'
       uses: actions/github-script@v7
@@ -83,6 +91,7 @@ runs:
         CLOUSEAU_CONFIG: ${{ inputs.config }}
         PR_NUMBER: ${{ inputs.pull-request }}
         ASSESSMENT: ${{ inputs.assessment }}
+        CLOUSEAU_NATIVE_GATE: ${{ inputs.native-gate }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -90,7 +99,7 @@ runs:
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
-          await policy.gate({github, context, core});
+          await policy.gate({github, context, core, nativeGate: process.env.CLOUSEAU_NATIVE_GATE === 'true'});
     - name: Check DeepSeek provider
       if: inputs.operation == 'check-provider'
       uses: actions/github-script@v7
@@ -110,3 +119,32 @@ runs:
       env:
         DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
       run: node test/evaluate-review.cjs
+    - name: Request trusted metadata reassessment
+      if: inputs.operation == 'request-reassessment'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        PR_NUMBER: ${{ inputs.pull-request }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          await require(path.join(root, 'src/policy.cjs')).createPolicy(config).requestReassessment({github, context, core});
+    - name: Finalize merged revision and preserve deployment handoff
+      if: inputs.operation == 'finalize'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        PR_NUMBER: ${{ inputs.pull-request }}
+        ASSESSMENT: ${{ inputs.assessment }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          await require(path.join(root, 'src/policy.cjs')).createPolicy(config).finalize({github, context, core});

@@ -532,3 +532,128 @@ test('confirmed intent produces a technical review and repeated handoffs do not 
   await repeated.run({assessment: {...automatic, decision: 'second_opinion'}});
   assert.ok(!repeated.writes.some(write => write.name === 'comment'));
 });
+
+test('read-only assessment waits for real technical evidence and never approves an unfinished run', async t => {
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const provider = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(assessmentJson())}}]})});
+  try {
+    const f = fixture(); f.state.run.status = 'in_progress';
+    let waits = 0;
+    const result = await policy.assessWhenReady({github: f.github, context, fetchImpl: provider, maxPolls: 2,
+      wait: async ms => {assert.equal(ms, 15000); waits++; f.state.run.status = 'completed';}});
+    assert.equal(result.decision, 'auto_approve'); assert.equal(waits, 1);
+    await assert.rejects(policy.assessWhenReady({github: fixture().github, context, maxPolls: 0}), /deadline/);
+    const pending = fixture(); pending.state.run.status = 'in_progress';
+    await assert.rejects(policy.assessWhenReady({github: pending.github, context, maxPolls: 1, wait: async () => {}}), /deadline/);
+    const timed = fixture(); timed.state.run.status = 'in_progress';
+    t.mock.method(global, 'setTimeout', callback => {timed.state.run.status = 'completed'; callback(); return 0;});
+    assert.equal((await policy.assessWhenReady({github: timed.github, context, fetchImpl: provider})).decision, 'auto_approve');
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
+function nativeFixture(overrides) {
+  const f = fixture(overrides);
+  const request = f.github.request;
+  f.github.request = async (route, args) => {
+    if (route.startsWith('POST')) {f.writes.push({name: 'rerun', args}); return {};}
+    const result = await request(route, args);
+    result.data[0].parameters.required_status_checks[1].context = 'approve-and-merge';
+    return result;
+  };
+  return f;
+}
+
+test('native policy result fails on missing intent, pending assessment and integrity concerns', async () => {
+  for (const decision of ['second_opinion', 'pending_technical', 'blocked_integrity']) {
+    const f = nativeFixture();
+    await assert.rejects(f.run({nativeGate: true, assessment: {...automatic, decision, reason: 'test evidence was bypassed'}}));
+    assert.equal(f.writes.some(w => w.name === 'review'), false);
+    assert.ok(f.writes.some(w => w.name === 'updateCheck' && w.args.conclusion === 'failure'));
+  }
+  const wrongProtection = fixture();
+  await assert.rejects(wrongProtection.run({nativeGate: true}), /approve-and-merge/);
+});
+
+test('native policy success requires completed evidence and finishes before merge finalization', async () => {
+  for (const confirmed of [false, true]) {
+    const f = nativeFixture(confirmed ? {comments: [{user: human, body: `/approve-intent ${SHA}`}]} : {});
+    await f.run({nativeGate: true, assessment: {...automatic, decision: confirmed ? 'second_opinion' : 'auto_approve'}});
+    assert.equal(f.writes.find(w => w.name === 'createCheck').args.name, 'clouseau-review');
+    assert.ok(f.writes.some(w => w.name === 'review'));
+    assert.ok(f.writes.some(w => w.args.conclusion === 'success'));
+    assert.equal(f.writes.some(w => w.name === 'dispatch'), false);
+  }
+});
+
+function reassessmentFixture() {
+  const f = nativeFixture();
+  f.state.run.event = 'pull_request_target';
+  f.github.rest.actions.getWorkflowRun = async args => {
+    assert.equal(args.run_id, 22); return {data: f.state.run};
+  };
+  return f;
+}
+const commentTrigger = () => ({...context, eventName: 'issue_comment', payload: {
+  issue: {number: 8, pull_request: {}}, comment: {user: human, body: `/approve-intent ${SHA}`},
+}});
+
+test('intent comment reruns only the trusted metadata workflow for the exact revision', async () => {
+  const f = reassessmentFixture();
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info() {}}, wait: async () => {}});
+  assert.deepEqual(f.writes.filter(w => w.name === 'rerun').map(w => w.args.run_id), [22]);
+  assert.equal(f.writes.some(w => w.name === 'dispatch' || w.name === 'review'), false);
+  const manual = reassessmentFixture();
+  await policy.requestReassessment({github: manual.github, context: {...context, actor: human.login, eventName: 'workflow_dispatch'}, core: {info() {}}, wait: async () => {}});
+  assert.ok(manual.writes.some(w => w.name === 'rerun'));
+});
+
+test('reassessment rejects unauthorized, stale, unrelated and missing metadata runs', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  for (const mutate of [
+    (f, c) => {c.payload.comment.body = `/approve-intent ${BASE}`;},
+    f => {f.state.permission = 'read';},
+    (f, c) => {c.payload.comment.user = bot;},
+    f => {f.state.pr.state = 'closed';},
+    f => {f.state.pr.draft = true;},
+    f => {f.state.pr.base.ref = 'other';},
+    f => {f.state.run.event = 'pull_request';},
+    f => {f.state.run.head_sha = BASE;},
+    f => {f.state.run.head_repository = undefined; f.state.run.head_branch = 'other';},
+  ]) {
+    const f = reassessmentFixture(); const c = commentTrigger(); mutate(f, c);
+    await assert.rejects(policy.requestReassessment({github: f.github, context: c, core: {info() {}}, wait: async () => {}}));
+    assert.equal(f.writes.length, 0);
+  }
+});
+
+test('an active metadata run consumes confirmation without duplicating work', async t => {
+  const f = reassessmentFixture(); f.state.run.status = 'in_progress';
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  t.mock.method(global, 'setTimeout', callback => {callback(); return 0;});
+  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info() {} }});
+  assert.equal(f.writes.length, 0);
+  f.state.run.status = 'completed'; f.state.run.pull_requests = [{number: 8}];
+  f.github.rest.actions.listWorkflowRuns = async () => ({data: {workflow_runs: [{...f.state.run, id: 21}, f.state.run]}});
+  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info() {}}, wait: async () => {}});
+  assert.equal(f.writes.find(w => w.name === 'rerun').args.run_id, 22);
+});
+
+test('separate finalization validates revision and dispatches CD only for the merged main head', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  for (const changed of ['number', 'head', 'base']) {
+    const f = fixture(); const assessment = {...automatic};
+    if (changed === 'number') assessment.number = 9;
+    if (changed === 'head') f.state.pr.head.sha = BASE;
+    if (changed === 'base') f.state.pr.base.ref = 'other';
+    await assert.rejects(policy.finalize({github: f.github, context, core: {info() {}}, assessment}), /changed/);
+    assert.equal(f.writes.length, 0);
+  }
+  const f = fixture(); f.state.pr.merged = true; f.state.pr.merge_commit_sha = BASE;
+  const original = process.env.ASSESSMENT; process.env.ASSESSMENT = JSON.stringify(automatic);
+  try {await policy.finalize({github: f.github, context, core: {info() {} }});}
+  finally {if (original === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = original;}
+  assert.ok(f.writes.some(w => w.name === 'dispatch' && w.args.workflow_id === 'backend-deploy.yml'));
+});

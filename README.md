@@ -24,10 +24,12 @@ consumer's privileged approval job. See `examples/colombo.json` for configuratio
 | --- | --- | --- |
 | `test` | none | Run Clouseau's Python and Node regression suites |
 | `coverage` | `coverage-report`, `source-directory` | Require exact, nonempty 100% application line and branch coverage in LLVM JSON |
-| `assess` | `config`, optional `pull-request`, `provider-key` | Read-only intent assessment; emits `assessment` JSON |
+| `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
+| `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
+| `finalize` | `config`, `assessment` | Wait for GitHub auto-merge after the required native gate finishes, then preserve the existing CD handoff |
 
 For example, a caller's coverage step supplies:
 
@@ -72,8 +74,8 @@ contract remain protected. Their changes still receive an AI integrity assessmen
 and require explicit owner confirmation.
 
 The controller requires active effective base-branch rules: strict required
-checks for the configured verification job and `approval-policy` from GitHub
-Actions, a fresh approving review, no deletion, and no force pushes. The installing
+checks for the configured verification job and native `approve-and-merge` job
+from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
 administrator must also verify no bypass actors. Repository auto-merge and Actions
 approving reviews must be enabled. Runtime tokens do not get administration access.
 
@@ -87,8 +89,27 @@ First-time fork workflow authorization remains GitHub's responsibility.
 The consumer must retain PR, metadata-only target, comment, and manual workflow
 entry points and PR-level concurrency. The controller validates the exact latest
 PR-event run, revision, verification job, and named steps from configuration.
-If it waits for technical verification, it dispatches the consumer's configured
-workflow again to perform assessment with a separate read-only credential context.
+The read-only `assess` job waits for the PR verification run to finish before
+calling AI. Allow 70 minutes for this job when verification can take 60 minutes.
+The separate native job named `approve-and-merge` calls `gate`; it must run on
+`pull_request_target` and fail if assessment fails, intent is missing, integrity
+is rejected, or technical evidence is incomplete. Use `always()` with `needs`
+so a failed assessment cannot silently skip the required gate. In other event
+contexts, use a different job name to avoid a skipped duplicate required check.
+The `native-gate` and `wait-for-verification` action inputs default to `true`.
+
+The informational `clouseau-review` API check preserves detailed reasons, but
+GitHub's required result is the actual native job. A custom API check created by
+`GITHUB_TOKEN` is insufficient for this flow. Comment/manual handlers call
+`request-reassessment` with actions write and contents/pull-requests read access;
+they rerun the current revision's existing `pull_request_target` run. Its test job
+is skipped, so confirming intent does not rebuild the container. The handler
+validates maintainer permission and exact comment SHA before requesting a rerun.
+
+Run `finalize` in a separate job after the native gate succeeds, with actions
+write and contents/pull-requests read access and no provider key. Auto-merge must
+wait for the required gate job to finish, so deployment handoff cannot run inside
+that gate. A provider diagnostic remains read-only and never approves a PR.
 
 `deployment` is either `null` or an explicit workflow and path list. For a bot
 merge touching those paths, Clouseau dispatches that existing workflow because
