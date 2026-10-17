@@ -16,17 +16,7 @@
   "manual_reviewer": "gaulatti",
   "repository_policy": ".github/clouseau.md",
   "readme": "README.md",
-  "sensitive_paths": [
-    ".cargo/",
-    "Cargo.toml",
-    "Cargo.lock",
-    "vendor/",
-    "migrations/",
-    "scripts/",
-    "tests/",
-    "Dockerfile",
-    "compose.yaml"
-  ],
+  "sensitive_paths": [],
   "deployment": {
     "workflow": "backend-deploy.yml",
     "paths": [

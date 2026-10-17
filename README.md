@@ -26,6 +26,7 @@ consumer's privileged approval job. See `examples/colombo.json` for configuratio
 | `coverage` | `coverage-report`, `source-directory` | Require exact, nonempty 100% application line and branch coverage in LLVM JSON |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Read-only intent assessment; emits `assessment` JSON |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
+| `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
 
 For example, a caller's coverage step supplies:
@@ -55,9 +56,18 @@ The `assess` job needs actions/contents/pull-requests/issues read permissions an
 the repository's `DEEPSEEK_API_KEY`. `gate` needs contents/pull-requests/issues/
 checks/actions write permissions and must receive no provider key. Pass the
 assessment output between jobs. The action cannot elevate the caller's token.
-The shared model is `deepseek-flash`; small fixes are sent to it only after
-technical verification succeeds. Provider errors and incomplete evidence require
-a second opinion. No numerical confidence score grants approval.
+The shared model is `deepseek-flash`; changes are sent to it only after
+technical verification succeeds. It assesses repository fit and supported intent,
+including large test improvements. There is no file-count or line-count approval
+cutoff. New product decisions and unclear scope require the owner’s judgment. Provider errors and incomplete evidence require
+a second opinion. AI must also support test integrity with evidence about assertions
+and failure cases. Detected test fakery blocks approval, including after an intent
+confirmation. Coverage percentages alone cannot satisfy that assessment. No numerical confidence score grants approval.
+
+`sensitive_paths` lists additional paths the consumer explicitly protects with
+owner confirmation. The example leaves it empty; ordinary test, dependency,
+and infrastructure paths are assessed by AI rather than rejected by filename.
+Review controls and the repository-purpose contract remain protected.
 
 The controller requires active effective base-branch rules: strict required
 checks for the configured verification job and `approval-policy` from GitHub
@@ -109,3 +119,14 @@ CI also exercises the packaged composite action and verifies both passing and
 failing coverage reports. No provider credential is needed for regression tests.
 The new repository's wiki is not initialized; operational documentation lives
 here until a wiki is available.
+
+## Live model evaluations
+
+The `evaluate-review` operation calls the real provider with three committed
+synthetic review contexts. Maintenance must qualify, unrelated product scope
+must request an owner decision, and test-specific validation bypasses must block
+approval. A wrong or unavailable decision fails the evaluation. The GitHub and
+technical-readiness inputs are fixtures; these evaluations validate model judgment,
+not actual test execution or an end-to-end PR merge. Controller regression tests
+use simulated provider decisions separately. Run live evaluations only in a
+read-only diagnostic job with the provider key and no repository write token.
