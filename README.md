@@ -91,6 +91,20 @@ python3 -m unittest discover -s src -p 'test_*.py'
 node --test src/*.test.cjs
 ```
 
+Clouseau's own CI also requires exactly 100% line and branch coverage across
+all production Python and JavaScript modules. New source files are included
+even when no test imports them. Test code is outside the production scope;
+there are no exclusions for production failure paths or rounded thresholds.
+
+To run the same gate locally with Node 22:
+
+```sh
+python3 -m venv .venv
+source .venv/bin/activate
+python3 -m pip install -r requirements-test.txt
+./scripts/verify-coverage
+```
+
 CI also exercises the packaged composite action and verifies both passing and
 failing coverage reports. No provider credential is needed for regression tests.
 The new repository's wiki is not initialized; operational documentation lives

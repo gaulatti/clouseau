@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+python3 -m coverage run -m unittest discover -s src -p 'test_*.py'
+python3 -m coverage report
+node --experimental-test-coverage --test \
+  --test-coverage-lines=100 --test-coverage-branches=100 \
+  --test-coverage-include='src/**/*.cjs' \
+  --test-coverage-include='src/**/*.js' \
+  --test-coverage-include='src/**/*.mjs' \
+  --test-coverage-exclude='src/**/*.test.*' \
+  --test-coverage-exclude='src/**/*.spec.*' \
+  --import ./test/load-sources.mjs src/*.test.cjs
