@@ -1,0 +1,55 @@
+name: Clouseau CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Test approval policy
+        uses: ./
+        with:
+          operation: test
+      - name: Build coverage contract fixtures
+        shell: python
+        run: |
+          import json
+          from pathlib import Path
+          source = Path('work/application/main.rs').resolve()
+          source.parent.mkdir(parents=True, exist_ok=True)
+          source.write_text('fn main() {}\n')
+          for name, covered in [('full', 2), ('gap', 1)]:
+              report = {'type': 'llvm.coverage.json.export', 'data': [{'files': [{
+                  'filename': str(source), 'summary': {
+                      'lines': {'count': 2, 'covered': 2},
+                      'branches': {'count': 2, 'covered': covered}}}]}]}
+              Path(f'work/{name}.json').write_text(json.dumps(report))
+      - name: Accept complete application coverage
+        uses: ./
+        with:
+          operation: coverage
+          coverage-report: work/full.json
+          source-directory: work/application
+      - name: Reject a missing branch
+        id: gap
+        continue-on-error: true
+        uses: ./
+        with:
+          operation: coverage
+          coverage-report: work/gap.json
+          source-directory: work/application
+      - name: Verify rejection is enforced
+        env:
+          GAP_OUTCOME: ${{ steps.gap.outcome }}
+        run: test "$GAP_OUTCOME" = failure

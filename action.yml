@@ -1,0 +1,105 @@
+name: Clouseau
+description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
+inputs:
+  operation:
+    description: test, coverage, assess, gate, or check-provider
+    required: true
+  config:
+    description: Trusted repository configuration path (assess and gate)
+    default: .github/clouseau.json
+  coverage-report:
+    description: LLVM JSON coverage export path (coverage)
+    default: ''
+  source-directory:
+    description: Application source directory to measure (coverage)
+    default: ''
+  pull-request:
+    description: PR number for manual reassessment
+    default: ''
+  assessment:
+    description: Exact assessment JSON from the read-only assessment job (gate)
+    default: ''
+  provider-key:
+    description: DeepSeek API key; supply only to assess or check-provider
+    default: ''
+  github-token:
+    description: Caller-scoped GitHub token; permissions belong to the calling job
+    default: ${{ github.token }}
+outputs:
+  assessment:
+    description: Commit-bound intent decision from assess
+    value: ${{ steps.assess.outputs.assessment }}
+runs:
+  using: composite
+  steps:
+    - name: Validate Clouseau operation
+      shell: bash
+      env:
+        CLOUSEAU_OPERATION: ${{ inputs.operation }}
+      run: |
+        case "$CLOUSEAU_OPERATION" in
+          test|coverage|assess|gate|check-provider) ;;
+          *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
+        esac
+    - name: Test approval policy
+      if: inputs.operation == 'test'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        python3 -m unittest discover -s src -p 'test_*.py'
+        node --test src/*.test.cjs
+    - name: Enforce 100% line and branch coverage
+      if: inputs.operation == 'coverage'
+      shell: bash
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        COVERAGE_REPORT: ${{ inputs.coverage-report }}
+        SOURCE_DIRECTORY: ${{ inputs.source-directory }}
+      run: |
+        test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY"
+    - name: Assess repository intent
+      id: assess
+      if: inputs.operation == 'assess'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+        PR_NUMBER: ${{ inputs.pull-request }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
+          core.setOutput('assessment', JSON.stringify(await policy.assess({github, context})));
+    - name: Approve and ensure auto-merge
+      if: inputs.operation == 'gate'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        PR_NUMBER: ${{ inputs.pull-request }}
+        ASSESSMENT: ${{ inputs.assessment }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
+          await policy.gate({github, context, core});
+    - name: Check DeepSeek provider
+      if: inputs.operation == 'check-provider'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          await require(path.join(process.env.CLOUSEAU_ROOT, 'src/provider.cjs')).checkProvider();
+          core.info('DeepSeek authentication and structured output verified. No PR was approved or merged.');
