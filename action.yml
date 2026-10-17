@@ -20,7 +20,7 @@ inputs:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
   provider-key:
-    description: DeepSeek API key; supply only to assess or check-provider
+    description: DeepSeek API key; supply only to assess, check-provider, or evaluate-review
     default: ''
   github-token:
     description: Caller-scoped GitHub token; permissions belong to the calling job
