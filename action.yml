@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, assess, gate, or check-provider
+    description: test, coverage, assess, gate, check-provider, or evaluate-review
     required: true
   config:
     description: Trusted repository configuration path (assess and gate)
@@ -38,7 +38,7 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|assess|gate|check-provider) ;;
+          test|coverage|assess|gate|check-provider|evaluate-review) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
     - name: Test approval policy
@@ -103,3 +103,10 @@ runs:
           const path = require('node:path');
           await require(path.join(process.env.CLOUSEAU_ROOT, 'src/provider.cjs')).checkProvider();
           core.info('DeepSeek authentication and structured output verified. No PR was approved or merged.');
+    - name: Evaluate live review decisions
+      if: inputs.operation == 'evaluate-review'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+      run: node test/evaluate-review.cjs

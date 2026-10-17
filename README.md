@@ -26,6 +26,7 @@ consumer's privileged approval job. See `examples/colombo.json` for configuratio
 | `coverage` | `coverage-report`, `source-directory` | Require exact, nonempty 100% application line and branch coverage in LLVM JSON |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Read-only intent assessment; emits `assessment` JSON |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
+| `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
 
 For example, a caller's coverage step supplies:
@@ -118,3 +119,14 @@ CI also exercises the packaged composite action and verifies both passing and
 failing coverage reports. No provider credential is needed for regression tests.
 The new repository's wiki is not initialized; operational documentation lives
 here until a wiki is available.
+
+## Live model evaluations
+
+The `evaluate-review` operation calls the real provider with three committed
+synthetic review contexts. Maintenance must qualify, unrelated product scope
+must request an owner decision, and test-specific validation bypasses must block
+approval. A wrong or unavailable decision fails the evaluation. The GitHub and
+technical-readiness inputs are fixtures; these evaluations validate model judgment,
+not actual test execution or an end-to-end PR merge. Controller regression tests
+use simulated provider decisions separately. Run live evaluations only in a
+read-only diagnostic job with the provider key and no repository write token.
