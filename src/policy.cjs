@@ -20,7 +20,7 @@ function numberFor(context) {
 
 function scopeReason(files, pr) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
-  const sensitive = ['.github/ci/', '.github/clouseau.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
   if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }

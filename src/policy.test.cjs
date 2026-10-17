@@ -72,12 +72,12 @@ function fixture(overrides = {}) {
 
 test('repository fit is assessed for large maintenance and ordinary infrastructure changes', () => {
   assert.equal(scopeReason([file], small), null);
-  for (const filename of ['.github/workflows/backend-ci.yml', 'Cargo.toml', 'Cargo.lock',
+  for (const filename of ['.github/workflows/backend-deploy.yml', 'Cargo.toml', 'Cargo.lock',
     'migrations/new.sql', 'vendor/libunftp/src/lib.rs', 'tests/e2e.sh',
     'scripts/tenants-cli.sh', 'Dockerfile']) {
     assert.equal(scopeReason([{...file, filename}], small), null, filename);
   }
-  for (const filename of ['.github/ci/check_coverage.py', '.github/clouseau.json',
+  for (const filename of ['.github/workflows/backend-ci.yml', '.github/ci/check_coverage.py', '.github/clouseau.json',
     'test/fixtures/APPROVAL.md', 'AGENTS.md']) {
     assert.ok(scopeReason([{...file, filename}], small), filename);
   }
@@ -166,7 +166,7 @@ test('test fakery blocks approval even when a maintainer has confirmed intent', 
 });
 
 test('protected review changes still receive AI test assessment before owner confirmation', async () => {
-  const f = fixture({files: [{...file, filename: '.github/clouseau.json'}]});
+  const f = fixture({files: [{...file, filename: '.github/workflows/backend-ci.yml'}]});
   const old = process.env.DEEPSEEK_API_KEY;
   process.env.DEEPSEEK_API_KEY = 'fictional-key';
   let calls = 0;
