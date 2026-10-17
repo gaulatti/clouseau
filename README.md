@@ -56,7 +56,7 @@ messages, and tickets are untrusted evidence and never executed by the reviewer.
 
 The `assess` job needs actions/contents/pull-requests/issues read permissions and
 the repository's `DEEPSEEK_API_KEY`. `gate` needs contents/pull-requests/issues/
-checks/actions write permissions and must receive no provider key. Pass the
+actions write permissions and must receive no provider key. Pass the
 assessment output between jobs. The action cannot elevate the caller's token.
 The shared model is `deepseek-flash`; changes are sent to it only after
 technical verification succeeds. It assesses repository fit and supported intent,
@@ -98,9 +98,9 @@ so a failed assessment cannot silently skip the required gate. In other event
 contexts, use a different job name to avoid a skipped duplicate required check.
 The `native-gate` and `wait-for-verification` action inputs default to `true`.
 
-The informational `clouseau-review` API check preserves detailed reasons, but
-GitHub's required result is the actual native job. A custom API check created by
-`GITHUB_TOKEN` is insufficient for this flow. Comment/manual handlers call
+The native job summary preserves detailed reasons; no additional API check is
+created in native mode. A `GITHUB_TOKEN` API check can attach to another run's
+suite and is insufficient as the required approval result for this flow. Comment/manual handlers call
 `request-reassessment` with actions write and contents/pull-requests read access;
 they rerun the current revision's existing `pull_request_target` run. Its test job
 is skipped, so confirming intent does not rebuild the container. The handler

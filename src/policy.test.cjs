@@ -65,7 +65,10 @@ function fixture(overrides = {}) {
     return {repository: {pullRequest: {closingIssuesReferences: {nodes: [{number: 1, title: 'Fix naming', body: 'Restore contract'}], pageInfo: {hasNextPage: false}}}}};
   }};
   github.paginate = async (method, args) => (await method(args)).data;
-  const core = {info: () => {}};
+  const core = {info: () => {}, summary: {
+    addRaw(text) {writes.push({name: 'summary', text}); return this;},
+    async write() {},
+  }};
   const run = options => gate({github, context, core, assessment: automatic, wait: async () => {}, maxPolls: 1, mergePolls: 1, ...options});
   return {github, state, writes, run, fetches: () => fetches};
 }
@@ -570,7 +573,8 @@ test('native policy result fails on missing intent, pending assessment and integ
     const f = nativeFixture();
     await assert.rejects(f.run({nativeGate: true, assessment: {...automatic, decision, reason: 'test evidence was bypassed'}}));
     assert.equal(f.writes.some(w => w.name === 'review'), false);
-    assert.ok(f.writes.some(w => w.name === 'updateCheck' && w.args.conclusion === 'failure'));
+    assert.ok(f.writes.some(w => w.name === 'summary' && w.text.includes('Clouseau review: failure')));
+    assert.equal(f.writes.some(w => w.name === 'createCheck' || w.name === 'updateCheck'), false);
   }
   const wrongProtection = fixture();
   await assert.rejects(wrongProtection.run({nativeGate: true}), /approve-and-merge/);
@@ -580,9 +584,9 @@ test('native policy success requires completed evidence and finishes before merg
   for (const confirmed of [false, true]) {
     const f = nativeFixture(confirmed ? {comments: [{user: human, body: `/approve-intent ${SHA}`}]} : {});
     await f.run({nativeGate: true, assessment: {...automatic, decision: confirmed ? 'second_opinion' : 'auto_approve'}});
-    assert.equal(f.writes.find(w => w.name === 'createCheck').args.name, 'clouseau-review');
+    assert.equal(f.writes.some(w => w.name === 'createCheck' || w.name === 'updateCheck'), false);
     assert.ok(f.writes.some(w => w.name === 'review'));
-    assert.ok(f.writes.some(w => w.args.conclusion === 'success'));
+    assert.ok(f.writes.some(w => w.name === 'summary' && w.text.includes('Clouseau review: success')));
     assert.equal(f.writes.some(w => w.name === 'dispatch'), false);
   }
 });

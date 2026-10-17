@@ -233,11 +233,16 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   const {data: branch} = await github.rest.repos.getBranch({...repo, branch: config.base_branch});
   if (!settings.allow_auto_merge || !branch.protected) throw new Error('Repository auto-merge and main protection must be enabled');
   await assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK);
-  const {data: check} = await github.rest.checks.create({...repo, name: nativeGate ? 'clouseau-review' : CHECK, head_sha: pr.head.sha,
+  // The native job is the required check. Additional GITHUB_TOKEN API checks
+  // can attach to another run's suite; publish detail in this job's summary.
+  const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
     status: 'in_progress', external_id: `clouseau:${pull_number}:${pr.head.sha}`,
-    details_url: `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`});
-  const finish = async (conclusion, summary) => github.rest.checks.update({...repo, check_run_id: check.id,
-    status: 'completed', conclusion, output: {title: 'Clouseau approval policy', summary}});
+    details_url: `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`})).data;
+  const finish = async (conclusion, summary) => {
+    if (nativeGate) await core.summary.addRaw(`## Clouseau review: ${conclusion}\n\n${summary}\n`).write();
+    else await github.rest.checks.update({...repo, check_run_id: check.id,
+      status: 'completed', conclusion, output: {title: 'Clouseau approval policy', summary}});
+  };
 
   try {
     if (!pr.auto_merge) {
