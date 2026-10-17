@@ -67,7 +67,9 @@ confirmation. Coverage percentages alone cannot satisfy that assessment. No nume
 `sensitive_paths` lists additional paths the consumer explicitly protects with
 owner confirmation. The example leaves it empty; ordinary test, dependency,
 and infrastructure paths are assessed by AI rather than rejected by filename.
-Review controls and the repository-purpose contract remain protected.
+The configured verification workflow, review controls, and repository-purpose
+contract remain protected. Their changes still receive an AI integrity assessment
+and require explicit owner confirmation.
 
 The controller requires active effective base-branch rules: strict required
 checks for the configured verification job and `approval-policy` from GitHub
