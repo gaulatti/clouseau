@@ -55,9 +55,18 @@ The `assess` job needs actions/contents/pull-requests/issues read permissions an
 the repository's `DEEPSEEK_API_KEY`. `gate` needs contents/pull-requests/issues/
 checks/actions write permissions and must receive no provider key. Pass the
 assessment output between jobs. The action cannot elevate the caller's token.
-The shared model is `deepseek-flash`; small fixes are sent to it only after
-technical verification succeeds. Provider errors and incomplete evidence require
-a second opinion. No numerical confidence score grants approval.
+The shared model is `deepseek-flash`; changes are sent to it only after
+technical verification succeeds. It assesses repository fit and supported intent,
+including large test improvements. There is no file-count or line-count approval
+cutoff. New product decisions and unclear scope require the owner’s judgment. Provider errors and incomplete evidence require
+a second opinion. AI must also support test integrity with evidence about assertions
+and failure cases. Detected test fakery blocks approval, including after an intent
+confirmation. Coverage percentages alone cannot satisfy that assessment. No numerical confidence score grants approval.
+
+`sensitive_paths` lists additional paths the consumer explicitly protects with
+owner confirmation. The example leaves it empty; ordinary test, dependency,
+and infrastructure paths are assessed by AI rather than rejected by filename.
+Review controls and the repository-purpose contract remain protected.
 
 The controller requires active effective base-branch rules: strict required
 checks for the configured verification job and `approval-policy` from GitHub

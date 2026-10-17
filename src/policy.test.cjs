@@ -17,7 +17,7 @@ const small = {number: 8, node_id: 'PR_8', state: 'open', draft: false, changed_
   auto_merge: {enabled_by: {login: 'github-actions[bot]'}}};
 const automatic = {number: 8, head_sha: SHA, base_sha: BASE, decision: 'auto_approve', reason: 'Restores the existing naming contract.'};
 const assessmentJson = () => ({head_sha: SHA, decision: 'auto_approve', kind: 'bugfix',
-  fits_repository: true, scope_minimal: true, intent_supported: true, has_concerns: false, reason: automatic.reason});
+  fits_repository: true, scope_supported: true, intent_supported: true, changes_review_controls: false, test_integrity_supported: true, has_concerns: false, reason: automatic.reason});
 const bot = {login: 'github-actions[bot]', type: 'Bot'};
 const human = {login: 'maintainer', type: 'User'};
 
@@ -70,27 +70,35 @@ function fixture(overrides = {}) {
   return {github, state, writes, run, fetches: () => fetches};
 }
 
-test('small code fix qualifies for AI assessment; broad or privileged changes require a second opinion', () => {
+test('repository fit is assessed for large maintenance and ordinary infrastructure changes', () => {
   assert.equal(scopeReason([file], small), null);
-  for (const filename of ['.github/workflows/backend-ci.yml', '.github/ci/check_coverage.py',
-    'Cargo.toml', 'Cargo.lock', 'migrations/new.sql', 'vendor/libunftp/src/lib.rs',
-    'tests/e2e.sh', 'scripts/tenants-cli.sh', 'Dockerfile', 'AGENTS.md']) {
+  for (const filename of ['.github/workflows/backend-ci.yml', 'Cargo.toml', 'Cargo.lock',
+    'migrations/new.sql', 'vendor/libunftp/src/lib.rs', 'tests/e2e.sh',
+    'scripts/tenants-cli.sh', 'Dockerfile']) {
+    assert.equal(scopeReason([{...file, filename}], small), null, filename);
+  }
+  for (const filename of ['.github/ci/check_coverage.py', '.github/clouseau.json',
+    'test/fixtures/APPROVAL.md', 'AGENTS.md']) {
     assert.ok(scopeReason([{...file, filename}], small), filename);
   }
   assert.ok(scopeReason([file], {...small, changed_files: 2}));
-  assert.ok(scopeReason([file], {...small, additions: 201}));
+  assert.equal(scopeReason([file], {...small, additions: 20000}), null);
   assert.ok(scopeReason([{...file, patch: undefined}], small));
-  assert.ok(scopeReason([{...file, status: 'renamed'}], small));
+  assert.ok(scopeReason([{...file, status: 'binary'}], small));
+  for (const status of ['removed', 'renamed']) assert.equal(scopeReason([{...file, status}], small), null);
 });
 
 test('AI output must identify this revision and supply every positive evidence field', () => {
   assert.equal(assessmentResult(assessmentJson(), SHA).decision, 'auto_approve');
-  for (const field of ['fits_repository', 'scope_minimal', 'intent_supported']) {
+  for (const field of ['fits_repository', 'scope_supported', 'intent_supported', 'test_integrity_supported']) {
     const result = assessmentJson(); delete result[field];
     assert.equal(assessmentResult(result, SHA).decision, 'second_opinion');
   }
   assert.equal(assessmentResult({...assessmentJson(), has_concerns: true}, SHA).decision, 'second_opinion');
-  assert.equal(assessmentResult({...assessmentJson(), kind: 'feature'}, SHA).decision, 'second_opinion');
+  for (const kind of ['maintenance', 'feature']) assert.equal(assessmentResult({...assessmentJson(), kind}, SHA).decision, 'auto_approve');
+  assert.equal(assessmentResult({...assessmentJson(), kind: 'other'}, SHA).decision, 'second_opinion');
+  for (const changes_review_controls of [true, undefined]) assert.equal(assessmentResult({...assessmentJson(), changes_review_controls}, SHA).decision, 'second_opinion');
+  assert.equal(assessmentResult({...assessmentJson(), kind: 'feature', fits_repository: false}, SHA).decision, 'second_opinion');
   assert.throws(() => assessmentResult({...assessmentJson(), head_sha: BASE}, SHA));
   assert.throws(() => assessmentResult('not JSON', SHA));
 });
@@ -113,6 +121,64 @@ test('DeepSeek receives untrusted patches only as data and no tool capability', 
     for (const response of [{ok: false, status: 429}, {ok: true, json: async () => ({choices: [{finish_reason: 'length'}]})}]) {
       assert.equal((await assess({github, context, fetchImpl: async () => response})).decision, 'second_opinion');
     }
+  } finally {
+    if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
+  }
+});
+
+test('large coverage maintenance can be AI-approved and gated without a human override', async () => {
+  const f = fixture();
+  f.state.files = Array.from({length: 60}, (_, i) => ({...file, filename: `src/coverage_${i}.rs`}));
+  f.state.files[0] = {...f.state.files[0], status: 'renamed', previous_filename: 'src/previous.rs'};
+  f.state.pr.changed_files = 60;
+  f.state.pr.additions = 20000;
+  const originalContent = f.github.rest.repos.getContent;
+  const paths = [];
+  f.github.rest.repos.getContent = async args => {paths.push(args.path); return originalContent(args);};
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+    const assessment = await assess({github: f.github, context, fetchImpl: async (_, options) => {
+      const request = JSON.parse(options.body);
+      assert.match(request.messages[0].content, /File count, line count/);
+      assert.equal(JSON.parse(request.messages[1].content).patches.length, 60);
+      return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({...assessmentJson(), kind: 'maintenance', reason: 'Meaningful coverage preserves the upload contract.'})}}]})};
+    }});
+    assert.equal(assessment.decision, 'auto_approve');
+    assert.equal(paths[0], 'src/previous.rs');
+    await f.run({assessment});
+    assert.equal(f.writes.filter(write => write.name === 'review').length, 1);
+    assert.ok(f.writes.some(write => write.name === 'updateCheck' && write.args.conclusion === 'success'));
+    assert.equal(f.writes.some(write => write.name === 'assign'), false);
+  } finally {
+    if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
+  }
+});
+
+test('test fakery blocks approval even when a maintainer has confirmed intent', async () => {
+  const assessment = {...automatic, ...assessmentResult({...assessmentJson(), test_integrity_supported: false,
+    reason: 'The regression replaces the gateway with a stub and cannot detect broken persistence.'}, SHA)};
+  assert.equal(assessment.decision, 'blocked_integrity');
+  const f = fixture({comments: [{user: human, body: `/approve-intent ${SHA}`}], permission: 'admin'});
+  await assert.rejects(f.run({assessment}), /stub/);
+  assert.equal(f.writes.some(write => write.name === 'review'), false);
+  assert.ok(f.writes.some(write => write.name === 'updateCheck' && write.args.conclusion === 'failure'));
+});
+
+test('protected review changes still receive AI test assessment before owner confirmation', async () => {
+  const f = fixture({files: [{...file, filename: '.github/clouseau.json'}]});
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  let calls = 0;
+  try {
+    for (const test_integrity_supported of [true, false]) {
+      const assessment = await assess({github: f.github, context, fetchImpl: async () => {
+        calls++;
+        return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({...assessmentJson(), test_integrity_supported})}}]})};
+      }});
+      assert.equal(assessment.decision, test_integrity_supported ? 'second_opinion' : 'blocked_integrity');
+    }
+    assert.equal(calls, 2);
   } finally {
     if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
   }
@@ -182,10 +248,10 @@ test('a PR changed during CI cannot receive an approval', async () => {
   assert.ok(!f.writes.some(write => write.name === 'review'));
 });
 
-test('major changes arm auto-merge but stay action_required and ask once for a second opinion', async () => {
-  const f = fixture({files: [{...file, filename: '.github/workflows/backend-ci.yml'}]});
+test('AI-identified unsupported product scope waits for an owner decision', async () => {
+  const f = fixture();
   f.state.pr.auto_merge = null;
-  await f.run();
+  await f.run({assessment: {...automatic, decision: 'second_opinion', reason: 'Unrelated product capability lacks supported requirements.'}});
   assert.ok(f.writes.some(write => write.name === 'arm'));
   assert.ok(f.writes.some(write => write.args.conclusion === 'action_required'));
   assert.ok(f.writes.some(write => write.name === 'comment' && write.args.body.includes(`/approve-intent ${SHA}`)));
@@ -355,12 +421,12 @@ test('assessment refuses missing identity, bot authors and incomplete precedent 
     assert.equal((await assess({github: fixture().github, context: {...context, payload: {}}, fetchImpl: provider})).decision, 'auto_approve');
     for (const mutate of [
       f => {f.state.pr.base.ref = 'other';},
+      f => {f.state.pr.changed_files = 2;},
       f => {f.state.pr.user = bot;},
-      f => {f.state.files = [{...file, filename: '.github/contract.json'}];},
       f => {f.github.rest.repos.getContent = async () => ({data: {}});},
       f => {f.github.rest.repos.getContent = async () => ({data: {content: 'x', encoding: 'utf8'}});},
       f => {f.github.graphql = async () => ({repository: {pullRequest: {closingIssuesReferences: {pageInfo: {hasNextPage: true}}}}});},
-      f => {f.state.pr.body = 'x'.repeat(160001);},
+      f => {f.state.pr.body = 'x'.repeat(320001);},
     ]) {
       const f = fixture(); mutate(f);
       let providerCalls = 0;
@@ -372,9 +438,9 @@ test('assessment refuses missing identity, bot authors and incomplete precedent 
     }
     const f = fixture({files: [{...file, status: 'added'}]});
     assert.equal((await assess({github: f.github, context, fetchImpl: provider})).decision, 'auto_approve');
-    assert.ok(scopeReason(Array.from({length: 6}, () => file), {...small, changed_files: 6}));
+    assert.equal(scopeReason(Array.from({length: 60}, () => file), {...small, changed_files: 60}), null);
     assert.ok(scopeReason([], {...small, changed_files: 0}));
-    assert.ok(scopeReason([{...file, previous_filename: '.github/workflows/previous.yml'}], small));
+    assert.ok(scopeReason([{...file, previous_filename: '.github/ci/previous.cjs'}], small));
     for (const raw of [null, {...assessmentJson(), reason: ''}, {...assessmentJson(), reason: 'x'.repeat(2001)}]) assert.throws(() => assessmentResult(raw, SHA), /Invalid/);
     assert.equal(assessmentResult(JSON.stringify(assessmentJson()), SHA).decision, 'auto_approve');
   } finally {
