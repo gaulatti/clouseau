@@ -13,6 +13,12 @@ protected auto-merge. Humans decide genuine purpose and authority questions.
 Technical uncertainty goes to automated investigation and cannot be waived by
 an intent comment. Version 1 remains explicit compatibility for existing pins.
 
+The source example cites each changed file directly. Facts produce no approval
+score; positive binding grades still require trusted contract proof at the gate.
+The ledger retains every score, reason, reference and history entry while showing
+each cited immutable source line once. Oversized output still holds approval.
+Superseded metadata reviews are cancelled within their event and PR group.
+
 ## Ownership
 
 Clouseau contains the coverage checker, regression tests, PR intent review rules,

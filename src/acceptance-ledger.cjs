@@ -71,6 +71,12 @@ function reconcile(result, snapshot, previous = []) {
 }
 
 function render(result, snapshot, state) {
+  const sources = new Map();
+  for (const review of result.reviews) for (const evidence of review.report.evidence) {
+    if (!sources.has(evidence.source)) sources.set(evidence.source, {id: `S${sources.size + 1}`, lines: new Set()});
+    const source = sources.get(evidence.source);
+    for (let line = evidence.start; line <= evidence.end; line++) source.lines.add(line);
+  }
   const lines = [MARKER, '## Clouseau acceptance', '', `Decision: **${clean(result.decision)}**`,
     `Revision: \`${snapshot.head_sha}\` · Policy: \`${snapshot.policy_digest}\``, '',
     'Scores are policy indices. Product acceptance requires at least 80 in every dimension; a technical finding at or above 70 blocks. Uncertainty crossing a threshold requires investigation. Display rounding never decides eligibility.', ''];
@@ -109,11 +115,18 @@ function render(result, snapshot, state) {
       lines.push('', '</details>');
     }
     lines.push('', '<details><summary>Immutable evidence register</summary>', '', '| Id | Source | Lines |', '|---|---|---|');
-    for (const evidence of review.report.evidence) lines.push(`| ${clean(evidence.id)} | ${clean(evidence.source)} | ${evidence.start}–${evidence.end} |`);
-    for (const evidence of review.report.evidence) lines.push('', `${clean(evidence.id)}: ${clean(evidence.quote)}`);
+    for (const evidence of review.report.evidence) lines.push(`| ${clean(evidence.id)} | ${sources.get(evidence.source).id} | ${evidence.start}–${evidence.end} |`);
     for (const resolution of review.report.resolutions) lines.push('', `Disposition ${clean(resolution.id)}: **${resolution.state}** — ${clean(resolution.reason)} (${clean(resolution.evidence.join(', '))})`);
     lines.push('', '</details>');
   }
+  lines.push('', '<details><summary>Literal immutable source excerpts</summary>', '',
+    'Each cited source line appears once. The per-review registers retain every evidence ID and exact line range.', '');
+  for (const [name, source] of sources) {
+    lines.push('', `**${source.id} — ${clean(name)}**`, '');
+    const content = snapshot.sources[name].content.split('\n');
+    for (const number of [...source.lines].sort((a, b) => a - b)) lines.push(`L${number}: ${clean(content[number - 1])}`);
+  }
+  lines.push('', '</details>');
   if (state.findings.length) {
     lines.push('', '| Persistent finding | State | Blocking | Path |', '|---|---|---|---|');
     for (const finding of state.findings) lines.push(`| ${clean(finding.title)} (${finding.id}) | ${finding.state} | ${finding.blocking} | ${clean(finding.path)} |`);
