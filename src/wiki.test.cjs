@@ -353,3 +353,15 @@ test('per-page findings regenerate only rejected pages and preserve the other pa
   assert.equal(diagnostics[0].review.pages['Home.md'].supported, true);
   assert.equal(diagnostics[1].review.pages['Guide.md'].supported, true);
 });
+
+test('a failed live positive control retains its exact case and factual report for inspection', async () => {
+  const {evaluateWiki} = require('./wiki.cjs');
+  const diagnostics = [];
+  await assert.rejects(evaluateWiki({diagnostic: value => diagnostics.push(value), complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    return done(rejection('Home.md', Object.keys(input.source_evidence)[0], 'The model disputed this positive control.'));
+  }}), /did not support/);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].case, 'supported-authentication');
+  assert.equal(diagnostics[0].review.pages['Home.md'].supported, false);
+});

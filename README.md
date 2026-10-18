@@ -212,7 +212,9 @@ on supported authentication and shared-refresh documents plus deliberate
 denial/unavailability and FTP-only-refresh falsehoods. Provider, schema, or citation failures cannot count as a successful
 negative result.
 
-Structured diagnostics are saved beside the plan at
+Live evaluation case diagnostics are saved at `wiki-plan.json.evaluation.json`,
+including when a positive or negative control fails. Structured generation
+diagnostics are saved beside the plan at
 `wiki-plan.json.diagnostic.json`. Rejected planning values are retained before
 any generation. Factual diagnostics contain each reviewed draft, findings, and
 its immutable source-line map. Consumers should upload diagnostics even when

@@ -176,7 +176,7 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   return bundle;
 }
 
-async function evaluateWiki({complete = requestWiki, report = () => {}} = {}) {
+async function evaluateWiki({complete = requestWiki, report = () => {}, diagnostic = () => {}} = {}) {
   const identity = {repository: 'example/gateway', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 1};
   const authenticationSource = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
   const wiki = {'Home.md': '# Authentication'};
@@ -189,7 +189,7 @@ async function evaluateWiki({complete = requestWiki, report = () => {}} = {}) {
   ]) {
     let calls = 0, error;
     try {
-      await planWiki({identity, source, wiki, report, allowCorrection: false, complete: async request => {
+      await planWiki({identity, source, wiki, report, diagnostic: result => diagnostic({case: name, ...result}), allowCorrection: false, complete: async request => {
         calls++;
         if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Authentication contract'}]})};
         if (calls === 2) return {content: JSON.stringify({path: 'Home.md', content})};
