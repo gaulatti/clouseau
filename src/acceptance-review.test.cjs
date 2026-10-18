@@ -165,3 +165,45 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   }});
   assert.equal(inspected.report.resolutions[0].id, draft.findings[0].id);
 }));
+
+test('multi-file syntax gives every accounting entry its own changed-source proof and uses trusted contract authority', () => {
+  const {snapshot} = fixture();
+  snapshot.sources.readme = {authority: 'trusted', kind: 'readme', content: 'Repository introduction.'};
+  snapshot.sources = {readme: snapshot.sources.readme, ...snapshot.sources};
+  snapshot.paths.push('src/helper.rs', 'src/removed.rs');
+  snapshot.files.push({path: 'src/helper.rs', head_source: 'helper'}, {path: 'src/removed.rs', base_source: 'removed'});
+  snapshot.files.reverse();
+  snapshot.sources.helper = {authority: 'untrusted', kind: 'source', content: 'pub fn helper() {}'};
+  snapshot.sources.removed = {authority: 'untrusted', kind: 'source', content: 'pub fn obsolete() {}'};
+  require('./acceptance-sources.cjs').refresh(snapshot);
+  const facts = template(snapshot);
+  const report = materialize(facts, snapshot);
+  assert.equal(report.evidence[0].source, 'contract', 'noncontract evidence cannot stand in for trusted contract authority');
+  assert.equal(report.accounting.length, 3);
+  assert.doesNotThrow(() => validateInspection(report, snapshot));
+  for (const path of snapshot.paths) {
+    const file = snapshot.files.find(item => item.path === path);
+    const entry = report.accounting.find(item => item.path === path);
+    const proof = report.evidence.find(item => entry.evidence.includes(item.id));
+    assert.equal(proof.source, file.head_source || file.base_source);
+  }
+});
+
+test('facts can observe no binding requirement while final positive grades still require trusted contract proof', () => {
+  const {report, snapshot} = fixture();
+  const facts = template(snapshot);
+  facts.units[0].need.binding = {evidence: ['source'], reason: 'The changed code establishes no accepted requirement by itself.'};
+  const materialized = materialize(facts, snapshot);
+  const {validateFacts, validateReport} = require('./acceptance.cjs');
+  assert.equal(validateFacts(materialized, snapshot), undefined, 'fact validation cannot provide an approval score');
+  assert.doesNotThrow(() => validateInspection(materialized, snapshot));
+  assert.throws(() => validateReport(materialized, snapshot), /binding obligation lacks trusted contract authority/);
+  report.units[0].need.binding = {min: 0, max: 0, ...facts.units[0].need.binding};
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'established value and need can justify work without claiming a binding requirement');
+  report.units[0].need.binding.max = 0.25;
+  assert.throws(() => validateReport(report, snapshot), /binding obligation lacks trusted contract authority/);
+  report.units[0].need.binding.evidence = ['contract'];
+  assert.doesNotThrow(() => validateReport(report, snapshot));
+  materialized.units[0].need.binding.evidence = ['undeclared'];
+  assert.throws(() => validateFacts(materialized, snapshot), /missing or unknown citation/);
+});

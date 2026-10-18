@@ -93,6 +93,34 @@ test('oversized ledgers fail visibly rather than truncating findings or evidence
   assert.throws(() => render(result, snapshot, reconcile(result, snapshot)), /comment budget/);
 });
 
+test('overlapping citations from both roles retain all source lines and references without duplicating their bytes', () => {
+  const {result, snapshot} = setup();
+  const extra = Array.from({length: 20}, (_, index) => `// immutable supporting line ${index}: ${'x'.repeat(700)}`);
+  snapshot.sources.head.content = snapshot.sources.head.content.trimEnd() + '\n' + extra.join('\n');
+  require('./acceptance-sources.cjs').refresh(snapshot);
+  for (const review of result.reviews) {
+    review.report.snapshot = snapshot.digest;
+    for (let index = 0; index < 60; index++) {
+      const start = index % 20 + 3;
+      const entry = {id: `support-${index}`, source: 'head', start, end: start, quote: extra[index % 20]};
+      review.report.evidence.push(entry);
+      review.report.units[0].excess.abstraction.evidence.push(entry.id);
+    }
+    review.scores = validateReport(review.report, snapshot);
+  }
+  const before = JSON.stringify({result, snapshot});
+  const state = reconcile(result, snapshot);
+  const body = render(result, snapshot, state);
+  assert.ok(body.length < 64000);
+  for (let index = 0; index < 60; index++) assert.equal(body.split(`| support-${index} |`).length - 1, 2, 'both role registers retain every original reference');
+  for (let index = 0; index < extra.length; index++) {
+    assert.equal(body.split(`L${index + 3}: ${clean(extra[index])}`).length - 1, 1, 'each literal source line appears exactly once');
+  }
+  assert.equal(JSON.stringify({result, snapshot}), before, 'display compaction changes no evidence, grade or decision');
+  const restored = priorState([{id: 7, user: {login: 'github-actions[bot]'}, body}], snapshot.repository, snapshot.number);
+  assert.deepEqual(restored.findings, state.findings, 'persistent blocker history survives the compact display');
+});
+
 test('a product rejection persists across renamed or disappeared acceptance units and cannot impersonate a technical root', () => {
   const {result, snapshot} = setup(false);
   for (const review of result.reviews) {

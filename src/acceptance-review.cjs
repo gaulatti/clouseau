@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {FACTORS, GATES, validateReport} = require('./acceptance.cjs');
+const {FACTORS, GATES, validateFacts, validateReport} = require('./acceptance.cjs');
 const {additionalSources} = require('./acceptance-sources.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 const {requestJSON} = require('./review-provider.cjs');
@@ -10,12 +10,12 @@ const {schemas} = require('./acceptance-schema.cjs');
 
 function template(snapshot) {
   const sources = Object.keys(snapshot.sources);
-  const trusted = sources.find(id => snapshot.sources[id].authority === 'trusted' && id !== 'verification');
-  const source = snapshot.files[0].head_source || snapshot.files[0].base_source;
-  const evidence = [trusted, source].map((id, index) => {
+  const trusted = sources.find(id => snapshot.sources[id].authority === 'trusted' && snapshot.sources[id].kind === 'contract');
+  const changed = new Map(snapshot.files.map(file => [file.path, file.head_source || file.base_source]));
+  const evidence = [trusted, ...snapshot.paths.map(filename => changed.get(filename))].map((id, index) => {
     const lines = snapshot.sources[id].content.split('\n');
     const start = lines.findIndex(line => line.trim()) + 1;
-    return {id: index === 0 ? 'contract' : 'source', source: id, start, end: start};
+    return {id: index === 0 ? 'contract' : index === 1 ? 'source' : `source-${index}`, source: id, start, end: start};
   });
   const groups = (name, cited) => Object.fromEntries(FACTORS[name].map(key => [key,
     {evidence: [cited], reason: 'Describe the observable condition and any missing evidence; the separate grader selects its semantic level.'}]));
@@ -24,7 +24,7 @@ function template(snapshot) {
       obligation: 'State the accepted outcome this unit serves.', fit: groups('fit', 'contract'), need: groups('need', 'contract'),
       excess: groups('excess', 'source'), alternative: ''}], findings: [],
     gates: GATES.map(name => ({name, state: 'unresolved', reason: 'Replace this with the demonstrated gate result.', evidence: ['source']})),
-    accounting: snapshot.paths.map(filename => ({path: filename, units: ['accepted-outcome'], evidence: ['source'], reason: 'Explain this file role and its connection to the accepted unit.'})),
+    accounting: snapshot.paths.map((filename, index) => ({path: filename, units: ['accepted-outcome'], evidence: [evidence[index + 1].id], reason: 'Explain this file role and its connection to the accepted unit.'})),
     decisions: [], resolutions: []};
 }
 
@@ -83,7 +83,7 @@ function validationSnapshot(snapshot, drafts = []) {
 
 function validateInspection(report, snapshot, drafts = []) {
   const view = validationSnapshot(snapshot, drafts);
-  validateReport(report, view);
+  validateFacts(report, view);
   for (const finding of drafts.flatMap(draft => draft.findings)) {
     const retained = report.findings.find(item => item.id === finding.id);
     if (retained && retained.path === finding.path && retained.cause === finding.cause && retained.obligation === finding.obligation) continue;

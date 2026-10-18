@@ -90,7 +90,7 @@ function scoreReport(report) {
   return {rules: RULES, units, findings, decision};
 }
 
-function validateReport(report, snapshot) {
+function validateEvidence(report, snapshot, graded) {
   keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions', 'resolutions']);
   requireThat(report.version === RULES.version && report.snapshot === snapshot.digest && text(report.summary), 'stale identity or missing summary');
   requireThat(Array.isArray(report.evidence) && report.evidence.length > 0, 'missing evidence register');
@@ -125,7 +125,7 @@ function validateReport(report, snapshot) {
     unique(unit.paths, 'unit paths');
     requireThat(unit.paths.length > 0 && unit.paths.every(name => snapshot.paths.includes(name)), 'unit outside changed paths');
     factors(unit.fit, 'fit'); factors(unit.need, 'need'); factors(unit.excess, 'excess');
-    if (unit.need.binding.max > 0) requireThat(unit.need.binding.evidence.some(id =>
+    if (graded && unit.need.binding.max > 0) requireThat(unit.need.binding.evidence.some(id =>
       snapshot.sources[evidence.get(id).source].authority === 'trusted' &&
       snapshot.sources[evidence.get(id).source].kind === 'contract'), 'binding obligation lacks trusted contract authority');
     requireThat(typeof unit.alternative === 'string' && unit.alternative.length <= 2000, 'invalid narrower alternative');
@@ -185,7 +185,17 @@ function validateReport(report, snapshot) {
     requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].ref === snapshot.head_sha), 'resolution lacks current-revision evidence');
     resolved.add(item.id);
   }
+}
+
+// Fact validation makes no numeric claim and cannot yield an approval score.
+// Positive binding grades are still checked in final validation and the gate.
+function validateFacts(report, snapshot) {
+  validateEvidence(report, snapshot, false);
+}
+
+function validateReport(report, snapshot) {
+  validateEvidence(report, snapshot, true);
   return scoreReport(report);
 }
 
-module.exports = {FACTORS, GATES, STATES, RULES, digest, productScore, findingScore, scoreReport, validateReport};
+module.exports = {FACTORS, GATES, STATES, RULES, digest, productScore, findingScore, scoreReport, validateFacts, validateReport};
