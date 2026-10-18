@@ -304,6 +304,24 @@ test('an invalid planning decision leaves inspectable diagnostics and never reac
   assert.equal(diagnostics[0].identity.source_sha, identity.source_sha);
 });
 
+test('native factual references require complete literal source paths while local validation checks line identity', async () => {
+  const source = {'src/a+b.rs': 'Gateway fact.\n\n', '.github/workflows/deploy.yml': 'name: Deploy'};
+  let nativePattern;
+  const result = await planWiki({identity, source, wiki, complete: async ({messages, schema}) => {
+    const input = JSON.parse(messages[1].content);
+    if (input.proposed_update) {
+      nativePattern = new RegExp(schema.properties.pages.properties['Guide.md'].properties.source_id.pattern);
+      assert.match(messages[0].content, /complete repository-relative path/);
+      return done(facts(input.proposed_update, source));
+    }
+    return done(input.requested_page ? {path: 'Guide.md', content: '[Home](Home) Gateway fact.'} :
+      {pages: [{path: 'Guide.md', reason: 'Gateway contract'}]});
+  }});
+  assert.equal(result.updates.length, 1);
+  for (const id of ['src/a+b.rs:L1', '.github/workflows/deploy.yml:L13']) assert.ok(nativePattern.test(id));
+  for (const id of ['a+b.rs:L1', 'deploy.yml:L13', 'src/aaab.rs:L1', 'src/a+bXrs:L1', 'src/a+b.rs:L0', 'src/a+b.rs:L01', 'src/a+b.rs:L1 extra']) assert.ok(!nativePattern.test(id));
+});
+
 
 test('correction refuses cycling back to any previously rejected draft, not only the immediately prior text', async () => {
   let renders = 0, reviews = 0;

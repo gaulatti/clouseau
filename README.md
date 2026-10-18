@@ -195,9 +195,11 @@ supported verdict emitted last. Every page must be supported with no unresolved
 findings; contradictory verdicts are rejected. This avoids unbounded evidence
 arrays while retaining an independent judgment for every updated page.
 
-Source references select controller-assigned `path:Lnumber` IDs. The source map
-preserves exact lines, including blanks; invented IDs, blank citations, and
-missing page checks are rejected. The model cannot substitute quotation text.
+Source references select controller-assigned `path:Lnumber` IDs. The native
+response schema restricts paths to actual source filenames; shortened basenames
+are not accepted. The source map preserves exact lines, including blanks.
+Local validation rejects invented IDs, blank citations, and missing page checks.
+The model cannot substitute quotation text.
 This is an AI quality gate rather than a proof of semantic correctness;
 documentation still needs correction when new evidence reveals an error.
 
