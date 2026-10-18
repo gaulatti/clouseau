@@ -11,7 +11,7 @@ test('configuration is explicit and cannot omit technical or owner requirements'
     assert.throws(() => validateConfig(config), /Invalid Clouseau/, field);
   }
   for (const mutate of [
-    config => {config.version = 2;},
+    config => {config.version = 3;},
     config => {config.repository_policy = '../untrusted.md';},
     config => {config.readme = '/tmp/untrusted.md';},
     config => {config.manual_reviewer = '';},

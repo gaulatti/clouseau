@@ -40,6 +40,7 @@ test('purpose exclusions and owner authority are never compensated by product sc
   report.gates[0].state = 'unresolved';
   assert.equal(validateReport(report, snapshot).decision, 'review_incomplete');
   report.gates[0].state = 'satisfied';
+  report.units[0].fit.outcome = factor(0);
   report.decisions.push({kind: 'purpose', question: 'Should this upload gateway also compose music?', options: ['Keep the upload purpose', 'Accept a new product purpose'], evidence: ['contract']});
   assert.equal(validateReport(report, snapshot).decision, 'owner_decision');
   for (const state of ['unresolved', 'violated']) {
@@ -48,6 +49,23 @@ test('purpose exclusions and owner authority are never compensated by product sc
   }
   report.gates[2].state = 'violated';
   assert.equal(validateReport(report, snapshot).decision, 'repair_required');
+});
+
+test('a proposed purpose question cannot delegate unnecessary internal machinery to the owner', () => {
+  const {report, snapshot} = fixture();
+  report.decisions.push({kind: 'purpose', question: 'Should uploads use a plugin framework?',
+    options: ['Authorize the plugin framework', 'Preserve the direct implementation'], evidence: ['source']});
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'an unsupported question alone cannot block accepted work');
+  report.units[0].excess.abstraction = factor(0.75);
+  report.units[0].alternative = 'Retain direct validation and the new real rejection tests.';
+  const mechanism = structuredClone(report.units[0]);
+  mechanism.id = 'plugin-framework'; mechanism.kind = 'mechanism';
+  mechanism.fit.outcome = factor(0);
+  report.units.push(mechanism); report.accounting[0].units.push(mechanism.id);
+  report.gates[0].state = 'violated';
+  assert.equal(validateReport(report, snapshot).decision, 'repair_required');
+  report.gates[0].state = 'unresolved';
+  assert.equal(validateReport(report, snapshot).decision, 'review_incomplete', 'unresolved authority still requires investigation');
 });
 
 test('the nine-factor defect score preserves necessity and all five consequence amplifiers', () => {

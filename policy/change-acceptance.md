@@ -15,6 +15,11 @@ An internal mechanism alone is not a new product direction. When the accepted
 outcome is clear, remedy unnecessary machinery within that outcome. When the PR
 requests an unaccepted product outcome, ask one concrete purpose/authority
 question rather than silently removing the requested outcome as a repair.
+Use kind `capability` for a user-observable outcome and `mechanism` for machinery
+serving it. A purpose question is eligible only when a capability's evidence-
+graded fit is below the acceptance boundary. It cannot turn an internal
+implementation preference into an owner decision. Distinct privilege or outcome
+tradeoffs still require their own concrete authority or tradeoff evidence.
 
 Fit: outcome, workflow, domain, component boundary, operating model.
 Need: binding obligation, evidence of need, outcome value, unmetness, timeliness.

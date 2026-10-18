@@ -75,13 +75,18 @@ function scoreReport(report) {
       max < RULES.defect_threshold ? 'nonblocking' : 'investigate'};
   });
   const integrity = report.gates.find(gate => gate.name === 'test_integrity');
-  const scopeDecision = report.decisions.length > 0 && report.gates.find(gate => gate.name === 'scope_authority').state !== 'satisfied';
+  // A purpose question needs a material user outcome outside the accepted
+  // purpose. Unnecessary machinery serving an accepted outcome is rework,
+  // even if an inspector proposes asking the owner to authorize that machinery.
+  const newOutcome = units.some((unit, index) => report.units[index].kind === 'capability' && unit.max.fit < RULES.product_threshold);
+  const decisions = report.decisions.filter(item => item.kind !== 'purpose' || newOutcome);
+  const scopeDecision = decisions.length > 0 && report.gates.find(gate => gate.name === 'scope_authority').state !== 'satisfied';
   const blocked = report.gates.some(gate => gate.state === 'violated' && !(scopeDecision && gate.name === 'scope_authority')) || findings.some(finding => finding.disposition === 'blocking');
   const incomplete = report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority')) ||
     units.some(unit => unit.disposition === 'investigate') || findings.some(finding => finding.disposition === 'investigate');
   const rework = units.some(unit => unit.disposition === 'rework');
   const decision = integrity.state === 'violated' ? 'blocked_integrity' : blocked ? 'repair_required' :
-    incomplete ? 'review_incomplete' : report.decisions.length ? 'owner_decision' : rework ? 'repair_required' : 'auto_approve';
+    incomplete ? 'review_incomplete' : decisions.length ? 'owner_decision' : rework ? 'repair_required' : 'auto_approve';
   return {rules: RULES, units, findings, decision};
 }
 

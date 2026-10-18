@@ -160,3 +160,22 @@ receive repository administration permission.
 Merge, deployment, live health and post-deployment wiki publication remain
 separate results. This protocol preserves their existing handoff and never
 declares delivery merely because a PR merged.
+
+The inspector selects source IDs and line ranges. The controller supplies their
+literal text, derives unit paths from complete file accounting, and derives every
+technical finding's path from a concrete changed-source anchor. Atomic defect
+grading always receives that causal anchor together with the factor's citations.
+These fields cannot be invented independently by a model.
+
+Use the `evaluate-acceptance` action operation with both provider keys for the
+read-only five-case qualification. Its complete artifact is written to
+`work/acceptance-evaluation.json` in the caller's workspace; upload it with an
+`always()` step. Passing synthetic cases is qualification evidence, not proof of
+a genuine unattended merge or automatic repair.
+
+A purpose handoff must accompany a capability whose upper fit is below 80.
+An inspector's request to authorize an internal framework cannot itself make
+that framework a product direction; unnecessary machinery remains repair work.
+Technical necessity and severity are graded for distinct runtime, data, security,
+compatibility, or verification consequences. Product scope and proportionality
+are still enforced by the independent product scores and scope gate.

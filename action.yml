@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, assess, gate, repair, check-provider, evaluate-review, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: test, coverage, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -26,13 +26,13 @@ inputs:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
   provider-key:
-    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, plan-wiki, or evaluate-wiki
+    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, evaluate-acceptance, plan-wiki, or evaluate-wiki
     default: ''
   typesafe-key:
-    description: TypeSafe API key; supply only to the read-only assessment when the trusted configuration selects Jev grading
+    description: TypeSafe API key; supply only to the read-only assessment or acceptance qualification that uses Jev grading
     default: ''
   repair-token:
-    description: Independent fine-grained author token for bounded repairs; supply only to the separate repair job
+    description: Independent GitHub author token for bounded repairs; supply only to the separate repair job
     default: ''
   github-token:
     description: Caller-scoped GitHub token; permissions belong to the calling job
@@ -71,7 +71,7 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|assess|gate|repair|check-provider|evaluate-review|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          test|coverage|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
     - name: Test approval policy
@@ -175,6 +175,15 @@ runs:
       env:
         DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
       run: node test/evaluate-review.cjs
+    - name: Qualify live acceptance decisions and cost
+      if: inputs.operation == 'evaluate-acceptance'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+        TYPESAFE_API_KEY: ${{ inputs.typesafe-key }}
+        CLOUSEAU_EVALUATION_PATH: ${{ github.workspace }}/work/acceptance-evaluation.json
+      run: node test/evaluate-acceptance.cjs
     - name: Request trusted metadata reassessment
       if: inputs.operation == 'request-reassessment'
       uses: actions/github-script@v7
