@@ -81,13 +81,15 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
   const ask = async (instruction, evidence) => {
+    const content = JSON.stringify(evidence);
+    assert(Buffer.byteLength(content) <= 1000000, 'Wiki request exceeds the complete-context limit');
     // A malformed JSON envelope is a transport-format failure, not a review
     // decision. Regenerate once from the same evidence; never trim or accept
     // a prefix, and never retry schema, link, scope, or deployment failures.
     for (let formatAttempt = 1; formatAttempt <= 2; formatAttempt++) {
       const result = await complete({report, messages: [
         {role: 'system', content: `${RULES}\n${instruction}\nReturn exactly ONE JSON object. Escape Markdown line breaks inside the content string. Do not append another object, prose, or code fences outside the JSON. ${formatAttempt === 2 ? 'The previous envelope was not valid JSON; regenerate the exact requested object from the same evidence.' : ''}`},
-        {role: 'user', content: JSON.stringify(evidence)},
+        {role: 'user', content},
       ]});
       assert(!result.failure, 'Wiki model completion failed; nothing will be published');
       try {return JSON.parse(result.content);}
@@ -116,12 +118,16 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
     }
     return updates;
   };
+  // Controller-owned source references preserve exact text, including blank
+  // lines. The model selects an existing line ID; it never retypes a quotation.
+  const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
+    content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const review = await ask('Independently fact-check EVERY proposed page against the source. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_path":"source file path","quote":"exact source substring supporting the change"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page with at least one exact source quotation; source citations alone do not excuse contradictory claims.', {identity, source, wiki, proposed_update: updates});
+    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates});
     assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
       Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
       Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
-    diagnostic({version: 1, identity, revision, updates, review});
+    diagnostic({version: 1, identity, revision, updates, review, source_evidence: sourceEvidence});
     return review;
   };
   let updates = await generate();
@@ -139,9 +145,9 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
   }
   assert(review.supported && review.findings.length === 0, 'Wiki factual review did not support the complete update; nothing will be published');
   for (const evidence of review.evidence) {
-    assert(exact(evidence, ['page', 'source_path', 'quote']) && names.has(evidence.page) &&
-      Object.hasOwn(source, evidence.source_path) && typeof evidence.quote === 'string' && evidence.quote.trim().length > 0 &&
-      evidence.quote.length <= 1000 && source[evidence.source_path].includes(evidence.quote), 'Wiki factual review requires exact source evidence');
+    assert(exact(evidence, ['page', 'source_id']) && names.has(evidence.page) &&
+      typeof evidence.source_id === 'string' && Object.hasOwn(sourceEvidence, evidence.source_id) &&
+      sourceEvidence[evidence.source_id].trim().length > 0, 'Wiki factual review requires exact source evidence');
   }
   assert(updates.every(page => review.evidence.some(evidence => evidence.page === page.path)), 'Wiki factual review must cover every updated page');
   report(`Wiki factual review supported all ${updates.length} updated pages with exact source evidence`);

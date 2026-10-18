@@ -236,8 +236,8 @@ formatting mechanism. This does not change the PR review retry policy.
 After generation and structural/link validation, a separate model call checks the
 whole proposed update against the source, including authentication, HTTP statuses,
 retry classifications, and protocol differences. Publication requires a supporting
-verdict without findings and exact source quotations for every updated page.
-Unsupported claims, fabricated quotations, or uncovered pages fail closed. This is
+verdict without findings and references to exact source lines for every updated page.
+Unsupported claims, invented source references, or uncovered pages fail closed. This is
 an AI quality gate, not a proof of semantic correctness; generated docs remain
 subject to correction when new evidence reveals a mistake.
 
@@ -259,3 +259,10 @@ must be substantively rejected. The generator also saves a structured diagnostic
 next to its plan (`wiki-plan.json.diagnostic.json`), including the reviewed draft,
 findings and source evidence, without provider credentials or raw transport data.
 Consumers should retain this diagnostic even when planning fails.
+
+Factual citations use controller-assigned `path:Lnumber` source references rather
+than model-written code quotations. The review receives the full source as indexed
+exact lines and must select existing nonblank IDs for every updated page. Invented
+IDs, unrelated authority, and incomplete page evidence fail closed. Diagnostics
+include the immutable source-line map so each cited text can be inspected without
+trusting a model's transcription. This keeps the same substantive review gate.
