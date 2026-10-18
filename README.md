@@ -114,7 +114,9 @@ jobs. Select examiner, challenger and grader explicitly in `acceptance`; see
 only when the explicit Jev/DeepSeek grading route is selected. Failure never
 silently changes that choice. A separate repair job receives an independent
 author token through `repair-token`; Colombo reuses its existing deployment
-token. Neither the approval job nor AI inspection receives that author token.
+token. Neither the approval job nor AI inspection receives that author token. The repair
+job requires a trusted GitHub head repository matching the base repository before
+loading the author credential; the writer independently rechecks that identity.
 Only purpose/authority decisions can use owner confirmation in version 2.
 
 The consumer must retain PR, metadata-only target, comment, and manual workflow

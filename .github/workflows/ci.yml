@@ -77,6 +77,11 @@ jobs:
         uses: ./
         with:
           operation: test
+      - name: Test workflow security
+        if: *verify-code
+        run: |
+          npm ci --prefix .github/tests --ignore-scripts --no-audit --no-fund
+          npm test --prefix .github/tests
       - name: Build coverage contract fixtures
         if: *verify-code
         shell: python
@@ -193,6 +198,7 @@ jobs:
     needs: [assess-intent, approve-and-merge]
     if: >-
       always() && github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       needs.assess-intent.result == 'success' && needs.approve-and-merge.result == 'failure' &&
       fromJSON(needs.assess-intent.outputs.assessment).repair_digest != ''
     runs-on: ubuntu-latest
