@@ -8,19 +8,21 @@ function locations(report) {
   const result = [];
   for (const [index, unit] of report.units.entries()) {
     for (const group of ['fit', 'need', 'excess']) for (const name of FACTORS[group]) {
-      result.push({id: `u${index}_${group}_${name}`, group, name, target: unit[group][name], subject: unit.title, obligation: unit.obligation});
+      result.push({id: `u${index}_${group}_${name}`, group, name, target: unit[group][name], subject: unit.title, obligation: unit.obligation,
+        context: {kind: unit.kind, paths: unit.paths, narrower_alternative: unit.alternative}});
     }
   }
   for (const [index, finding] of report.findings.entries()) for (const name of FACTORS.defect) {
     result.push({id: `f${index}_${name}`, group: 'defect', name, target: finding.factors[name],
-      subject: finding.title, obligation: finding.obligation});
+      subject: finding.title, obligation: finding.obligation, causal_evidence: finding.evidence,
+      context: {path: finding.path, cause: finding.cause, trigger: finding.trigger, consequence: finding.consequence}});
   }
   return result;
 }
 
 function packetFor(location, report, snapshot) {
-  return {subject: location.subject, obligation: location.obligation, observations: location.target.reason,
-    evidence: location.target.evidence.map(id => {
+  return {subject: location.subject, obligation: location.obligation, context: location.context, observations: location.target.reason,
+    evidence: [...new Set([...location.target.evidence, ...(location.causal_evidence || [])])].map(id => {
       const entry = report.evidence.find(item => item.id === id);
       const source = snapshot.sources[entry.source];
       return {path: source.path, ref: source.ref, authority: source.authority,

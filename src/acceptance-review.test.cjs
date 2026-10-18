@@ -12,8 +12,15 @@ function withKey(run) {return async () => {
 const response = value => {
   value = structuredClone(value);
   for (const entry of value.evidence || []) delete entry.quote;
-  for (const unit of value.units || []) for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) {delete factor.min; delete factor.max;}
-  for (const finding of value.findings || []) for (const factor of Object.values(finding.factors)) {delete factor.min; delete factor.max;}
+  for (const unit of value.units || []) {
+    delete unit.paths;
+    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) {delete factor.min; delete factor.max;}
+  }
+  for (const finding of value.findings || []) {
+    const evidence = value.evidence.find(entry => finding.evidence.includes(entry.id) && entry.source !== 'contract');
+    finding.anchor = {source: evidence.source, start: evidence.start, end: evidence.end}; delete finding.path;
+    for (const factor of Object.values(finding.factors)) {delete factor.min; delete factor.max;}
+  }
   return {ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
   {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: value.request_sources ? 'source_request' : 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})};
 };
@@ -34,9 +41,19 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   const facts = template(fresh);
   assert.equal(materialize(facts, fresh).units[0].fit.outcome.max, 1);
   const concern = finding();
+  concern.anchor = {source: 'head', start: 1, end: 1}; delete concern.path;
   concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
   facts.findings.push(concern);
   assert.equal(materialize(facts, fresh).findings[0].factors.necessity.max, 1);
+  assert.equal(materialize(facts, fresh).findings[0].path, 'src/upload.rs');
+  const outside = structuredClone(facts); outside.findings[0].anchor.source = 'contract';
+  assert.throws(() => materialize(outside, fresh), /outside changed source/);
+  for (const mutate of [finding => {delete finding.anchor;}, finding => {finding.path = 'invented';}, finding => {finding.anchor.extra = true;}]) {
+    const invalid = structuredClone(facts); mutate(invalid.findings[0]);
+    assert.throws(() => materialize(invalid, fresh), /concrete changed-source anchor/);
+  }
+  const conflicting = template(fresh); conflicting.units[0].paths = ['invented'];
+  assert.throws(() => materialize(conflicting, fresh), /exclusively from complete file accounting/);
   facts.units[0].fit.outcome.extra = 'unrecognized';
   assert.throws(() => materialize(facts, fresh), /observations and citations only/);
   facts.units[0].fit.outcome = null;
@@ -139,4 +156,12 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   const closed = structuredClone(f.report);
   closed.resolutions = [{id: draft.findings[0].id, state: 'dismissed', reason: 'The current source proves rejection before durable acceptance.', evidence: ['source']}];
   assert.ok(validateInspection(closed, f.snapshot, [draft]));
+  const inspected = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+    const supplied = JSON.parse(JSON.parse(options.body).messages[1].content);
+    assert.equal(supplied.earlier_concerns_by_this_role[0].id, draft.findings[0].id);
+    assert.deepEqual(supplied.earlier_concerns_by_this_role[0].sources[0], {source: 'head', start: 1, end: 2});
+    assert.equal(supplied.earlier_concerns_by_this_role[0].factors, undefined);
+    return response(closed);
+  }});
+  assert.equal(inspected.report.resolutions[0].id, draft.findings[0].id);
 }));

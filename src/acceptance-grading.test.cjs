@@ -29,6 +29,12 @@ test('every formula input has its own five descriptive semantic anchors', () => 
   assert.equal(packet.subject, 'Validate before acceptance');
   assert.equal(packet.evidence[0].text, 'validate(input)?;\naccept_durably(input)');
   assert.equal(packet.evidence[0].authority, 'untrusted');
+  assert.equal(packet.context.kind, 'capability');
+  const causal = values.find(item => item.id === 'f0_confidence');
+  causal.target.evidence = ['contract'];
+  const proof = packetFor(causal, report, snapshot);
+  assert.equal(proof.context.cause, report.findings[0].cause);
+  assert.ok(proof.evidence.some(item => item.path === 'src/upload.rs'), 'causal source proof accompanies every defect factor even if its observation cites only a contract');
 });
 
 test('typed grading uncertainty is preserved and confidence never substitutes for proof', () => {
