@@ -66,7 +66,14 @@ function scoreReport(report) {
     return {id: unit.id, min, max, disposition: min.acceptance >= RULES.product_threshold ? 'accepted' :
       max.acceptance < RULES.product_threshold ? 'rework' : 'investigate'};
   });
-  const findings = scoreFindings(report.findings);
+  const findings = report.findings.map(finding => {
+    const min = findingScore(finding, 'min');
+    const max = findingScore(finding, 'max');
+    const xg = Object.values(finding.opportunity).every(value => value === true) ? 1 : 0;
+    const priority = Math.min(100, max + RULES.xg_bonus * xg / finding.blast_radius ** 2);
+    return {id: finding.id, min, max, xg, priority, disposition: min >= RULES.defect_threshold ? 'blocking' :
+      max < RULES.defect_threshold ? 'nonblocking' : 'investigate'};
+  });
   const integrity = report.gates.find(gate => gate.name === 'test_integrity');
   // A purpose question needs a material user outcome outside the accepted
   // purpose. Unnecessary machinery serving an accepted outcome is rework,
@@ -179,17 +186,6 @@ function validateReport(report, snapshot) {
     resolved.add(item.id);
   }
   return scoreReport(report);
-}
-
-function scoreFindings(findings) {
-  return findings.map(finding => {
-    const min = findingScore(finding, 'min');
-    const max = findingScore(finding, 'max');
-    const xg = Object.values(finding.opportunity).every(value => value === true) ? 1 : 0;
-    const priority = Math.min(100, max + RULES.xg_bonus * xg / finding.blast_radius ** 2);
-    return {id: finding.id, min, max, xg, priority, disposition: min >= RULES.defect_threshold ? 'blocking' :
-      max < RULES.defect_threshold ? 'nonblocking' : 'investigate'};
-  });
 }
 
 module.exports = {FACTORS, GATES, STATES, RULES, digest, productScore, findingScore, scoreReport, validateReport};
