@@ -4,9 +4,38 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      evaluate_acceptance:
+        description: 'Run read-only DeepSeek/Jev acceptance qualification and retain evidence'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
+  evaluate-acceptance:
+    if: github.event_name == 'workflow_dispatch' && inputs.evaluate_acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Compare real providers against fixed acceptance cases
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: node test/evaluate-acceptance.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: acceptance-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/acceptance-evaluation.json
+          if-no-files-found: error
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 10
