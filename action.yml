@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, assess, gate, check-provider, evaluate-review, request-reassessment, or finalize
+    description: test, coverage, assess, gate, check-provider, evaluate-review, request-reassessment, finalize, plan-wiki, or publish-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -26,15 +26,36 @@ inputs:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
   provider-key:
-    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, request-reassessment, or finalize
+    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, or plan-wiki
     default: ''
   github-token:
     description: Caller-scoped GitHub token; permissions belong to the calling job
     default: ${{ github.token }}
+  wiki-config:
+    description: Trusted wiki maintenance configuration in the source checkout
+    default: .github/clouseau-wiki.json
+  wiki-directory:
+    description: Initialized wiki Git checkout
+    default: wiki
+  wiki-source-directory:
+    description: Git checkout of the deployment revision
+    default: .
+  wiki-plan-path:
+    description: Validated JSON bundle produced or consumed by wiki operations
+    default: work/wiki-plan.json
+  wiki-draft:
+    description: Generate a draft without requiring deployment; publish-wiki always requires deployment
+    default: 'false'
 outputs:
   assessment:
     description: Commit-bound intent decision from assess
     value: ${{ steps.assess.outputs.assessment }}
+  wiki-commit:
+    description: Published or already-documented wiki commit
+    value: ${{ steps.publish-wiki.outputs.commit }}
+  wiki-pages:
+    description: Number of changed Markdown pages
+    value: ${{ steps.publish-wiki.outputs.pages }}
 runs:
   using: composite
   steps:
@@ -44,7 +65,7 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|assess|gate|check-provider|evaluate-review|request-reassessment|finalize) ;;
+          test|coverage|assess|gate|check-provider|evaluate-review|request-reassessment|finalize|plan-wiki|publish-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
     - name: Test approval policy
@@ -148,3 +169,53 @@ runs:
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           await require(path.join(root, 'src/policy.cjs')).createPolicy(config).finalize({github, context, core});
+
+    - name: Prepare coordinated wiki documentation
+      id: plan-wiki
+      if: inputs.operation == 'plan-wiki'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        WIKI_CONFIG: ${{ inputs.wiki-config }}
+        WIKI_DIRECTORY: ${{ inputs.wiki-directory }}
+        WIKI_SOURCE_DIRECTORY: ${{ inputs.wiki-source-directory }}
+        WIKI_PLAN_PATH: ${{ inputs.wiki-plan-path }}
+        WIKI_DRAFT: ${{ inputs.wiki-draft }}
+        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
+          const config = JSON.parse(fs.readFileSync(process.env.WIKI_CONFIG, 'utf8'));
+          const bundle = await require(path.join(process.env.CLOUSEAU_ROOT, 'src/wiki-git.cjs')).prepareWiki({
+            github, context, config, sourceDirectory: process.env.WIKI_SOURCE_DIRECTORY,
+            wikiDirectory: process.env.WIKI_DIRECTORY, draft: process.env.WIKI_DRAFT === 'true',
+            report: line => core.info(line.replace(/^AI assessment/, 'Wiki generation'))});
+          fs.mkdirSync(path.dirname(process.env.WIKI_PLAN_PATH), {recursive: true});
+          fs.writeFileSync(process.env.WIKI_PLAN_PATH, JSON.stringify(bundle, null, 2) + '\n');
+          core.info(`Validated coordinated update for ${bundle.updates.length} wiki pages. Nothing published.`);
+    - name: Publish validated wiki documentation
+      id: publish-wiki
+      if: inputs.operation == 'publish-wiki'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        WIKI_CONFIG: ${{ inputs.wiki-config }}
+        WIKI_DIRECTORY: ${{ inputs.wiki-directory }}
+        WIKI_SOURCE_DIRECTORY: ${{ inputs.wiki-source-directory }}
+        WIKI_PLAN_PATH: ${{ inputs.wiki-plan-path }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const config = JSON.parse(fs.readFileSync(process.env.WIKI_CONFIG, 'utf8'));
+          const bundle = JSON.parse(fs.readFileSync(process.env.WIKI_PLAN_PATH, 'utf8'));
+          const result = await require(path.join(process.env.CLOUSEAU_ROOT, 'src/wiki-git.cjs')).publishWiki({
+            github, context, config, sourceDirectory: process.env.WIKI_SOURCE_DIRECTORY,
+            wikiDirectory: process.env.WIKI_DIRECTORY, bundle});
+          core.setOutput('commit', result.commit);
+          core.setOutput('pages', result.changedPages);
+          await core.summary.addRaw(`Wiki documentation: ${result.changedPages} Markdown pages changed. Wiki commit: ${result.commit}. Source revision: ${context.sha}. This is not a live-health assertion.`).write();

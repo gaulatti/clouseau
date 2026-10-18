@@ -29,6 +29,8 @@ consumer's privileged approval job. See `examples/colombo.json` for configuratio
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
 | `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
+| `plan-wiki` | `provider-key`, `wiki-config`, wiki/source checkouts | Generate and validate a coordinated multi-page draft after deployment; `wiki-draft: true` permits read-only validation |
+| `publish-wiki` | `wiki-config`, validated `wiki-plan-path`, wiki/source checkouts | Revalidate deployment and publish every page in one non-force wiki commit; no provider key |
 | `finalize` | `config`, `assessment` | Wait for GitHub auto-merge after the required native gate finishes, then preserve the existing CD handoff |
 
 For example, a caller's coverage step supplies:
@@ -165,3 +167,62 @@ automatic recovery within the same assessment. Logs identify that injection
 explicitly; it is not evidence of a naturally occurring provider outage. Controller regression tests
 use simulated provider decisions separately. Run live evaluations only in a
 read-only diagnostic job with the provider key and no repository write token.
+
+## Wiki maintenance after deployment
+
+The [shared wiki policy](policy/wiki-maintenance.md) grounds documentation in the
+exact deployment source revision and the existing wiki. A read-only job plans all
+needed pages, then renders each against that common plan. Home/navigation updates
+are included when needed. The full bundle is validated before it becomes an artifact;
+no partial page set is publishable. The source context is complete or the job fails:
+there is no silent truncation. Generation uses the same bounded incomplete-response
+recovery as PR assessment, with at most three completions per manifest or page.
+
+A separate publishing job receives no model key. It downloads only the artifact
+from its own deployment run and checks the repository, source SHA, wiki base SHA,
+and run ID. Both normal planning and publication verify that the expected main
+workflow's configured deployment job actually completed successfully. A draft can
+skip deployment verification, but publication never can. Scope `actions: read` and
+`contents: read` to generation; grant `contents: write` only to publication. The
+wiki checkout's credential must be available to Git only in the publishing job.
+No deployment credential belongs in either documentation job.
+
+Consumer `.github/clouseau-wiki.json` must specify all fields explicitly:
+
+```json
+{
+  "version": 1,
+  "source_paths": ["README.md", "src/", "migrations/", "Dockerfile", "compose.yaml", "Makefile", "scripts/", ".env.example", ".github/workflows/"],
+  "deployment_workflow": "backend-deploy.yml",
+  "deployment_job": "deploy",
+  "wiki_branch": "master"
+}
+```
+
+Only committed text in those paths is provided; real `.env` files and agent-rule
+paths are refused. The current wiki must be a clean, initialized Git checkout.
+Agent instructions are excluded from its model context. Supported pages are flat
+Markdown filenames, including Home, `_Sidebar`, and `_Footer`. The model cannot
+change configuration or delete pages. At most 20 pages, 128,000 bytes per page,
+512,000 bytes per published bundle, 300 source files, and 1,000,000 bytes of base
+source/wiki context are accepted. Exceeding a limit fails clearly without publishing.
+Generated pages use ordinary inline Markdown links; broken links, orphaned new
+pages, ambiguous names, unsafe paths, unsupported link syntax, and unclosed code
+fences fail validation. External URLs are not fetched by the validator.
+
+Use `plan-wiki` with `wiki-directory: wiki` and the source checkout at `.`. The
+validated bundle is written to `work/wiki-plan.json` by default. Transfer it with
+same-run Actions upload/download artifacts to `publish-wiki`; its `wiki-plan-path`
+can point to the downloaded file. Pin both operations to a reviewed full commit.
+Serialize the entire deployment-and-documentation workflow, with cancellation
+disabled, so a later deployment cannot overtake documentation for an earlier one.
+
+Publication fetches the wiki again and refuses an advanced base instead of rebasing
+full generated pages over a person's edits. It builds a private Git index, keeping
+working files and symlink targets untouched, and publishes a single non-force
+commit. A push rejection publishes nothing. The controller-owned
+`.clouseau-deployment.json` records the source SHA and deployment run. Repeated source
+revisions spend no model credits and create no duplicate commit. When no Markdown
+needs changing, only the documentation-check receipt is recorded; the summary
+reports zero changed pages. Documentation failures are separate from deployment
+success, and a wiki commit never asserts live application health.
