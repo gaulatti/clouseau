@@ -11,6 +11,10 @@ material capability or engineering decision; a useful repair cannot conceal an
 unnecessary framework, dependency, configuration mode, or unrelated feature.
 Local helpers and meaningful tests inherit justification only through a concrete
 accepted obligation. Large test changes do not imply product drift.
+An internal mechanism alone is not a new product direction. When the accepted
+outcome is clear, remedy unnecessary machinery within that outcome. When the PR
+requests an unaccepted product outcome, ask one concrete purpose/authority
+question rather than silently removing the requested outcome as a repair.
 
 Fit: outcome, workflow, domain, component boundary, operating model.
 Need: binding obligation, evidence of need, outcome value, unmetness, timeliness.
@@ -33,6 +37,10 @@ Admit a finding only with changed/newly enabled cause, feasible trigger, affecte
 obligation, consequence and exact source evidence. Keywords only nominate a
 trace. Pre-existing debt is separate unless activated, widened or relied upon.
 Close false allegations with counterevidence rather than inventing work.
+Purpose fit and unnecessary machinery belong in the product units and scope
+gate. Do not duplicate them as technical findings without a distinct runtime,
+data, security, compatibility or verification consequence. An owner product
+decision must not acquire a fictitious technical veto.
 
 Finding factors: intrinsic repair necessity, causal evidence strength, immediate
 severity, activation, lasting irreversibility, direct reach, difficulty detecting

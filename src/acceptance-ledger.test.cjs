@@ -92,3 +92,33 @@ test('oversized ledgers fail visibly rather than truncating findings or evidence
   result.reviews[0].report.summary = 'Complete evidence '.repeat(4000);
   assert.throws(() => render(result, snapshot, reconcile(result, snapshot)), /comment budget/);
 });
+
+test('a product rejection persists across renamed or disappeared acceptance units and cannot impersonate a technical root', () => {
+  const {result, snapshot} = setup(false);
+  for (const review of result.reviews) {
+    review.report.units[0].fit.outcome = factor(0);
+    review.scores = validateReport(review.report, snapshot);
+  }
+  const previous = reconcile(result, snapshot).findings;
+  assert.equal(previous.length, 1); assert.equal(previous[0].kind, 'product');
+  const accepted = setup(false).result;
+  let state = reconcile(accepted, snapshot, previous);
+  assert.deepEqual(state.unresolved, [previous[0].id]);
+  for (const review of accepted.reviews) review.report.resolutions = [{id: previous[0].id, state: 'dismissed', reason: 'The concrete change serves the cited obligation.', evidence: ['source']}];
+  state = reconcile(accepted, snapshot, previous);
+  assert.equal(state.findings[0].state, 'dismissed');
+  assert.match(render(accepted, snapshot, state), /The concrete change serves/);
+  for (const review of result.reviews) {
+    review.report.units[0].id = previous[0].id; review.report.accounting[0].units = [previous[0].id];
+    review.scores = validateReport(review.report, snapshot);
+  }
+  assert.equal(reconcile(result, snapshot, previous).findings[0].id, previous[0].id);
+  const technical = setup().result;
+  for (const review of technical.reviews) review.report.findings[0].id = previous[0].id;
+  assert.equal(reconcile(technical, snapshot, previous).findings.length, 2, 'a technical claim cannot overwrite a product root by borrowing its identifier');
+  const technicalRoot = reconcile(setup().result, snapshot).findings[0];
+  for (const review of result.reviews) {review.report.units[0].id = technicalRoot.id; review.report.accounting[0].units = [technicalRoot.id];}
+  assert.equal(reconcile(result, snapshot, [technicalRoot]).findings.length, 2, 'a product unit cannot impersonate a prior technical defect');
+  for (const review of result.reviews) {review.report.units[0].fit.outcome = factor(0, 1); review.scores = validateReport(review.report, snapshot);}
+  assert.equal(reconcile(result, snapshot).findings[0].state, 'investigating');
+});

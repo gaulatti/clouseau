@@ -80,6 +80,30 @@ test('partial causal proof remains a potentially blocking upper bound after grad
   assert.equal(validateReport(result.report, f.snapshot).decision, 'review_incomplete');
 }));
 
+test('hybrid grading sends only unresolved factors to reasoning and never resamples a definite negative', credentials(async () => {
+  const f = fixture(); const escalations = [];
+  const result = await gradeReport({...f, provider: 'typesafe', model: 'deepseek-flash', fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (url.includes('typesafe')) {
+      const answers = Object.fromEntries(Object.keys(body.questions).map(id => {
+        const choice = id === 'u0_fit_outcome' ? 'level0' : id.includes('_excess_') ? 'level0' : 'level4';
+        return [id, {type: 'choice', choice, confidence: id === 'u0_need_value' ? 0.62 : 1,
+          probabilities: Object.fromEntries(Object.keys(body.questions[id].criteria).map(key => [key, key === choice ? 1 : 0]))}];
+      }));
+      return {ok: true, json: async () => ({model: JEV_MODEL, answers})};
+    }
+    const packet = JSON.parse(body.messages[1].content); escalations.push(packet);
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content:
+      JSON.stringify({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4']))})}}]})};
+  }});
+  assert.deepEqual(result.grading.escalated, ['u0_need_value']);
+  assert.deepEqual(Object.keys(escalations[0].questions), ['u0_need_value']);
+  assert.equal(result.report.units[0].fit.outcome.max, 0, 'a decisive low grade cannot be sent to another model until it passes');
+  assert.equal(result.report.units[0].need.value.min, 1);
+  assert.equal(result.grading.decisions.length, 17);
+  assert.ok(!JSON.stringify(escalations).includes('probabilities'), 'the reasoning grader is blind to the other model answer');
+}));
+
 test('unknown providers and incomplete factor results cannot become an acceptance record', credentials(async () => {
   const f = fixture();
   await assert.rejects(gradeReport({...f, provider: 'unknown'}), /Unknown/);

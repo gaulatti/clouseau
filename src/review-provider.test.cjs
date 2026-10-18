@@ -92,6 +92,9 @@ test('Jev uses only atomic typed questions at the official endpoint and records 
     return reply(jev());
   }});
   assert.equal(result.value.fit.choice, 'yes'); assert.equal(result.usage[0].tokens.input_tokens, 20);
+  const rounded = jev(); rounded.answers.fit.probabilities = {yes: 0.98, no: 0.01};
+  assert.deepEqual((await requestJev({state: '', questions: question, fetchImpl: async () => reply(rounded)})).value.fit.probabilities,
+    {yes: 0.98, no: 0.01}, 'rounding is retained as evidence rather than inflated into a normalized confidence');
 }));
 
 test('Jev overloads back off but complete classifications and malformed answers are not resampled', keys(async () => {

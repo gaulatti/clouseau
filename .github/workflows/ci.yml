@@ -3,8 +3,19 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  issue_comment:
+    types: [created]
   workflow_dispatch:
     inputs:
+      pull_request:
+        description: 'PR number to reassess without executing contributor code'
+        type: string
+        required: false
       evaluate_acceptance:
         description: 'Run read-only DeepSeek/Jev acceptance qualification and retain evidence'
         type: boolean
@@ -37,27 +48,37 @@ jobs:
           path: work/acceptance-evaluation.json
           if-no-files-found: error
   verify:
+    name: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'verify' || 'metadata-only' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        if: &verify-code >-
+          github.event_name == 'push' || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
+        if: *verify-code
         with:
           node-version: '22'
       - uses: actions/setup-python@v5
+        if: *verify-code
         with:
           python-version: '3.13'
       - name: Install coverage tooling
+        if: *verify-code
         run: python3 -m pip install -r requirements-test.txt
-      - name: Enforce Clouseau self coverage
+      - name: Enforce 100% line and branch coverage
+        if: *verify-code
         run: ./scripts/verify-coverage
       - name: Test approval policy
+        if: *verify-code
         uses: ./
         with:
           operation: test
       - name: Build coverage contract fixtures
+        if: *verify-code
         shell: python
         run: |
           import json
@@ -72,12 +93,14 @@ jobs:
                       'branches': {'count': 2, 'covered': covered}}}]}]}
               Path(f'work/{name}.json').write_text(json.dumps(report))
       - name: Accept complete application coverage
+        if: *verify-code
         uses: ./
         with:
           operation: coverage
           coverage-report: work/full.json
           source-directory: work/application
       - name: Reject a missing branch
+        if: *verify-code
         id: gap
         continue-on-error: true
         uses: ./
@@ -86,6 +109,153 @@ jobs:
           coverage-report: work/gap.json
           source-directory: work/application
       - name: Verify rejection is enforced
+        if: *verify-code
         env:
           GAP_OUTCOME: ${{ steps.gap.outcome }}
         run: test "$GAP_OUTCOME" = failure
+
+  assess-intent:
+    if: github.event_name == 'pull_request_target' && !github.event.pull_request.draft
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      assessment: ${{ steps.assess.outputs.assessment }}
+    steps:
+      # Never load the controller or its configuration from the PR.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: ./
+        id: assess
+        with:
+          operation: assess
+          wait-for-verification: 'true'
+          provider-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          typesafe-key: ${{ secrets.TYPESAFE_API_KEY }}
+      - name: Retain acceptance record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/clouseau-acceptance*.json
+          if-no-files-found: ignore
+
+  approve-and-merge:
+    name: ${{ github.event_name == 'pull_request_target' && !github.event.pull_request.draft && 'approve-and-merge' || 'metadata-only-approval' }}
+    needs: assess-intent
+    # Always resolve the job name; only trusted, ready PR events run its steps.
+    # A failed assessment must still fail the required native approval check.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    concurrency:
+      group: pr-approval-${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}
+      cancel-in-progress: false
+    steps:
+      - name: Require a completed assessment
+        if: >-
+          github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+          needs.assess-intent.result != 'success'
+        run: exit 1
+      - uses: actions/checkout@v4
+        if: &approve-code github.event_name == 'pull_request_target' && !github.event.pull_request.draft
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Load this run's acceptance record
+        if: >-
+          github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+          needs.assess-intent.result == 'success' &&
+          fromJSON(needs.assess-intent.outputs.assessment).record_digest != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work
+      - if: *approve-code
+        uses: ./
+        with:
+          operation: gate
+          native-gate: 'true'
+          assessment: ${{ needs.assess-intent.outputs.assessment }}
+
+  apply-repair:
+    needs: [assess-intent, approve-and-merge]
+    if: >-
+      always() && github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+      needs.assess-intent.result == 'success' && needs.approve-and-merge.result == 'failure' &&
+      fromJSON(needs.assess-intent.outputs.assessment).repair_digest != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+    concurrency:
+      group: pr-approval-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work
+      - uses: ./
+        with:
+          operation: repair
+          assessment: ${{ needs.assess-intent.outputs.assessment }}
+          repair-token: ${{ secrets.DEPLOYMENT_TOKEN }}
+
+  finalize-merge:
+    needs: [assess-intent, approve-and-merge]
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: ./
+        with:
+          operation: finalize
+          assessment: ${{ needs.assess-intent.outputs.assessment }}
+
+  request-reassessment:
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve-intent ')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.evaluate_acceptance)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: ./
+        with:
+          operation: request-reassessment
+          pull-request: ${{ inputs.pull_request }}
+

@@ -6,6 +6,13 @@ compare it with repository contracts and precedent, request the owner's second
 opinion when necessary, and approve and arm auto-merge only after every technical
 requirement passes. The initial implementation was extracted from Colombo.
 
+Version 2 implements the [change acceptance protocol](docs/change-acceptance.md):
+product fit, need and proportionality; nine-factor technical findings; independent
+source investigations; a persistent evidence ledger; bounded repairs; and native
+protected auto-merge. Humans decide genuine purpose and authority questions.
+Technical uncertainty goes to automated investigation and cannot be waived by
+an intent comment. Version 1 remains explicit compatibility for existing pins.
+
 ## Ownership
 
 Clouseau contains the coverage checker, regression tests, PR intent review rules,
@@ -26,6 +33,7 @@ consumer's privileged approval job. See `examples/colombo.json` for configuratio
 | `coverage` | `coverage-report`, `source-directory` | Require exact, nonempty 100% application line and branch coverage in LLVM JSON |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
+| `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
 | `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
@@ -61,7 +69,7 @@ The `assess` job needs actions/contents/pull-requests/issues read permissions an
 the repository's `DEEPSEEK_API_KEY`. `gate` needs contents/pull-requests/issues/
 actions write permissions and must receive no provider key. Pass the
 assessment output between jobs. The action cannot elevate the caller's token.
-The shared model is `deepseek-flash`; changes are sent to it only after
+Version 1's shared model is `deepseek-flash`; changes are sent to it only after
 technical verification succeeds. It assesses repository fit and supported intent,
 including large test improvements. There is no file-count or line-count approval
 cutoff. New product decisions and unclear scope require the owner’s judgment.
@@ -97,6 +105,16 @@ The owner can comment `/approve-intent FULL_HEAD_SHA`; this confirms intent only
 All tests and exact coverage remain mandatory. Changes invalidate the decision.
 The Actions bot cannot approve its own PR; it needs an independent human review.
 First-time fork workflow authorization remains GitHub's responsibility.
+
+Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
+bound artifact and downloads it into `work/` in the separate approval and repair
+jobs. Select examiner, challenger and grader explicitly in `acceptance`; see
+[the self-hosting configuration](.github/clouseau.json). `typesafe-key` is needed
+only when the explicit Jev/DeepSeek grading route is selected. Failure never
+silently changes that choice. A separate repair job receives an independent
+author token through `repair-token`; Colombo reuses its existing deployment
+token. Neither the approval job nor AI inspection receives that author token.
+Only purpose/authority decisions can use owner confirmation in version 2.
 
 The consumer must retain PR, metadata-only target, comment, and manual workflow
 entry points and PR-level concurrency. The controller validates the exact latest

@@ -34,14 +34,24 @@ function reconcile(result, snapshot, previous = []) {
   const records = new Map();
   const previousById = new Map(previous.map(item => [item.id, item]));
   for (const review of result.reviews) {
+    for (const [index, unit] of review.report.units.entries()) {
+      const current = review.scores.units[index];
+      if (current.disposition === 'accepted') continue;
+      const old = previousById.get(unit.id);
+      const cause = `The material unit does not establish the required product acceptance: ${unit.title}`;
+      const id = old?.kind === 'product' ? old.id : digest({repository: snapshot.repository, kind: 'product',
+        obligation: unit.obligation.trim().toLowerCase().replace(/\s+/g, ' '), title: unit.title.trim().toLowerCase().replace(/\s+/g, ' ')});
+      records.set(id, {id, kind: 'product', title: unit.title, path: unit.paths[0], cause, obligation: unit.obligation,
+        blocking: true, state: current.disposition === 'rework' ? 'confirmed' : 'investigating'});
+    }
     for (const [index, finding] of review.report.findings.entries()) {
       const current = review.scores.findings[index];
       const old = previousById.get(finding.id);
-      const id = old ? old.id : digest({repository: snapshot.repository, path: finding.path,
+      const id = old && old.kind !== 'product' ? old.id : digest({repository: snapshot.repository, path: finding.path,
         cause: finding.cause.trim().toLowerCase().replace(/\s+/g, ' '), obligation: finding.obligation.trim().toLowerCase().replace(/\s+/g, ' ')});
       const blocking = current.disposition !== 'nonblocking';
       const existing = records.get(id);
-      const record = {id, title: finding.title, path: finding.path, cause: finding.cause,
+      const record = {id, kind: 'technical', title: finding.title, path: finding.path, cause: finding.cause,
         obligation: finding.obligation, blocking, state: blocking ? current.disposition === 'blocking' ? 'confirmed' : 'investigating' : 'advisory_closed'};
       if (!existing || blocking) records.set(id, record);
     }
@@ -64,6 +74,8 @@ function render(result, snapshot, state) {
   const lines = [MARKER, '## Clouseau acceptance', '', `Decision: **${clean(result.decision)}**`,
     `Revision: \`${snapshot.head_sha}\` · Policy: \`${snapshot.policy_digest}\``, '',
     'Scores are policy indices. Product acceptance requires at least 80 in every dimension; a technical finding at or above 70 blocks. Uncertainty crossing a threshold requires investigation. Display rounding never decides eligibility.', ''];
+  lines.push('Fit = 35 outcome + 25 workflow + 20 domain + 10 boundary + 10 operating model. Need = 100 × max(binding, evidence × (.50 value + .30 unmetness + .20 timeliness)). Proportionality = 100 × (1 − greatest excess). Unit acceptance = min(Fit, Need, Proportionality).', '',
+    'Technical Q = 100 × confidence × min(1, max(necessity, activation × severity × (1 + .25 irreversibility + .20 reach + .20 detection + .20 propagation + .15 recurrence))). xG affects optional priority only; it never creates a blocker.', '');
   for (const review of result.reviews) {
     lines.push(`### ${clean(review.role)}`, '', clean(review.report.summary), '',
       '| Unit | Fit | Need | Proportionality | Acceptance | Disposition |', '|---|---:|---:|---:|---:|---|');
@@ -98,7 +110,13 @@ function render(result, snapshot, state) {
     }
     lines.push('', '<details><summary>Immutable evidence register</summary>', '', '| Id | Source | Lines |', '|---|---|---|');
     for (const evidence of review.report.evidence) lines.push(`| ${clean(evidence.id)} | ${clean(evidence.source)} | ${evidence.start}–${evidence.end} |`);
+    for (const evidence of review.report.evidence) lines.push('', `${clean(evidence.id)}: ${clean(evidence.quote)}`);
+    for (const resolution of review.report.resolutions) lines.push('', `Disposition ${clean(resolution.id)}: **${resolution.state}** — ${clean(resolution.reason)} (${clean(resolution.evidence.join(', '))})`);
     lines.push('', '</details>');
+  }
+  if (state.findings.length) {
+    lines.push('', '| Persistent finding | State | Blocking | Path |', '|---|---|---|---|');
+    for (const finding of state.findings) lines.push(`| ${clean(finding.title)} (${finding.id}) | ${finding.state} | ${finding.blocking} | ${clean(finding.path)} |`);
   }
   if (state.unresolved.length) lines.push('', `Outstanding prior blockers: ${state.unresolved.join(', ')}. Absence from a new review is not a resolution.`);
   const value = {version: 2, repository: snapshot.repository, number: snapshot.number, head_sha: snapshot.head_sha, findings: state.findings};

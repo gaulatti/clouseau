@@ -2,15 +2,20 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {template, inspect, combine, reviewChange, canonicalReferences} = require('./acceptance-review.cjs');
+const {template, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
 function withKey(run) {return async () => {
   const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
   try {await run();} finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
 };}
-const response = value => ({ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
-  {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: value.request_sources ? 'source_request' : 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})});
+const response = value => {
+  value = structuredClone(value);
+  for (const unit of value.units || []) for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) {delete factor.min; delete factor.max;}
+  for (const finding of value.findings || []) for (const factor of Object.values(finding.factors)) {delete factor.min; delete factor.max;}
+  return {ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
+  {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: value.request_sources ? 'source_request' : 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})};
+};
 
 test('review syntax includes all gates and uses actual immutable nonblank source lines', () => {
   const {snapshot} = fixture();
@@ -24,6 +29,16 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   const original = {evidence: ['same', 'same'], nested: [{evidence: ['a', 'a'], other: null}], malformed: {evidence: [null]}, scalar: 'value'};
   assert.deepEqual(canonicalReferences(original), {evidence: ['same'], nested: [{evidence: ['a'], other: null}], malformed: {evidence: [null]}, scalar: 'value'});
   assert.equal(original.evidence.length, 2);
+  const facts = template(fixture().snapshot);
+  assert.equal(materialize(facts).units[0].fit.outcome.max, 1);
+  const concern = finding();
+  concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
+  facts.findings.push(concern);
+  assert.equal(materialize(facts).findings[0].factors.necessity.max, 1);
+  facts.units[0].fit.outcome.extra = 'unrecognized';
+  assert.throws(() => materialize(facts), /observations and citations only/);
+  facts.units[0].fit.outcome = null;
+  assert.throws(() => materialize(facts), /observations and citations only/);
 });
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
@@ -85,10 +100,34 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
   assert.equal(call, 3);
 }));
 
-test('new challenger context invalidates an earlier source assessment before any approval', withKey(async () => {
+test('new challenger source triggers a bounded fresh examination while the final independent reviews share one complete snapshot', withKey(async () => {
   const f = fixture(); let calls = 0;
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
-  await assert.rejects(reviewChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash'}, fetchImpl: async () => {
+  const result = await investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
     calls++; return calls === 2 ? response({request_sources: ['src/new.rs']}) : response({...f.report, snapshot: f.snapshot.digest});
-  }}), /fresh examination/);
+  }});
+  assert.equal(calls, 4);
+  assert.equal(result.inspections[0].drafts.length, 1);
+  assert.equal(result.inspections[1].drafts.length, 0);
+  assert.ok(result.inspections.every(item => item.report.snapshot === f.snapshot.digest));
+}));
+
+test('source investigation cannot run indefinitely or discard a causal concern while refreshing its evidence', withKey(async () => {
+  const f = fixture(); let calls = 0;
+  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
+  await assert.rejects(investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
+    calls++; return calls % 2 ? response({request_sources: [`src/new-${calls}.rs`]}) : response({...f.report, snapshot: f.snapshot.digest});
+  }}), /two complete examination cycles/);
+  assert.equal(calls, 8);
+  f.report.snapshot = f.snapshot.digest;
+  const draft = structuredClone(f.report); draft.findings.push(finding());
+  assert.throws(() => validateInspection(f.report, f.snapshot, [draft]), /prior investigation concern/);
+  assert.ok(validateInspection(f.report, f.snapshot));
+  const retained = structuredClone(draft);
+  assert.ok(validateInspection(retained, f.snapshot, [draft]));
+  retained.findings[0].cause = 'A different root cannot silently reuse the identifier.';
+  assert.throws(() => validateInspection(retained, f.snapshot, [draft]), /prior investigation concern/);
+  const closed = structuredClone(f.report);
+  closed.resolutions = [{id: draft.findings[0].id, state: 'dismissed', reason: 'The current source proves rejection before durable acceptance.', evidence: ['source']}];
+  assert.ok(validateInspection(closed, f.snapshot, [draft]));
 }));

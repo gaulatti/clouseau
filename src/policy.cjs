@@ -5,6 +5,10 @@ const {requestReview} = require('./provider.cjs');
 
 function createPolicy(input) {
 const config = require('./config.cjs').validateConfig(input);
+if (config.version === 2) {
+  const legacy = createPolicy({...config, version: 1});
+  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
+}
 const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
 const MANUAL_REVIEWER = config.manual_reviewer;
@@ -158,7 +162,7 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
   return false;
 }
 
-async function technicalRun(github, repo, pr) {
+async function technicalRun(github, repo, pr, {receipt = false} = {}) {
   const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
     event: 'pull_request', head_sha: pr.head.sha, per_page: 100});
   const runs = data.workflow_runs.filter(run => run.head_sha === pr.head.sha &&
@@ -175,7 +179,10 @@ async function technicalRun(github, repo, pr) {
     !verify.steps.some(step => step.name === name && step.conclusion === 'success'))) {
     return {failure: 'Required verification steps did not all succeed'};
   }
-  return {url: run.html_url};
+  return receipt ? {url: run.html_url, run_id: run.id, attempt: run.run_attempt,
+    head_sha: run.head_sha, event: run.event, conclusion: run.conclusion,
+    job: {id: verify.id, name: verify.name, conclusion: verify.conclusion,
+      steps: verify.steps.map(step => ({name: step.name, conclusion: step.conclusion}))}} : {url: run.html_url};
 }
 
 async function assertProtection(github, repo, policyJob = CHECK) {
