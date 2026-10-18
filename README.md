@@ -232,3 +232,11 @@ is regenerated once from unchanged evidence with an explicit single-object
 instruction. No prefix is accepted or repaired, and response bodies are not logged.
 Schema, page, link, deployment, and publication failures are never retried by this
 formatting mechanism. This does not change the PR review retry policy.
+
+After generation and structural/link validation, a separate model call checks the
+whole proposed update against the source, including authentication, HTTP statuses,
+retry classifications, and protocol differences. Publication requires a supporting
+verdict without findings and exact source quotations for every updated page.
+Unsupported claims, fabricated quotations, or uncovered pages fail closed. This is
+an AI quality gate, not a proof of semantic correctness; generated docs remain
+subject to correction when new evidence reveals a mistake.

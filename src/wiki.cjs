@@ -113,7 +113,21 @@ async function planWiki({identity, source, wiki, complete = requestReview, repor
     updates.push(rendered);
     report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
   }
-  return validateBundle({version: 1, ...identity, updates}, identity, wiki);
+  const bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
+  if (updates.length === 0) return bundle;
+  const review = await ask('Independently fact-check EVERY proposed page against the source. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_path":"source file path","quote":"exact source substring supporting the change"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page with at least one exact source quotation; source citations alone do not excuse contradictory claims.', {identity, source, wiki, proposed_update: updates});
+  assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
+    Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
+    Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
+  assert(review.supported && review.findings.length === 0, 'Wiki factual review did not support the complete update; nothing will be published');
+  for (const evidence of review.evidence) {
+    assert(exact(evidence, ['page', 'source_path', 'quote']) && names.has(evidence.page) &&
+      Object.hasOwn(source, evidence.source_path) && typeof evidence.quote === 'string' && evidence.quote.trim().length > 0 &&
+      evidence.quote.length <= 1000 && source[evidence.source_path].includes(evidence.quote), 'Wiki factual review requires exact source evidence');
+  }
+  assert(updates.every(page => review.evidence.some(evidence => evidence.page === page.path)), 'Wiki factual review must cover every updated page');
+  report(`Wiki factual review supported all ${updates.length} updated pages with exact source evidence`);
+  return bundle;
 }
 
 module.exports = {validateConfig, validateIdentity, validateBundle, planWiki};

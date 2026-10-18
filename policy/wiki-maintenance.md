@@ -28,3 +28,10 @@ An empty page plan is valid when the documentation already matches the evidence.
 The output is a proposed complete update, not permission to publish. A separate
 deterministic publisher verifies deployment, identity, page safety, links, and
 concurrent wiki edits before committing the entire update atomically.
+
+Preserve the exact distinctions between denied credentials and temporary upstream
+unavailability, HTTP status mappings, retryable and terminal failures, and
+protocol-specific behavior. Read production control flow instead of treating all
+failures as equivalent. Do not carry a correction to one protocol into another
+without source evidence. A final independent factual review must support every
+proposed page with exact quotations from the supplied source snapshot.
