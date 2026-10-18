@@ -20,7 +20,7 @@ async function checkProvider({fetchImpl = fetch} = {}) {
 }
 
 // Retry only missing/truncated completions, never a completed review decision.
-async function requestReview({messages, fetchImpl = fetch,
+async function requestReview({messages, fetchImpl = fetch, thinking = true,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = () => {}}) {
   let maxTokens = 4096;
   let outcome;
@@ -28,7 +28,8 @@ async function requestReview({messages, fetchImpl = fetch,
     const response = await fetchImpl('https://api.deepseek.com/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(90000),
       headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model: 'deepseek-flash', thinking: {type: 'enabled'}, reasoning_effort: 'low',
+      body: JSON.stringify({model: 'deepseek-flash',
+        ...(thinking ? {thinking: {type: 'enabled'}, reasoning_effort: 'low'} : {thinking: {type: 'disabled'}}),
         max_tokens: maxTokens, response_format: {type: 'json_object'}, messages}),
     });
     if (!response.ok) return {failure: `AI assessment unavailable: provider HTTP ${response.status}`};

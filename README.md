@@ -240,3 +240,11 @@ verdict without findings and exact source quotations for every updated page.
 Unsupported claims, fabricated quotations, or uncovered pages fail closed. This is
 an AI quality gate, not a proof of semantic correctness; generated docs remain
 subject to correction when new evidence reveals a mistake.
+
+Wiki planning, writing, and factual checking use DeepSeek Flash with thinking
+explicitly disabled and JSON mode enabled. This leaves the bounded output budget
+for actual structured results; PR review retains its existing reasoning mode.
+The read-only `evaluate-wiki` operation tests the live factual gate on a supported
+authentication document and a deliberately false denial/unavailability claim.
+A false claim must receive a substantive negative verdict; provider failures,
+malformed output, or missing evidence cannot count as a successful rejection.

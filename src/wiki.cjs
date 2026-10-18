@@ -77,7 +77,7 @@ function validateBundle(bundle, expected, wiki) {
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
-async function planWiki({identity, source, wiki, complete = requestReview, report = () => {}}) {
+async function planWiki({identity, source, wiki, complete = options => requestReview({...options, thinking: false}), report = () => {}}) {
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
   const ask = async (instruction, evidence) => {
@@ -130,4 +130,27 @@ async function planWiki({identity, source, wiki, complete = requestReview, repor
   return bundle;
 }
 
-module.exports = {validateConfig, validateIdentity, validateBundle, planWiki};
+async function evaluateWiki({complete = options => requestReview({...options, thinking: false}), report = () => {}} = {}) {
+  const identity = {repository: 'example/gateway', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 1};
+  const source = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
+  const wiki = {'Home.md': '# Authentication'};
+  for (const [name, content, supported] of [
+    ['supported-authentication', '# Authentication\nDenied credentials return 401. Temporary upstream unavailability returns 502.', true],
+    ['false-denial-classification', '# Authentication\nTemporary upstream unavailability is treated as denied credentials and returns 401.', false],
+  ]) {
+    let calls = 0, error;
+    try {
+      await planWiki({identity, source, wiki, report, complete: async request => {
+        calls++;
+        if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Authentication contract'}]})};
+        if (calls === 2) return {content: JSON.stringify({path: 'Home.md', content})};
+        return complete(request);
+      }});
+    } catch (failure) {error = failure;}
+    if (supported && error) throw error;
+    assert(supported || error?.message === 'Wiki factual review did not support the complete update; nothing will be published', 'Live wiki evaluation failed to reject the false authentication claim');
+    report(`Live wiki evaluation ${name}: ${supported ? 'supported' : 'rejected'}`);
+  }
+}
+
+module.exports = {validateConfig, validateIdentity, validateBundle, planWiki, evaluateWiki};
