@@ -9,7 +9,8 @@ function withKey(run) {return async () => {
   const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
   try {await run();} finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
 };}
-const response = value => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(value)}}]})});
+const response = value => ({ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
+  {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: value.request_sources ? 'source_request' : 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})});
 
 test('review syntax includes all gates and uses actual immutable nonblank source lines', () => {
   const {snapshot} = fixture();
@@ -34,6 +35,9 @@ test('complete independent source reports are graded and combined without exposi
   assert.equal(result.decision, 'auto_approve'); assert.equal(result.reviews.length, 2); assert.equal(result.usage.length, 4);
   assert.deepEqual(requests.slice(0, 2).map(request => request.model), ['deepseek-flash', 'deepseek-v4-pro']);
   assert.equal(requests[0].messages[1].content, requests[1].messages[1].content);
+  const native = requests[0].tools.find(item => item.function.name === 'acceptance_report').function.parameters;
+  assert.deepEqual(native.properties.evidence.items.properties.source.enum, Object.keys(f.snapshot.sources));
+  assert.deepEqual(native.properties.snapshot.enum, [f.snapshot.digest]);
   assert.ok(!JSON.parse(requests[1].messages[1].content).reviews);
   assert.equal(reports[0], result);
   const quiet = await reviewChange({...f, config, fetchImpl: async (_, options) => {

@@ -51,6 +51,28 @@ test('acceptance truncation retries identical evidence within fixed token and de
   assert.equal(result.usage.length, 3); assert.equal(result.usage[0].tokens, null);
 }));
 
+test('native structured results bind source identities without allowing arbitrary generated calls', keys(async () => {
+  const schemas = {acceptance_report: {type: 'object', properties: {}, required: [], additionalProperties: false}};
+  const request = thinking => ({model: 'deepseek-flash', messages, thinking, schemas});
+  for (const thinking of [true, false]) {
+    const result = await requestJSON({...request(thinking), fetchImpl: async (url, options) => {
+      assert.equal(url, 'https://api.deepseek.com/beta/chat/completions');
+      const body = JSON.parse(options.body);
+      assert.equal(body.tool_choice, thinking ? 'auto' : 'required');
+      assert.equal(body.parallel_tool_calls, false); assert.equal(body.tools[0].function.strict, true);
+      return reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: 'acceptance_report', arguments: '{"result":"held"}'}}]}}]});
+    }});
+    assert.deepEqual(result.value, {result: 'held'});
+  }
+  for (const calls of [undefined, [], [{function: {name: 'execute_shell', arguments: '{}'}}], [{}, {}]]) {
+    let count = 0;
+    await assert.rejects(requestJSON({...request(false), fetchImpl: async () => {
+      count++; return reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: calls}}]});
+    }}), /invalid structured result/);
+    assert.equal(count, 1);
+  }
+}));
+
 test('unavailable, malformed, incomplete and unsupported model responses never produce approval', keys(async () => {
   await assert.rejects(requestJSON({model: 'unknown', messages}), /Unsupported/);
   delete process.env.DEEPSEEK_API_KEY;

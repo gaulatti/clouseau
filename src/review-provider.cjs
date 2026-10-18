@@ -5,26 +5,38 @@ const JEV_MODEL = 'jev-1.13.0';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // A completed answer, including a negative or malformed one, is never resampled.
-async function requestJSON({messages, model, thinking = true, fetchImpl = fetch, wait = delay, report = () => {}}) {
+async function requestJSON({messages, model, thinking = true, schemas, fetchImpl = fetch, wait = delay, report = () => {}}) {
   if (!MODELS.includes(model)) throw new Error('Unsupported acceptance model');
   if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
   const usage = [];
   let completed;
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
-    const response = await fetchImpl('https://api.deepseek.com/chat/completions', {
+    const response = await fetchImpl(schemas ? 'https://api.deepseek.com/beta/chat/completions' : 'https://api.deepseek.com/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(90000),
       headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
       body: JSON.stringify({model, ...(thinking ? {thinking: {type: 'enabled'}, reasoning_effort: 'low'} : {thinking: {type: 'disabled'}, temperature: 0}),
-        max_tokens: 8192 * 2 ** attempt, response_format: {type: 'json_object'}, messages}),
+        max_tokens: 8192 * 2 ** attempt, messages, ...(schemas ? {
+          tools: Object.entries(schemas).map(([name, parameters]) => ({type: 'function', function: {name, parameters, strict: true,
+            description: 'Submit structured evidence or request repository source. Arguments are parsed data; no generated function or source is executed.'}})),
+          tool_choice: thinking ? 'auto' : 'required', parallel_tool_calls: false,
+        } : {response_format: {type: 'json_object'}})}),
     });
     if (!response.ok) throw new Error(`Acceptance provider unavailable: HTTP ${response.status}`);
     const body = await response.json();
     usage.push({provider: 'deepseek', requested_model: model, model: body.model || model,
       milliseconds: Date.now() - started, tokens: body.usage || null});
     const choice = body.choices?.[0];
-    report(`Acceptance provider: model=${model}, attempt=${attempt + 1}/3, outcome=${choice?.finish_reason === 'stop' ? 'complete' : choice?.finish_reason === 'length' ? 'length' : 'incomplete'}`);
-    if (choice?.finish_reason === 'stop') {completed = choice.message.content; break;}
+    const complete = choice?.finish_reason === (schemas ? 'tool_calls' : 'stop');
+    report(`Acceptance provider: model=${model}, attempt=${attempt + 1}/3, outcome=${complete ? 'complete' : choice?.finish_reason === 'length' ? 'length' : 'incomplete'}`);
+    if (complete) {
+      if (schemas) {
+        const calls = choice.message.tool_calls;
+        if (calls?.length !== 1 || !Object.hasOwn(schemas, calls[0].function.name)) throw new Error('Acceptance provider returned an invalid structured result');
+        completed = calls[0].function.arguments;
+      } else completed = choice.message.content;
+      break;
+    }
     if (choice?.finish_reason !== 'length' || attempt === 2) throw new Error('Acceptance provider did not complete the bounded review');
     await wait((attempt + 1) * 1000);
   }
