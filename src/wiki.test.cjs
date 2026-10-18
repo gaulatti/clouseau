@@ -6,6 +6,7 @@ const config = {version: 1, source_paths: ['src/', 'README.md'], deployment_work
 const identity = {repository: 'example/upload', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 12};
 const wiki = {'Home.md': '[Guide](Guide)\n', 'Guide.md': 'Existing upload guide.\n'};
 const bundle = (updates = []) => ({version: 1, ...identity, updates});
+const facts = (pages, source) => ({supported: true, findings: [], evidence: pages.map(page => ({page: page.path, source_path: Object.keys(source)[0], quote: Object.values(source)[0]}))});
 const done = value => ({content: JSON.stringify(value)});
 
 test('wiki configuration rejects ambiguous fields, unsafe source paths and deployment boundaries', () => {
@@ -74,13 +75,14 @@ test('wiki generation coordinates three real pages before validating the whole b
     assert.match(request.messages[0].content, /untrusted\s+evidence/);
     const input = JSON.parse(request.messages[1].content);
     assert.deepEqual(input.source, source);
+    if (input.proposed_update) {calls++; return done(facts(input.proposed_update, source));}
     if (calls++ === 0) return done(manifest);
     assert.deepEqual(input.plan, manifest.pages);
     assert.equal(input.requested_page, manifest.pages[calls - 2].path);
     assert.equal(input.proposed_pages.length, calls - 2);
     return done({path: input.requested_page, content: pages[calls - 2]});
   }});
-  assert.equal(calls, 4);
+  assert.equal(calls, 5);
   assert.equal(result.updates.length, 3);
 });
 
@@ -115,10 +117,11 @@ test('default wiki completion uses the production provider and accepts an unchan
 
 test('wiki JSON envelope retry regenerates one complete object without salvaging a prefix', async () => {
   const requests = [], reports = [];
+  const source = {'README.md': 'Upload gateway deployment.'};
   const manifest = {pages: [{path: 'Guide.md', reason: 'Update deployment'}]};
   const page = {path: 'Guide.md', content: '[Home](Home) Complete guide.'};
-  const responses = [JSON.stringify(manifest), JSON.stringify(page) + '\n' + JSON.stringify(page), JSON.stringify(page)];
-  const result = await planWiki({identity, source: {}, wiki, report: line => reports.push(line), complete: async request => {
+  const responses = [JSON.stringify(manifest), JSON.stringify(page) + '\n' + JSON.stringify(page), JSON.stringify(page), JSON.stringify(facts([page], source))];
+  const result = await planWiki({identity, source, wiki, report: line => reports.push(line), complete: async request => {
     requests.push(request);
     return {content: responses[requests.length - 1]};
   }});
@@ -138,4 +141,30 @@ test('wiki JSON envelope retry regenerates one complete object without salvaging
   calls = 0;
   await assert.rejects(planWiki({identity, source: {}, wiki, complete: async () => {calls++; return done({pages: [{path: '../bad.md', reason: 'invalid'}]});}}));
   assert.equal(calls, 1, 'a valid JSON object with invalid authority must never be retried');
+});
+
+test('wiki factual review blocks unsupported claims, invented citations and incomplete page evidence', async () => {
+  const source = {'src/auth.rs': 'temporary upstream failure is unavailable; invalid credentials are denied'};
+  const page = {path: 'Guide.md', content: '[Home](Home) Authentication guide.'};
+  const supported = facts([page], source);
+  const run = async review => {
+    let calls = 0;
+    return planWiki({identity, source, wiki, complete: async () => done(++calls === 1 ?
+      {pages: [{path: page.path, reason: 'Clarify authentication'}]} : calls === 2 ? page : review)});
+  };
+  assert.deepEqual((await run(supported)).updates, [page]);
+  for (const review of [null, {}, {...supported, supported: 'true'}, {...supported, findings: null},
+    {...supported, findings: [1]}, {...supported, findings: [' ']}, {...supported, findings: ['x'.repeat(1001)]},
+    {...supported, evidence: null}, {...supported, evidence: Array(101).fill({})}]) {
+    await assert.rejects(run(review), /Invalid wiki factual review/);
+  }
+  await assert.rejects(run({...supported, supported: false, findings: ['Temporary unavailability was changed into permanent denial.']}), /did not support/);
+  await assert.rejects(run({...supported, findings: ['A contradiction remains.']}), /did not support/);
+  for (const evidence of [null, {...supported.evidence[0], page: 'Other.md'},
+    {...supported.evidence[0], source_path: 'absent.rs'}, {...supported.evidence[0], quote: 1},
+    {...supported.evidence[0], quote: ' '}, {...supported.evidence[0], quote: 'x'.repeat(1001)},
+    {...supported.evidence[0], quote: 'invented source quotation'}]) {
+    await assert.rejects(run({...supported, evidence: [evidence]}), /exact source evidence/);
+  }
+  await assert.rejects(run({...supported, evidence: []}), /cover every updated page/);
 });

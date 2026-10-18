@@ -36,6 +36,7 @@ function fixture() {
   return {temp, sourceDirectory, wikiDirectory, remote, context, state, github, options, read, publish,
     close() {fs.rmSync(temp, {recursive: true, force: true});}};
 }
+const facts = (pages, source) => ({supported: true, findings: [], evidence: pages.map(page => ({page: page.path, source_path: Object.keys(source)[0], quote: Object.values(source)[0]}))});
 const empty = s => ({version: 1, ...s.identity, updates: []});
 
 test('committed snapshots select explicit source paths and exclude wiki agent instructions', () => {
@@ -110,7 +111,7 @@ test('real Git publication commits coordinated pages and a deployment receipt at
     const s = f.read(); let calls = 0;
     const pages = [{path: 'Home.md', reason: 'link new page'}, {path: 'Guide.md', reason: 'update behavior'}, {path: 'New.md', reason: 'new docs'}];
     const content = ['[Guide](Guide) [New](New)\n', '[Home](Home) Updated guide.\n', '[Guide](Guide) New docs.\n'];
-    const bundle = await planWiki({...s, complete: async () => ({content: JSON.stringify(calls++ === 0 ? {pages} : {path: pages[calls - 2].path, content: content[calls - 2]})})});
+    const bundle = await planWiki({...s, complete: async ({messages}) => {const input = JSON.parse(messages[1].content); return {content: JSON.stringify(input.proposed_update ? facts(input.proposed_update, s.source) : calls++ === 0 ? {pages} : {path: pages[calls - 2].path, content: content[calls - 2]})};}});
     const before = g(f.remote, ['rev-parse', 'master']);
     const result = await f.publish(bundle);
     assert.equal(result.changedPages, 3); assert.equal(result.alreadyDocumented, false);
