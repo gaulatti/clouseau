@@ -242,7 +242,7 @@ an AI quality gate, not a proof of semantic correctness; generated docs remain
 subject to correction when new evidence reveals a mistake.
 
 Wiki planning, writing, and factual checking use DeepSeek Flash with thinking
-explicitly disabled and JSON mode enabled. This leaves the bounded output budget
+explicitly disabled and native JSON schemas enabled. This leaves the bounded output budget
 for actual structured results; PR review retains its existing reasoning mode.
 The read-only `evaluate-wiki` operation tests the live factual gate on a supported
 authentication document and a deliberately false denial/unavailability claim.
@@ -266,3 +266,11 @@ exact lines and must select existing nonblank IDs for every updated page. Invent
 IDs, unrelated authority, and incomplete page evidence fail closed. Diagnostics
 include the immutable source-line map so each cited text can be inspected without
 trusting a model's transcription. This keeps the same substantive review gate.
+
+Wiki requests use DeepSeek's `/responses` API with native `json_schema` formats
+specific to planning, the exact requested page, and factual review. Local schema,
+identity, page, link, source-reference, and publication validation remain mandatory.
+Only token-truncated native responses are retried, at most three attempts with
+4,096/8,192/16,384 output tokens and 90-second request deadlines. A completed
+response must contain one assistant text item; tool calls or fragments fail closed.
+PR review continues to use its existing Chat Completions API and reasoning policy.

@@ -1,6 +1,6 @@
 'use strict';
 
-const {requestReview} = require('./provider.cjs');
+const {requestWiki} = require('./provider.cjs');
 const assert = (condition, message) => {if (!condition) throw new Error(message);};
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');
@@ -75,19 +75,24 @@ function validateBundle(bundle, expected, wiki) {
   return bundle;
 }
 
+const objectSchema = properties => ({type: 'object', additionalProperties: false, required: Object.keys(properties), properties});
+const textSchema = {type: 'string'};
+const planSchema = objectSchema({pages: {type: 'array', items: objectSchema({path: textSchema, reason: textSchema})}});
+const reviewSchema = objectSchema({supported: {type: 'boolean'}, findings: {type: 'array', items: textSchema}, evidence: {type: 'array', items: objectSchema({page: textSchema, source_id: textSchema})}});
+
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
-async function planWiki({identity, source, wiki, complete = options => requestReview({...options, thinking: false}), report = () => {}, diagnostic = () => {}, allowCorrection = true}) {
+async function planWiki({identity, source, wiki, complete = requestWiki, report = () => {}, diagnostic = () => {}, allowCorrection = true}) {
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
-  const ask = async (instruction, evidence) => {
+  const ask = async (instruction, evidence, schema) => {
     const content = JSON.stringify(evidence);
     assert(Buffer.byteLength(content) <= 1000000, 'Wiki request exceeds the complete-context limit');
     // A malformed JSON envelope is a transport-format failure, not a review
     // decision. Regenerate once from the same evidence; never trim or accept
     // a prefix, and never retry schema, link, scope, or deployment failures.
     for (let formatAttempt = 1; formatAttempt <= 2; formatAttempt++) {
-      const result = await complete({report, messages: [
+      const result = await complete({report, schema, messages: [
         {role: 'system', content: `${RULES}\n${instruction}\nReturn exactly ONE JSON object. Escape Markdown line breaks inside the content string. Do not append another object, prose, or code fences outside the JSON. ${formatAttempt === 2 ? 'The previous envelope was not valid JSON; regenerate the exact requested object from the same evidence.' : ''}`},
         {role: 'user', content},
       ]});
@@ -99,7 +104,7 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
     }
     throw new Error('Wiki model returned invalid JSON twice; nothing will be published');
   };
-  const manifest = await ask('Return {"pages":[{"path":"Page.md","reason":"evidence-based reason"}]} planning all necessary page changes. Use an empty pages array when documentation already matches. Include navigation updates for new pages.', {identity, source, wiki});
+  const manifest = await ask('Return {"pages":[{"path":"Page.md","reason":"evidence-based reason"}]} planning all necessary page changes. Use an empty pages array when documentation already matches. Include navigation updates for new pages.', {identity, source, wiki}, planSchema);
   assert(exact(manifest, ['pages']) && Array.isArray(manifest.pages) && manifest.pages.length <= 20, 'Invalid wiki page plan');
   const names = new Set();
   for (const page of manifest.pages) {
@@ -111,7 +116,7 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
   const generate = async (previous = [], findings = []) => {
     const updates = [];
     for (const page of manifest.pages) {
-      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: findings});
+      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: findings}, objectSchema({path: {type: 'string', enum: [page.path]}, content: textSchema}));
       assert(rendered.path === page.path, 'Model returned a different wiki page');
       updates.push(rendered);
       report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
@@ -123,7 +128,7 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
   const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates});
+    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema);
     assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
       Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
       Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
@@ -154,7 +159,7 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
   return bundle;
 }
 
-async function evaluateWiki({complete = options => requestReview({...options, thinking: false}), report = () => {}} = {}) {
+async function evaluateWiki({complete = requestWiki, report = () => {}} = {}) {
   const identity = {repository: 'example/gateway', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 1};
   const source = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
   const wiki = {'Home.md': '# Authentication'};
