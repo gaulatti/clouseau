@@ -282,3 +282,14 @@ test('native response schemas bind planning, the requested page and factual cita
   assert.deepEqual(requests[2].schema.properties.evidence.items.required, ['page', 'source_id']);
   assert.equal(requests[2].schema.properties.supported.type, 'boolean');
 });
+
+test('an invalid planning decision leaves inspectable diagnostics and never reaches page generation', async () => {
+  const plan = {pages: [{path: 'AGENTS.md', reason: 'Forbidden authority change'}]};
+  const diagnostics = [];
+  let calls = 0;
+  await assert.rejects(planWiki({identity, source: {}, wiki, diagnostic: value => diagnostics.push(value), complete: async () => {calls++; return done(plan);}}), /Invalid wiki planned page/);
+  assert.equal(calls, 1);
+  assert.equal(diagnostics[0].stage, 'planning');
+  assert.deepEqual(diagnostics[0].plan, plan);
+  assert.equal(diagnostics[0].identity.source_sha, identity.source_sha);
+});
