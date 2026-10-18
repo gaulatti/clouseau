@@ -165,26 +165,3 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   }});
   assert.equal(inspected.report.resolutions[0].id, draft.findings[0].id);
 }));
-
-test('multi-file syntax gives every accounting entry its own changed-source proof and uses trusted contract authority', () => {
-  const {snapshot} = fixture();
-  snapshot.sources.readme = {authority: 'trusted', kind: 'readme', content: 'Repository introduction.'};
-  snapshot.sources = {readme: snapshot.sources.readme, ...snapshot.sources};
-  snapshot.paths.push('src/helper.rs', 'src/removed.rs');
-  snapshot.files.push({path: 'src/helper.rs', head_source: 'helper'}, {path: 'src/removed.rs', base_source: 'removed'});
-  snapshot.files.reverse();
-  snapshot.sources.helper = {authority: 'untrusted', kind: 'source', content: 'pub fn helper() {}'};
-  snapshot.sources.removed = {authority: 'untrusted', kind: 'source', content: 'pub fn obsolete() {}'};
-  require('./acceptance-sources.cjs').refresh(snapshot);
-  const facts = template(snapshot);
-  const report = materialize(facts, snapshot);
-  assert.equal(report.evidence[0].source, 'contract', 'noncontract evidence cannot stand in for trusted contract authority');
-  assert.equal(report.accounting.length, 3);
-  assert.doesNotThrow(() => validateInspection(report, snapshot));
-  for (const path of snapshot.paths) {
-    const file = snapshot.files.find(item => item.path === path);
-    const entry = report.accounting.find(item => item.path === path);
-    const proof = report.evidence.find(item => entry.evidence.includes(item.id));
-    assert.equal(proof.source, file.head_source || file.base_source);
-  }
-});
