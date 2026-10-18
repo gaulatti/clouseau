@@ -133,10 +133,10 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
     const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Findings must contain ONLY unresolved false or unsupported claims, each naming the page, exact incorrect claim, and source-grounded correction. Never put supported statements, audit commentary, or "no finding" entries in findings; put successful support only in evidence. Set supported true exactly when no unresolved findings remain. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema);
+    diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review, source_evidence: sourceEvidence});
     assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
       Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
       Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
-    diagnostic({version: 1, identity, revision, updates, review, source_evidence: sourceEvidence});
     return review;
   };
   let updates = await generate();

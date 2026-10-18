@@ -306,3 +306,16 @@ test('correction refuses cycling back to any previously rejected draft, not only
   assert.equal(renders, 3);
   assert.equal(reviews, 2, 'a repeated rejected draft is refused before another model verdict');
 });
+
+
+test('invalid factual response values remain inspectable before schema rejection', async () => {
+  const diagnostics = [];
+  const invalid = {supported: true, findings: [null], evidence: []};
+  await assert.rejects(planWiki({identity, source: {'README.md': 'Gateway.'}, wiki, diagnostic: value => diagnostics.push(value), complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    return done(input.proposed_update ? invalid : input.requested_page ? {path: 'Guide.md', content: '[Home](Home) Guide.'} : {pages: [{path: 'Guide.md', reason: 'Documentation'}]});
+  }}), /Invalid wiki factual review/);
+  assert.equal(diagnostics[0].stage, 'factual-review');
+  assert.deepEqual(diagnostics[0].review, invalid);
+  assert.equal(diagnostics[0].source_evidence['README.md:L1'], 'Gateway.');
+});
