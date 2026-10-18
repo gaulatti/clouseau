@@ -109,7 +109,7 @@ test('failed, oversized or malformed generation never returns a publishable part
 
 test('default wiki completion uses the production provider and accepts an unchanged-page plan', async () => {
   const original = globalThis.fetch;
-  globalThis.fetch = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: '{"pages":[]}'}}]})});
+  globalThis.fetch = async (_, options) => {const body = JSON.parse(options.body); assert.deepEqual(body.thinking, {type: 'disabled'}); assert.equal(body.reasoning_effort, undefined); return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: '{"pages":[]}'}}]})};};
   try {assert.deepEqual((await planWiki({identity, source: {}, wiki})).updates, []);}
   finally {globalThis.fetch = original;}
 });
@@ -167,4 +167,30 @@ test('wiki factual review blocks unsupported claims, invented citations and inco
     await assert.rejects(run({...supported, evidence: [evidence]}), /exact source evidence/);
   }
   await assert.rejects(run({...supported, evidence: []}), /cover every updated page/);
+});
+
+
+test('live wiki evaluation uses real production fact-checking and refuses a model that accepts the known false claim', async () => {
+  const {evaluateWiki} = require('./wiki.cjs');
+  const source = 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }';
+  const reports = [];
+  await evaluateWiki({report: line => reports.push(line), complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    const supported = input.proposed_update[0].content.includes('Temporary upstream unavailability returns 502');
+    return done({supported, findings: supported ? [] : ['Unavailability returns 502, not 401.'], evidence: supported ? [{page: 'Home.md', source_path: 'src/auth.rs', quote: source}] : []});
+  }});
+  assert.ok(reports.some(line => line === 'Live wiki evaluation false-denial-classification: rejected'));
+  const positive = () => done({supported: true, findings: [], evidence: [{page: 'Home.md', source_path: 'src/auth.rs', quote: source}]});
+  await assert.rejects(evaluateWiki({complete: async () => positive()}), /failed to reject/);
+  let evaluations = 0;
+  await assert.rejects(evaluateWiki({complete: async () => ++evaluations === 1 ? positive() : {failure: 'unavailable'}}), /failed to reject/);
+  assert.equal(evaluations, 2, 'provider failure cannot masquerade as rejection of the negative fixture');
+  await assert.rejects(evaluateWiki({complete: async () => ({failure: 'unavailable'})}), /nothing will be published/);
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(++calls === 1 ?
+    {supported: true, findings: [], evidence: [{page: 'Home.md', source_path: 'src/auth.rs', quote: source}]} :
+    {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}}]})});
+  try {await evaluateWiki(); assert.equal(calls, 2);}
+  finally {globalThis.fetch = original;}
 });
