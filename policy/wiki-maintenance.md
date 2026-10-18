@@ -35,3 +35,9 @@ protocol-specific behavior. Read production control flow instead of treating all
 failures as equivalent. Do not carry a correction to one protocol into another
 without source evidence. A final independent factual review must support every
 proposed page with exact quotations from the supplied source snapshot.
+
+Prefer the existing page structure and keep edits small. Do not split good pages,
+create redundant summaries, or rewrite unrelated human wording. When supplied
+with review findings and a rejected draft, repair the factual claims in the
+complete updated page set using production control flow. A corrected batch is a
+new proposal that must pass the same full validation and independent review.

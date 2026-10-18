@@ -189,11 +189,16 @@ runs:
           const path = require('node:path');
           if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
           const config = JSON.parse(fs.readFileSync(process.env.WIKI_CONFIG, 'utf8'));
+          fs.mkdirSync(path.dirname(process.env.WIKI_PLAN_PATH), {recursive: true});
+          const diagnostics = [];
           const bundle = await require(path.join(process.env.CLOUSEAU_ROOT, 'src/wiki-git.cjs')).prepareWiki({
             github, context, config, sourceDirectory: process.env.WIKI_SOURCE_DIRECTORY,
             wikiDirectory: process.env.WIKI_DIRECTORY, draft: process.env.WIKI_DRAFT === 'true',
-            report: line => core.info(line.replace(/^AI assessment/, 'Wiki generation'))});
-          fs.mkdirSync(path.dirname(process.env.WIKI_PLAN_PATH), {recursive: true});
+            report: line => core.info(line.replace(/^AI assessment/, 'Wiki generation')),
+            diagnostic: result => {
+              diagnostics.push(result);
+              fs.writeFileSync(`${process.env.WIKI_PLAN_PATH}.diagnostic.json`, JSON.stringify({version: 1, reviews: diagnostics}, null, 2) + '\n');
+            }});
           fs.writeFileSync(process.env.WIKI_PLAN_PATH, JSON.stringify(bundle, null, 2) + '\n');
           core.info(`Validated coordinated update for ${bundle.updates.length} wiki pages. Nothing published.`);
     - name: Publish validated wiki documentation

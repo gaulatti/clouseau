@@ -149,7 +149,7 @@ test('wiki factual review blocks unsupported claims, invented citations and inco
   const supported = facts([page], source);
   const run = async review => {
     let calls = 0;
-    return planWiki({identity, source, wiki, complete: async () => done(++calls === 1 ?
+    return planWiki({identity, source, wiki, allowCorrection: false, complete: async () => done(++calls === 1 ?
       {pages: [{path: page.path, reason: 'Clarify authentication'}]} : calls === 2 ? page : review)});
   };
   assert.deepEqual((await run(supported)).updates, [page]);
@@ -193,4 +193,45 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
     {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}}]})});
   try {await evaluateWiki(); assert.equal(calls, 2);}
   finally {globalThis.fetch = original;}
+});
+
+test('one corrected batch uses actionable findings and receives a new factual review on changed text', async () => {
+  const source = {'src/auth.rs': 'Temporary upstream unavailability returns 502.'};
+  for (const firstSupported of [false, true]) {
+    const requests = [], diagnostics = [];
+    const result = await planWiki({identity, source, wiki, diagnostic: result => diagnostics.push(result), complete: async ({messages}) => {
+      const input = JSON.parse(messages[1].content); requests.push(input);
+      if (input.proposed_update) {
+        const corrected = input.proposed_update[0].content.includes('returns 502');
+        return done(corrected ? facts(input.proposed_update, source) : {supported: firstSupported, findings: ['Temporary unavailability returns 502, not 401.'], evidence: []});
+      }
+      if (input.requested_page) return done({path: 'Guide.md', content: input.review_findings.length ? '[Home](Home) Temporary upstream unavailability returns 502.' : '[Home](Home) Temporary upstream unavailability returns 401.'});
+      return done({pages: [{path: 'Guide.md', reason: 'Authentication status'}]});
+    }});
+    assert.equal(requests.length, 5);
+    assert.deepEqual(requests[3].review_findings, ['Temporary unavailability returns 502, not 401.']);
+    assert.deepEqual(requests[3].previous_update, requests[2].proposed_update);
+    assert.notDeepEqual(requests[2].proposed_update, requests[4].proposed_update);
+    assert.deepEqual(requests[2].source, requests[4].source);
+    assert.match(result.updates[0].content, /returns 502/);
+    assert.deepEqual(diagnostics.map(result => result.revision), [0, 1]);
+    assert.equal(diagnostics[1].review.supported, true);
+  }
+});
+
+test('correction refuses missing findings, identical text and a second substantive rejection', async () => {
+  for (const scenario of ['no-findings', 'unchanged', 'still-wrong']) {
+    const source = {'README.md': 'Temporary upstream unavailability returns 502.'};
+    let calls = 0, renders = 0, reviews = 0;
+    const promise = planWiki({identity, source, wiki, complete: async ({messages}) => {
+      calls++;
+      const input = JSON.parse(messages[1].content);
+      if (input.proposed_update) {reviews++; return done({supported: false, findings: scenario === 'no-findings' ? [] : ['The status is wrong.'], evidence: []});}
+      if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong status.' + (renders === 2 && scenario === 'still-wrong' ? ' Still wrong.' : '')});}
+      return done({pages: [{path: 'Guide.md', reason: 'Authentication'}]});
+    }});
+    await assert.rejects(promise, scenario === 'no-findings' ? /actionable findings/ : scenario === 'unchanged' ? /did not change/ : /did not support/);
+    assert.equal(reviews, scenario === 'still-wrong' ? 2 : 1);
+    assert.equal(calls, scenario === 'no-findings' ? 3 : scenario === 'unchanged' ? 4 : 5);
+  }
 });

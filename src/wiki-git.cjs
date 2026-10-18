@@ -60,13 +60,13 @@ async function verifyDeployment({github, context, config}) {
   check(deployment.length === 1 && deployment[0].status === 'completed' && deployment[0].conclusion === 'success', 'Wiki publication requires a completed successful deployment job');
 }
 
-async function prepareWiki({github, context, config, sourceDirectory, wikiDirectory, draft = false, complete, report}) {
+async function prepareWiki({github, context, config, sourceDirectory, wikiDirectory, draft = false, complete, report, diagnostic}) {
   if (!draft) await verifyDeployment({github, context, config});
   const current = snapshot({sourceDirectory, wikiDirectory, config, repository: `${context.repo.owner}/${context.repo.repo}`, revision: context.sha, runId: context.runId});
   if (current.previous?.source_sha === context.sha) {
     return validateBundle({version: 1, ...current.identity, updates: []}, current.identity, current.wiki);
   }
-  return planWiki({...current, complete, report});
+  return planWiki({...current, complete, report, diagnostic});
 }
 
 async function publishWiki({github, context, config, sourceDirectory, wikiDirectory, bundle}) {

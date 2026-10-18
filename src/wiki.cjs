@@ -77,7 +77,7 @@ function validateBundle(bundle, expected, wiki) {
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
-async function planWiki({identity, source, wiki, complete = options => requestReview({...options, thinking: false}), report = () => {}}) {
+async function planWiki({identity, source, wiki, complete = options => requestReview({...options, thinking: false}), report = () => {}, diagnostic = () => {}, allowCorrection = true}) {
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
   const ask = async (instruction, evidence) => {
@@ -106,19 +106,37 @@ async function planWiki({identity, source, wiki, complete = options => requestRe
     names.add(page.path);
   }
   report(`Wiki generation planned ${manifest.pages.length} pages`);
-  const updates = [];
-  for (const page of manifest.pages) {
-    const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates});
-    assert(rendered.path === page.path, 'Model returned a different wiki page');
-    updates.push(rendered);
-    report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
-  }
-  const bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
+  const generate = async (previous = [], findings = []) => {
+    const updates = [];
+    for (const page of manifest.pages) {
+      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: findings});
+      assert(rendered.path === page.path, 'Model returned a different wiki page');
+      updates.push(rendered);
+      report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
+    }
+    return updates;
+  };
+  const reviewUpdate = async (updates, revision) => {
+    const review = await ask('Independently fact-check EVERY proposed page against the source. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_path":"source file path","quote":"exact source substring supporting the change"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page with at least one exact source quotation; source citations alone do not excuse contradictory claims.', {identity, source, wiki, proposed_update: updates});
+    assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
+      Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
+      Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
+    diagnostic({version: 1, identity, revision, updates, review});
+    return review;
+  };
+  let updates = await generate();
+  let bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
   if (updates.length === 0) return bundle;
-  const review = await ask('Independently fact-check EVERY proposed page against the source. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_path":"source file path","quote":"exact source substring supporting the change"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page with at least one exact source quotation; source citations alone do not excuse contradictory claims.', {identity, source, wiki, proposed_update: updates});
-  assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
-    Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
-    Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
+  let review = await reviewUpdate(updates, 0);
+  if (allowCorrection && (!review.supported || review.findings.length > 0)) {
+    assert(review.findings.length > 0, 'A rejected wiki draft needs actionable findings for correction');
+    report('Wiki factual review rejected the draft; generating one corrected batch from its findings');
+    const previous = updates;
+    updates = await generate(previous, review.findings);
+    bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
+    assert(updates.some((page, index) => page.content !== previous[index].content), 'Wiki correction did not change the rejected draft; nothing will be published');
+    review = await reviewUpdate(updates, 1);
+  }
   assert(review.supported && review.findings.length === 0, 'Wiki factual review did not support the complete update; nothing will be published');
   for (const evidence of review.evidence) {
     assert(exact(evidence, ['page', 'source_path', 'quote']) && names.has(evidence.page) &&
@@ -140,7 +158,7 @@ async function evaluateWiki({complete = options => requestReview({...options, th
   ]) {
     let calls = 0, error;
     try {
-      await planWiki({identity, source, wiki, report, complete: async request => {
+      await planWiki({identity, source, wiki, report, allowCorrection: false, complete: async request => {
         calls++;
         if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Authentication contract'}]})};
         if (calls === 2) return {content: JSON.stringify({path: 'Home.md', content})};
