@@ -6,7 +6,8 @@ const config = {version: 1, source_paths: ['src/', 'README.md'], deployment_work
 const identity = {repository: 'example/upload', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 12};
 const wiki = {'Home.md': '[Guide](Guide)\n', 'Guide.md': 'Existing upload guide.\n'};
 const bundle = (updates = []) => ({version: 1, ...identity, updates});
-const facts = (pages, source) => ({supported: true, findings: [], evidence: pages.map(page => ({page: page.path, source_id: `${Object.keys(source)[0]}:L1`}))});
+const facts = (pages, source) => ({pages: Object.fromEntries(pages.map(page => [page.path, {source_id: `${Object.keys(source)[0]}:L1`, findings: '', supported: true}]))});
+const rejection = (page, sourceId, finding) => ({pages: {[page]: {source_id: sourceId, findings: finding, supported: false}}});
 const done = value => ({content: JSON.stringify(value)});
 
 test('wiki configuration rejects ambiguous fields, unsafe source paths and deployment boundaries', () => {
@@ -111,11 +112,11 @@ test('default wiki completion uses the production provider and accepts an unchan
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     const body = JSON.parse(options.body);
-    assert.equal(url, 'https://api.deepseek.com/responses');
-    assert.deepEqual(body.reasoning, {effort: 'none'});
-    assert.equal(body.text.format.type, 'json_schema');
-    assert.deepEqual(body.text.format.schema.required, ['pages']);
-    return {ok: true, json: async () => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: '{"pages":[]}'}]}]})};
+    assert.equal(url, 'https://api.deepseek.com/beta/chat/completions');
+    assert.deepEqual(body.thinking, {type: 'disabled'});
+    assert.equal(body.tools[0].function.strict, true);
+    assert.deepEqual(body.tools[0].function.parameters.required, ['pages']);
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: '{"pages":[]}'}}]}}]})};
   };
   try {assert.deepEqual((await planWiki({identity, source: {}, wiki})).updates, []);}
   finally {globalThis.fetch = original;}
@@ -160,19 +161,20 @@ test('wiki factual review blocks unsupported claims, invented citations and inco
       {pages: [{path: page.path, reason: 'Clarify authentication'}]} : calls === 2 ? page : review)});
   };
   assert.deepEqual((await run(supported)).updates, [page]);
-  for (const review of [null, {}, {...supported, supported: 'true'}, {...supported, findings: null},
-    {...supported, findings: [1]}, {...supported, findings: [' ']}, {...supported, findings: ['x'.repeat(1001)]},
-    {...supported, evidence: null}, {...supported, evidence: Array(101).fill({})}]) {
+  const item = supported.pages['Guide.md'];
+  for (const review of [null, {}, {pages: null}, {pages: {}}, {pages: {'Other.md': item}},
+    {pages: {'Guide.md': null}}, {pages: {'Guide.md': {...item, extra: true}}},
+    {pages: {'Guide.md': {...item, supported: 'true'}}}, {pages: {'Guide.md': {...item, findings: null}}},
+    {pages: {'Guide.md': {...item, findings: 'x'.repeat(2001)}}}]) {
     await assert.rejects(run(review), /Invalid wiki factual review/);
   }
-  await assert.rejects(run({...supported, supported: false, findings: ['Temporary unavailability was changed into permanent denial.']}), /did not support/);
-  await assert.rejects(run({...supported, findings: ['A contradiction remains.']}), /did not support/);
-  for (const evidence of [null, {...supported.evidence[0], page: 'Other.md'},
-    {...supported.evidence[0], source_id: 'absent.rs:L1'}, {...supported.evidence[0], source_id: 1},
-    {...supported.evidence[0], source_id: 'src/auth.rs:L0'}, {...supported.evidence[0], quote: 'invented quotation'}]) {
-    await assert.rejects(run({...supported, evidence: [evidence]}), /exact source evidence/);
+  await assert.rejects(run(rejection('Guide.md', 'src/auth.rs:L1', 'Temporary failure was called denial.')), /did not support/);
+  for (const changed of [{...item, supported: false}, {...item, findings: 'A contradiction remains.'}]) {
+    await assert.rejects(run({pages: {'Guide.md': changed}}), /contradicts page findings/);
   }
-  await assert.rejects(run({...supported, evidence: []}), /cover every updated page/);
+  for (const source_id of ['absent.rs:L1', 1, 'src/auth.rs:L0']) {
+    await assert.rejects(run({pages: {'Guide.md': {...item, source_id}}}), /exact source evidence/);
+  }
 });
 
 
@@ -182,11 +184,13 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
   const reports = [];
   await evaluateWiki({report: line => reports.push(line), complete: async ({messages}) => {
     const input = JSON.parse(messages[1].content);
-    const supported = input.proposed_update[0].content.includes('Temporary upstream unavailability returns 502');
-    return done({supported, findings: supported ? [] : ['Unavailability returns 502, not 401.'], evidence: supported ? [{page: 'Home.md', source_id: 'src/auth.rs:L1'}] : []});
+    const text = input.proposed_update[0].content;
+    const supported = text.includes('Temporary upstream unavailability returns 502') || text.includes('Both HTTP and FTP');
+    const sourceId = Object.keys(input.source_evidence)[0];
+    return done({pages: {'Home.md': {source_id: sourceId, findings: supported ? '' : 'The document contradicts the supplied implementation.', supported}}});
   }});
   assert.ok(reports.some(line => line === 'Live wiki evaluation false-denial-classification: rejected'));
-  const positive = () => done({supported: true, findings: [], evidence: [{page: 'Home.md', source_id: 'src/auth.rs:L1'}]});
+  const positive = () => done(facts([{path: 'Home.md'}], {'src/auth.rs': source}));
   await assert.rejects(evaluateWiki({complete: async () => positive()}), /failed to reject/);
   let evaluations = 0;
   await assert.rejects(evaluateWiki({complete: async () => ++evaluations === 1 ? positive() : {failure: 'unavailable'}}), /failed to reject/);
@@ -194,51 +198,55 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
   await assert.rejects(evaluateWiki({complete: async () => ({failure: 'unavailable'})}), /nothing will be published/);
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async () => ({ok: true, json: async () => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: JSON.stringify(++calls === 1 ?
-    {supported: true, findings: [], evidence: [{page: 'Home.md', source_id: 'src/auth.rs:L1'}]} :
-    {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}]}]})});
-  try {await evaluateWiki(); assert.equal(calls, 2);}
+  globalThis.fetch = async (_, options) => {
+    calls++;
+    const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+    const text = input.proposed_update[0].content;
+    const supported = text.includes('Temporary upstream unavailability returns 502') || text.includes('Both HTTP and FTP');
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: JSON.stringify({pages: {'Home.md': {source_id: Object.keys(input.source_evidence)[0], findings: supported ? '' : 'The source contradicts this claim.', supported}}})}}]}}]})};
+  };
+  try {await evaluateWiki(); assert.equal(calls, 4);}
   finally {globalThis.fetch = original;}
 });
 
 test('one corrected batch uses actionable findings and receives a new factual review on changed text', async () => {
   const source = {'src/auth.rs': 'Temporary upstream unavailability returns 502.'};
-  for (const firstSupported of [false, true]) {
+  for (const firstSupported of [false]) {
     const requests = [], diagnostics = [];
     const result = await planWiki({identity, source, wiki, diagnostic: result => diagnostics.push(result), complete: async ({messages}) => {
       const input = JSON.parse(messages[1].content); requests.push(input);
       if (input.proposed_update) {
         const corrected = input.proposed_update[0].content.includes('returns 502');
-        return done(corrected ? facts(input.proposed_update, source) : {supported: firstSupported, findings: ['Temporary unavailability returns 502, not 401.'], evidence: []});
+        return done(corrected ? facts(input.proposed_update, source) : rejection('Guide.md', 'src/auth.rs:L1', 'Temporary unavailability returns 502, not 401.'));
       }
       if (input.requested_page) return done({path: 'Guide.md', content: input.review_findings.length ? '[Home](Home) Temporary upstream unavailability returns 502.' : '[Home](Home) Temporary upstream unavailability returns 401.'});
       return done({pages: [{path: 'Guide.md', reason: 'Authentication status'}]});
     }});
     assert.equal(requests.length, 5);
-    assert.deepEqual(requests[3].review_findings, ['Temporary unavailability returns 502, not 401.']);
+    assert.deepEqual(requests[3].review_findings, ['Guide.md: Temporary unavailability returns 502, not 401.']);
     assert.deepEqual(requests[3].previous_update, requests[2].proposed_update);
     assert.notDeepEqual(requests[2].proposed_update, requests[4].proposed_update);
     assert.deepEqual(requests[2].source_evidence, requests[4].source_evidence);
     assert.match(result.updates[0].content, /returns 502/);
     assert.deepEqual(diagnostics.map(result => result.revision), [0, 1]);
-    assert.equal(diagnostics[1].review.supported, true);
+    assert.equal(diagnostics[1].review.pages['Guide.md'].supported, true);
   }
 });
 
-test('correction refuses missing findings, identical text and a second substantive rejection', async () => {
+test('correction refuses missing findings, repeated text and an exhausted substantive correction budget', async () => {
   for (const scenario of ['no-findings', 'unchanged', 'still-wrong']) {
     const source = {'README.md': 'Temporary upstream unavailability returns 502.'};
     let calls = 0, renders = 0, reviews = 0;
     const promise = planWiki({identity, source, wiki, complete: async ({messages}) => {
       calls++;
       const input = JSON.parse(messages[1].content);
-      if (input.proposed_update) {reviews++; return done({supported: false, findings: scenario === 'no-findings' ? [] : ['The status is wrong.'], evidence: []});}
-      if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong status.' + (renders === 2 && scenario === 'still-wrong' ? ' Still wrong.' : '')});}
+      if (input.proposed_update) {reviews++; return done(rejection('Guide.md', 'README.md:L1', scenario === 'no-findings' ? '' : 'The status is wrong.'));}
+      if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong status.' + (scenario === 'still-wrong' ? ` Still wrong ${renders}.` : '')});}
       return done({pages: [{path: 'Guide.md', reason: 'Authentication'}]});
     }});
-    await assert.rejects(promise, scenario === 'no-findings' ? /actionable findings/ : scenario === 'unchanged' ? /did not change/ : /did not support/);
-    assert.equal(reviews, scenario === 'still-wrong' ? 2 : 1);
-    assert.equal(calls, scenario === 'no-findings' ? 3 : scenario === 'unchanged' ? 4 : 5);
+    await assert.rejects(promise, scenario === 'no-findings' ? /contradicts page findings/ : scenario === 'unchanged' ? /did not change/ : /did not support/);
+    assert.equal(reviews, scenario === 'still-wrong' ? 4 : 1);
+    assert.equal(calls, scenario === 'no-findings' ? 3 : scenario === 'unchanged' ? 4 : 9);
   }
 });
 
@@ -248,7 +256,7 @@ test('source references preserve exact indexed lines and never accept blank or i
     const diagnostics = [];
     const promise = planWiki({identity, source, wiki, diagnostic: result => diagnostics.push(result), complete: async ({messages}) => {
       const input = JSON.parse(messages[1].content);
-      if (input.proposed_update) return done({supported: true, findings: [], evidence: [{page: 'Guide.md', source_id: id}]});
+      if (input.proposed_update) return done({pages: {'Guide.md': {source_id: id, findings: '', supported: true}}});
       if (input.requested_page) return done({path: 'Guide.md', content: '[Home](Home) Gateway guide.'});
       return done({pages: [{path: 'Guide.md', reason: 'Gateway documentation'}]});
     }});
@@ -276,11 +284,13 @@ test('native response schemas bind planning, the requested page and factual cita
     return done(input.proposed_update ? facts(input.proposed_update, source) : input.requested_page ?
       {path: 'Guide.md', content: '[Home](Home) Upload gateway guide.'} : {pages: [{path: 'Guide.md', reason: 'Gateway contract'}]});
   }});
-  assert.deepEqual(requests.map(request => request.schema.required), [['pages'], ['path', 'content'], ['supported', 'findings', 'evidence']]);
+  assert.deepEqual(requests.map(request => request.model), ['deepseek-flash', 'deepseek-flash', 'deepseek-v4-pro']);
+  assert.deepEqual(requests.map(request => request.schema.required), [['pages'], ['path', 'content'], ['pages']]);
   assert.ok(requests.every(request => request.schema.additionalProperties === false));
   assert.deepEqual(requests[1].schema.properties.path.enum, ['Guide.md']);
-  assert.deepEqual(requests[2].schema.properties.evidence.items.required, ['page', 'source_id']);
-  assert.equal(requests[2].schema.properties.supported.type, 'boolean');
+  assert.deepEqual(requests[2].schema.properties.pages.required, ['Guide.md']);
+  assert.deepEqual(requests[2].schema.properties.pages.properties['Guide.md'].required, ['source_id', 'findings', 'supported']);
+  assert.equal(requests[2].schema.properties.pages.properties['Guide.md'].properties.supported.type, 'boolean');
 });
 
 test('an invalid planning decision leaves inspectable diagnostics and never reaches page generation', async () => {
@@ -292,4 +302,66 @@ test('an invalid planning decision leaves inspectable diagnostics and never reac
   assert.equal(diagnostics[0].stage, 'planning');
   assert.deepEqual(diagnostics[0].plan, plan);
   assert.equal(diagnostics[0].identity.source_sha, identity.source_sha);
+});
+
+
+test('correction refuses cycling back to any previously rejected draft, not only the immediately prior text', async () => {
+  let renders = 0, reviews = 0;
+  await assert.rejects(planWiki({identity, source: {'README.md': 'Correct fact.'}, wiki, complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    if (input.proposed_update) {reviews++; return done(rejection('Guide.md', 'README.md:L1', 'The fact is wrong.'));}
+    if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong draft ' + (renders % 2)});}
+    return done({pages: [{path: 'Guide.md', reason: 'Fact correction'}]});
+  }}), /revisited rejected text/);
+  assert.equal(renders, 3);
+  assert.equal(reviews, 2, 'a repeated rejected draft is refused before another model verdict');
+});
+
+
+test('invalid factual response values remain inspectable before schema rejection', async () => {
+  const diagnostics = [];
+  const invalid = {pages: {'Guide.md': {source_id: 'README.md:L1', findings: null, supported: true}}};
+  await assert.rejects(planWiki({identity, source: {'README.md': 'Gateway.'}, wiki, diagnostic: value => diagnostics.push(value), complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    return done(input.proposed_update ? invalid : input.requested_page ? {path: 'Guide.md', content: '[Home](Home) Guide.'} : {pages: [{path: 'Guide.md', reason: 'Documentation'}]});
+  }}), /Invalid wiki factual review/);
+  assert.equal(diagnostics[0].stage, 'factual-review');
+  assert.deepEqual(diagnostics[0].review, invalid);
+  assert.equal(diagnostics[0].source_evidence['README.md:L1'], 'Gateway.');
+});
+
+test('per-page findings regenerate only rejected pages and preserve the other page bytes exactly', async () => {
+  const source = {'README.md': 'Temporary unavailability returns 502.'};
+  const originalHome = '# Home\nHand-written introduction.\n[Guide](Guide)';
+  const rendered = [], diagnostics = [];
+  const result = await planWiki({identity, source, wiki, diagnostic: value => diagnostics.push(value), complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    if (input.proposed_update) {
+      const report = facts(input.proposed_update, source);
+      if (input.proposed_update[0].content.includes('401')) report.pages['Guide.md'] = {source_id: 'README.md:L1', findings: 'Unavailability returns 502, not 401.', supported: false};
+      return done(report);
+    }
+    if (input.requested_page) {
+      rendered.push(input.requested_page);
+      return done({path: input.requested_page, content: input.requested_page === 'Home.md' ? originalHome : '[Home](Home) Unavailability returns ' + (input.review_findings.length ? '502.' : '401.')});
+    }
+    return done({pages: [{path: 'Guide.md', reason: 'Authentication'}, {path: 'Home.md', reason: 'Navigation'}]});
+  }});
+  assert.deepEqual(rendered, ['Guide.md', 'Home.md', 'Guide.md']);
+  assert.equal(result.updates[1].content, originalHome);
+  assert.match(result.updates[0].content, /502/);
+  assert.equal(diagnostics[0].review.pages['Home.md'].supported, true);
+  assert.equal(diagnostics[1].review.pages['Guide.md'].supported, true);
+});
+
+test('a failed live positive control retains its exact case and factual report for inspection', async () => {
+  const {evaluateWiki} = require('./wiki.cjs');
+  const diagnostics = [];
+  await assert.rejects(evaluateWiki({diagnostic: value => diagnostics.push(value), complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    return done(rejection('Home.md', Object.keys(input.source_evidence)[0], 'The model disputed this positive control.'));
+  }}), /did not support/);
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].case, 'supported-authentication');
+  assert.equal(diagnostics[0].review.pages['Home.md'].supported, false);
 });

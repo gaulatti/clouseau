@@ -143,20 +143,22 @@ test('default provider transport returns the complete response without exposing 
 
 const {requestWiki} = require('./provider.cjs');
 const wikiSchema = {type: 'object', additionalProperties: false, required: ['pages'], properties: {pages: {type: 'array', items: {type: 'string'}}}};
-const wikiResponse = text => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text}]}]});
+const wikiResponse = text => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: text}}]}}]});
 
-test('wiki requests use native schemas without changing review API or enabling model tools', async () => {
+test('wiki requests force one strict structured return without executing any model-selected tool', async () => {
   const result = await requestWiki({messages, schema: wikiSchema, fetchImpl: async (url, options) => {
     const body = JSON.parse(options.body);
-    assert.equal(url, 'https://api.deepseek.com/responses');
+    assert.equal(url, 'https://api.deepseek.com/beta/chat/completions');
     assert.equal(options.method, 'POST');
     assert.ok(options.signal instanceof AbortSignal);
     assert.equal(body.model, 'deepseek-flash');
-    assert.deepEqual(body.reasoning, {effort: 'none'});
+    assert.deepEqual(body.thinking, {type: 'disabled'});
     assert.equal(body.temperature, 0);
-    assert.deepEqual(body.input, messages);
-    assert.deepEqual(body.text.format, {type: 'json_schema', name: 'wiki_result', schema: wikiSchema});
-    assert.equal(body.tools, undefined);
+    assert.deepEqual(body.messages, messages);
+    assert.deepEqual(body.tool_choice, {type: 'function', function: {name: 'wiki_result'}});
+    assert.equal(body.tools.length, 1);
+    assert.equal(body.tools[0].function.strict, true);
+    assert.deepEqual(body.tools[0].function.parameters, wikiSchema);
     return response(wikiResponse('{"pages":[]}'));
   }});
   assert.deepEqual(result, {content: '{"pages":[]}'});
@@ -164,46 +166,58 @@ test('wiki requests use native schemas without changing review API or enabling m
   await assert.rejects(requestWiki({messages, schema: {type: 'array'}}), /JSON schema is required/);
 });
 
-test('wiki retries only native token truncation with a fixed budget and unchanged schema/evidence', async () => {
+test('wiki truncation retries keep a fixed budget and identical schema/evidence', async () => {
   const requests = [], waits = [], reports = [];
   const result = await requestWiki({messages, schema: wikiSchema, wait: async ms => waits.push(ms), report: line => reports.push(line),
-    fetchImpl: async (_, options) => {requests.push(JSON.parse(options.body)); return response({status: 'incomplete', incomplete_details: {reason: 'max_output_tokens'}});}});
-  assert.deepEqual(requests.map(body => body.max_output_tokens), [4096, 8192, 16384]);
+    fetchImpl: async (_, options) => {requests.push(JSON.parse(options.body)); return response({choices: [{finish_reason: 'length'}]});}});
+  assert.deepEqual(requests.map(body => body.max_tokens), [4096, 8192, 16384]);
   assert.deepEqual(waits, [1000, 2000]);
-  assert.ok(requests.every(body => JSON.stringify(body.text.format.schema) === JSON.stringify(wikiSchema) && JSON.stringify(body.input) === JSON.stringify(messages)));
+  assert.ok(requests.every(body => JSON.stringify(body.tools[0].function.parameters) === JSON.stringify(wikiSchema) && JSON.stringify(body.messages) === JSON.stringify(messages)));
   assert.match(result.failure, /exhausted/);
   assert.equal(reports.length, 3);
   let calls = 0;
   const recovered = await requestWiki({messages, schema: wikiSchema, fetchImpl: async () => response(++calls === 1 ?
-    {status: 'incomplete', incomplete_details: {reason: 'max_output_tokens'}} : wikiResponse('{"pages":[]}'))});
+    {choices: [{finish_reason: 'length'}]} : wikiResponse('{"pages":[]}'))});
   assert.deepEqual(recovered, {content: '{"pages":[]}'});
   assert.equal(calls, 2);
 });
 
-test('wiki rejects incomplete, failed, missing and non-message responses without accepting fragments', async () => {
-  for (const body of [{status: 'failed'}, {}, {status: 'incomplete'}, {status: 'incomplete', incomplete_details: {reason: 'content_filter'}}]) {
+test('wiki rejects plain text, wrong return names, multiple returns and missing structured results', async () => {
+  for (const body of [{}, {choices: []}, {choices: [{}]}, {choices: [{finish_reason: 'stop'}]}, {choices: [{finish_reason: 'content_filter'}]}]) {
     const reports = [];
     const result = await requestWiki({messages, schema: wikiSchema, report: line => reports.push(line), fetchImpl: async () => response(body)});
     assert.match(result.failure, /did not complete/);
     assert.ok(reports[0].includes('failed'));
   }
-  for (const output of [undefined, [], [null], [{type: 'function_call'}], [{type: 'message', role: 'user'}],
-    [{type: 'message', role: 'assistant'}], [{type: 'message', role: 'assistant', content: []}],
-    [{type: 'message', role: 'assistant', content: [null]}],
-    [{type: 'message', role: 'assistant', content: [{type: 'refusal'}]}],
-    [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: 1}]}],
-    [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: ' '}]}],
-    [...wikiResponse('{}').output, ...wikiResponse('{}').output],
-    [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: '{}'}, {type: 'output_text', text: '{}'}]}]]) {
-    const result = await requestWiki({messages, schema: wikiSchema, fetchImpl: async () => response({status: 'completed', output})});
-    assert.match(result.failure, /invalid structured message/);
+  for (const calls of [undefined, [], [null], [{type: 'custom'}], [{type: 'function'}],
+    [{type: 'function', function: {name: 'other', arguments: '{}'}}],
+    [{type: 'function', function: {name: 'wiki_result', arguments: 1}}],
+    [{type: 'function', function: {name: 'wiki_result', arguments: ' '}}],
+    [...wikiResponse('{}').choices[0].message.tool_calls, ...wikiResponse('{}').choices[0].message.tool_calls]]) {
+    const result = await requestWiki({messages, schema: wikiSchema, fetchImpl: async () => response({choices: [{finish_reason: 'tool_calls', message: {tool_calls: calls}}]})});
+    assert.match(result.failure, /invalid structured result/);
   }
+  assert.match((await requestWiki({messages, schema: wikiSchema, fetchImpl: async () => response({choices: [{finish_reason: 'tool_calls'}]})})).failure, /invalid structured result/);
   assert.match((await requestWiki({messages, schema: wikiSchema, fetchImpl: async () => ({ok: false, status: 400})})).failure, /HTTP 400/);
 });
 
-test('default wiki transport uses the same bounded structured protocol without exposing response bodies', async () => {
+test('default wiki transport uses the bounded strict return protocol without exposing response bodies', async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => response(wikiResponse('{"pages":[]}'));
   try {assert.deepEqual(await requestWiki({messages, schema: wikiSchema}), {content: '{"pages":[]}'});}
   finally {globalThis.fetch = original;}
+});
+
+test('the factual checker can use Pro while unknown model names are refused before any request', async () => {
+  let calls = 0;
+  const result = await requestWiki({messages, schema: wikiSchema, model: 'deepseek-v4-pro', fetchImpl: async (_, options) => {
+    calls++;
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, 'deepseek-v4-pro');
+    assert.equal(body.tools[0].function.strict, true);
+    return response(wikiResponse('{}'));
+  }});
+  assert.deepEqual(result, {content: '{}'});
+  await assert.rejects(requestWiki({messages, schema: wikiSchema, model: 'unknown', fetchImpl: async () => {calls++;}}), /Unsupported wiki model/);
+  assert.equal(calls, 1);
 });

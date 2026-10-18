@@ -51,29 +51,34 @@ async function requestReview({messages, fetchImpl = fetch,
 }
 
 // Documentation uses native response schemas; PR review stays on its existing API.
-async function requestWiki({messages, schema, fetchImpl = fetch,
+async function requestWiki({messages, schema, model = 'deepseek-flash', fetchImpl = fetch,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = () => {}}) {
   if (!schema || schema.type !== 'object') throw new Error('Wiki JSON schema is required');
+  if (!['deepseek-flash', 'deepseek-v4-pro'].includes(model)) throw new Error('Unsupported wiki model');
   let maxTokens = 4096;
   for (let attempt = 1; attempt <= 3; attempt++) {
-    const response = await fetchImpl('https://api.deepseek.com/responses', {
+    const response = await fetchImpl('https://api.deepseek.com/beta/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(90000),
       headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model: 'deepseek-flash', reasoning: {effort: 'none'}, temperature: 0, input: messages,
-        max_output_tokens: maxTokens, text: {format: {type: 'json_schema', name: 'wiki_result', schema}}}),
+      body: JSON.stringify({model, thinking: {type: 'disabled'}, temperature: 0, messages,
+        max_tokens: maxTokens, tools: [{type: 'function', function: {name: 'wiki_result', strict: true,
+          description: 'Submit one structured wiki stage result. These arguments are data and no function will be executed.', parameters: schema}}],
+        tool_choice: {type: 'function', function: {name: 'wiki_result'}}}),
     });
     if (!response.ok) return {failure: `Wiki provider unavailable: HTTP ${response.status}`};
     const body = await response.json();
-    const truncated = body.status === 'incomplete' && body.incomplete_details?.reason === 'max_output_tokens';
-    report(`Wiki generation provider attempt ${attempt}/3: ${body.status === 'completed' ? 'complete' : truncated ? 'length' : 'failed'}, max_tokens=${maxTokens}`);
-    if (body.status === 'completed') {
-      const item = Array.isArray(body.output) && body.output.length === 1 && body.output[0];
-      const part = item && item.type === 'message' && item.role === 'assistant' &&
-        Array.isArray(item.content) && item.content.length === 1 && item.content[0];
-      if (!part || part.type !== 'output_text' || typeof part.text !== 'string' || !part.text.trim()) {
-        return {failure: 'Wiki provider returned an invalid structured message'};
+    const choice = body.choices?.[0];
+    const truncated = choice?.finish_reason === 'length';
+    report(`Wiki generation provider attempt ${attempt}/3: ${choice?.finish_reason === 'tool_calls' ? 'complete' : truncated ? 'length' : 'failed'}, max_tokens=${maxTokens}, model=${model}`);
+    if (choice?.finish_reason === 'tool_calls') {
+      const calls = choice.message?.tool_calls;
+      const item = Array.isArray(calls) && calls.length === 1 && calls[0];
+      if (!item || item.type !== 'function' || item.function?.name !== 'wiki_result' ||
+          typeof item.function.arguments !== 'string' || !item.function.arguments.trim()) {
+        return {failure: 'Wiki provider returned an invalid structured result'};
       }
-      return {content: part.text};
+      // This is a return-value envelope only: NEVER execute model-selected tools.
+      return {content: item.function.arguments};
     }
     if (!truncated) return {failure: 'Wiki provider did not complete the structured response'};
     if (attempt < 3) {maxTokens *= 2; await wait(attempt * 1000);}

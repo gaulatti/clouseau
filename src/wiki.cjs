@@ -77,22 +77,22 @@ function validateBundle(bundle, expected, wiki) {
 
 const objectSchema = properties => ({type: 'object', additionalProperties: false, required: Object.keys(properties), properties});
 const textSchema = {type: 'string'};
-const planSchema = objectSchema({pages: {type: 'array', maxItems: 20, uniqueItems: true, items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', minLength: 1, maxLength: 1000}})}});
-const reviewSchema = objectSchema({supported: {type: 'boolean'}, findings: {type: 'array', items: textSchema}, evidence: {type: 'array', items: objectSchema({page: textSchema, source_id: textSchema})}});
+const planSchema = objectSchema({pages: {type: 'array', items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', pattern: '^\\S[^\\r\\n]{0,999}$'}})}});
+const reviewSchema = pages => objectSchema({pages: objectSchema(Object.fromEntries(pages.map(page => [page.path, objectSchema({source_id: textSchema, findings: {type: 'string', pattern: '^[\\s\\S]{0,2000}$'}, supported: {type: 'boolean'}})])))});
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
 async function planWiki({identity, source, wiki, complete = requestWiki, report = () => {}, diagnostic = () => {}, allowCorrection = true}) {
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
-  const ask = async (instruction, evidence, schema) => {
+  const ask = async (instruction, evidence, schema, model = 'deepseek-flash') => {
     const content = JSON.stringify(evidence);
     assert(Buffer.byteLength(content) <= 1000000, 'Wiki request exceeds the complete-context limit');
     // A malformed JSON envelope is a transport-format failure, not a review
     // decision. Regenerate once from the same evidence; never trim or accept
     // a prefix, and never retry schema, link, scope, or deployment failures.
     for (let formatAttempt = 1; formatAttempt <= 2; formatAttempt++) {
-      const result = await complete({report, schema, messages: [
+      const result = await complete({report, schema, model, messages: [
         {role: 'system', content: `${RULES}\n${instruction}\nReturn exactly ONE JSON object. Escape Markdown line breaks inside the content string. Do not append another object, prose, or code fences outside the JSON. ${formatAttempt === 2 ? 'The previous envelope was not valid JSON; regenerate the exact requested object from the same evidence.' : ''}`},
         {role: 'user', content},
       ]});
@@ -120,7 +120,13 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const generate = async (previous = [], findings = []) => {
     const updates = [];
     for (const page of manifest.pages) {
-      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: findings}, objectSchema({path: {type: 'string', enum: [page.path]}, content: textSchema}));
+      const pageFindings = findings.filter(finding => finding.startsWith(`${page.path}: `));
+      if (previous.length > 0 && pageFindings.length === 0) {
+        updates.push(previous.find(value => value.path === page.path));
+        report(`Wiki generation preserved unchanged page ${updates.length}/${manifest.pages.length}`);
+        continue;
+      }
+      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: pageFindings}, objectSchema({path: {type: 'string', enum: [page.path]}, content: textSchema}));
       assert(rendered.path === page.path, 'Model returned a different wiki page');
       updates.push(rendered);
       report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
@@ -132,50 +138,60 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema);
-    assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
-      Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
-      Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
-    diagnostic({version: 1, identity, revision, updates, review, source_evidence: sourceEvidence});
-    return review;
+    const raw = await ask('Fact-check every factual statement in every proposed page against current production control flow, including retained text. Existing wiki prose may be stale. For EACH requested page, select ONE relevant nonblank source_id, write a concise findings string containing ONLY unresolved false or unsupported claims (empty string if none), and decide supported LAST for that page. Never list supported statements, audit commentary, or "no finding" prose in findings. Set a page supported true exactly when its findings string is empty. Check authentication/status/error/retry semantics and protocol distinctions. Copy source IDs exactly. Do not enumerate every claim or source line: the report has exactly one checklist entry per planned page.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema(updates), 'deepseek-v4-pro');
+    diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review: raw, source_evidence: sourceEvidence});
+    const paths = updates.map(page => page.path);
+    assert(exact(raw, ['pages']) && exact(raw.pages, paths), 'Invalid wiki factual review');
+    const findings = [];
+    for (const page of paths) {
+      const item = raw.pages[page];
+      assert(exact(item, ['source_id', 'findings', 'supported']) && typeof item.supported === 'boolean' &&
+        typeof item.findings === 'string' && item.findings.length <= 2000, 'Invalid wiki factual review');
+      assert(typeof item.source_id === 'string' && Object.hasOwn(sourceEvidence, item.source_id) &&
+        sourceEvidence[item.source_id].trim().length > 0, 'Wiki factual review requires exact source evidence');
+      const finding = item.findings.trim();
+      assert(item.supported === (finding.length === 0), 'Wiki factual verdict contradicts page findings');
+      if (finding) findings.push(`${page}: ${finding}`);
+    }
+    return {supported: findings.length === 0, findings};
   };
   let updates = await generate();
   let bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
   if (updates.length === 0) return bundle;
   let review = await reviewUpdate(updates, 0);
-  if (allowCorrection && (!review.supported || review.findings.length > 0)) {
-    assert(review.findings.length > 0, 'A rejected wiki draft needs actionable findings for correction');
-    report('Wiki factual review rejected the draft; generating one corrected batch from its findings');
+  const signature = pages => JSON.stringify(pages.map(page => [page.path, page.content]));
+  const rejected = new Set([signature(updates)]);
+  for (let revision = 1; allowCorrection && !review.supported && revision <= 3; revision++) {
+    report(`Wiki factual review rejected the draft; generating corrected batch ${revision}/3 from its findings`);
     const previous = updates;
     updates = await generate(previous, review.findings);
     bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
-    assert(updates.some((page, index) => page.content !== previous[index].content), 'Wiki correction did not change the rejected draft; nothing will be published');
-    review = await reviewUpdate(updates, 1);
+    const key = signature(updates);
+    assert(!rejected.has(key), 'Wiki correction did not change or revisited rejected text; nothing will be published');
+    rejected.add(key);
+    review = await reviewUpdate(updates, revision);
   }
-  assert(review.supported && review.findings.length === 0, 'Wiki factual review did not support the complete update; nothing will be published');
-  for (const evidence of review.evidence) {
-    assert(exact(evidence, ['page', 'source_id']) && names.has(evidence.page) &&
-      typeof evidence.source_id === 'string' && Object.hasOwn(sourceEvidence, evidence.source_id) &&
-      sourceEvidence[evidence.source_id].trim().length > 0, 'Wiki factual review requires exact source evidence');
-  }
-  assert(updates.every(page => review.evidence.some(evidence => evidence.page === page.path)), 'Wiki factual review must cover every updated page');
+  assert(review.supported, 'Wiki factual review did not support the complete update; nothing will be published');
   report(`Wiki factual review supported all ${updates.length} updated pages with exact source evidence`);
   return bundle;
 }
 
-async function evaluateWiki({complete = requestWiki, report = () => {}} = {}) {
+async function evaluateWiki({complete = requestWiki, report = () => {}, diagnostic = () => {}} = {}) {
   const identity = {repository: 'example/gateway', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 1};
-  const source = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
+  const authenticationSource = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
   const wiki = {'Home.md': '# Authentication'};
-  for (const [name, content, supported] of [
-    ['supported-authentication', '# Authentication\nDenied credentials return 401. Temporary upstream unavailability returns 502.', true],
-    ['false-denial-classification', '# Authentication\nTemporary upstream unavailability is treated as denied credentials and returns 401.', false],
+  const refreshSource = {'src/refresh.rs': 'enum Protocol { Http, Ftp } struct Operation { protocol: Protocol, expired: bool } fn refresh_needed(op: &Operation) -> bool { op.expired }'};
+  for (const [name, source, content, supported] of [
+    ['supported-authentication', authenticationSource, '# Authentication\nDenied credentials return 401. Temporary upstream unavailability returns 502.', true],
+    ['false-denial-classification', authenticationSource, '# Authentication\nTemporary upstream unavailability is treated as denied credentials and returns 401.', false],
+    ['supported-shared-refresh', refreshSource, '# Refresh\nBoth HTTP and FTP operations with expired=true produce true from refresh_needed. The function does not branch on protocol.', true],
+    ['false-ftp-only-refresh', refreshSource, '# Refresh\nrefresh_needed returns true only for expired FTP operations and false for expired HTTP operations.', false],
   ]) {
     let calls = 0, error;
     try {
-      await planWiki({identity, source, wiki, report, allowCorrection: false, complete: async request => {
+      await planWiki({identity, source, wiki, report, diagnostic: result => diagnostic({case: name, ...result}), allowCorrection: false, complete: async request => {
         calls++;
-        if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Authentication contract'}]})};
+        if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Document the supplied production function contract'}]})};
         if (calls === 2) return {content: JSON.stringify({path: 'Home.md', content})};
         return complete(request);
       }});

@@ -36,7 +36,7 @@ function fixture() {
   return {temp, sourceDirectory, wikiDirectory, remote, context, state, github, options, read, publish,
     close() {fs.rmSync(temp, {recursive: true, force: true});}};
 }
-const facts = (pages, source) => ({supported: true, findings: [], evidence: pages.map(page => ({page: page.path, source_id: `${Object.keys(source)[0]}:L1`}))});
+const facts = (pages, source) => ({pages: Object.fromEntries(pages.map(page => [page.path, {source_id: `${Object.keys(source)[0]}:L1`, findings: '', supported: true}]))});
 const empty = s => ({version: 1, ...s.identity, updates: []});
 
 test('committed snapshots select explicit source paths and exclude wiki agent instructions', () => {

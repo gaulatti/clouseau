@@ -230,9 +230,17 @@ runs:
       uses: actions/github-script@v7
       env:
         CLOUSEAU_ROOT: ${{ github.action_path }}
+        WIKI_PLAN_PATH: ${{ inputs.wiki-plan-path }}
         DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
-          await require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/wiki.cjs')).evaluateWiki({report: line => core.info(line)});
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const output = `${process.env.WIKI_PLAN_PATH}.evaluation.json`;
+          const cases = [];
+          fs.mkdirSync(path.dirname(output), {recursive: true});
+          fs.writeFileSync(output, JSON.stringify({version: 1, cases}, null, 2) + '\n');
+          await require(path.join(process.env.CLOUSEAU_ROOT, 'src/wiki.cjs')).evaluateWiki({report: line => core.info(line),
+            diagnostic: result => {cases.push(result); fs.writeFileSync(output, JSON.stringify({version: 1, cases}, null, 2) + '\n');}});
