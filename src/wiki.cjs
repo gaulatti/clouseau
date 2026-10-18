@@ -184,14 +184,14 @@ async function evaluateWiki({complete = requestWiki, report = () => {}, diagnost
   for (const [name, source, content, supported] of [
     ['supported-authentication', authenticationSource, '# Authentication\nDenied credentials return 401. Temporary upstream unavailability returns 502.', true],
     ['false-denial-classification', authenticationSource, '# Authentication\nTemporary upstream unavailability is treated as denied credentials and returns 401.', false],
-    ['supported-shared-refresh', refreshSource, '# Refresh\nBoth HTTP and FTP operations require credential refresh when expired.', true],
-    ['false-ftp-only-refresh', refreshSource, '# Refresh\nOnly FTP operations require credential refresh; expired HTTP operations never require it.', false],
+    ['supported-shared-refresh', refreshSource, '# Refresh\nBoth HTTP and FTP operations with expired=true produce true from refresh_needed. The function does not branch on protocol.', true],
+    ['false-ftp-only-refresh', refreshSource, '# Refresh\nrefresh_needed returns true only for expired FTP operations and false for expired HTTP operations.', false],
   ]) {
     let calls = 0, error;
     try {
       await planWiki({identity, source, wiki, report, diagnostic: result => diagnostic({case: name, ...result}), allowCorrection: false, complete: async request => {
         calls++;
-        if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Authentication contract'}]})};
+        if (calls === 1) return {content: JSON.stringify({pages: [{path: 'Home.md', reason: 'Document the supplied production function contract'}]})};
         if (calls === 2) return {content: JSON.stringify({path: 'Home.md', content})};
         return complete(request);
       }});
