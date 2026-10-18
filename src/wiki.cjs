@@ -85,14 +85,14 @@ const RULES = require('node:fs').readFileSync(require('node:path').join(__dirnam
 async function planWiki({identity, source, wiki, complete = requestWiki, report = () => {}, diagnostic = () => {}, allowCorrection = true}) {
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
-  const ask = async (instruction, evidence, schema) => {
+  const ask = async (instruction, evidence, schema, model = 'deepseek-flash') => {
     const content = JSON.stringify(evidence);
     assert(Buffer.byteLength(content) <= 1000000, 'Wiki request exceeds the complete-context limit');
     // A malformed JSON envelope is a transport-format failure, not a review
     // decision. Regenerate once from the same evidence; never trim or accept
     // a prefix, and never retry schema, link, scope, or deployment failures.
     for (let formatAttempt = 1; formatAttempt <= 2; formatAttempt++) {
-      const result = await complete({report, schema, messages: [
+      const result = await complete({report, schema, model, messages: [
         {role: 'system', content: `${RULES}\n${instruction}\nReturn exactly ONE JSON object. Escape Markdown line breaks inside the content string. Do not append another object, prose, or code fences outside the JSON. ${formatAttempt === 2 ? 'The previous envelope was not valid JSON; regenerate the exact requested object from the same evidence.' : ''}`},
         {role: 'user', content},
       ]});
@@ -138,7 +138,7 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const raw = await ask('Fact-check every factual statement in every proposed page against current production control flow, including retained text. Existing wiki prose may be stale. For EACH requested page, select ONE relevant nonblank source_id, write a concise findings string containing ONLY unresolved false or unsupported claims (empty string if none), and decide supported LAST for that page. Never list supported statements, audit commentary, or "no finding" prose in findings. Set a page supported true exactly when its findings string is empty. Check authentication/status/error/retry semantics and protocol distinctions. Copy source IDs exactly. Do not enumerate every claim or source line: the report has exactly one checklist entry per planned page.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema(updates));
+    const raw = await ask('Fact-check every factual statement in every proposed page against current production control flow, including retained text. Existing wiki prose may be stale. For EACH requested page, select ONE relevant nonblank source_id, write a concise findings string containing ONLY unresolved false or unsupported claims (empty string if none), and decide supported LAST for that page. Never list supported statements, audit commentary, or "no finding" prose in findings. Set a page supported true exactly when its findings string is empty. Check authentication/status/error/retry semantics and protocol distinctions. Copy source IDs exactly. Do not enumerate every claim or source line: the report has exactly one checklist entry per planned page.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema(updates), 'deepseek-v4-pro');
     diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review: raw, source_evidence: sourceEvidence});
     const paths = updates.map(page => page.path);
     assert(exact(raw, ['pages']) && exact(raw.pages, paths), 'Invalid wiki factual review');
@@ -178,11 +178,14 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
 
 async function evaluateWiki({complete = requestWiki, report = () => {}} = {}) {
   const identity = {repository: 'example/gateway', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 1};
-  const source = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
+  const authenticationSource = {'src/auth.rs': 'fn authentication_status(failure: Failure) -> u16 { match failure { Failure::Denied => 401, Failure::Unavailable => 502 } }'};
   const wiki = {'Home.md': '# Authentication'};
-  for (const [name, content, supported] of [
-    ['supported-authentication', '# Authentication\nDenied credentials return 401. Temporary upstream unavailability returns 502.', true],
-    ['false-denial-classification', '# Authentication\nTemporary upstream unavailability is treated as denied credentials and returns 401.', false],
+  const refreshSource = {'src/refresh.rs': 'enum Protocol { Http, Ftp } struct Operation { protocol: Protocol, expired: bool } fn refresh_needed(op: &Operation) -> bool { op.expired }'};
+  for (const [name, source, content, supported] of [
+    ['supported-authentication', authenticationSource, '# Authentication\nDenied credentials return 401. Temporary upstream unavailability returns 502.', true],
+    ['false-denial-classification', authenticationSource, '# Authentication\nTemporary upstream unavailability is treated as denied credentials and returns 401.', false],
+    ['supported-shared-refresh', refreshSource, '# Refresh\nBoth HTTP and FTP operations require credential refresh when expired.', true],
+    ['false-ftp-only-refresh', refreshSource, '# Refresh\nOnly FTP operations require credential refresh; expired HTTP operations never require it.', false],
   ]) {
     let calls = 0, error;
     try {

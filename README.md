@@ -178,7 +178,8 @@ and navigation, and independently fact-checks every proposed page, including
 retained claims. Existing wiki prose can be stale; production control flow takes
 precedence. The full bundle must pass before it becomes a publishable artifact.
 
-Wiki calls use DeepSeek Flash in non-thinking mode at temperature zero. DeepSeek's
+Planning and writing use DeepSeek Flash; the independent factual checker uses
+DeepSeek V4 Pro. Both run in non-thinking mode at temperature zero. DeepSeek's
 [beta strict function-return format](https://api-docs.deepseek.com/guides/tool_calls/)
 provides separate schemas for planning, the exact requested page, and factual
 review. The sole return name is `wiki_result`. Its arguments are parsed as data;
@@ -207,8 +208,8 @@ and receive a fresh supporting factual verdict. No previously rejected text is
 resubmitted, including cycles between drafts. Missing findings or an exhausted
 correction budget stops publication. The
 read-only `evaluate-wiki` operation disables correction and calls the real model
-on a supported authentication document and a deliberate denial/unavailability
-falsehood. Provider, schema, or citation failures cannot count as a successful
+on supported authentication and shared-refresh documents plus deliberate
+denial/unavailability and FTP-only-refresh falsehoods. Provider, schema, or citation failures cannot count as a successful
 negative result.
 
 Structured diagnostics are saved beside the plan at

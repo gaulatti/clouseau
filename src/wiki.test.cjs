@@ -184,8 +184,10 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
   const reports = [];
   await evaluateWiki({report: line => reports.push(line), complete: async ({messages}) => {
     const input = JSON.parse(messages[1].content);
-    const supported = input.proposed_update[0].content.includes('Temporary upstream unavailability returns 502');
-    return done(supported ? facts([{path: 'Home.md'}], {'src/auth.rs': source}) : rejection('Home.md', 'src/auth.rs:L1', 'Unavailability returns 502, not 401.'));
+    const text = input.proposed_update[0].content;
+    const supported = text.includes('Temporary upstream unavailability returns 502') || text.includes('Both HTTP and FTP');
+    const sourceId = Object.keys(input.source_evidence)[0];
+    return done({pages: {'Home.md': {source_id: sourceId, findings: supported ? '' : 'The document contradicts the supplied implementation.', supported}}});
   }});
   assert.ok(reports.some(line => line === 'Live wiki evaluation false-denial-classification: rejected'));
   const positive = () => done(facts([{path: 'Home.md'}], {'src/auth.rs': source}));
@@ -196,10 +198,14 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
   await assert.rejects(evaluateWiki({complete: async () => ({failure: 'unavailable'})}), /nothing will be published/);
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: JSON.stringify(++calls === 1 ?
-    facts([{path: 'Home.md'}], {'src/auth.rs': source}) :
-    rejection('Home.md', 'src/auth.rs:L1', 'Unavailability is not denial.'))}}]}}]})});
-  try {await evaluateWiki(); assert.equal(calls, 2);}
+  globalThis.fetch = async (_, options) => {
+    calls++;
+    const input = JSON.parse(JSON.parse(options.body).messages[1].content);
+    const text = input.proposed_update[0].content;
+    const supported = text.includes('Temporary upstream unavailability returns 502') || text.includes('Both HTTP and FTP');
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: JSON.stringify({pages: {'Home.md': {source_id: Object.keys(input.source_evidence)[0], findings: supported ? '' : 'The source contradicts this claim.', supported}}})}}]}}]})};
+  };
+  try {await evaluateWiki(); assert.equal(calls, 4);}
   finally {globalThis.fetch = original;}
 });
 
@@ -278,6 +284,7 @@ test('native response schemas bind planning, the requested page and factual cita
     return done(input.proposed_update ? facts(input.proposed_update, source) : input.requested_page ?
       {path: 'Guide.md', content: '[Home](Home) Upload gateway guide.'} : {pages: [{path: 'Guide.md', reason: 'Gateway contract'}]});
   }});
+  assert.deepEqual(requests.map(request => request.model), ['deepseek-flash', 'deepseek-flash', 'deepseek-v4-pro']);
   assert.deepEqual(requests.map(request => request.schema.required), [['pages'], ['path', 'content'], ['pages']]);
   assert.ok(requests.every(request => request.schema.additionalProperties === false));
   assert.deepEqual(requests[1].schema.properties.path.enum, ['Guide.md']);

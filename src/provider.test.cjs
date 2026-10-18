@@ -207,3 +207,17 @@ test('default wiki transport uses the bounded strict return protocol without exp
   try {assert.deepEqual(await requestWiki({messages, schema: wikiSchema}), {content: '{"pages":[]}'});}
   finally {globalThis.fetch = original;}
 });
+
+test('the factual checker can use Pro while unknown model names are refused before any request', async () => {
+  let calls = 0;
+  const result = await requestWiki({messages, schema: wikiSchema, model: 'deepseek-v4-pro', fetchImpl: async (_, options) => {
+    calls++;
+    const body = JSON.parse(options.body);
+    assert.equal(body.model, 'deepseek-v4-pro');
+    assert.equal(body.tools[0].function.strict, true);
+    return response(wikiResponse('{}'));
+  }});
+  assert.deepEqual(result, {content: '{}'});
+  await assert.rejects(requestWiki({messages, schema: wikiSchema, model: 'unknown', fetchImpl: async () => {calls++;}}), /Unsupported wiki model/);
+  assert.equal(calls, 1);
+});
