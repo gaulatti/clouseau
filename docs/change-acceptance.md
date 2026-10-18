@@ -112,6 +112,12 @@ investigations, grading, uncertainty routing and transport truncation attempts.
 Each qualification is capped at 40 provider requests, including transport retries.
 `CLOUSEAU_EVALUATION_REQUEST_LIMIT=0` verifies the guard without making a provider
 request. Exhausting the budget fails qualification and retains the case evidence.
+`resume_evaluation` reuses completed qualification work only when source, policy,
+routing, rubric and request meanings match. Completed scores and blockers are
+revalidated and retained. Failed transport framing can reuse its original factual
+response after lossless decoding; only missing judgments make new provider calls.
+Historical and new requests share the 40-request ceiling. The artifact separates
+new usage/cost from reused evidence. Ordinary PR assessment remains fresh.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
 live evaluation must establish useful approvals, blocked drift and excess,

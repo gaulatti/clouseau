@@ -72,6 +72,22 @@ test('JSON punctuation normalization preserves negative judgments, literals and 
     });
 }));
 
+test('captured redundant JSON framing is lossless and conflicting or additional judgments remain invalid', () => {
+  const value = {decision: 'blocked_integrity', evidence: ['literal } ], with "quote" and \\'], gates: [{state: 'violated'}]};
+  const canonical = JSON.stringify(value);
+  for (const raw of [canonical + '}', canonical + ']}', canonical + ',"gates":[{"state":"violated"}]}']) {
+    const decoded = decodeJSON(raw);
+    assert.deepEqual(decoded.value, value); assert.equal(decoded.raw, raw); assert.equal(decoded.canonical, canonical);
+  }
+  assert.deepEqual(decodeJSON('[1,2]]').value, [1, 2]);
+  for (const raw of [canonical + ',"decision":"auto_approve"}', canonical + ',"new_claim":true}',
+    canonical + ' APPROVE', '[1],"0":1}', '{broken:1}}', '"value"}', canonical + ',not JSON']) {
+    assert.throws(() => decodeJSON(raw), error => {
+      assert.equal(error.details.raw_response, raw); return /malformed JSON/.test(error.message);
+    });
+  }
+});
+
 test('native structured results bind source identities without allowing arbitrary generated calls', keys(async () => {
   const schemas = {acceptance_report: {type: 'object', properties: {}, required: [], additionalProperties: false}};
   const request = thinking => ({model: 'deepseek-flash', messages, thinking, schemas});

@@ -1,8 +1,24 @@
 'use strict';
 
+const {isDeepStrictEqual} = require('node:util');
 const MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4-pro']);
 const JEV_MODEL = 'jev-1.13.0';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function rootEnd(raw) {
+  let depth = 0, quoted = false;
+  for (let i = 0; i < raw.length; i++) {
+    const character = raw[i];
+    if (quoted && character === '\\') {i++; continue;}
+    if (character === '"') {quoted = !quoted; continue;}
+    if (quoted) continue;
+    if (character === '{' || character === '[') depth++;
+    if (character === '}' || character === ']') {
+      depth--; if (depth === 0) return i + 1;
+    }
+  }
+  return -1;
+}
 
 function decodeJSON(raw) {
   let canonical = raw;
@@ -17,6 +33,21 @@ function decodeJSON(raw) {
       if (character === '"') quoted = !quoted;
       if (!quoted && character === ',' && /^\s*[}\]]/.test(raw.slice(i + 1))) continue;
       canonical += character;
+    }
+    const end = rootEnd(canonical);
+    if (end > 0) {
+      const prefix = canonical.slice(0, end), rest = canonical.slice(end).trim();
+      try {
+        const value = JSON.parse(prefix);
+        if (/^[\s,}\]]*$/.test(rest)) canonical = prefix;
+        else if (rest.startsWith(',')) {
+          const duplicate = JSON.parse(`{${rest.slice(1)}`);
+          if (value && typeof value === 'object' && !Array.isArray(value) &&
+              Object.keys(duplicate).every(key => Object.hasOwn(value, key) && isDeepStrictEqual(value[key], duplicate[key]))) {
+            canonical = prefix;
+          }
+        }
+      } catch {} // Unknown or conflicting extra content remains an error below.
     }
   }
   try {return {value: JSON.parse(canonical), raw, canonical};} catch (cause) {
