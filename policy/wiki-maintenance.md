@@ -46,3 +46,8 @@ During factual review, source_evidence maps immutable `path:Lnumber` identifiers
 to exact source lines. Cite these existing identifiers rather than retyping code.
 Choose relevant nonblank lines and inspect surrounding control flow. Never invent
 an identifier; source headings unrelated to a claim do not support that claim.
+
+Existing wiki text may be stale. Preserve accurate human wording, but correct
+retained claims that current production code contradicts. Protocol exclusivity,
+error classifications, and retry behavior require actual control-flow evidence;
+do not carry an old restriction forward merely because it was documented before.
