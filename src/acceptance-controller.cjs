@@ -51,13 +51,18 @@ function createAcceptancePolicy(config, legacy) {
     if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
     if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
     const observations = [];
+    const snapshots = {};
+    let snapshot;
     fs.mkdirSync(path.dirname(recordPath), {recursive: true});
-    const diagnostic = value => fs.writeFileSync(`${recordPath}.diagnostic.json`, JSON.stringify(value, null, 2) + '\n');
+    const diagnostic = value => {
+      if (snapshot) snapshots[snapshot.digest] ??= structuredClone(snapshot);
+      fs.writeFileSync(`${recordPath}.diagnostic.json`, JSON.stringify({...value, snapshots}, null, 2) + '\n');
+    };
     try {
       const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
-      const snapshot = await collectSnapshot({github, repo, pr, files, config, technical});
+      snapshot = await collectSnapshot({github, repo, pr, files, config, technical});
       snapshot.prior_findings = previous.findings;
       const repair = require('./acceptance-repair.cjs');
       const reservations = repair.history(comments, snapshot.repository, number);
