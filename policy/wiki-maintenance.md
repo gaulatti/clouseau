@@ -34,10 +34,15 @@ unavailability, HTTP status mappings, retryable and terminal failures, and
 protocol-specific behavior. Read production control flow instead of treating all
 failures as equivalent. Do not carry a correction to one protocol into another
 without source evidence. A final independent factual review must support every
-proposed page with exact quotations from the supplied source snapshot.
+proposed page with references to exact lines of the supplied source snapshot.
 
 Prefer the existing page structure and keep edits small. Do not split good pages,
 create redundant summaries, or rewrite unrelated human wording. When supplied
 with review findings and a rejected draft, repair the factual claims in the
 complete updated page set using production control flow. A corrected batch is a
 new proposal that must pass the same full validation and independent review.
+
+During factual review, source_evidence maps immutable `path:Lnumber` identifiers
+to exact source lines. Cite these existing identifiers rather than retyping code.
+Choose relevant nonblank lines and inspect surrounding control flow. Never invent
+an identifier; source headings unrelated to a claim do not support that claim.
