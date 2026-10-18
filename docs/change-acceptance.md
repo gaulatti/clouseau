@@ -160,6 +160,25 @@ The existing `/approve-intent FULL_HEAD_SHA` confirms only such a decision. It
 cannot waive tests, coverage, integrity failures, technical repairs or incomplete
 evidence. Ordinary coverage improvements do not require a new product decision.
 
+Clouseau's own reviewer upgrades have a separate owner-authorized installation
+route so a defective installed reviewer cannot prevent installing its verified
+replacement. First qualify the frozen candidate and confirm its exact PR head.
+The owner then publishes that commit to `policy-install/pr-NUMBER`:
+
+```sh
+git push origin FULL_HEAD_SHA:refs/heads/policy-install/pr-NUMBER
+```
+
+Before loading the candidate controller, a read-only guard requires the owner
+actor, owner-authored open non-draft PR, the same repository, `main` as its base,
+an exact matching head SHA and the owner's exact-revision intent comment.
+The separate read-only AI assessment and write gate use that frozen revision.
+They retain the full scored protocol, fresh PR verification, exact coverage,
+evidence/history checks, native approval and existing branch protection. Failed
+preparation or assessment fails the required approval job. Ordinary PR events
+always load the controller from protected `main`; fork PRs cannot use this route.
+Deleting an installation branch starts no installation or approval work.
+
 The read-only assessment uploads its full source-bound record and emits a compact
 digest. The separate approval job downloads that run's artifact, checks the
 digest, recomputes scores, reconciles history and rechecks current CI/head/base.

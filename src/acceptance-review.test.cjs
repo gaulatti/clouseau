@@ -154,7 +154,7 @@ test('the real inspection transport accepts the citation boundary and holds over
     const result = inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
       calls++;
       const request = JSON.parse(options.body);
-      assert.match(request.messages[0].content, /at most 40 inclusive lines/);
+      assert.match(request.messages[0].content, /at most 40 inclusive\s+lines/);
       const schema = request.tools.find(item => item.function.name === 'acceptance_report').function.parameters;
       assert.match(schema.properties.evidence.items.properties.end.description, /end < start \+ 40/);
       assert.match(schema.properties.findings.items.properties.anchor.properties.end.description, /end < start \+ 40/);

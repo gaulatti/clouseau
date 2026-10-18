@@ -118,6 +118,12 @@ owner decision, with concrete options and consequences. Already authorized
 decisions must be reused. Review/control installation needs exact-revision owner
 authorization; no owner decision waives tests, integrity or required evidence.
 
+For Clouseau's own reviewer installation, an owner push to `policy-install/pr-N`
+may select a frozen candidate controller after the read-only owner/head/repository
+and intent guards pass. This operator-authorized policy upgrade retains every
+technical, integrity, scoring and protection gate. Ordinary PR review always uses
+the controller from protected main; contributor source remains untrusted.
+
 ## Evidence and independence
 
 Select exact nonblank source line references; the controller copies their literal
