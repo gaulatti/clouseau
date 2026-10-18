@@ -104,7 +104,7 @@ function validateReport(report, snapshot) {
     const lines = source.content.split('\n');
     requireThat(item.end <= lines.length, 'citation extends beyond source');
     const selected = lines.slice(item.start - 1, item.end).join('\n');
-    requireThat(text(item.quote) && selected.trim() && selected.includes(item.quote), 'citation does not match immutable source');
+    requireThat(typeof item.quote === 'string' && item.quote.trim().length > 0 && selected.trim() && selected.includes(item.quote), 'citation does not match immutable source');
     evidence.set(item.id, item);
   }
   const citations = values => {
