@@ -54,6 +54,10 @@ repeatedly. max score =100; consequence amplifier =1+.25*irreversibility+.20*rea
 .20*detection+.20*propagation+.15*recurrence; score =100*confidence*min(1,
 max(necessity,activation*severity*amplifier)). Score >=70 blocks, no PR average.
 
+Each immutable citation or changed-source anchor selects at most 40 inclusive
+lines. Cite the specific relevant verification steps instead of a whole receipt.
+Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
+
 Every numeric input has an explanation and immutable citations. Unknowns produce
 ranges. Partial causal evidence must retain confidence.max=1: low confidence
 cannot hide a potentially blocking finding. confidence.max=0 requires decisive

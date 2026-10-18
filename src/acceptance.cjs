@@ -11,6 +11,7 @@ const FACTORS = Object.freeze({
 const GATES = Object.freeze(['scope_authority', 'test_integrity', 'security_isolation', 'compatibility_recovery', 'review_completeness']);
 const STATES = Object.freeze(['satisfied', 'violated', 'unresolved', 'inapplicable']);
 const RULES = Object.freeze({version: 2, product_threshold: 80, defect_threshold: 70, xg_bonus: 20});
+const MAX_CITATION_LINES = 40;
 
 function requireThat(condition, message) {
   if (!condition) throw new Error(`Invalid acceptance evidence: ${message}`);
@@ -100,7 +101,7 @@ function validateReport(report, snapshot) {
     requireThat(text(item.id) && !evidence.has(item.id), 'duplicate evidence id');
     const source = snapshot.sources[item.source];
     requireThat(source && Number.isSafeInteger(item.start) && Number.isSafeInteger(item.end) &&
-      item.start >= 1 && item.end >= item.start && item.end - item.start < 40, 'citation source or lines');
+      item.start >= 1 && item.end >= item.start && item.end - item.start < MAX_CITATION_LINES, 'citation source or lines');
     const lines = source.content.split('\n');
     requireThat(item.end <= lines.length, 'citation extends beyond source');
     const selected = lines.slice(item.start - 1, item.end).join('\n');
@@ -188,4 +189,4 @@ function validateReport(report, snapshot) {
   return scoreReport(report);
 }
 
-module.exports = {FACTORS, GATES, STATES, RULES, digest, productScore, findingScore, scoreReport, validateReport};
+module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, productScore, findingScore, scoreReport, validateReport};

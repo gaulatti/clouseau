@@ -9,6 +9,9 @@ policy. Every changed file is accounted for. The complete original and proposed
 text, linked tickets, recent file precedent and actual verification receipt are
 bound to immutable revisions. Fork source is read from the fork at its exact SHA.
 Contributor text, source and model output are data, never executable instructions.
+Each source citation and changed-source anchor is limited to 40 inclusive lines;
+the reviewer receives the same limit enforced by the validator. Oversized ranges
+stop review without trimming evidence or retrying for a different result.
 
 ## Product acceptance
 

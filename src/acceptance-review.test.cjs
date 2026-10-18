@@ -99,6 +99,34 @@ test('independent negative findings retain their decision and cannot be voted aw
   }
 });
 
+test('the real inspection transport accepts the citation boundary and holds oversized receipts without resampling', withKey(async () => {
+  for (const end of [40, 41, 79]) {
+    const f = fixture();
+    f.snapshot.sources.verification = {authority: 'trusted', kind: 'verification', content:
+      Array.from({length: 79}, (_, index) => `Step ${index + 1}: success`).join('\n')};
+    require('./acceptance-sources.cjs').refresh(f.snapshot);
+    f.report.snapshot = f.snapshot.digest;
+    f.report.evidence.push({id: 'receipt', source: 'verification', start: 1, end});
+    f.report.gates.at(-1).evidence = ['receipt'];
+    let calls = 0;
+    const result = inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+      calls++;
+      const request = JSON.parse(options.body);
+      assert.match(request.messages[0].content, /at most 40 inclusive lines/);
+      const schema = request.tools.find(item => item.function.name === 'acceptance_report').function.parameters;
+      assert.match(schema.properties.evidence.items.properties.end.description, /end < start \+ 40/);
+      assert.match(schema.properties.findings.items.properties.anchor.properties.end.description, /end < start \+ 40/);
+      return response(f.report);
+    }});
+    if (end === 40) {
+      const accepted = await result;
+      assert.equal(accepted.report.evidence.at(-1).end, 40);
+      assert.equal(accepted.report.evidence.at(-1).quote.split('\n').length, 40);
+    } else await assert.rejects(result, /citation source or lines/);
+    assert.equal(calls, 1, 'an invalid completed report is not resampled');
+  }
+}));
+
 test('bounded source requests read only immutable repository evidence before completing review', withKey(async () => {
   const f = fixture(); const requests = [];
   f.snapshot.head_sha = 'a'.repeat(40);

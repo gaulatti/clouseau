@@ -1,6 +1,6 @@
 'use strict';
 
-const {FACTORS, GATES, STATES} = require('./acceptance.cjs');
+const {FACTORS, GATES, STATES, MAX_CITATION_LINES} = require('./acceptance.cjs');
 const string = {type: 'string'};
 const boolean = {type: 'boolean'};
 const enumeration = values => ({type: 'string', enum: values});
@@ -13,13 +13,14 @@ function schemas(snapshot) {
   const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
   const paths = array(enumeration(snapshot.paths));
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
+  const end = {type: 'integer', minimum: 1, description: `Inclusive last line: start <= end < start + ${MAX_CITATION_LINES}. Select the narrow relevant lines, never a whole receipt or file.`};
   return {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
-      evidence: array(object({id: string, source: enumeration(Object.keys(snapshot.sources)), start: {type: 'integer', minimum: 1}, end: {type: 'integer', minimum: 1}})),
+      evidence: array(object({id: string, source: enumeration(Object.keys(snapshot.sources)), start: {type: 'integer', minimum: 1}, end})),
       units: array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string,
         fit: group('fit'), need: group('need'), excess: group('excess'), alternative: string})),
       findings: array(object({id: string, title: string, anchor: object({source: enumeration(anchors),
-        start: {type: 'integer', minimum: 1}, end: {type: 'integer', minimum: 1}}), cause: string, trigger: string, consequence: string,
+        start: {type: 'integer', minimum: 1}, end}), cause: string, trigger: string, consequence: string,
         obligation: string, evidence: citations, factors: group('defect'), blast_radius: {type: 'number', minimum: 1, maximum: 10},
         opportunity: object({mechanical: boolean, beneficial: boolean, within_scope: boolean, verified: boolean}), repair_paths: paths})),
       gates: array(object({name: enumeration(GATES), state: enumeration(STATES), reason: string, evidence: citations})),
