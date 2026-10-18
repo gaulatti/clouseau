@@ -153,13 +153,14 @@ async function investigateChange({snapshot, config, github, repo, fetchImpl, wai
   throw new Error('Source investigation did not converge within two complete examination cycles');
 }
 
-async function gradeInvestigations({snapshot, config, investigation, fetchImpl, wait, log, diagnostic = () => {}}) {
+async function gradeInvestigations({snapshot, config, investigation, fetchImpl, wait, log, observe = () => {}, diagnostic = () => {}}) {
   const usage = [...investigation.usage];
   const reviews = [];
   for (const item of investigation.inspections) {
     const result = await gradeReport({report: item.report, snapshot, provider: config.grader, model: config.grading_model,
-      fetchImpl, wait, log});
+      fetchImpl, wait, log, observe: observation => observe({role: item.role, snapshot: snapshot.digest, ...observation})});
     usage.push(...result.usage);
+    observe({role: item.role, phase: 'graded_report', snapshot: snapshot.digest, report: result.report, grading: result.grading});
     const drafts = item.drafts;
     const view = validateInspection(result.report, snapshot, drafts);
     reviews.push({role: item.role, report: result.report, drafts, grading: result.grading, scores: validateReport(result.report, view)});

@@ -134,6 +134,41 @@ test('a model failure or pending/failed verification cannot reach an approval or
   assert.equal(f.state.writes.length, 0);
 }));
 
+test('failed grading retains exact replay inputs and still cannot approve or waive an inconsistent result', () => fixture(async f => {
+  const assessment = await f.assess({fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.tools) return f.fetchImpl(url, options);
+    const {questions} = JSON.parse(body.messages[1].content);
+    const answers = Object.fromEntries(Object.keys(questions).map(id => [id,
+      id === 'u0_excess_abstraction' ? 'level1' : id.includes('_excess_') ? 'level0' : 'level4']));
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers})}}]})};
+  }});
+  assert.equal(assessment.decision, 'review_incomplete');
+  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
+  assert.match(trace.failure, /excess without a feasible narrower alternative/);
+  const response = trace.observations.find(item => item.phase === 'grading_response');
+  const graded = trace.observations.find(item => item.phase === 'graded_report');
+  const snapshot = trace.snapshots[graded.snapshot];
+  assert.equal(response.value.answers.u0_excess_abstraction, 'level1');
+  assert.equal(response.packet.state.factors.u0_excess_abstraction.context.narrower_alternative, '');
+  assert.equal(graded.report.units[0].excess.abstraction.min, 0.25);
+  assert.equal(snapshot.digest, graded.report.snapshot);
+  assert.throws(() => require('./acceptance.cjs').validateReport(graded.report, snapshot),
+    /excess without a feasible narrower alternative/, 'the retained inputs reproduce the exact failure without calling a provider');
+  await assert.rejects(f.gate(assessment), /incomplete/);
+  assert.equal(f.state.writes.length, 0);
+}));
+
+test('failure before source collection is retained without fabricating a snapshot', () => fixture(async f => {
+  f.github.rest.repos.getContent = async () => {throw new Error('immutable source unavailable');};
+  assert.equal((await f.assess()).decision, 'review_incomplete');
+  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
+  assert.equal(trace.failure, 'immutable source unavailable');
+  assert.deepEqual(trace.snapshots, {});
+  assert.equal(f.state.calls, 0);
+  assert.equal(f.state.writes.length, 0);
+}));
+
 test('source records, scores, independent roles, base, policy and verification identity are revalidated before the write boundary', () => fixture(async f => {
   const assessment = await f.assess(); const record = JSON.parse(fs.readFileSync(f.recordPath));
   for (const mutate of [

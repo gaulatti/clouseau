@@ -46,7 +46,7 @@ function bounds(answer) {
   return {min: Math.min(...levels), max: Math.max(...levels)};
 }
 
-async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, log}) {
+async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, log, observe = () => {}}) {
   const graded = structuredClone(report);
   const entries = locations(graded);
   const usage = [];
@@ -71,6 +71,7 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
     ]});
     else throw new Error('Unknown factor grading provider');
     const answers = selected === 'typesafe' ? completion.value : completion.value.answers;
+    observe({phase: 'grading_response', provider: selected, packet: {state, questions}, value: completion.value});
     if (!answers || Object.keys(answers).sort().join('\0') !== batch.map(item => item.id).sort().join('\0')) throw new Error('Incomplete atomic factor grades');
     for (const item of batch) {
       const value = bounds(answers[item.id]);

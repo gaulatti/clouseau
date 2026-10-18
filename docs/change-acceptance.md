@@ -75,6 +75,11 @@ A decisive negative Jev grade is never resampled with another model. Rounded
 probabilities are preserved; they are not normalized into greater confidence.
 Vendor confidence is never a substitute for source proof.
 
+Failure diagnostics retain the observed immutable snapshots, investigator replies,
+atomic grading packets and parsed responses, and graded reports before final
+validation. These inputs support offline reproduction without calling a model
+again; they do not replace fresh verification or authorize a merge.
+
 Both routes are compared on the same investigations. Token usage includes the
 investigations, grading, uncertainty routing and transport truncation attempts.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
