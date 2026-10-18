@@ -61,8 +61,17 @@ assessment output between jobs. The action cannot elevate the caller's token.
 The shared model is `deepseek-flash`; changes are sent to it only after
 technical verification succeeds. It assesses repository fit and supported intent,
 including large test improvements. There is no file-count or line-count approval
-cutoff. New product decisions and unclear scope require the owner’s judgment. Provider errors and incomplete evidence require
-a second opinion. AI must also support test integrity with evidence about assertions
+cutoff. New product decisions and unclear scope require the owner’s judgment.
+A missing or token-truncated provider completion is retried within the same
+read-only assessment, using the identical evidence, at most three attempts total.
+Retries wait one then two seconds. The output budget starts at 4,096 tokens and
+doubles only after a token-limit truncation, capped at 16,384 tokens per request.
+Every request retains its 90-second timeout. Fixed attempt/outcome/token-budget
+categories are logged without model text, reasoning, patches, or credentials.
+A complete verdict stops retries immediately, including second opinions,
+integrity rejections, and invalid or wrong-revision evidence. HTTP failures,
+network/decoding errors, unknown terminal finish reasons, and exhausted retries
+fail closed and require a second opinion. The provider health probe is unchanged. AI must also support test integrity with evidence about assertions
 and failure cases. Detected test fakery blocks approval, including after an intent
 confirmation. Coverage percentages alone cannot satisfy that assessment. No numerical confidence score grants approval.
 
@@ -150,6 +159,9 @@ synthetic review contexts. Maintenance must qualify, unrelated product scope
 must request an owner decision, and test-specific validation bypasses must block
 approval. A wrong or unavailable decision fails the evaluation. The GitHub and
 technical-readiness inputs are fixtures; these evaluations validate model judgment,
-not actual test execution or an end-to-end PR merge. Controller regression tests
+not actual test execution or an end-to-end PR merge. The maintenance case injects
+one synthetic truncated completion before calling the real provider to verify
+automatic recovery within the same assessment. Logs identify that injection
+explicitly; it is not evidence of a naturally occurring provider outage. Controller regression tests
 use simulated provider decisions separately. Run live evaluations only in a
 read-only diagnostic job with the provider key and no repository write token.

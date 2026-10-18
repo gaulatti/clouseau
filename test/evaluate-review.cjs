@@ -39,8 +39,23 @@ async function main() {
       },
     }, graphql: async () => ({repository: {pullRequest: {closingIssuesReferences: {nodes: [], pageInfo: {hasNextPage: false}}}}})};
     github.paginate = async (method, args) => (await method(args)).data;
-    const result = await assess({github, context: {repo: {owner: 'example', repo: 'synthetic-upload-gateway'}, payload: {pull_request: {number: 1}}}});
-    console.log(JSON.stringify({case: scenario.name, expected: scenario.expected, actual: result.decision, reason: result.reason}));
+    // Deterministically exercise recovery, then require a complete real-provider verdict.
+    // This is explicitly synthetic fault injection, not evidence of a natural outage.
+    let attempts = 0;
+    const injectTruncation = scenario.name === 'coverage-maintenance';
+    const result = await assess({github,
+      context: {repo: {owner: 'example', repo: 'synthetic-upload-gateway'}, payload: {pull_request: {number: 1}}},
+      report: line => console.log(line),
+      fetchImpl: async (...args) => {
+        attempts++;
+        if (injectTruncation && attempts === 1) {
+          return {ok: true, json: async () => ({choices: [{finish_reason: 'length'}]})};
+        }
+        return fetch(...args);
+      }});
+    if (injectTruncation) assert.ok(attempts >= 2, 'Truncation must recover without rerunning the job');
+    console.log(JSON.stringify({case: scenario.name, injected_truncation: injectTruncation,
+      attempts, expected: scenario.expected, actual: result.decision, reason: result.reason}));
     assert.equal(result.decision, scenario.expected, `Live review failed the ${scenario.name} evaluation`);
   }
   console.log('All three live model evaluations passed. Synthetic CI fixtures do not establish a real PR merge.');

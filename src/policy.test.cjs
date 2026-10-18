@@ -122,7 +122,66 @@ test('DeepSeek receives untrusted patches only as data and no tool capability', 
     }});
     assert.equal(result.decision, 'auto_approve');
     for (const response of [{ok: false, status: 429}, {ok: true, json: async () => ({choices: [{finish_reason: 'length'}]})}]) {
-      assert.equal((await assess({github, context, fetchImpl: async () => response})).decision, 'second_opinion');
+      assert.equal((await assess({github, context, retryWait: async () => {}, fetchImpl: async () => response})).decision, 'second_opinion');
+    }
+  } finally {
+    if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
+  }
+});
+
+test('incomplete provider output recovers inside one assessment without a human override', async () => {
+  const f = fixture();
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  const requests = [];
+  const delays = [];
+  const reports = [];
+  try {
+    const assessment = await assess({github: f.github, context,
+      retryWait: async ms => delays.push(ms), report: message => reports.push(message),
+      fetchImpl: async (_, options) => {
+        requests.push(JSON.parse(options.body));
+        return {ok: true, json: async () => requests.length === 1
+          ? {choices: [{finish_reason: 'length', message: {content: 'partial output must not be parsed'}}]}
+          : {choices: [{finish_reason: 'stop', message: {content: JSON.stringify(assessmentJson())}}]}};
+      }});
+    assert.equal(assessment.decision, 'auto_approve');
+    assert.deepEqual(requests.map(request => request.max_tokens), [4096, 8192]);
+    assert.deepEqual(requests[0].messages, requests[1].messages);
+    assert.deepEqual(delays, [1000]);
+    assert.equal(reports.length, 2);
+    await f.run({assessment});
+    assert.equal(f.writes.filter(write => write.name === 'review').length, 1);
+    assert.equal(f.writes.some(write => write.name === 'assign'), false);
+  } finally {
+    if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
+  }
+});
+
+test('completed negative or invalid assessments are never retried to obtain approval', async () => {
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+    for (const [raw, expected] of [
+      [{...assessmentJson(), decision: 'second_opinion', has_concerns: true}, 'second_opinion'],
+      [{...assessmentJson(), test_integrity_supported: false}, 'blocked_integrity'],
+      [{...assessmentJson(), head_sha: BASE}, 'second_opinion'],
+      ['not JSON', 'second_opinion'],
+      [{}, 'second_opinion'],
+    ]) {
+      let calls = 0;
+      const f = fixture();
+      const result = await assess({github: f.github, context, retryWait: async () => {},
+        fetchImpl: async () => {
+          calls++;
+          assert.ok(calls <= 2, 'a complete response must not be retried');
+          return {ok: true, json: async () => calls === 1
+            ? {choices: [{finish_reason: 'length'}]}
+            : {choices: [{finish_reason: 'stop', message: {content: typeof raw === 'string' ? raw : JSON.stringify(raw)}}]}};
+        }});
+      assert.equal(result.decision, expected);
+      assert.equal(calls, 2);
+      assert.equal(f.writes.length, 0);
     }
   } finally {
     if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
@@ -437,7 +496,7 @@ test('assessment refuses missing identity, bot authors and incomplete precedent 
       assert.equal(providerCalls, 0);
     }
     for (const fetchImpl of [async () => {throw new Error('fixture network failure');}, async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: 'invalid'}}]})}), async () => ({ok: true, json: async () => ({})})]) {
-      assert.equal((await assess({github: fixture().github, context, fetchImpl})).decision, 'second_opinion');
+      assert.equal((await assess({github: fixture().github, context, retryWait: async () => {}, fetchImpl})).decision, 'second_opinion');
     }
     const f = fixture({files: [{...file, status: 'added'}]});
     assert.equal((await assess({github: f.github, context, fetchImpl: provider})).decision, 'auto_approve');

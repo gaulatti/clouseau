@@ -82,7 +82,7 @@ runs:
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
           const assess = process.env.CLOUSEAU_WAIT_FOR_VERIFICATION === 'true' ? policy.assessWhenReady : policy.assess;
-          core.setOutput('assessment', JSON.stringify(await assess({github, context})));
+          core.setOutput('assessment', JSON.stringify(await assess({github, context, report: core.info})));
     - name: Approve and ensure auto-merge
       if: inputs.operation == 'gate'
       uses: actions/github-script@v7
