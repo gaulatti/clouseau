@@ -9,8 +9,14 @@ Inspect actual behavior, necessary supporting mechanisms, and verification.
 Account for every changed file with at least one acceptance unit. Identify each
 material capability or engineering decision; a useful repair cannot conceal an
 unnecessary framework, dependency, configuration mode, or unrelated feature.
-Local helpers and meaningful tests inherit justification only through a concrete
-accepted obligation. Large test changes do not imply product drift.
+Supporting helpers, meaningful tests and accurate companion documentation inherit
+justification only through a concrete accepted obligation. Account for routine
+documentation of the same code or test behavior within that outcome, rather than
+inventing a separate feature whose need depends on an explicit request for prose.
+Keep material engineering choices separate. Documentation that introduces a new
+promise or unrelated subject requires its own scope and factual assessment.
+Every supporting artifact still needs direct source accounting, factual accuracy
+and proportionality review. Large test changes do not imply product drift.
 An internal mechanism alone is not a new product direction. When the accepted
 outcome is clear, remedy unnecessary machinery within that outcome. When the PR
 requests an unaccepted product outcome, ask one concrete purpose/authority
@@ -53,6 +59,18 @@ failure, downstream propagation and recurrence. Do not count one consequence
 repeatedly. max score =100; consequence amplifier =1+.25*irreversibility+.20*reach+
 .20*detection+.20*propagation+.15*recurrence; score =100*confidence*min(1,
 max(necessity,activation*severity*amplifier)). Score >=70 blocks, no PR average.
+
+Each immutable citation or changed-source anchor selects at most 40 inclusive
+lines. Cite the specific relevant verification steps instead of a whole receipt.
+Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
+A positive graded binding claim requires trusted contract proof. Before grading,
+an investigator's observation that no binding obligation is established can cite
+the actual source without inventing authority. Fact validation never produces an
+approval score; final graded validation and the write gate enforce the trusted
+proof rule. Each file-accounting entry directly cites that changed file's own
+original or proposed source.
+Every referenced evidence ID must be declared verbatim exactly once in the
+report's evidence register. An undeclared alias is invalid; never infer its source.
 
 Every numeric input has an explanation and immutable citations. Unknowns produce
 ranges. Partial causal evidence must retain confidence.max=1: low confidence
@@ -99,6 +117,12 @@ Only purpose, authority or genuinely unresolved outcome tradeoffs justify an
 owner decision, with concrete options and consequences. Already authorized
 decisions must be reused. Review/control installation needs exact-revision owner
 authorization; no owner decision waives tests, integrity or required evidence.
+
+For Clouseau's own reviewer installation, an owner push to `policy-install/pr-N`
+may select a frozen candidate controller after the read-only owner/head/repository
+and intent guards pass. This operator-authorized policy upgrade retains every
+technical, integrity, scoring and protection gate. Ordinary PR review always uses
+the controller from protected main; contributor source remains untrusted.
 
 ## Evidence and independence
 

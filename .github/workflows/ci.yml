@@ -1,7 +1,7 @@
 name: Clouseau CI
 on:
   push:
-    branches: [main]
+    branches: [main, 'policy-install/**']
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -22,6 +22,10 @@ on:
         default: false
 permissions:
   contents: read
+# Cancel superseded metadata reviews without cancelling code verification.
+concurrency:
+  group: clouseau-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}
+  cancel-in-progress: true
 jobs:
   evaluate-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.evaluate_acceptance
@@ -48,13 +52,13 @@ jobs:
           path: work/acceptance-evaluation.json
           if-no-files-found: error
   verify:
-    name: ${{ (github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'verify' || 'metadata-only' }}
+    name: ${{ ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'verify' || 'metadata-only' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         if: &verify-code >-
-          github.event_name == 'push' || github.event_name == 'pull_request' ||
+          (github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
           (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')
         with:
           persist-credentials: false
@@ -77,6 +81,11 @@ jobs:
         uses: ./
         with:
           operation: test
+      - name: Test workflow security
+        if: *verify-code
+        run: |
+          npm ci --prefix .github/tests --ignore-scripts --no-audit --no-fund
+          npm test --prefix .github/tests
       - name: Build coverage contract fixtures
         if: *verify-code
         shell: python
@@ -114,6 +123,77 @@ jobs:
           GAP_OUTCOME: ${{ steps.gap.outcome }}
         run: test "$GAP_OUTCOME" = failure
 
+  prepare-installation:
+    if: &install-event >-
+      github.event_name == 'push' && !github.event.deleted &&
+      startsWith(github.ref, 'refs/heads/policy-install/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      number: ${{ steps.install.outputs.number }}
+      head: ${{ steps.install.outputs.head }}
+    steps:
+      - uses: actions/github-script@v7
+        id: install
+        with:
+          script: |
+            if (context.actor !== context.repo.owner) throw new Error('Only the repository owner may install review controls');
+            const match = context.ref.match(/^refs\/heads\/policy-install\/pr-([1-9][0-9]*)$/);
+            if (!match || !/^[a-f0-9]{40}$/.test(context.sha)) throw new Error('Installation requires a frozen PR revision');
+            const pull_number = Number(match[1]);
+            if (!Number.isSafeInteger(pull_number)) throw new Error('Installation requires a valid PR number');
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number});
+            if (pr.state !== 'open' || pr.draft || pr.base.ref !== 'main' ||
+                pr.user.login !== context.repo.owner || pr.head.sha !== context.sha ||
+                pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              throw new Error('Installation requires the owner-authored, ready, same-repository PR at this exact revision');
+            }
+            const comments = await github.paginate(github.rest.issues.listComments,
+              {...context.repo, issue_number: pull_number, per_page: 100});
+            if (!comments.some(comment => comment.user?.type === 'User' && comment.user.login === context.repo.owner &&
+                comment.body.trim() === `/approve-intent ${context.sha}`)) {
+              throw new Error('Installation requires the owner intent confirmation on this exact revision');
+            }
+            core.setOutput('number', String(pull_number));
+            core.setOutput('head', pr.head.sha);
+
+  assess-installation:
+    needs: [prepare-installation, verify]
+    if: *install-event
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      assessment: ${{ steps.assess.outputs.assessment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare-installation.outputs.head }}
+          persist-credentials: false
+      - uses: ./
+        id: assess
+        with:
+          operation: assess
+          pull-request: ${{ needs.prepare-installation.outputs.number }}
+          wait-for-verification: 'true'
+          provider-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          typesafe-key: ${{ secrets.TYPESAFE_API_KEY }}
+      - name: Retain acceptance record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          path: work/clouseau-acceptance*.json
+          if-no-files-found: ignore
+
   assess-intent:
     if: github.event_name == 'pull_request_target' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
@@ -147,8 +227,8 @@ jobs:
           if-no-files-found: ignore
 
   approve-and-merge:
-    name: ${{ github.event_name == 'pull_request_target' && !github.event.pull_request.draft && 'approve-and-merge' || 'metadata-only-approval' }}
-    needs: assess-intent
+    name: ${{ ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) && 'approve-and-merge' || 'metadata-only-approval' }}
+    needs: [assess-intent, assess-installation, prepare-installation]
     # Always resolve the job name; only trusted, ready PR events run its steps.
     # A failed assessment must still fail the required native approval check.
     if: always()
@@ -165,19 +245,24 @@ jobs:
     steps:
       - name: Require a completed assessment
         if: >-
-          github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
-          needs.assess-intent.result != 'success'
+          (github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+          needs.assess-intent.result != 'success') ||
+          (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/') &&
+          needs.assess-installation.result != 'success')
         run: exit 1
       - uses: actions/checkout@v4
-        if: &approve-code github.event_name == 'pull_request_target' && !github.event.pull_request.draft
+        if: &approve-code >-
+          (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+          (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))
         with:
-          ref: main
+          ref: ${{ github.event_name == 'push' && needs.prepare-installation.outputs.head || 'main' }}
           persist-credentials: false
       - name: Load this run's acceptance record
         if: >-
-          github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
-          needs.assess-intent.result == 'success' &&
-          fromJSON(needs.assess-intent.outputs.assessment).record_digest != ''
+          ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+          (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) &&
+          ((needs.assess-intent.result == 'success' && fromJSON(needs.assess-intent.outputs.assessment).record_digest != '') ||
+          (needs.assess-installation.result == 'success' && fromJSON(needs.assess-installation.outputs.assessment).record_digest != ''))
         uses: actions/download-artifact@v4
         with:
           name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
@@ -187,12 +272,14 @@ jobs:
         with:
           operation: gate
           native-gate: 'true'
-          assessment: ${{ needs.assess-intent.outputs.assessment }}
+          assessment: ${{ needs.assess-intent.outputs.assessment || needs.assess-installation.outputs.assessment }}
+          pull-request: ${{ needs.prepare-installation.outputs.number }}
 
   apply-repair:
     needs: [assess-intent, approve-and-merge]
     if: >-
       always() && github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       needs.assess-intent.result == 'success' && needs.approve-and-merge.result == 'failure' &&
       fromJSON(needs.assess-intent.outputs.assessment).repair_digest != ''
     runs-on: ubuntu-latest

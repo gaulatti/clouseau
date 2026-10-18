@@ -16,14 +16,19 @@ async function main() {
     const context = await prepareCase(scenario);
     const models = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grading_model: 'deepseek-flash'};
     console.log(`Acceptance qualification: ${scenario.name}`);
-    const record = {name: scenario.name, expected: scenario.expected, results: [], observations: []};
+    const record = {name: scenario.name, expected: scenario.expected, results: [], observations: [], snapshots: {}};
     evaluation.cases.push(record); save();
+    const observe = (observation, grader) => {
+      record.snapshots[context.snapshot.digest] ??= structuredClone(context.snapshot);
+      record.observations.push({...observation, grader}); save();
+    };
     try {
       const investigation = await investigateChange({...context, config: models, log: console.log,
-        observe: observation => {record.observations.push(observation); save();}});
+        observe});
       for (const grader of ['deepseek', 'typesafe']) {
         try {
-          const result = await gradeInvestigations({...context, investigation, config: {...models, grader}, log: console.log});
+          const result = await gradeInvestigations({...context, investigation, config: {...models, grader}, log: console.log,
+            observe: observation => observe(observation, grader)});
           const cost = estimate(result.usage);
           record.results.push({grader, ...result, cost, passed: scenario.expected.includes(result.decision)}); save();
           console.log(JSON.stringify({case: scenario.name, grader, expected: scenario.expected, decision: result.decision, cost}));

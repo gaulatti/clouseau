@@ -34,7 +34,7 @@ consumer's privileged approval job. See `examples/colombo.json` for version 2 co
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
-| `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute five fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
+| `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
 | `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
@@ -114,7 +114,9 @@ jobs. Select examiner, challenger and grader explicitly in `acceptance`; see
 only when the explicit Jev/DeepSeek grading route is selected. Failure never
 silently changes that choice. A separate repair job receives an independent
 author token through `repair-token`; Colombo reuses its existing deployment
-token. Neither the approval job nor AI inspection receives that author token.
+token. Neither the approval job nor AI inspection receives that author token. The repair
+job requires a trusted GitHub head repository matching the base repository before
+loading the author credential; the writer independently rechecks that identity.
 Only purpose/authority decisions can use owner confirmation in version 2.
 
 The consumer must retain PR, metadata-only target, comment, and manual workflow

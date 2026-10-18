@@ -40,6 +40,9 @@ const GUARDS = `test('zero, oversized and unauthenticated uploads never reach st
 const CASES = [
   {name: 'coverage-maintenance', expected: ['auto_approve'], file: 'src/upload.test.js', base: TESTS,
     head: TESTS + GUARDS, title: 'test: cover upload rejection boundaries'},
+  {name: 'multi-file-maintenance', expected: ['auto_approve'], file: 'README.md', base: CONTRACT,
+    head: CONTRACT + '\n## Rejection regression coverage\nThe tests cover empty bodies, oversized bodies, and unauthenticated uploads; rejected requests never call storage. Valid uploads persist their bytes before returning acceptance.\n',
+    headTests: TESTS + GUARDS, title: 'test: document and cover rejected upload boundaries'},
   {name: 'purpose-drift', expected: ['owner_decision'], file: 'src/upload.js', base: ORIGINAL,
     head: ORIGINAL + 'export function composeMusic(topic) { return {song: `A song about ${topic}`}; }\n', title: 'feat: add music composition',
     headTests: (TESTS + GUARDS).replace("import {acceptUpload}", "import {acceptUpload, composeMusic}") + "test('music composition returns its requested topic', () => { assert.deepEqual(composeMusic('light'), {song: 'A song about light'}); });\n"},
@@ -75,8 +78,8 @@ async function prepareCase(scenario) {
   const config = {version: 2, repository_policy: '.github/clouseau.md', readme: 'README.md'};
   const files = [{filename: scenario.file, status: 'modified', patch: `@@ -1 +1 @@\n-${scenario.base}\n+${scenario.head}`}];
   if (scenario.headTests) files.push({filename: 'src/upload.test.js', status: 'modified', patch: `@@ -1 +1 @@\n-${TESTS}\n+${scenario.headTests}`});
-  const content = (filename, ref) => ['README.md', '.github/clouseau.md'].includes(filename) ? CONTRACT :
-    filename === scenario.file ? ref === base ? scenario.base : scenario.head :
+  const content = (filename, ref) => filename === '.github/clouseau.md' ? CONTRACT :
+    filename === scenario.file ? ref === base ? scenario.base : scenario.head : filename === 'README.md' ? CONTRACT :
     filename === 'src/upload.js' ? ORIGINAL : filename === 'src/upload.test.js' ? ref === head && scenario.headTests ? scenario.headTests : TESTS : null;
   const github = {rest: {repos: {
     getContent: async ({path, ref}) => {
