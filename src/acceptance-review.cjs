@@ -37,6 +37,13 @@ function modelEvidence(snapshot) {
   return view;
 }
 
+function canonicalReferences(value) {
+  if (Array.isArray(value)) return value.map(canonicalReferences);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
+    key === 'evidence' && Array.isArray(item) && item.every(id => typeof id === 'string') ? [...new Set(item)] : canonicalReferences(item)]));
+}
+
 async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, log, observe = () => {}}) {
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
   const usage = [];
@@ -58,7 +65,10 @@ async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, lo
       if (snapshot.digest === before) throw new Error('Source investigation requested no new evidence');
       continue;
     }
-    completed = result.value; break;
+    // A repeated reference to the same proof adds no information. Canonicalize
+    // these sets without changing a citation, fact, finding or verdict; all
+    // substantive source/schema validation still runs below.
+    completed = canonicalReferences(result.value); break;
   }
   validateReport(completed, snapshot);
   return {report: completed, usage};
@@ -104,4 +114,4 @@ async function reviewChange(options) {
   return gradeInvestigations({...options, investigation});
 }
 
-module.exports = {template, modelEvidence, inspect, combine, investigateChange, gradeInvestigations, reviewChange};
+module.exports = {template, modelEvidence, canonicalReferences, inspect, combine, investigateChange, gradeInvestigations, reviewChange};

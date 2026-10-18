@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {template, inspect, combine, reviewChange} = require('./acceptance-review.cjs');
+const {template, inspect, combine, reviewChange, canonicalReferences} = require('./acceptance-review.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
 function withKey(run) {return async () => {
@@ -21,6 +21,9 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   assert.ok(value.gates.every(gate => gate.state === 'unresolved'));
   snapshot.files[0].base_source = 'head'; delete snapshot.files[0].head_source;
   assert.equal(template(snapshot).evidence[1].source, 'head');
+  const original = {evidence: ['same', 'same'], nested: [{evidence: ['a', 'a'], other: null}], malformed: {evidence: [null]}, scalar: 'value'};
+  assert.deepEqual(canonicalReferences(original), {evidence: ['same'], nested: [{evidence: ['a'], other: null}], malformed: {evidence: [null]}, scalar: 'value'});
+  assert.equal(original.evidence.length, 2);
 });
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
