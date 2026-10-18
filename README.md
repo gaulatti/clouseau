@@ -188,7 +188,9 @@ use identical evidence and schemas, at most three attempts with 4,096/8,192/16,3
 output tokens and 90-second deadlines. PR review keeps its existing API and
 reasoning policy.
 
-Factual review must support the complete update with no findings. Every updated
+The factual schema puts source evidence first, unresolved findings second, and
+the supported verdict last. Supported claims belong in evidence, not findings.
+Factual review must support the complete update with no unresolved findings. Every updated
 page needs relevant references to controller-assigned `path:Lnumber` source IDs.
 The source map preserves exact lines, including blanks; invented IDs, blank
 citations, and incomplete page evidence are rejected. The model cannot substitute

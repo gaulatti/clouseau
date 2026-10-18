@@ -276,7 +276,7 @@ test('native response schemas bind planning, the requested page and factual cita
     return done(input.proposed_update ? facts(input.proposed_update, source) : input.requested_page ?
       {path: 'Guide.md', content: '[Home](Home) Upload gateway guide.'} : {pages: [{path: 'Guide.md', reason: 'Gateway contract'}]});
   }});
-  assert.deepEqual(requests.map(request => request.schema.required), [['pages'], ['path', 'content'], ['supported', 'findings', 'evidence']]);
+  assert.deepEqual(requests.map(request => request.schema.required), [['pages'], ['path', 'content'], ['evidence', 'findings', 'supported']]);
   assert.ok(requests.every(request => request.schema.additionalProperties === false));
   assert.deepEqual(requests[1].schema.properties.path.enum, ['Guide.md']);
   assert.deepEqual(requests[2].schema.properties.evidence.items.required, ['page', 'source_id']);
