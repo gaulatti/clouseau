@@ -9,8 +9,14 @@ Inspect actual behavior, necessary supporting mechanisms, and verification.
 Account for every changed file with at least one acceptance unit. Identify each
 material capability or engineering decision; a useful repair cannot conceal an
 unnecessary framework, dependency, configuration mode, or unrelated feature.
-Local helpers and meaningful tests inherit justification only through a concrete
-accepted obligation. Large test changes do not imply product drift.
+Supporting helpers, meaningful tests and accurate companion documentation inherit
+justification only through a concrete accepted obligation. Account for routine
+documentation of the same code or test behavior within that outcome, rather than
+inventing a separate feature whose need depends on an explicit request for prose.
+Keep material engineering choices separate. Documentation that introduces a new
+promise or unrelated subject requires its own scope and factual assessment.
+Every supporting artifact still needs direct source accounting, factual accuracy
+and proportionality review. Large test changes do not imply product drift.
 An internal mechanism alone is not a new product direction. When the accepted
 outcome is clear, remedy unnecessary machinery within that outcome. When the PR
 requests an unaccepted product outcome, ask one concrete purpose/authority
@@ -60,6 +66,8 @@ Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
 Each binding observation cites the trusted contract, including an observation
 that no binding requirement exists. Each file-accounting entry directly cites
 that changed file's own original or proposed source.
+Every referenced evidence ID must be declared verbatim exactly once in the
+report's evidence register. An undeclared alias is invalid; never infer its source.
 
 Every numeric input has an explanation and immutable citations. Unknowns produce
 ranges. Partial causal evidence must retain confidence.max=1: low confidence

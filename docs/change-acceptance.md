@@ -21,6 +21,10 @@ cite trusted contract authority, including an observed lack of a requirement.
 Inspect each material capability and mechanism. A necessary fix cannot hide an
 unnecessary framework, dependency or unrelated feature. Helpers and tests inherit
 justification only through the accepted outcome they demonstrably support.
+Routine companion documentation of that same behavior is accounted for within
+the accepted outcome. It is not a separate feature needing an explicit request
+for prose. New promises, unrelated documentation and material engineering choices
+still receive their own scope, factual and proportionality assessment.
 
 | Index | Inputs and calculation |
 |---|---|
