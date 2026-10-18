@@ -31,7 +31,7 @@ async function fixture(run) {
       return graphql(query, args);
     };
     const endpoint = (name, fn) => Object.assign(fn, {endpointName: name});
-    const write = name => endpoint(name, async args => {state.writes.push({name, args}); return {data: {}};});
+    const write = name => endpoint(name, async args => {state.writes.push({name, args}); return {data: {id: 100 + state.writes.length}};});
     github.rest.pulls = {
       get: async () => ({data: structuredClone(state.pr)}),
       listFiles: endpoint('files', async () => ({data: [{filename: 'src/upload.test.js', status: 'modified', patch: '+meaningful tests'}]})),
@@ -109,6 +109,38 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(numberFor({payload: {issue: {number: 4, pull_request: {}}}}), 4);
   assert.equal(decided({decision: 'repair_required'}, true), 'repair_required');
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
+}));
+
+test('all evidence pages must publish before native approval, and a partial publication is safely resumed without new model calls', () => fixture(async f => {
+  f.state.alter = report => {
+    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(report.units[0][group])) {
+      factor.reason = 'Unchanged cited source evidence. '.repeat(60);
+    }
+  };
+  const assessment = await f.assess();
+  assert.equal(assessment.decision, 'auto_approve');
+  const originalRecord = fs.readFileSync(f.recordPath, 'utf8');
+  const calls = f.state.calls;
+  const create = f.github.rest.issues.createComment;
+  let fail = true;
+  f.github.rest.issues.createComment = async args => {
+    if (fail && args.body.includes('### Acceptance evidence 2/')) throw new Error('GitHub publication interrupted');
+    const response = await create(args);
+    f.state.comments.push({id: response.data.id, user: {login: 'github-actions[bot]'}, body: args.body});
+    return response;
+  };
+  await assert.rejects(f.gate(assessment), /publication interrupted/);
+  assert.equal(f.state.writes.some(item => item.name === 'approve'), false);
+  assert.equal(f.state.comments.some(item => item.body.includes('<!-- clouseau-acceptance:v2 -->')), false);
+  fail = false;
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(item => item.name === 'update-ledger').length, 1, 'the first complete page is reused in place');
+  const primary = f.state.comments.find(item => item.body.includes('<!-- clouseau-acceptance:v2 -->'));
+  assert.match(primary.body, /Complete factor inputs and literal evidence: \[Evidence 1\//);
+  for (const comment of f.state.comments) assert.ok(comment.body.length < 64000);
+  assert.equal(fs.readFileSync(f.recordPath, 'utf8'), originalRecord);
+  assert.equal(f.state.calls, calls, 'publishing or retrying publication never calls a model');
 }));
 
 test('a model failure or pending/failed verification cannot reach an approval or default to owner review', () => fixture(async f => {

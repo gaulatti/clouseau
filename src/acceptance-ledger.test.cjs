@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {clean, score, priorState, reconcile, render, MARKER} = require('./acceptance-ledger.cjs');
+const {clean, score, priorState, reconcile, render, publication, MARKER} = require('./acceptance-ledger.cjs');
 const {validateReport} = require('./acceptance.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
@@ -91,6 +91,40 @@ test('oversized ledgers fail visibly rather than truncating findings or evidence
   const {result, snapshot} = setup();
   result.reviews[0].report.summary = 'Complete evidence '.repeat(4000);
   assert.throws(() => render(result, snapshot, reconcile(result, snapshot)), /comment budget/);
+  assert.throws(() => publication(result, snapshot, reconcile(result, snapshot)), /comment budget/);
+});
+
+test('large evidence is published losslessly in bounded Unicode-safe pages without changing the scores or history', () => {
+  for (const prefix of ['', 'x']) {
+    const {result, snapshot} = setup();
+    snapshot.sources.head.content += prefix + '😀'.repeat(60000);
+    require('./acceptance-sources.cjs').refresh(snapshot);
+    for (const review of result.reviews) {
+      review.report.snapshot = snapshot.digest;
+      review.report.evidence.push({id: 'large-source', source: 'head', start: 3, end: 3, quote: '😀'});
+      review.report.units[0].excess.abstraction.evidence.push('large-source');
+      review.scores = validateReport(review.report, snapshot);
+    }
+    const before = JSON.stringify({result, snapshot});
+    const state = reconcile(result, snapshot);
+    const full = render(result, snapshot, state, {unbounded: true});
+    const {body, pages} = publication(result, snapshot, state);
+    assert.ok(pages.length >= 3); assert.ok(body.length < 64000);
+    assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
+    assert.match(body, /Fit | Need | Proportionality/);
+    const chunks = pages.map(page => {
+      assert.ok(page.length < 64000); assert.ok(!page.includes(MARKER));
+      const chunk = page.slice(page.indexOf('\n\n') + 2);
+      assert.ok(!/[\uD800-\uDBFF]$/.test(chunk)); assert.ok(!/^[\uDC00-\uDFFF]/.test(chunk));
+      return chunk;
+    });
+    assert.equal(chunks.join(''), full.replace(MARKER, '').replace(/<!-- clouseau-state:[A-Za-z0-9+/=]+ -->/, ''));
+    const comments = [body, ...pages].map((body, id) => ({id, user: {login: 'github-actions[bot]'}, body}));
+    assert.deepEqual(priorState(comments, snapshot.repository, snapshot.number).findings, state.findings);
+    assert.equal(JSON.stringify({result, snapshot}), before);
+  }
+  const {result, snapshot} = setup();
+  assert.deepEqual(publication(result, snapshot, reconcile(result, snapshot)).pages, []);
 });
 
 test('overlapping citations from both roles retain all source lines and references without duplicating their bytes', () => {

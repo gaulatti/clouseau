@@ -147,6 +147,14 @@ survive revision changes, renaming and disappearance from a later report.
 Both roles must provide explicit evidence to close a prior blocker. Optional
 observations close without creating recurring follow-up work.
 
+When complete evidence exceeds GitHub's comment limit, the primary ledger keeps
+every score, finding, gate and persistent disposition. It links bounded evidence
+comments containing the complete factor explanations and source excerpts, with
+revision and content identities. No evidence is truncated. All evidence pages
+and the primary ledger must publish successfully before approval. Retrying a
+partial publication reuses matching bot pages without calling a model; the
+complete source-bound assessment also remains in the run's artifact.
+
 ## Repair boundaries and optional improvements
 
 A verified, blocking result can propose a correction within the original changed
