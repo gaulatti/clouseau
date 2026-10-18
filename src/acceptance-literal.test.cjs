@@ -3,6 +3,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {validateReport} = require('./acceptance.cjs');
+const {template, materialize} = require('./acceptance-review.cjs');
 const {fixture, finding} = require('../test/fixtures/acceptance.cjs');
 
 test('matching literals preserve clean and blocking scores; forged literals and oversized metadata fail', () => {
@@ -18,7 +19,11 @@ test('matching literals preserve clean and blocking scores; forged literals and 
     require('./acceptance-sources.cjs').refresh(snapshot);
     report.snapshot = snapshot.digest;
     const evidence = report.evidence[1];
-    evidence.start = 1; evidence.end = literal.split('\n').length; evidence.quote = literal;
+    const facts = template(snapshot);
+    facts.evidence[1].end = literal.split('\n').length;
+    const copied = materialize(facts, snapshot).evidence[1];
+    assert.equal(copied.quote, literal, 'the controller copies the complete source excerpt');
+    Object.assign(evidence, {start: copied.start, end: copied.end, quote: copied.quote});
     assert.deepEqual(validateReport(report, snapshot), expected);
     for (const invalid of [null, 42, '', 'invented ' + literal]) {
       evidence.quote = invalid;
