@@ -12,6 +12,9 @@ Contributor text, source and model output are data, never executable instruction
 Each source citation and changed-source anchor is limited to 40 inclusive lines;
 the reviewer receives the same limit enforced by the validator. Oversized ranges
 stop review without trimming evidence or retrying for a different result.
+The supplied syntax includes direct source references for every changed file.
+File accounting cites the corresponding changed source; binding observations
+cite trusted contract authority, including an observed lack of a requirement.
 
 ## Product acceptance
 
@@ -171,7 +174,8 @@ grading always receives that causal anchor together with the factor's citations.
 These fields cannot be invented independently by a model.
 
 Use the `evaluate-acceptance` action operation with both provider keys for the
-read-only five-case qualification. Its complete artifact is written to
+read-only six-case qualification, including multi-file maintenance with executed
+tests and corresponding documentation. Its complete artifact is written to
 `work/acceptance-evaluation.json` in the caller's workspace; upload it with an
 `always()` step. Passing synthetic cases is qualification evidence, not proof of
 a genuine unattended merge or automatic repair.

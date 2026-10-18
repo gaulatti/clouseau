@@ -11,6 +11,8 @@ function schemas(snapshot) {
   const citations = array(string);
   const factor = object({evidence: citations, reason: string});
   const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
+  const need = group('need');
+  need.properties.binding = object({evidence: {...citations, description: 'Include an evidence ID citing a source marked authority=trusted and kind=contract, even when observing no binding requirement.'}, reason: string});
   const paths = array(enumeration(snapshot.paths));
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   const end = {type: 'integer', minimum: 1, description: `Inclusive last line: start <= end < start + ${MAX_CITATION_LINES}. Select the narrow relevant lines, never a whole receipt or file.`};
@@ -18,13 +20,14 @@ function schemas(snapshot) {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
       evidence: array(object({id: string, source: enumeration(Object.keys(snapshot.sources)), start: {type: 'integer', minimum: 1}, end})),
       units: array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string,
-        fit: group('fit'), need: group('need'), excess: group('excess'), alternative: string})),
+        fit: group('fit'), need, excess: group('excess'), alternative: string})),
       findings: array(object({id: string, title: string, anchor: object({source: enumeration(anchors),
         start: {type: 'integer', minimum: 1}, end}), cause: string, trigger: string, consequence: string,
         obligation: string, evidence: citations, factors: group('defect'), blast_radius: {type: 'number', minimum: 1, maximum: 10},
         opportunity: object({mechanical: boolean, beneficial: boolean, within_scope: boolean, verified: boolean}), repair_paths: paths})),
       gates: array(object({name: enumeration(GATES), state: enumeration(STATES), reason: string, evidence: citations})),
-      accounting: array(object({path: enumeration(snapshot.paths), units: array(string), evidence: citations, reason: string})),
+      accounting: array(object({path: enumeration(snapshot.paths), units: array(string), evidence: {...citations,
+        description: 'Include an evidence ID citing this path\'s own changed base_source or head_source, not only other files or verification.'}, reason: string})),
       decisions: array(object({kind: enumeration(['purpose', 'authority', 'tradeoff']), question: string, options: array(string), evidence: citations})),
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
     }),

@@ -57,6 +57,9 @@ max(necessity,activation*severity*amplifier)). Score >=70 blocks, no PR average.
 Each immutable citation or changed-source anchor selects at most 40 inclusive
 lines. Cite the specific relevant verification steps instead of a whole receipt.
 Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
+Each binding observation cites the trusted contract, including an observation
+that no binding requirement exists. Each file-accounting entry directly cites
+that changed file's own original or proposed source.
 
 Every numeric input has an explanation and immutable citations. Unknowns produce
 ranges. Partial causal evidence must retain confidence.max=1: low confidence
