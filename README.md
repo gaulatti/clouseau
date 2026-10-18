@@ -188,17 +188,21 @@ use identical evidence and schemas, at most three attempts with 4,096/8,192/16,3
 output tokens and 90-second deadlines. PR review keeps its existing API and
 reasoning policy.
 
-The factual schema puts source evidence first, unresolved findings second, and
-the supported verdict last. Supported claims belong in evidence, not findings.
-Factual review must support the complete update with no unresolved findings. Every updated
-page needs relevant references to controller-assigned `path:Lnumber` source IDs.
-The source map preserves exact lines, including blanks; invented IDs, blank
-citations, and incomplete page evidence are rejected. The model cannot substitute
-its own quotation text. This is an AI quality gate rather than a proof of semantic
-correctness; documentation still needs correction when new evidence reveals an error.
+The factual report is a fixed checklist keyed by the planned pages. Each page
+has one source reference, a findings string limited to 2,000 characters, and a
+supported verdict emitted last. Every page must be supported with no unresolved
+findings; contradictory verdicts are rejected. This avoids unbounded evidence
+arrays while retaining an independent judgment for every updated page.
+
+Source references select controller-assigned `path:Lnumber` IDs. The source map
+preserves exact lines, including blanks; invented IDs, blank citations, and
+missing page checks are rejected. The model cannot substitute quotation text.
+This is an AI quality gate rather than a proof of semantic correctness;
+documentation still needs correction when new evidence reveals an error.
 
 A rejected factual draft may receive up to three correction passes from actionable findings.
-The complete corrected batch must differ, pass structural/link validation again,
+Only pages with findings are regenerated; other page bytes are preserved. The
+complete corrected batch must differ, pass structural/link validation again,
 and receive a fresh supporting factual verdict. No previously rejected text is
 resubmitted, including cycles between drafts. Missing findings or an exhausted
 correction budget stops publication. The

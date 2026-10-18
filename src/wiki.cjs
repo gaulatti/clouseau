@@ -78,7 +78,7 @@ function validateBundle(bundle, expected, wiki) {
 const objectSchema = properties => ({type: 'object', additionalProperties: false, required: Object.keys(properties), properties});
 const textSchema = {type: 'string'};
 const planSchema = objectSchema({pages: {type: 'array', items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', pattern: '^\\S[^\\r\\n]{0,999}$'}})}});
-const reviewSchema = objectSchema({evidence: {type: 'array', items: objectSchema({page: textSchema, source_id: textSchema})}, findings: {type: 'array', items: textSchema}, supported: {type: 'boolean'}});
+const reviewSchema = pages => objectSchema({pages: objectSchema(Object.fromEntries(pages.map(page => [page.path, objectSchema({source_id: textSchema, findings: {type: 'string', pattern: '^[\\s\\S]{0,2000}$'}, supported: {type: 'boolean'}})])))});
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
@@ -120,7 +120,13 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const generate = async (previous = [], findings = []) => {
     const updates = [];
     for (const page of manifest.pages) {
-      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: findings}, objectSchema({path: {type: 'string', enum: [page.path]}, content: textSchema}));
+      const pageFindings = findings.filter(finding => finding.startsWith(`${page.path}: `));
+      if (previous.length > 0 && pageFindings.length === 0) {
+        updates.push(previous.find(value => value.path === page.path));
+        report(`Wiki generation preserved unchanged page ${updates.length}/${manifest.pages.length}`);
+        continue;
+      }
+      const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages. Preserve existing wording except claims that must change. When review_findings are supplied, correct the actual unsupported claims using production source, not by changing their labels or ignoring the review.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates, previous_update: previous, review_findings: pageFindings}, objectSchema({path: {type: 'string', enum: [page.path]}, content: textSchema}));
       assert(rendered.path === page.path, 'Model returned a different wiki page');
       updates.push(rendered);
       report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
@@ -132,12 +138,22 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}],"findings":[],"supported":true}. Select and evaluate source evidence first, list only unresolved contradictions second, and decide supported LAST. Findings must contain ONLY unresolved false or unsupported claims, each naming the page, exact incorrect claim, and source-grounded correction. Never put supported statements, audit commentary, or "no finding" entries in findings; put successful support only in evidence. Set supported true exactly when no unresolved findings remain. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema);
-    diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review, source_evidence: sourceEvidence});
-    assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
-      Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
-      Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
-    return review;
+    const raw = await ask('Fact-check every factual statement in every proposed page against current production control flow, including retained text. Existing wiki prose may be stale. For EACH requested page, select ONE relevant nonblank source_id, write a concise findings string containing ONLY unresolved false or unsupported claims (empty string if none), and decide supported LAST for that page. Never list supported statements, audit commentary, or "no finding" prose in findings. Set a page supported true exactly when its findings string is empty. Check authentication/status/error/retry semantics and protocol distinctions. Copy source IDs exactly. Do not enumerate every claim or source line: the report has exactly one checklist entry per planned page.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema(updates));
+    diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review: raw, source_evidence: sourceEvidence});
+    const paths = updates.map(page => page.path);
+    assert(exact(raw, ['pages']) && exact(raw.pages, paths), 'Invalid wiki factual review');
+    const findings = [];
+    for (const page of paths) {
+      const item = raw.pages[page];
+      assert(exact(item, ['source_id', 'findings', 'supported']) && typeof item.supported === 'boolean' &&
+        typeof item.findings === 'string' && item.findings.length <= 2000, 'Invalid wiki factual review');
+      assert(typeof item.source_id === 'string' && Object.hasOwn(sourceEvidence, item.source_id) &&
+        sourceEvidence[item.source_id].trim().length > 0, 'Wiki factual review requires exact source evidence');
+      const finding = item.findings.trim();
+      assert(item.supported === (finding.length === 0), 'Wiki factual verdict contradicts page findings');
+      if (finding) findings.push(`${page}: ${finding}`);
+    }
+    return {supported: findings.length === 0, findings};
   };
   let updates = await generate();
   let bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
@@ -145,8 +161,7 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   let review = await reviewUpdate(updates, 0);
   const signature = pages => JSON.stringify(pages.map(page => [page.path, page.content]));
   const rejected = new Set([signature(updates)]);
-  for (let revision = 1; allowCorrection && (!review.supported || review.findings.length > 0) && revision <= 3; revision++) {
-    assert(review.findings.length > 0, 'A rejected wiki draft needs actionable findings for correction');
+  for (let revision = 1; allowCorrection && !review.supported && revision <= 3; revision++) {
     report(`Wiki factual review rejected the draft; generating corrected batch ${revision}/3 from its findings`);
     const previous = updates;
     updates = await generate(previous, review.findings);
@@ -156,13 +171,7 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
     rejected.add(key);
     review = await reviewUpdate(updates, revision);
   }
-  assert(review.supported && review.findings.length === 0, 'Wiki factual review did not support the complete update; nothing will be published');
-  for (const evidence of review.evidence) {
-    assert(exact(evidence, ['page', 'source_id']) && names.has(evidence.page) &&
-      typeof evidence.source_id === 'string' && Object.hasOwn(sourceEvidence, evidence.source_id) &&
-      sourceEvidence[evidence.source_id].trim().length > 0, 'Wiki factual review requires exact source evidence');
-  }
-  assert(updates.every(page => review.evidence.some(evidence => evidence.page === page.path)), 'Wiki factual review must cover every updated page');
+  assert(review.supported, 'Wiki factual review did not support the complete update; nothing will be published');
   report(`Wiki factual review supported all ${updates.length} updated pages with exact source evidence`);
   return bundle;
 }
