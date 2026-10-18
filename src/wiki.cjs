@@ -132,7 +132,7 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Set supported false and list concise findings when any changed claim is false or unsupported. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema);
+    const review = await ask('Independently fact-check EVERY factual statement in EVERY proposed page against current production control flow, including retained text. Existing wiki prose may be stale; it is not authority. Do not accept a page merely because one citation matches. In particular inspect authentication/status/error/retry semantics and distinguish denial from temporary unavailability. Return exactly {"supported":true,"findings":[],"evidence":[{"page":"updated page name","source_id":"exact existing key from source_evidence"}]}. Findings must contain ONLY unresolved false or unsupported claims, each naming the page, exact incorrect claim, and source-grounded correction. Never put supported statements, audit commentary, or "no finding" entries in findings; put successful support only in evidence. Set supported true exactly when no unresolved findings remain. Cover each updated page and its material changed claims with relevant nonblank source line IDs. Inspect nearby control flow. Copy IDs exactly; never invent IDs or quotations, and avoid unrelated headings. Source citations alone do not excuse contradictory claims.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema);
     assert(exact(review, ['supported', 'findings', 'evidence']) && typeof review.supported === 'boolean' &&
       Array.isArray(review.findings) && review.findings.every(item => typeof item === 'string' && item.trim().length > 0 && item.length <= 1000) &&
       Array.isArray(review.evidence) && review.evidence.length <= 100, 'Invalid wiki factual review');
@@ -143,14 +143,18 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   let bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
   if (updates.length === 0) return bundle;
   let review = await reviewUpdate(updates, 0);
-  if (allowCorrection && (!review.supported || review.findings.length > 0)) {
+  const signature = pages => JSON.stringify(pages.map(page => [page.path, page.content]));
+  const rejected = new Set([signature(updates)]);
+  for (let revision = 1; allowCorrection && (!review.supported || review.findings.length > 0) && revision <= 3; revision++) {
     assert(review.findings.length > 0, 'A rejected wiki draft needs actionable findings for correction');
-    report('Wiki factual review rejected the draft; generating one corrected batch from its findings');
+    report(`Wiki factual review rejected the draft; generating corrected batch ${revision}/3 from its findings`);
     const previous = updates;
     updates = await generate(previous, review.findings);
     bundle = validateBundle({version: 1, ...identity, updates}, identity, wiki);
-    assert(updates.some((page, index) => page.content !== previous[index].content), 'Wiki correction did not change the rejected draft; nothing will be published');
-    review = await reviewUpdate(updates, 1);
+    const key = signature(updates);
+    assert(!rejected.has(key), 'Wiki correction did not change or revisited rejected text; nothing will be published');
+    rejected.add(key);
+    review = await reviewUpdate(updates, revision);
   }
   assert(review.supported && review.findings.length === 0, 'Wiki factual review did not support the complete update; nothing will be published');
   for (const evidence of review.evidence) {

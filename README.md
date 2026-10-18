@@ -195,10 +195,11 @@ citations, and incomplete page evidence are rejected. The model cannot substitut
 its own quotation text. This is an AI quality gate rather than a proof of semantic
 correctness; documentation still needs correction when new evidence reveals an error.
 
-A rejected factual draft may receive one correction pass from actionable findings.
+A rejected factual draft may receive up to three correction passes from actionable findings.
 The complete corrected batch must differ, pass structural/link validation again,
-and receive a fresh supporting factual verdict. Unchanged rejected text is never
-resubmitted. Missing findings or a second rejection stops publication. The
+and receive a fresh supporting factual verdict. No previously rejected text is
+resubmitted, including cycles between drafts. Missing findings or an exhausted
+correction budget stops publication. The
 read-only `evaluate-wiki` operation disables correction and calls the real model
 on a supported authentication document and a deliberate denial/unavailability
 falsehood. Provider, schema, or citation failures cannot count as a successful

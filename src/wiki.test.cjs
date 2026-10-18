@@ -225,7 +225,7 @@ test('one corrected batch uses actionable findings and receives a new factual re
   }
 });
 
-test('correction refuses missing findings, identical text and a second substantive rejection', async () => {
+test('correction refuses missing findings, repeated text and an exhausted substantive correction budget', async () => {
   for (const scenario of ['no-findings', 'unchanged', 'still-wrong']) {
     const source = {'README.md': 'Temporary upstream unavailability returns 502.'};
     let calls = 0, renders = 0, reviews = 0;
@@ -233,12 +233,12 @@ test('correction refuses missing findings, identical text and a second substanti
       calls++;
       const input = JSON.parse(messages[1].content);
       if (input.proposed_update) {reviews++; return done({supported: false, findings: scenario === 'no-findings' ? [] : ['The status is wrong.'], evidence: []});}
-      if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong status.' + (renders === 2 && scenario === 'still-wrong' ? ' Still wrong.' : '')});}
+      if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong status.' + (scenario === 'still-wrong' ? ` Still wrong ${renders}.` : '')});}
       return done({pages: [{path: 'Guide.md', reason: 'Authentication'}]});
     }});
     await assert.rejects(promise, scenario === 'no-findings' ? /actionable findings/ : scenario === 'unchanged' ? /did not change/ : /did not support/);
-    assert.equal(reviews, scenario === 'still-wrong' ? 2 : 1);
-    assert.equal(calls, scenario === 'no-findings' ? 3 : scenario === 'unchanged' ? 4 : 5);
+    assert.equal(reviews, scenario === 'still-wrong' ? 4 : 1);
+    assert.equal(calls, scenario === 'no-findings' ? 3 : scenario === 'unchanged' ? 4 : 9);
   }
 });
 
@@ -292,4 +292,17 @@ test('an invalid planning decision leaves inspectable diagnostics and never reac
   assert.equal(diagnostics[0].stage, 'planning');
   assert.deepEqual(diagnostics[0].plan, plan);
   assert.equal(diagnostics[0].identity.source_sha, identity.source_sha);
+});
+
+
+test('correction refuses cycling back to any previously rejected draft, not only the immediately prior text', async () => {
+  let renders = 0, reviews = 0;
+  await assert.rejects(planWiki({identity, source: {'README.md': 'Correct fact.'}, wiki, complete: async ({messages}) => {
+    const input = JSON.parse(messages[1].content);
+    if (input.proposed_update) {reviews++; return done({supported: false, findings: ['The fact is wrong.'], evidence: []});}
+    if (input.requested_page) {renders++; return done({path: 'Guide.md', content: '[Home](Home) Wrong draft ' + (renders % 2)});}
+    return done({pages: [{path: 'Guide.md', reason: 'Fact correction'}]});
+  }}), /revisited rejected text/);
+  assert.equal(renders, 3);
+  assert.equal(reviews, 2, 'a repeated rejected draft is refused before another model verdict');
 });
