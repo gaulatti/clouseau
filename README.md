@@ -248,3 +248,14 @@ The read-only `evaluate-wiki` operation tests the live factual gate on a support
 authentication document and a deliberately false denial/unavailability claim.
 A false claim must receive a substantive negative verdict; provider failures,
 malformed output, or missing evidence cannot count as a successful rejection.
+
+A substantive rejection may trigger one correction pass using its actionable
+findings and the rejected draft. The corrected batch must differ, retain all
+planned pages, pass structural/link validation, and receive a fresh supporting
+factual verdict with exact citations. An unchanged draft, missing findings, or a
+second rejection stops publication; a verdict is never retried on unchanged text.
+The live negative diagnostic disables correction so the deliberately false claim
+must be substantively rejected. The generator also saves a structured diagnostic
+next to its plan (`wiki-plan.json.diagnostic.json`), including the reviewed draft,
+findings and source evidence, without provider credentials or raw transport data.
+Consumers should retain this diagnostic even when planning fails.
