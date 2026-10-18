@@ -2,7 +2,18 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest} = require('./acceptance.cjs');
+const {digest, MAX_CITATION_LINES} = require('./acceptance.cjs');
+
+function proofCatalog(snapshot) {
+  return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
+    const lines = value.content.split('\n'); const entries = [];
+    for (let start = 1; start <= lines.length; start += MAX_CITATION_LINES) {
+      const end = Math.min(lines.length, start + MAX_CITATION_LINES - 1);
+      if (lines.slice(start - 1, end).join('\n').trim()) entries.push({id: `proof-${index}-${start}`, source, start, end});
+    }
+    return entries;
+  });
+}
 
 function safePath(value) {
   return typeof value === 'string' && value.length > 0 && value.length < 500 &&
@@ -80,4 +91,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};

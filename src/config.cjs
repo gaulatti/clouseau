@@ -24,7 +24,7 @@ function validateConfig(config) {
     const review = config.acceptance;
     if (!review || !['deepseek-flash', 'deepseek-v4-pro'].includes(review.examiner) ||
         !['deepseek-flash', 'deepseek-v4-pro'].includes(review.challenger) ||
-        !['deepseek', 'typesafe'].includes(review.grader) || review.grading_model !== 'deepseek-flash' ||
+        !['deepseek', 'typesafe', 'routed'].includes(review.grader) || review.grading_model !== 'deepseek-flash' ||
         review.repair_attempts !== 2 || Object.keys(review).sort().join(',') !==
           ['challenger', 'examiner', 'grader', 'grading_model', 'repair_attempts'].join(',')) {
       throw new Error('Invalid Clouseau acceptance configuration; explicit qualified roles and two bounded repair attempts are required');

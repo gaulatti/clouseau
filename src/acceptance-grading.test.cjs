@@ -68,6 +68,8 @@ test('the DeepSeek-only grader and Jev consume the same atomic evidence without 
     }});
     assert.equal(requests.length, provider === 'typesafe' ? 2 : 1, 'typed-model packets hold at most twelve atomic questions');
     assert.ok(requests.every(packet => Object.values(packet.questions).every(question => question.type === 'choice')));
+    assert.ok(requests.every(packet => packet.state.acceptance_policy.includes('within that outcome')),
+      'the grader receives the same inherited-supporting-work policy as investigators');
     assert.equal(validateReport(result.report, f.snapshot).decision, 'auto_approve');
     assert.equal(result.usage.length, requests.length);
     assert.notEqual(result.report, f.report);
@@ -84,6 +86,34 @@ test('partial causal proof remains a potentially blocking upper bound after grad
   }});
   assert.deepEqual([result.report.findings[0].factors.confidence.min, result.report.findings[0].factors.confidence.max], [0.5, 1]);
   assert.equal(validateReport(result.report, f.snapshot).decision, 'review_incomplete');
+}));
+
+test('task routing delegates only supported typed factors and combines unresolved factors with one reasoning request', credentials(async () => {
+  const f = fixture(); f.report.findings.push(finding());
+  f.report.units[0].alternative = 'Keep the existing direct validator and regression tests.';
+  const requests = [];
+  const result = await gradeReport({...f, provider: 'routed', model: 'deepseek-flash', fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body); const typed = url.includes('typesafe');
+    const packet = typed ? body : JSON.parse(body.messages[1].content);
+    const ids = Object.keys(packet.questions); requests.push({typed, ids});
+    if (typed) {
+      assert.deepEqual(ids, ['u0_fit_domain', 'u0_excess_abstraction', 'u0_excess_authority']);
+      const answers = Object.fromEntries(ids.map(id => {
+        const choice = id === 'u0_excess_authority' ? 'unknown' : 'level4';
+        return [id, {type: 'choice', choice, confidence: 1,
+          probabilities: Object.fromEntries(Object.keys(packet.questions[id].criteria).map(key => [key, key === choice ? 1 : 0]))}];
+      }));
+      return {ok: true, json: async () => ({model: JEV_MODEL, answers})};
+    }
+    assert.ok(ids.includes('u0_excess_authority') && ids.includes('u0_need_binding') && ids.includes('f0_confidence'));
+    assert.ok(!ids.includes('u0_excess_abstraction') && !ids.includes('u0_fit_domain'), 'settled delegated answers are never regraded');
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers:
+      Object.fromEntries(ids.map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))})}}]})};
+  }});
+  assert.equal(requests.length, 2, 'typed work and reasoning work run once each, without a duplicated baseline');
+  assert.deepEqual(result.grading.escalated, ['u0_excess_authority']);
+  assert.equal(result.report.units[0].excess.abstraction.min, 1, 'a settled negative is preserved');
+  assert.equal(validateReport(result.report, f.snapshot).decision, 'repair_required');
 }));
 
 test('hybrid grading sends only unresolved factors to reasoning and never resamples a definite negative', credentials(async () => {

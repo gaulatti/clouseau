@@ -73,6 +73,10 @@ proof rule. Each file-accounting entry directly cites that changed file's own
 original or proposed source.
 Every referenced evidence ID must be declared verbatim exactly once in the
 report's evidence register. An undeclared alias is invalid; never infer its source.
+For new investigations, select the supplied controller proof IDs. The controller
+generates their register, bounded coordinates and literal text; do not invent
+source bookkeeping. The atomic grader receives this same trusted policy so that
+supporting-work justification is assessed consistently across stages.
 
 Every numeric input has an explanation and immutable citations. Unknowns produce
 ranges. Partial causal evidence must retain confidence.max=1: low confidence

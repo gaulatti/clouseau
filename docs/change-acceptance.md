@@ -14,6 +14,10 @@ lines. The controller partitions a longer valid model-selected interval into
 entries within that limit and expands every reference to include all its parts.
 Every cited line and judgment is preserved; no model retry is needed for chunking.
 Unknown sources, invalid coordinates and unmatched references still stop review.
+New investigations select from a controller-generated proof catalog. The tool
+schema enumerates those IDs for every citation and changed-source anchor. The
+controller generates the stored source register and coordinates; the model
+supplies observations and chooses the relevant supplied proofs.
 The supplied syntax includes direct source references for every changed file.
 File accounting cites the corresponding changed source. An investigator may
 observe the lack of a binding requirement without inventing contract authority.
@@ -85,9 +89,14 @@ grader assigns descriptive semantic levels. Code converts those levels to values
 and computes every formula and threshold. All factors remain visible in the PR
 ledger, including their citations and explanations.
 
-`acceptance.grader: deepseek` uses the DeepSeek atomic grader. `typesafe` selects
-the explicit Jev/DeepSeek route: Jev 1.13 handles bounded classification packets;
-unresolved distributions go to DeepSeek with the same facts and no Jev answer.
+`acceptance.grader: routed` delegates domain fit, abstraction excess and duplicated
+authority to Jev 1.13. DeepSeek grades the other factors and any unresolved Jev
+classifications in one combined request per investigation. Recorded same-input
+comparisons selected these delegated tasks; necessity and causal confidence stay
+with DeepSeek. Both investigators and graders receive the same trusted policy,
+including inherited justification for accurate supporting documentation.
+`deepseek` retains the all-DeepSeek route; `typesafe` retains the broader typed
+comparison route. An unresolved distribution uses the same facts and no Jev answer.
 A decisive negative Jev grade is never resampled with another model. Rounded
 probabilities are preserved; they are not normalized into greater confidence.
 Vendor confidence is never a substitute for source proof.
@@ -97,8 +106,12 @@ atomic grading packets and parsed responses, and graded reports before final
 validation. These inputs support offline reproduction without calling a model
 again; they do not replace fresh verification or authorize a merge.
 
-Both routes are compared on the same investigations. Token usage includes the
+Live qualification defaults to the single combined production route. An explicit
+`CLOUSEAU_EVALUATION_GRADERS` list enables comparisons when needed. Token usage includes the
 investigations, grading, uncertainty routing and transport truncation attempts.
+Each qualification is capped at 40 provider requests, including transport retries.
+`CLOUSEAU_EVALUATION_REQUEST_LIMIT=0` verifies the guard without making a provider
+request. Exhausting the budget fails qualification and retains the case evidence.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
 live evaluation must establish useful approvals, blocked drift and excess,

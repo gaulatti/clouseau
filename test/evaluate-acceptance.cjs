@@ -7,10 +7,21 @@ const {investigateChange, gradeInvestigations} = require('../src/acceptance-revi
 const {PRICING, estimate} = require('../src/review-cost.cjs');
 
 async function main() {
+  const graders = (process.env.CLOUSEAU_EVALUATION_GRADERS || 'routed').split(',');
+  assert.ok(graders.length && new Set(graders).size === graders.length &&
+    graders.every(grader => ['deepseek', 'typesafe', 'routed'].includes(grader)), 'Choose explicit distinct supported grading routes');
+  const requestLimit = Number(process.env.CLOUSEAU_EVALUATION_REQUEST_LIMIT || 40);
+  assert.ok(Number.isSafeInteger(requestLimit) && requestLimit >= 0 && requestLimit <= 40, 'Qualification permits at most forty provider requests');
   const output = process.env.CLOUSEAU_EVALUATION_PATH || 'work/acceptance-evaluation.json';
   fs.mkdirSync(require('node:path').dirname(output), {recursive: true});
-  const evaluation = {version: 2, synthetic: true, qualification_only: true, pricing: PRICING, cases: []};
+  const evaluation = {version: 2, synthetic: true, qualification_only: true, graders,
+    request_budget: {limit: requestLimit, used: 0}, pricing: PRICING, cases: []};
   const save = () => fs.writeFileSync(output, JSON.stringify(evaluation, null, 2) + '\n');
+  const budgetedFetch = async (...args) => {
+    assert.ok(evaluation.request_budget.used < requestLimit, 'Live provider request budget exhausted');
+    evaluation.request_budget.used++; save();
+    return fetch(...args);
+  };
   save();
   for (const scenario of CASES) {
     const context = await prepareCase(scenario);
@@ -23,19 +34,19 @@ async function main() {
       record.observations.push({...observation, grader}); save();
     };
     try {
-      const investigation = await investigateChange({...context, config: models, log: console.log,
+      const investigation = await investigateChange({...context, config: models, log: console.log, fetchImpl: budgetedFetch,
         observe});
-      for (const grader of ['deepseek', 'typesafe']) {
+      for (const grader of graders) {
         try {
-          const result = await gradeInvestigations({...context, investigation, config: {...models, grader}, log: console.log,
+          const result = await gradeInvestigations({...context, investigation, config: {...models, grader}, log: console.log, fetchImpl: budgetedFetch,
             observe: observation => observe(observation, grader)});
           const cost = estimate(result.usage);
           record.results.push({grader, ...result, cost, passed: scenario.expected.includes(result.decision)}); save();
           console.log(JSON.stringify({case: scenario.name, grader, expected: scenario.expected, decision: result.decision, cost}));
         } catch (error) {record.results.push({grader, error: error.message, details: error.details || null, passed: false}); save();}
       }
-      record.passed = record.results.every(result => result.passed) &&
-        (record.results[0].decision === 'auto_approve') === (record.results[1].decision === 'auto_approve');
+      record.passed = record.results.length === graders.length && record.results.every(result => result.passed) &&
+        new Set(record.results.map(result => result.decision === 'auto_approve')).size === 1;
     } catch (error) {
       record.snapshots[context.snapshot.digest] ??= structuredClone(context.snapshot);
       record.error = error.message; record.details = error.details || null; record.passed = false;

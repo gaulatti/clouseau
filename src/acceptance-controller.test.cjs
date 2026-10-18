@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {createPolicy} = require('./policy.cjs');
-const {template} = require('./acceptance-review.cjs');
+const {template, modelTemplate} = require('./acceptance-review.cjs');
 const {digest} = require('./acceptance.cjs');
 const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
@@ -79,7 +79,7 @@ async function fixture(run) {
       }
       const view = JSON.parse(body.messages[1].content);
       for (const source of Object.values(view.sources)) source.content = source.numbered_lines.replace(/^L[0-9]+: /gm, '');
-      const report = template(view);
+      const report = state.alter ? template(view) : modelTemplate(view);
       report.gates.forEach(gate => {gate.state = 'satisfied';});
       if (state.alter) state.alter(report);
       return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:

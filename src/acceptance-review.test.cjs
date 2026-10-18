@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {template, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
+const {template, modelTemplate, modelEvidence, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
 function withKey(run) {return async () => {
@@ -71,6 +71,38 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   }
 });
 
+test('the native inspection selects controller proofs without generating source coordinates or aliases', withKey(async () => {
+  const f = fixture(); const facts = modelTemplate(f.snapshot);
+  facts.gates.forEach(gate => {gate.state = 'satisfied';});
+  assert.equal(facts.evidence, undefined);
+  let calls = 0;
+  const wire = value => ({ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
+    [{function: {name: 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})});
+  const result = await inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+    calls++;
+    const request = JSON.parse(options.body); const view = JSON.parse(request.messages[1].content);
+    const schema = request.tools[0].function.parameters;
+    assert.deepEqual(schema.properties.units.items.properties.fit.properties.outcome.properties.evidence.items.enum,
+      view.proofs.map(proof => proof.id));
+    return wire(facts);
+  }});
+  assert.equal(calls, 1); assert.doesNotThrow(() => validateInspection(result.report, f.snapshot));
+  assert.ok(result.report.evidence.every(proof => proof.quote === f.snapshot.sources[proof.source].content.split('\n').slice(proof.start - 1, proof.end).join('\n')));
+  const anchor = modelEvidence(f.snapshot).proofs.find(proof => proof.source === 'head').id;
+  const concern = finding(); delete concern.path; concern.anchor = anchor; concern.evidence = [anchor];
+  concern.factors = Object.fromEntries(Object.keys(concern.factors).map(name => [name, {reason: 'Observable changed production path.', evidence: [anchor]}]));
+  facts.findings.push(concern);
+  const causal = materialize(facts, f.snapshot);
+  assert.equal(causal.findings[0].path, 'src/upload.rs');
+  assert.doesNotThrow(() => validateInspection(causal, f.snapshot));
+  const unknown = structuredClone(facts); unknown.gates[0].evidence = ['invented-alias'];
+  assert.throws(() => materialize(unknown, f.snapshot), /Unknown controller-supplied source proof/);
+  const malformed = structuredClone(facts); malformed.gates[0].reason = null;
+  assert.throws(() => validateInspection(materialize(malformed, f.snapshot), f.snapshot), /invalid gate/);
+  const old = template(f.snapshot); old.findings = [concern]; old.findings[0].anchor = 'unknown';
+  assert.throws(() => materialize(old, f.snapshot), /Unknown controller-supplied causal proof/);
+}));
+
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
   const f = fixture(); const reports = []; const requests = [];
   const config = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'deepseek', grading_model: 'deepseek-flash'};
@@ -84,7 +116,8 @@ test('complete independent source reports are graded and combined without exposi
   assert.deepEqual(requests.slice(0, 2).map(request => request.model), ['deepseek-flash', 'deepseek-v4-pro']);
   assert.equal(requests[0].messages[1].content, requests[1].messages[1].content);
   const native = requests[0].tools.find(item => item.function.name === 'acceptance_report').function.parameters;
-  assert.deepEqual(native.properties.evidence.items.properties.source.enum, Object.keys(f.snapshot.sources));
+  assert.equal(native.properties.evidence, undefined, 'source bookkeeping is not delegated to the model');
+  assert.deepEqual(native.properties.gates.items.properties.evidence.items.enum, modelEvidence(f.snapshot).proofs.map(proof => proof.id));
   assert.deepEqual(native.properties.snapshot.enum, [f.snapshot.digest]);
   assert.ok(!JSON.parse(requests[1].messages[1].content).reviews);
   assert.equal(reports[0], result);
@@ -160,8 +193,8 @@ test('the real inspection transport losslessly partitions valid long citations w
       const request = JSON.parse(options.body);
       assert.match(request.messages[0].content, /at most 40 inclusive\s+lines/);
       const schema = request.tools.find(item => item.function.name === 'acceptance_report').function.parameters;
-      assert.match(schema.properties.evidence.items.properties.end.description, /end < start \+ 40/);
-      assert.match(schema.properties.findings.items.properties.anchor.properties.end.description, /end < start \+ 40/);
+      assert.equal(schema.properties.evidence, undefined);
+      assert.ok(schema.properties.findings.items.properties.anchor.enum.every(id => modelEvidence(f.snapshot).proofs.some(proof => proof.id === id)));
       return response(f.report);
     }});
     if (end <= 79) {
