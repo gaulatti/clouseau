@@ -15,9 +15,10 @@ async function main() {
     const context = await prepareCase(scenario);
     const models = {examiner: 'deepseek-flash', challenger: 'deepseek-flash', grading_model: 'deepseek-flash'};
     console.log(`Acceptance qualification: ${scenario.name}`);
-    const investigation = await investigateChange({...context, config: models, log: console.log});
-    const record = {name: scenario.name, expected: scenario.expected, results: []};
+    const record = {name: scenario.name, expected: scenario.expected, results: [], observations: []};
     evaluation.cases.push(record); save();
+    const investigation = await investigateChange({...context, config: models, log: console.log,
+      observe: observation => {record.observations.push(observation); save();}});
     for (const grader of ['deepseek', 'typesafe']) {
       const result = await gradeInvestigations({...context, investigation, config: {...models, grader}, log: console.log});
       record.results.push({grader, ...result}); save();

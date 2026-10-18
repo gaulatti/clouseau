@@ -83,7 +83,7 @@ async function prepareCase(scenario) {
   }}, graphql: async () => ({repository: {pullRequest: {closingIssuesReferences: {nodes: [], pageInfo: {hasNextPage: false}}}}})};
   const repo = {owner: 'example', repo: 'synthetic-upload-gateway'};
   const snapshot = await collectSnapshot({github, repo, config, files,
-    pr: {number: 1, changed_files: 1, title: scenario.title, body: scenario.description || 'Assess the actual change against the existing upload contract.', base: {sha: base}, head: {sha: head}},
+    pr: {number: 1, changed_files: 1, title: scenario.title, body: scenario.description || 'Assess the actual change against the existing upload contract.', base: {sha: base}, head: {sha: head, repo: {owner: {login: repo.owner}, name: repo.repo}}},
     technical: {synthetic: true, explanation: 'Synthetic verification receipt for model qualification only; never evidence of a real PR, runtime test or merge.',
       head_sha: head, conclusion: 'success', checks: ['tests', 'exact coverage']}});
   // The dependent production/test boundary is supplied completely, not inferred.

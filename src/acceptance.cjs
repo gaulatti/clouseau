@@ -86,7 +86,7 @@ function scoreReport(report) {
 }
 
 function validateReport(report, snapshot) {
-  keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions']);
+  keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions', 'resolutions']);
   requireThat(report.version === RULES.version && report.snapshot === snapshot.digest && text(report.summary), 'stale identity or missing summary');
   requireThat(Array.isArray(report.evidence) && report.evidence.length > 0, 'missing evidence register');
   const evidence = new Map();
@@ -121,7 +121,8 @@ function validateReport(report, snapshot) {
     requireThat(unit.paths.length > 0 && unit.paths.every(name => snapshot.paths.includes(name)), 'unit outside changed paths');
     factors(unit.fit, 'fit'); factors(unit.need, 'need'); factors(unit.excess, 'excess');
     if (unit.need.binding.max > 0) requireThat(unit.need.binding.evidence.some(id =>
-      snapshot.sources[evidence.get(id).source].authority === 'trusted'), 'binding obligation lacks trusted authority');
+      snapshot.sources[evidence.get(id).source].authority === 'trusted' &&
+      snapshot.sources[evidence.get(id).source].kind === 'contract'), 'binding obligation lacks trusted contract authority');
     requireThat(typeof unit.alternative === 'string' && unit.alternative.length <= 2000, 'invalid narrower alternative');
     if (Object.values(unit.excess).some(value => value.max > 0)) requireThat(text(unit.alternative), 'excess without a feasible narrower alternative');
   }
@@ -158,6 +159,9 @@ function validateReport(report, snapshot) {
     unique(item.units, 'accounting units'); citations(item.evidence);
     requireThat(item.units.length > 0 && item.units.every(id => unitIds.has(id) &&
       report.units.find(unit => unit.id === id).paths.includes(item.path)), 'accounting lacks a covering acceptance unit');
+    requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].path === item.path ||
+      snapshot.files.some(file => file.path === item.path && [file.base_source, file.head_source].includes(evidence.get(id).source))),
+      'accounting lacks direct changed-file evidence');
   }
   requireThat(Array.isArray(report.decisions), 'missing authority decisions');
   for (const item of report.decisions) {
@@ -165,6 +169,16 @@ function validateReport(report, snapshot) {
     requireThat(['purpose', 'authority', 'tradeoff'].includes(item.kind) && text(item.question), 'unsupported human handoff');
     unique(item.options, 'decision options'); requireThat(item.options.length >= 2 && item.options.length <= 4, 'decision needs concrete options');
     citations(item.evidence);
+  }
+  requireThat(Array.isArray(report.resolutions), 'missing prior-finding dispositions');
+  const resolved = new Set();
+  for (const item of report.resolutions) {
+    keys(item, ['id', 'state', 'reason', 'evidence']);
+    requireThat(!resolved.has(item.id) && snapshot.prior_findings?.some(finding => finding.id === item.id) &&
+      ['corrected', 'dismissed'].includes(item.state) && text(item.reason), 'invalid prior-finding disposition');
+    citations(item.evidence);
+    requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].ref === snapshot.head_sha), 'resolution lacks current-revision evidence');
+    resolved.add(item.id);
   }
   return scoreReport(report);
 }

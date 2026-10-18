@@ -99,6 +99,27 @@ test('test integrity violations block despite owner confirmation or strong produ
   assert.equal(validateReport(report, snapshot).decision, 'blocked_integrity');
 });
 
+test('prior findings close only with valid current-revision counterevidence and cannot borrow runtime receipts as binding requirements', () => {
+  const {report, snapshot} = fixture();
+  snapshot.prior_findings = [{id: 'prior-cause'}];
+  report.resolutions = [{id: 'prior-cause', state: 'corrected', reason: 'Current source rejects the invalid request.', evidence: ['source']}];
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve');
+  for (const mutate of [
+    r => {r.resolutions = null;}, r => {r.resolutions[0].id = 'unknown';},
+    r => {r.resolutions[0].state = 'waived';}, r => {r.resolutions[0].evidence = ['contract'];},
+    r => {r.resolutions.push(r.resolutions[0]);}, r => {r.accounting[0].evidence = ['contract'];},
+  ]) {
+    const bad = structuredClone(report); mutate(bad);
+    assert.throws(() => validateReport(bad, snapshot), /Invalid acceptance/);
+  }
+  snapshot.sources.contract.kind = 'verification';
+  assert.throws(() => validateReport(report, snapshot), /trusted contract authority/);
+  snapshot.sources.contract.kind = 'contract';
+  snapshot.sources.head.path = 'src/previous-name.rs';
+  report.findings = [finding()];
+  assert.equal(validateReport(report, snapshot).decision, 'repair_required', 'rename aliases preserve changed-path evidence');
+});
+
 test('all boundaries are strict and no evidence, accounting, or empty-plan escape exists', () => {
   const invalid = [
     r => {r.extra = true;}, r => {r.version = 1;}, r => {r.snapshot = 'stale';}, r => {r.summary = '';},

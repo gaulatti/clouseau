@@ -11,7 +11,7 @@ function fixture() {
     listCommits: async () => ({data: [{sha: 'b'.repeat(40), commit: {message: 'fix: preserve durable upload acceptance'}}]}),
   }}, graphql: async () => ({repository: {pullRequest: {closingIssuesReferences: {nodes: [{number: 1, title: 'Repair upload', body: 'Preserve acceptance.'}], pageInfo: {hasNextPage: false}}}}})};
   return {github, calls, repo: {owner: 'example', repo: 'upload-gateway'},
-    pr: {number: 3, changed_files: 1, title: 'fix: preserve upload', body: 'Untrusted contributor claim.', base: {sha: 'b'.repeat(40)}, head: {sha: 'a'.repeat(40)}},
+    pr: {number: 3, changed_files: 1, title: 'fix: preserve upload', body: 'Untrusted contributor claim.', base: {sha: 'b'.repeat(40)}, head: {sha: 'a'.repeat(40), repo: {owner: {login: 'external'}, name: 'fork'}}},
     files: [{filename: 'src/upload.rs', status: 'modified', patch: '@@ -1 +1 @@\n-old\n+new'}],
     config: {repository_policy: '.github/clouseau.md', readme: 'README.md'},
     technical: {run_id: 42, head_sha: 'a'.repeat(40), conclusion: 'success'}};
@@ -39,6 +39,8 @@ test('source collection binds complete base/head blobs, authority, precedent, ti
   await additionalSources({...f, snapshot, paths: ['src/naming.rs']});
   assert.equal(f.calls.length, count, 'immutable evidence is not refetched');
   assert.ok(f.calls.every(call => [f.pr.head.sha, f.pr.base.sha].includes(call.ref)));
+  assert.ok(f.calls.filter(call => call.ref === f.pr.head.sha).every(call => call.owner === 'external' && call.repo === 'fork'));
+  assert.ok(f.calls.filter(call => call.ref === f.pr.base.sha).every(call => call.owner === 'example'));
 });
 
 test('renamed, added and removed files use only their applicable immutable sources', async () => {
@@ -58,6 +60,7 @@ test('bounded source reader refuses path traversal, binary data, truncation and 
   assert.equal(safePath('src/module.rs'), true);
   const f = fixture();
   await assert.rejects(readSource({...f, snapshot: {sources: {}}, filename: '../private', ref: f.pr.head.sha}), /Unsafe/);
+  await assert.rejects(readSource({...f, snapshot: {sources: {}, head_sha: f.pr.head.sha}, filename: 'src/upload.rs', ref: f.pr.head.sha}), /head repository/);
   for (const data of [{}, {content: '', encoding: 'utf8'}, {content: '', encoding: 'base64', size: 300001},
     {content: Buffer.from('x'.repeat(300001)).toString('base64'), encoding: 'base64'},
     {content: Buffer.from('a\0b').toString('base64'), encoding: 'base64'},
@@ -71,6 +74,8 @@ test('incomplete evidence, unsafe prior paths, oversized packets and truncated l
   for (const mutate of [
     f => {f.files = [];}, f => {f.pr.changed_files = 2;}, f => {f.files[0].filename = '../code';},
     f => {f.files[0].patch = '';}, f => {f.files[0].status = 'binary';}, f => {f.files[0].previous_filename = '../code';},
+    f => {f.pr.head.repo = null;}, f => {f.pr.head.repo.owner = null;}, f => {delete f.pr.head.repo.owner.login;},
+    f => {delete f.pr.head.repo.name;},
     f => {f.github.graphql = async () => ({repository: {pullRequest: {closingIssuesReferences: {nodes: [], pageInfo: {hasNextPage: true}}}}});},
   ]) {
     const f = fixture(); mutate(f); await assert.rejects(collectSnapshot(f));

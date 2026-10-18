@@ -5,7 +5,7 @@ const JEV_MODEL = 'jev-1.13.0';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // A completed answer, including a negative or malformed one, is never resampled.
-async function requestJSON({messages, model, fetchImpl = fetch, wait = delay, report = () => {}}) {
+async function requestJSON({messages, model, thinking = true, fetchImpl = fetch, wait = delay, report = () => {}}) {
   if (!MODELS.includes(model)) throw new Error('Unsupported acceptance model');
   if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
   const usage = [];
@@ -15,7 +15,7 @@ async function requestJSON({messages, model, fetchImpl = fetch, wait = delay, re
     const response = await fetchImpl('https://api.deepseek.com/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(90000),
       headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model, thinking: {type: 'enabled'}, reasoning_effort: 'low',
+      body: JSON.stringify({model, ...(thinking ? {thinking: {type: 'enabled'}, reasoning_effort: 'low'} : {thinking: {type: 'disabled'}, temperature: 0}),
         max_tokens: 8192 * 2 ** attempt, response_format: {type: 'json_object'}, messages}),
     });
     if (!response.ok) throw new Error(`Acceptance provider unavailable: HTTP ${response.status}`);
