@@ -75,7 +75,14 @@ test('wiki generation coordinates three real pages before validating the whole b
     assert.equal(request.messages[0].role, 'system');
     assert.match(request.messages[0].content, /untrusted\s+evidence/);
     const input = JSON.parse(request.messages[1].content);
-    if (input.proposed_update) {assert.deepEqual(input.source_evidence, {'src/app.rs:L1': source['src/app.rs']}); calls++; return done(facts(input.proposed_update, source));}
+    if (input.proposed_update) {
+      assert.deepEqual(input.source_evidence, {'src/app.rs:L1': source['src/app.rs']});
+      assert.equal(input.proposed_update.length, 1, 'each page receives a dedicated factual audit');
+      assert.equal(input.other_proposed_pages.length, 2, 'other pages remain available for consistency');
+      assert.ok(!input.other_proposed_pages.some(page => page.path === input.proposed_update[0].path));
+      assert.deepEqual(request.schema.properties.pages.required, [input.proposed_update[0].path]);
+      calls++; return done(facts(input.proposed_update, source));
+    }
     assert.deepEqual(input.source, source);
     if (calls++ === 0) return done(manifest);
     assert.deepEqual(input.plan, manifest.pages);
@@ -83,7 +90,7 @@ test('wiki generation coordinates three real pages before validating the whole b
     assert.equal(input.proposed_pages.length, calls - 2);
     return done({path: input.requested_page, content: pages[calls - 2]});
   }});
-  assert.equal(calls, 5);
+  assert.equal(calls, 7);
   assert.equal(result.updates.length, 3);
 });
 

@@ -192,7 +192,9 @@ use identical evidence and schemas, at most three attempts with 4,096/8,192/16,3
 output tokens and 90-second deadlines. PR review keeps its existing API and
 reasoning policy.
 
-The factual report is a fixed checklist keyed by the planned pages. Each page
+Each page receives a dedicated factual audit with the complete source map and
+the other proposed pages for consistency. The combined factual report is a fixed
+checklist keyed by the planned pages. Each page
 has one source reference, a findings string limited to 2,000 characters, and a
 supported verdict emitted last. Every page must be supported with no unresolved
 findings; contradictory verdicts are rejected. This avoids unbounded evidence
