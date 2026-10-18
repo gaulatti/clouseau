@@ -22,10 +22,6 @@ on:
         default: false
 permissions:
   contents: read
-# Cancel superseded metadata reviews without cancelling code verification.
-concurrency:
-  group: clouseau-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}
-  cancel-in-progress: true
 jobs:
   evaluate-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.evaluate_acceptance
