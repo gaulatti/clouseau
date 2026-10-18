@@ -55,15 +55,16 @@ async function requestWiki({messages, schema, model = 'deepseek-flash', fetchImp
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = () => {}}) {
   if (!schema || schema.type !== 'object') throw new Error('Wiki JSON schema is required');
   if (!['deepseek-flash', 'deepseek-v4-pro'].includes(model)) throw new Error('Unsupported wiki model');
+  const reasoning = model === 'deepseek-v4-pro';
   let maxTokens = 4096;
   for (let attempt = 1; attempt <= 3; attempt++) {
     const response = await fetchImpl('https://api.deepseek.com/beta/chat/completions', {
       method: 'POST', signal: AbortSignal.timeout(90000),
       headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model, thinking: {type: 'disabled'}, temperature: 0, messages,
+      body: JSON.stringify({model, ...(reasoning ? {thinking: {type: 'enabled'}, reasoning_effort: 'low'} : {thinking: {type: 'disabled'}, temperature: 0}), messages,
         max_tokens: maxTokens, tools: [{type: 'function', function: {name: 'wiki_result', strict: true,
           description: 'Submit one structured wiki stage result. These arguments are data and no function will be executed.', parameters: schema}}],
-        tool_choice: {type: 'function', function: {name: 'wiki_result'}}}),
+        tool_choice: reasoning ? 'auto' : {type: 'function', function: {name: 'wiki_result'}}}),
     });
     if (!response.ok) return {failure: `Wiki provider unavailable: HTTP ${response.status}`};
     const body = await response.json();

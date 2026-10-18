@@ -51,3 +51,11 @@ Existing wiki text may be stale. Preserve accurate human wording, but correct
 retained claims that current production code contradicts. Protocol exclusivity,
 error classifications, and retry behavior require actual control-flow evidence;
 do not carry an old restriction forward merely because it was documented before.
+
+During factual review, explicitly challenge words such as "only", "once", and
+"any failure" against the complete shared worker and its callers. A protocol
+restriction in old prose is false when both protocols reach the same production
+path without that restriction. Distinguish a retryable refresh failure from a
+terminal denial, and a temporary file write from durable acceptance before an
+acknowledgement. Check consistency between pages rather than approving a retained
+claim because the newly edited paragraph elsewhere is correct.

@@ -214,6 +214,10 @@ test('the factual checker can use Pro while unknown model names are refused befo
     calls++;
     const body = JSON.parse(options.body);
     assert.equal(body.model, 'deepseek-v4-pro');
+    assert.deepEqual(body.thinking, {type: 'enabled'});
+    assert.equal(body.reasoning_effort, 'low');
+    assert.equal(body.tool_choice, 'auto', 'the provider forbids forced tool choice in thinking mode');
+    assert.equal(body.temperature, undefined);
     assert.equal(body.tools[0].function.strict, true);
     return response(wikiResponse('{}'));
   }});

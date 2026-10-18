@@ -179,12 +179,15 @@ retained claims. Existing wiki prose can be stale; production control flow takes
 precedence. The full bundle must pass before it becomes a publishable artifact.
 
 Planning and writing use DeepSeek Flash; the independent factual checker uses
-DeepSeek V4 Pro. Both run in non-thinking mode at temperature zero. DeepSeek's
+DeepSeek V4 Pro with low reasoning effort; Flash uses non-thinking mode at
+temperature zero. DeepSeek's
 [beta strict function-return format](https://api-docs.deepseek.com/guides/tool_calls/)
 provides separate schemas for planning, the exact requested page, and factual
 review. The sole return name is `wiki_result`. Its arguments are parsed as data;
 no model-selected function is executed. Plain-text answers, unknown return names,
-multiple returns, and incomplete results fail closed. Token truncation retries
+multiple returns, and incomplete results fail closed. The factual checker uses
+automatic tool choice because the provider forbids forced choices in thinking
+mode; a plain answer still fails validation. Token truncation retries
 use identical evidence and schemas, at most three attempts with 4,096/8,192/16,384
 output tokens and 90-second deadlines. PR review keeps its existing API and
 reasoning policy.
