@@ -11,6 +11,7 @@ const FACTORS = Object.freeze({
 const GATES = Object.freeze(['scope_authority', 'test_integrity', 'security_isolation', 'compatibility_recovery', 'review_completeness']);
 const STATES = Object.freeze(['satisfied', 'violated', 'unresolved', 'inapplicable']);
 const RULES = Object.freeze({version: 2, product_threshold: 80, defect_threshold: 70, xg_bonus: 20});
+const MAX_CITATION_LINES = 40;
 
 function requireThat(condition, message) {
   if (!condition) throw new Error(`Invalid acceptance evidence: ${message}`);
@@ -82,7 +83,8 @@ function scoreReport(report) {
   const decisions = report.decisions.filter(item => item.kind !== 'purpose' || newOutcome);
   const scopeDecision = decisions.length > 0 && report.gates.find(gate => gate.name === 'scope_authority').state !== 'satisfied';
   const blocked = report.gates.some(gate => gate.state === 'violated' && !(scopeDecision && gate.name === 'scope_authority')) || findings.some(finding => finding.disposition === 'blocking');
-  const incomplete = report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority')) ||
+  const missingAlternative = report.units.some(unit => Object.values(unit.excess).some(value => value.max > 0) && !text(unit.alternative));
+  const incomplete = missingAlternative || report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority')) ||
     units.some(unit => unit.disposition === 'investigate') || findings.some(finding => finding.disposition === 'investigate');
   const rework = units.some(unit => unit.disposition === 'rework');
   const decision = integrity.state === 'violated' ? 'blocked_integrity' : blocked ? 'repair_required' :
@@ -90,7 +92,7 @@ function scoreReport(report) {
   return {rules: RULES, units, findings, decision};
 }
 
-function validateReport(report, snapshot) {
+function validateEvidence(report, snapshot, graded) {
   keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions', 'resolutions']);
   requireThat(report.version === RULES.version && report.snapshot === snapshot.digest && text(report.summary), 'stale identity or missing summary');
   requireThat(Array.isArray(report.evidence) && report.evidence.length > 0, 'missing evidence register');
@@ -100,7 +102,7 @@ function validateReport(report, snapshot) {
     requireThat(text(item.id) && !evidence.has(item.id), 'duplicate evidence id');
     const source = snapshot.sources[item.source];
     requireThat(source && Number.isSafeInteger(item.start) && Number.isSafeInteger(item.end) &&
-      item.start >= 1 && item.end >= item.start && item.end - item.start < 40, 'citation source or lines');
+      item.start >= 1 && item.end >= item.start && item.end - item.start < MAX_CITATION_LINES, 'citation source or lines');
     const lines = source.content.split('\n');
     requireThat(item.end <= lines.length, 'citation extends beyond source');
     const selected = lines.slice(item.start - 1, item.end).join('\n');
@@ -125,11 +127,10 @@ function validateReport(report, snapshot) {
     unique(unit.paths, 'unit paths');
     requireThat(unit.paths.length > 0 && unit.paths.every(name => snapshot.paths.includes(name)), 'unit outside changed paths');
     factors(unit.fit, 'fit'); factors(unit.need, 'need'); factors(unit.excess, 'excess');
-    if (unit.need.binding.max > 0) requireThat(unit.need.binding.evidence.some(id =>
+    if (graded && unit.need.binding.max > 0) requireThat(unit.need.binding.evidence.some(id =>
       snapshot.sources[evidence.get(id).source].authority === 'trusted' &&
       snapshot.sources[evidence.get(id).source].kind === 'contract'), 'binding obligation lacks trusted contract authority');
     requireThat(typeof unit.alternative === 'string' && unit.alternative.length <= 2000, 'invalid narrower alternative');
-    if (Object.values(unit.excess).some(value => value.max > 0)) requireThat(text(unit.alternative), 'excess without a feasible narrower alternative');
   }
   requireThat(Array.isArray(report.findings), 'missing findings register');
   const findingIds = new Set();
@@ -185,7 +186,17 @@ function validateReport(report, snapshot) {
     requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].ref === snapshot.head_sha), 'resolution lacks current-revision evidence');
     resolved.add(item.id);
   }
+}
+
+// Investigators supply facts, not numeric claims. Their placeholder range is
+// not an assertion of a binding obligation and cannot yield an approval score.
+function validateFacts(report, snapshot) {
+  validateEvidence(report, snapshot, false);
+}
+
+function validateReport(report, snapshot) {
+  validateEvidence(report, snapshot, true);
   return scoreReport(report);
 }
 
-module.exports = {FACTORS, GATES, STATES, RULES, digest, productScore, findingScore, scoreReport, validateReport};
+module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, productScore, findingScore, scoreReport, validateFacts, validateReport};

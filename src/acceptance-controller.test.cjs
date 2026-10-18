@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {createPolicy} = require('./policy.cjs');
-const {template} = require('./acceptance-review.cjs');
+const {template, modelTemplate} = require('./acceptance-review.cjs');
 const {digest} = require('./acceptance.cjs');
 const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
@@ -31,7 +31,7 @@ async function fixture(run) {
       return graphql(query, args);
     };
     const endpoint = (name, fn) => Object.assign(fn, {endpointName: name});
-    const write = name => endpoint(name, async args => {state.writes.push({name, args}); return {data: {}};});
+    const write = name => endpoint(name, async args => {state.writes.push({name, args}); return {data: {id: 100 + state.writes.length}};});
     github.rest.pulls = {
       get: async () => ({data: structuredClone(state.pr)}),
       listFiles: endpoint('files', async () => ({data: [{filename: 'src/upload.test.js', status: 'modified', patch: '+meaningful tests'}]})),
@@ -79,7 +79,7 @@ async function fixture(run) {
       }
       const view = JSON.parse(body.messages[1].content);
       for (const source of Object.values(view.sources)) source.content = source.numbered_lines.replace(/^L[0-9]+: /gm, '');
-      const report = template(view);
+      const report = state.alter ? template(view) : modelTemplate(view);
       report.gates.forEach(gate => {gate.state = 'satisfied';});
       if (state.alter) state.alter(report);
       return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
@@ -111,6 +111,38 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
+test('all evidence pages must publish before native approval, and a partial publication is safely resumed without new model calls', () => fixture(async f => {
+  f.state.alter = report => {
+    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(report.units[0][group])) {
+      factor.reason = 'Unchanged cited source evidence. '.repeat(60);
+    }
+  };
+  const assessment = await f.assess();
+  assert.equal(assessment.decision, 'auto_approve');
+  const originalRecord = fs.readFileSync(f.recordPath, 'utf8');
+  const calls = f.state.calls;
+  const create = f.github.rest.issues.createComment;
+  let fail = true;
+  f.github.rest.issues.createComment = async args => {
+    if (fail && args.body.includes('### Acceptance evidence 2/')) throw new Error('GitHub publication interrupted');
+    const response = await create(args);
+    f.state.comments.push({id: response.data.id, user: {login: 'github-actions[bot]'}, body: args.body});
+    return response;
+  };
+  await assert.rejects(f.gate(assessment), /publication interrupted/);
+  assert.equal(f.state.writes.some(item => item.name === 'approve'), false);
+  assert.equal(f.state.comments.some(item => item.body.includes('<!-- clouseau-acceptance:v2 -->')), false);
+  fail = false;
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(item => item.name === 'update-ledger').length, 1, 'the first complete page is reused in place');
+  const primary = f.state.comments.find(item => item.body.includes('<!-- clouseau-acceptance:v2 -->'));
+  assert.match(primary.body, /Complete factor inputs and literal evidence: \[Evidence 1\//);
+  for (const comment of f.state.comments) assert.ok(comment.body.length < 64000);
+  assert.equal(fs.readFileSync(f.recordPath, 'utf8'), originalRecord);
+  assert.equal(f.state.calls, calls, 'publishing or retrying publication never calls a model');
+}));
+
 test('a model failure or pending/failed verification cannot reach an approval or default to owner review', () => fixture(async f => {
   f.state.pending = true;
   assert.equal((await f.assess()).decision, 'pending_technical'); assert.equal(f.state.calls, 0);
@@ -131,6 +163,53 @@ test('a model failure or pending/failed verification cannot reach an approval or
   const ready = await f.policy.assessWhenReady({github: f.github, context: f.context, recordPath: f.recordPath,
     fetchImpl: async () => {throw new Error('still offline');}});
   assert.equal(ready.decision, 'review_incomplete');
+  assert.equal(f.state.writes.length, 0);
+}));
+
+test('incomplete grading retains exact replay inputs and still cannot approve or waive a missing alternative', () => fixture(async f => {
+  const assessment = await f.assess({fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body);
+    if (body.tools) return f.fetchImpl(url, options);
+    const {questions} = JSON.parse(body.messages[1].content);
+    const answers = Object.fromEntries(Object.keys(questions).map(id => [id,
+      id === 'u0_excess_abstraction' ? 'level1' : id.includes('_excess_') ? 'level0' : 'level4']));
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers})}}]})};
+  }});
+  assert.equal(assessment.decision, 'review_incomplete');
+  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
+  assert.equal(trace.failure, undefined, 'missing repair detail is incomplete analysis, not invalid source evidence');
+  const response = trace.observations.find(item => item.phase === 'grading_response');
+  const graded = trace.observations.find(item => item.phase === 'graded_report');
+  const snapshot = trace.snapshots[graded.snapshot];
+  assert.equal(response.value.answers.u0_excess_abstraction, 'level1');
+  assert.equal(response.packet.state.factors.u0_excess_abstraction.context.narrower_alternative, '');
+  assert.equal(graded.report.units[0].excess.abstraction.min, 0.25);
+  assert.equal(snapshot.digest, graded.report.snapshot);
+  assert.equal(require('./acceptance.cjs').validateReport(graded.report, snapshot).decision,
+    'review_incomplete', 'the retained inputs reproduce the exact hold without calling a provider');
+  await assert.rejects(f.gate(assessment), /incomplete/);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+}));
+
+test('malformed provider JSON retains the exact undecodable response and cannot reach approval', () => fixture(async f => {
+  const raw = '{"units":[';
+  const assessment = await f.assess({fetchImpl: async () => ({ok: true, json: async () => ({choices:
+    [{finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: 'acceptance_report', arguments: raw}}]}}]})})});
+  assert.equal(assessment.decision, 'review_incomplete');
+  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
+  assert.equal(trace.details.raw_response, raw); assert.equal(trace.details.canonical_response, raw);
+  assert.equal(trace.details.model, 'deepseek-flash'); assert.equal(trace.details.usage.length, 1);
+  await assert.rejects(f.gate(assessment), /incomplete/);
+  assert.equal(f.state.writes.length, 0);
+}));
+
+test('failure before source collection is retained without fabricating a snapshot', () => fixture(async f => {
+  f.github.rest.repos.getContent = async () => {throw new Error('immutable source unavailable');};
+  assert.equal((await f.assess()).decision, 'review_incomplete');
+  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
+  assert.equal(trace.failure, 'immutable source unavailable');
+  assert.deepEqual(trace.snapshots, {});
+  assert.equal(f.state.calls, 0);
   assert.equal(f.state.writes.length, 0);
 }));
 

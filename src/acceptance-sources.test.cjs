@@ -2,7 +2,17 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {safePath, refresh, readSource, collectSnapshot, additionalSources} = require('./acceptance-sources.cjs');
+const {proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources} = require('./acceptance-sources.cjs');
+
+test('controller proof IDs bind bounded immutable spans and remain stable when source context grows', () => {
+  const snapshot = {sources: {blank: {content: '\n'}, code: {content: Array.from({length: 85}, (_, i) =>
+    i < 40 ? '' : `statement ${i + 1}`).join('\n')}}};
+  const proofs = proofCatalog(snapshot);
+  assert.deepEqual(proofs, [{id: 'proof-1-41', source: 'code', start: 41, end: 80},
+    {id: 'proof-1-81', source: 'code', start: 81, end: 85}]);
+  snapshot.sources.other = {content: 'additional source'};
+  assert.deepEqual(proofCatalog(snapshot).slice(0, 2), proofs);
+});
 
 function fixture() {
   const calls = [];

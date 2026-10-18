@@ -8,7 +8,8 @@
       "Enforce 100% line and branch coverage",
       "Test approval policy",
       "Accept complete application coverage",
-      "Verify rejection is enforced"
+      "Verify rejection is enforced",
+      "Test workflow security"
     ]
   },
   "manual_reviewer": "gaulatti",
@@ -27,7 +28,7 @@
   "acceptance": {
     "examiner": "deepseek-flash",
     "challenger": "deepseek-v4-pro",
-    "grader": "deepseek",
+    "grader": "routed",
     "grading_model": "deepseek-flash",
     "repair_attempts": 2
   }

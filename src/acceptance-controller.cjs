@@ -5,7 +5,7 @@ const path = require('node:path');
 const {digest, validateReport} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
-const {priorState, reconcile, render} = require('./acceptance-ledger.cjs');
+const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
 
 const RECORD = 'work/clouseau-acceptance.json';
 const policyDigest = () => digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8'));
@@ -37,7 +37,7 @@ function verifyRecord(record, assessment, config) {
   const state = reconcile(record.result, record.snapshot, record.previous.findings);
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(record.result.decision)) record.result.decision = 'review_incomplete';
   if (assessment.decision !== decided(record.result, record.controls)) throw new Error('Acceptance decision differs from the deterministic record');
-  return {state, body: render({...record.result, decision: assessment.decision}, record.snapshot, state)};
+  return {state, ...publication({...record.result, decision: assessment.decision}, record.snapshot, state)};
 }
 
 function createAcceptancePolicy(config, legacy) {
@@ -51,13 +51,18 @@ function createAcceptancePolicy(config, legacy) {
     if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
     if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
     const observations = [];
+    const snapshots = {};
+    let snapshot;
     fs.mkdirSync(path.dirname(recordPath), {recursive: true});
-    const diagnostic = value => fs.writeFileSync(`${recordPath}.diagnostic.json`, JSON.stringify(value, null, 2) + '\n');
+    const diagnostic = value => {
+      if (snapshot) snapshots[snapshot.digest] ??= structuredClone(snapshot);
+      fs.writeFileSync(`${recordPath}.diagnostic.json`, JSON.stringify({...value, snapshots}, null, 2) + '\n');
+    };
     try {
       const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
-      const snapshot = await collectSnapshot({github, repo, pr, files, config, technical});
+      snapshot = await collectSnapshot({github, repo, pr, files, config, technical});
       snapshot.prior_findings = previous.findings;
       const repair = require('./acceptance-repair.cjs');
       const reservations = repair.history(comments, snapshot.repository, number);
@@ -73,7 +78,7 @@ function createAcceptancePolicy(config, legacy) {
       // Retain the complete record. Never place the large, model-controlled
       // ledger in workflow outputs or interpolate it into shell commands.
       fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
-      render({...result, decision}, snapshot, state);
+      publication({...result, decision}, snapshot, state);
       const assessment = {...identity, decision, record_digest: digest(record),
         reason: controls && decision === 'owner_decision' ? controls : `Evidence-bound product and technical acceptance: ${decision}.`};
       if (!record.controls && ['repair_required', 'blocked_integrity'].includes(result.decision)) {
@@ -85,7 +90,7 @@ function createAcceptancePolicy(config, legacy) {
       }
       return assessment;
     } catch (error) {
-      diagnostic({identity, observations, failure: error.message});
+      diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
       return {...identity, decision: 'review_incomplete', reason: 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.'};
     }
@@ -105,7 +110,7 @@ function createAcceptancePolicy(config, legacy) {
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) return hold(assessment.reason);
     const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
-    const {body} = verifyRecord(record, assessment, config);
+    const {body, pages} = verifyRecord(record, assessment, config);
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
@@ -114,9 +119,18 @@ function createAcceptancePolicy(config, legacy) {
     const comments = await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: pr.number, per_page: 100});
     const current = priorState(comments, record.snapshot.repository, pr.number);
     if (digest(current) !== digest(record.previous)) throw new Error('Acceptance history changed; reassess the current record');
-    if (current.comment === null) await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body});
-    else await github.rest.issues.updateComment({...context.repo, comment_id: current.comment, body});
-    await core.summary.addRaw(body).write();
+    const links = [];
+    for (const [index, page] of pages.entries()) {
+      const marker = page.split('\n')[0];
+      const existing = comments.find(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(`${marker}\n`));
+      const response = existing ? await github.rest.issues.updateComment({...context.repo, comment_id: existing.id, body: page}) :
+        await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body: page});
+      links.push(`[Evidence ${index + 1}/${pages.length}](https://github.com/${record.snapshot.repository}/pull/${pr.number}#issuecomment-${response.data.id})`);
+    }
+    const published = links.length ? `${body}\n\nComplete factor inputs and literal evidence: ${links.join(' · ')}` : body;
+    if (current.comment === null) await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body: published});
+    else await github.rest.issues.updateComment({...context.repo, comment_id: current.comment, body: published});
+    await core.summary.addRaw(published).write();
     if (!['auto_approve', 'owner_decision'].includes(assessment.decision)) {
       return hold(`Clouseau ${assessment.decision}: automated investigation or an in-envelope repair is required. Owner confirmation cannot waive this result.`);
     }

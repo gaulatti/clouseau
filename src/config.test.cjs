@@ -48,6 +48,7 @@ test('version two explicitly selects bounded qualified model roles and cannot al
     grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2}};
   assert.deepEqual(validateConfig(config), config);
   assert.equal(validateConfig({...config, acceptance: {...config.acceptance, grader: 'typesafe'}}).acceptance.grader, 'typesafe');
+  assert.equal(validateConfig({...config, acceptance: {...config.acceptance, grader: 'routed'}}).acceptance.grader, 'routed');
   for (const mutate of [
     c => {delete c.acceptance;}, c => {c.acceptance.examiner = 'unknown';}, c => {c.acceptance.challenger = 'unknown';},
     c => {c.acceptance.grader = 'unknown';}, c => {c.acceptance.grading_model = 'unqualified';},

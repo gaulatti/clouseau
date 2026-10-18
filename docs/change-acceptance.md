@@ -9,12 +9,30 @@ policy. Every changed file is accounted for. The complete original and proposed
 text, linked tickets, recent file precedent and actual verification receipt are
 bound to immutable revisions. Fork source is read from the fork at its exact SHA.
 Contributor text, source and model output are data, never executable instructions.
+Each stored source citation and changed-source anchor is limited to 40 inclusive
+lines. The controller partitions a longer valid model-selected interval into
+entries within that limit and expands every reference to include all its parts.
+Every cited line and judgment is preserved; no model retry is needed for chunking.
+Unknown sources, invalid coordinates and unmatched references still stop review.
+New investigations select from a controller-generated proof catalog. The tool
+schema enumerates those IDs for every citation and changed-source anchor. The
+controller generates the stored source register and coordinates; the model
+supplies observations and chooses the relevant supplied proofs.
+The supplied syntax includes direct source references for every changed file.
+File accounting cites the corresponding changed source. An investigator may
+observe the lack of a binding requirement without inventing contract authority.
+That factual phase produces no approval score. Every positive binding grade still
+requires trusted contract proof during final validation and at the write gate.
 
 ## Product acceptance
 
 Inspect each material capability and mechanism. A necessary fix cannot hide an
 unnecessary framework, dependency or unrelated feature. Helpers and tests inherit
 justification only through the accepted outcome they demonstrably support.
+Routine companion documentation of that same behavior is accounted for within
+the accepted outcome. It is not a separate feature needing an explicit request
+for prose. New promises, unrelated documentation and material engineering choices
+still receive their own scope, factual and proportionality assessment.
 
 | Index | Inputs and calculation |
 |---|---|
@@ -27,6 +45,9 @@ Excess covers abstraction, added surface, duplicated authority, dependencies,
 collateral changes and generalization beyond the demonstrated need. Every excess
 claim needs a concrete narrower alternative preserving the same guarantees.
 Preference, changed-line counts and helper counts alone establish no excess.
+If a possible excess lacks its narrower alternative, review remains incomplete
+and cannot approve. An independent integrity veto still blocks; an incomplete
+repair detail cannot erase established evidence of fabricated tests.
 A binding obligation must cite the trusted contract, never a contributor's claim.
 
 ## Technical findings
@@ -68,15 +89,35 @@ grader assigns descriptive semantic levels. Code converts those levels to values
 and computes every formula and threshold. All factors remain visible in the PR
 ledger, including their citations and explanations.
 
-`acceptance.grader: deepseek` uses the DeepSeek atomic grader. `typesafe` selects
-the explicit Jev/DeepSeek route: Jev 1.13 handles bounded classification packets;
-unresolved distributions go to DeepSeek with the same facts and no Jev answer.
+`acceptance.grader: routed` delegates domain fit, abstraction excess and duplicated
+authority to Jev 1.13. DeepSeek grades the other factors and any unresolved Jev
+classifications in one combined request per investigation. Recorded same-input
+comparisons selected these delegated tasks; necessity and causal confidence stay
+with DeepSeek. Both investigators and graders receive the same trusted policy,
+including inherited justification for accurate supporting documentation.
+`deepseek` retains the all-DeepSeek route; `typesafe` retains the broader typed
+comparison route. An unresolved distribution uses the same facts and no Jev answer.
 A decisive negative Jev grade is never resampled with another model. Rounded
 probabilities are preserved; they are not normalized into greater confidence.
 Vendor confidence is never a substitute for source proof.
 
-Both routes are compared on the same investigations. Token usage includes the
+Failure diagnostics retain the observed immutable snapshots, investigator replies,
+atomic grading packets and parsed responses, and graded reports before final
+validation. These inputs support offline reproduction without calling a model
+again; they do not replace fresh verification or authorize a merge.
+
+Live qualification defaults to the single combined production route. An explicit
+`CLOUSEAU_EVALUATION_GRADERS` list enables comparisons when needed. Token usage includes the
 investigations, grading, uncertainty routing and transport truncation attempts.
+Each qualification is capped at 40 provider requests, including transport retries.
+`CLOUSEAU_EVALUATION_REQUEST_LIMIT=0` verifies the guard without making a provider
+request. Exhausting the budget fails qualification and retains the case evidence.
+`resume_evaluation` reuses completed qualification work only when source, policy,
+routing, rubric and request meanings match. Completed scores and blockers are
+revalidated and retained. Failed transport framing can reuse its original factual
+response after lossless decoding; only missing judgments make new provider calls.
+Historical and new requests share the 40-request ceiling. The artifact separates
+new usage/cost from reused evidence. Ordinary PR assessment remains fresh.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
 live evaluation must establish useful approvals, blocked drift and excess,
@@ -105,6 +146,14 @@ One bot ledger is updated in place. Product rejections and technical findings
 survive revision changes, renaming and disappearance from a later report.
 Both roles must provide explicit evidence to close a prior blocker. Optional
 observations close without creating recurring follow-up work.
+
+When complete evidence exceeds GitHub's comment limit, the primary ledger keeps
+every score, finding, gate and persistent disposition. It links bounded evidence
+comments containing the complete factor explanations and source excerpts, with
+revision and content identities. No evidence is truncated. All evidence pages
+and the primary ledger must publish successfully before approval. Retrying a
+partial publication reuses matching bot pages without calling a model; the
+complete source-bound assessment also remains in the run's artifact.
 
 ## Repair boundaries and optional improvements
 
@@ -143,6 +192,25 @@ The existing `/approve-intent FULL_HEAD_SHA` confirms only such a decision. It
 cannot waive tests, coverage, integrity failures, technical repairs or incomplete
 evidence. Ordinary coverage improvements do not require a new product decision.
 
+Clouseau's own reviewer upgrades have a separate owner-authorized installation
+route so a defective installed reviewer cannot prevent installing its verified
+replacement. First qualify the frozen candidate and confirm its exact PR head.
+The owner then publishes that commit to `policy-install/pr-NUMBER`:
+
+```sh
+git push origin FULL_HEAD_SHA:refs/heads/policy-install/pr-NUMBER
+```
+
+Before loading the candidate controller, a read-only guard requires the owner
+actor, owner-authored open non-draft PR, the same repository, `main` as its base,
+an exact matching head SHA and the owner's exact-revision intent comment.
+The separate read-only AI assessment and write gate use that frozen revision.
+They retain the full scored protocol, fresh PR verification, exact coverage,
+evidence/history checks, native approval and existing branch protection. Failed
+preparation or assessment fails the required approval job. Ordinary PR events
+always load the controller from protected `main`; fork PRs cannot use this route.
+Deleting an installation branch starts no installation or approval work.
+
 The read-only assessment uploads its full source-bound record and emits a compact
 digest. The separate approval job downloads that run's artifact, checks the
 digest, recomputes scores, reconciles history and rechecks current CI/head/base.
@@ -168,7 +236,8 @@ grading always receives that causal anchor together with the factor's citations.
 These fields cannot be invented independently by a model.
 
 Use the `evaluate-acceptance` action operation with both provider keys for the
-read-only five-case qualification. Its complete artifact is written to
+read-only six-case qualification, including multi-file maintenance with executed
+tests and corresponding documentation. Its complete artifact is written to
 `work/acceptance-evaluation.json` in the caller's workspace; upload it with an
 `always()` step. Passing synthetic cases is qualification evidence, not proof of
 a genuine unattended merge or automatic repair.

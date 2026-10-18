@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {template, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
+const {template, modelTemplate, modelEvidence, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
 function withKey(run) {return async () => {
@@ -65,7 +65,43 @@ test('review syntax includes all gates and uses actual immutable nonblank source
     const invalid = template(fresh); mutate(invalid.evidence[0]);
     assert.throws(() => materialize(invalid, fresh), /immutable source and integer/);
   }
+  for (const [start, end] of [[0, 1], [2, 1], [1, 4]]) {
+    const invalid = template(fresh); Object.assign(invalid.evidence[1], {start, end});
+    assert.throws(() => materialize(invalid, fresh), /outside its immutable source/);
+  }
 });
+
+test('the native inspection selects controller proofs without generating source coordinates or aliases', withKey(async () => {
+  const f = fixture(); const facts = modelTemplate(f.snapshot);
+  facts.gates.forEach(gate => {gate.state = 'satisfied';});
+  assert.equal(facts.evidence, undefined);
+  let calls = 0;
+  const wire = value => ({ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
+    [{function: {name: 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})});
+  const result = await inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+    calls++;
+    const request = JSON.parse(options.body); const view = JSON.parse(request.messages[1].content);
+    const schema = request.tools[0].function.parameters;
+    assert.deepEqual(schema.properties.units.items.properties.fit.properties.outcome.properties.evidence.items.enum,
+      view.proofs.map(proof => proof.id));
+    return wire(facts);
+  }});
+  assert.equal(calls, 1); assert.doesNotThrow(() => validateInspection(result.report, f.snapshot));
+  assert.ok(result.report.evidence.every(proof => proof.quote === f.snapshot.sources[proof.source].content.split('\n').slice(proof.start - 1, proof.end).join('\n')));
+  const anchor = modelEvidence(f.snapshot).proofs.find(proof => proof.source === 'head').id;
+  const concern = finding(); delete concern.path; concern.anchor = anchor; concern.evidence = [anchor];
+  concern.factors = Object.fromEntries(Object.keys(concern.factors).map(name => [name, {reason: 'Observable changed production path.', evidence: [anchor]}]));
+  facts.findings.push(concern);
+  const causal = materialize(facts, f.snapshot);
+  assert.equal(causal.findings[0].path, 'src/upload.rs');
+  assert.doesNotThrow(() => validateInspection(causal, f.snapshot));
+  const unknown = structuredClone(facts); unknown.gates[0].evidence = ['invented-alias'];
+  assert.throws(() => materialize(unknown, f.snapshot), /Unknown controller-supplied source proof/);
+  const malformed = structuredClone(facts); malformed.gates[0].reason = null;
+  assert.throws(() => validateInspection(materialize(malformed, f.snapshot), f.snapshot), /invalid gate/);
+  const old = template(f.snapshot); old.findings = [concern]; old.findings[0].anchor = 'unknown';
+  assert.throws(() => materialize(old, f.snapshot), /Unknown controller-supplied causal proof/);
+}));
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
   const f = fixture(); const reports = []; const requests = [];
@@ -80,7 +116,8 @@ test('complete independent source reports are graded and combined without exposi
   assert.deepEqual(requests.slice(0, 2).map(request => request.model), ['deepseek-flash', 'deepseek-v4-pro']);
   assert.equal(requests[0].messages[1].content, requests[1].messages[1].content);
   const native = requests[0].tools.find(item => item.function.name === 'acceptance_report').function.parameters;
-  assert.deepEqual(native.properties.evidence.items.properties.source.enum, Object.keys(f.snapshot.sources));
+  assert.equal(native.properties.evidence, undefined, 'source bookkeeping is not delegated to the model');
+  assert.deepEqual(native.properties.gates.items.properties.evidence.items.enum, modelEvidence(f.snapshot).proofs.map(proof => proof.id));
   assert.deepEqual(native.properties.snapshot.enum, [f.snapshot.digest]);
   assert.ok(!JSON.parse(requests[1].messages[1].content).reviews);
   assert.equal(reports[0], result);
@@ -97,6 +134,113 @@ test('independent negative findings retain their decision and cannot be voted aw
   for (const decision of ['blocked_integrity', 'repair_required', 'review_incomplete', 'owner_decision', 'auto_approve']) {
     assert.equal(combine([{scores: {decision: 'auto_approve'}}, {scores: {decision}}]), decision);
   }
+});
+
+test('multi-file syntax gives every accounting entry its own changed-source proof and uses trusted contract authority', () => {
+  const {snapshot} = fixture();
+  snapshot.sources.readme = {authority: 'trusted', kind: 'readme', content: 'Repository introduction.'};
+  snapshot.sources = {readme: snapshot.sources.readme, ...snapshot.sources};
+  snapshot.paths.push('src/helper.rs', 'src/removed.rs');
+  snapshot.files.push({path: 'src/helper.rs', head_source: 'helper'}, {path: 'src/removed.rs', base_source: 'removed'});
+  snapshot.files.reverse();
+  snapshot.sources.helper = {authority: 'untrusted', kind: 'source', content: 'pub fn helper() {}'};
+  snapshot.sources.removed = {authority: 'untrusted', kind: 'source', content: 'pub fn obsolete() {}'};
+  require('./acceptance-sources.cjs').refresh(snapshot);
+  const facts = template(snapshot);
+  const report = materialize(facts, snapshot);
+  assert.equal(report.evidence[0].source, 'contract', 'noncontract evidence cannot stand in for trusted contract authority');
+  assert.equal(report.accounting.length, 3);
+  assert.doesNotThrow(() => validateInspection(report, snapshot));
+  for (const path of snapshot.paths) {
+    const file = snapshot.files.find(item => item.path === path);
+    const entry = report.accounting.find(item => item.path === path);
+    const proof = report.evidence.find(item => entry.evidence.includes(item.id));
+    assert.equal(proof.source, file.head_source || file.base_source);
+  }
+});
+
+test('facts can observe no binding requirement while final positive grades still require trusted contract proof', () => {
+  const {report, snapshot} = fixture();
+  const facts = template(snapshot);
+  facts.units[0].need.binding = {evidence: ['source'], reason: 'The changed code establishes no accepted requirement by itself.'};
+  const materialized = materialize(facts, snapshot);
+  const {validateFacts, validateReport} = require('./acceptance.cjs');
+  assert.equal(validateFacts(materialized, snapshot), undefined, 'fact validation cannot provide an approval score');
+  assert.doesNotThrow(() => validateInspection(materialized, snapshot));
+  assert.throws(() => validateReport(materialized, snapshot), /binding obligation lacks trusted contract authority/);
+  report.units[0].need.binding = {min: 0, max: 0, ...facts.units[0].need.binding};
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'established value and need can justify work without claiming a binding requirement');
+  report.units[0].need.binding.max = 0.25;
+  assert.throws(() => validateReport(report, snapshot), /binding obligation lacks trusted contract authority/);
+  report.units[0].need.binding.evidence = ['contract'];
+  assert.doesNotThrow(() => validateReport(report, snapshot));
+  materialized.units[0].need.binding.evidence = ['undeclared'];
+  assert.throws(() => validateFacts(materialized, snapshot), /missing or unknown citation/);
+});
+
+test('the real inspection transport losslessly partitions valid long citations without resampling', withKey(async () => {
+  for (const end of [40, 41, 79, 80]) {
+    const f = fixture();
+    f.snapshot.sources.verification = {authority: 'trusted', kind: 'verification', content:
+      Array.from({length: 79}, (_, index) => `Step ${index + 1}: success`).join('\n')};
+    require('./acceptance-sources.cjs').refresh(f.snapshot);
+    f.report.snapshot = f.snapshot.digest;
+    f.report.evidence.push({id: 'receipt', source: 'verification', start: 1, end});
+    f.report.gates.at(-1).evidence = ['receipt'];
+    let calls = 0;
+    const result = inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+      calls++;
+      const request = JSON.parse(options.body);
+      assert.match(request.messages[0].content, /at most 40 inclusive\s+lines/);
+      const schema = request.tools.find(item => item.function.name === 'acceptance_report').function.parameters;
+      assert.equal(schema.properties.evidence, undefined);
+      assert.ok(schema.properties.findings.items.properties.anchor.enum.every(id => modelEvidence(f.snapshot).proofs.some(proof => proof.id === id)));
+      return response(f.report);
+    }});
+    if (end <= 79) {
+      const accepted = await result;
+      const refs = accepted.report.gates.at(-1).evidence;
+      const parts = refs.map(id => accepted.report.evidence.find(entry => entry.id === id));
+      assert.equal(parts.map(part => part.quote).join('\n'), f.snapshot.sources.verification.content.split('\n').slice(0, end).join('\n'));
+      assert.ok(parts.every(part => part.end - part.start < 40));
+      assert.equal(parts[0].id, 'receipt');
+      assert.equal(parts.at(-1).end, end);
+    } else await assert.rejects(result, /outside its immutable source/);
+    assert.equal(calls, 1, 'format normalization never resamples a completed judgment');
+  }
+}));
+
+test('long source and causal-anchor proofs preserve all lines, references and blocking scores', async () => {
+  const {snapshot, report} = fixture();
+  snapshot.sources.head.content = Array.from({length: 81}, (_, i) => `production statement ${i + 1}`).join('\n');
+  require('./acceptance-sources.cjs').refresh(snapshot); report.snapshot = snapshot.digest;
+  report.evidence[1] = {id: 'source', source: 'head', start: 1, end: 81, quote: snapshot.sources.head.content};
+  report.findings.push(finding());
+  const {validateReport, scoreReport} = require('./acceptance.cjs');
+  assert.throws(() => validateInspection(report, snapshot), /citation source or lines/, 'the stored-proof validator keeps its 40-line limit');
+  const payload = await response(report).json();
+  const facts = JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments);
+  const original = structuredClone(facts);
+  const value = materialize(facts, snapshot);
+  assert.deepEqual(facts, original, 'the captured model response stays immutable');
+  for (const refs of [value.accounting[0].evidence, value.gates[0].evidence, value.units[0].excess.abstraction.evidence]) {
+    assert.equal(refs.map(id => value.evidence.find(entry => entry.id === id).quote).join('\n'), snapshot.sources.head.content);
+  }
+  const causal = value.findings[0].evidence.filter(id => id.startsWith('clouseau-'));
+  // The finding also retains its original source proof, plus its complete anchor.
+  assert.ok(causal.length >= 3);
+  assert.equal(value.findings[0].path, report.findings[0].path);
+  for (const [i, unit] of value.units.entries()) for (const group of ['fit', 'need', 'excess']) {
+    for (const [key, factor] of Object.entries(unit[group])) {
+      Object.assign(factor, {min: report.units[i][group][key].min, max: report.units[i][group][key].max});
+    }
+  }
+  for (const [key, factor] of Object.entries(value.findings[0].factors)) Object.assign(factor,
+    {min: report.findings[0].factors[key].min, max: report.findings[0].factors[key].max});
+  assert.deepEqual(validateReport(value, snapshot), scoreReport(report));
+  assert.equal(validateReport(value, snapshot).decision, 'repair_required');
+  value.findings[0].evidence.push('invented');
+  assert.throws(() => validateReport(value, snapshot), /missing or unknown citation/);
 });
 
 test('bounded source requests read only immutable repository evidence before completing review', withKey(async () => {

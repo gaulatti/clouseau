@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {clean, score, priorState, reconcile, render, MARKER} = require('./acceptance-ledger.cjs');
+const {clean, score, priorState, reconcile, render, publication, MARKER} = require('./acceptance-ledger.cjs');
 const {validateReport} = require('./acceptance.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
@@ -91,6 +91,68 @@ test('oversized ledgers fail visibly rather than truncating findings or evidence
   const {result, snapshot} = setup();
   result.reviews[0].report.summary = 'Complete evidence '.repeat(4000);
   assert.throws(() => render(result, snapshot, reconcile(result, snapshot)), /comment budget/);
+  assert.throws(() => publication(result, snapshot, reconcile(result, snapshot)), /comment budget/);
+});
+
+test('large evidence is published losslessly in bounded Unicode-safe pages without changing the scores or history', () => {
+  for (const prefix of ['', 'x']) {
+    const {result, snapshot} = setup();
+    snapshot.sources.head.content += prefix + '😀'.repeat(60000);
+    require('./acceptance-sources.cjs').refresh(snapshot);
+    for (const review of result.reviews) {
+      review.report.snapshot = snapshot.digest;
+      review.report.evidence.push({id: 'large-source', source: 'head', start: 3, end: 3, quote: '😀'});
+      review.report.units[0].excess.abstraction.evidence.push('large-source');
+      review.scores = validateReport(review.report, snapshot);
+    }
+    const before = JSON.stringify({result, snapshot});
+    const state = reconcile(result, snapshot);
+    const full = render(result, snapshot, state, {unbounded: true});
+    const {body, pages} = publication(result, snapshot, state);
+    assert.ok(pages.length >= 3); assert.ok(body.length < 64000);
+    assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
+    assert.match(body, /Fit | Need | Proportionality/);
+    const chunks = pages.map(page => {
+      assert.ok(page.length < 64000); assert.ok(!page.includes(MARKER));
+      const chunk = page.slice(page.indexOf('\n\n') + 2);
+      assert.ok(!/[\uD800-\uDBFF]$/.test(chunk)); assert.ok(!/^[\uDC00-\uDFFF]/.test(chunk));
+      return chunk;
+    });
+    assert.equal(chunks.join(''), full.replace(MARKER, '').replace(/<!-- clouseau-state:[A-Za-z0-9+/=]+ -->/, ''));
+    const comments = [body, ...pages].map((body, id) => ({id, user: {login: 'github-actions[bot]'}, body}));
+    assert.deepEqual(priorState(comments, snapshot.repository, snapshot.number).findings, state.findings);
+    assert.equal(JSON.stringify({result, snapshot}), before);
+  }
+  const {result, snapshot} = setup();
+  assert.deepEqual(publication(result, snapshot, reconcile(result, snapshot)).pages, []);
+});
+
+test('overlapping citations from both roles retain all source lines and references without duplicating their bytes', () => {
+  const {result, snapshot} = setup();
+  const extra = Array.from({length: 20}, (_, index) => `// immutable supporting line ${index}: ${'x'.repeat(700)}`);
+  snapshot.sources.head.content = snapshot.sources.head.content.trimEnd() + '\n' + extra.join('\n');
+  require('./acceptance-sources.cjs').refresh(snapshot);
+  for (const review of result.reviews) {
+    review.report.snapshot = snapshot.digest;
+    for (let index = 0; index < 60; index++) {
+      const start = index % 20 + 3;
+      const entry = {id: `support-${index}`, source: 'head', start, end: start, quote: extra[index % 20]};
+      review.report.evidence.push(entry);
+      review.report.units[0].excess.abstraction.evidence.push(entry.id);
+    }
+    review.scores = validateReport(review.report, snapshot);
+  }
+  const before = JSON.stringify({result, snapshot});
+  const state = reconcile(result, snapshot);
+  const body = render(result, snapshot, state);
+  assert.ok(body.length < 64000);
+  for (let index = 0; index < 60; index++) assert.equal(body.split(`| support-${index} |`).length - 1, 2, 'both role registers retain every original reference');
+  for (let index = 0; index < extra.length; index++) {
+    assert.equal(body.split(`L${index + 3}: ${clean(extra[index])}`).length - 1, 1, 'each literal source line appears exactly once');
+  }
+  assert.equal(JSON.stringify({result, snapshot}), before, 'display compaction changes no evidence, grade or decision');
+  const restored = priorState([{id: 7, user: {login: 'github-actions[bot]'}, body}], snapshot.repository, snapshot.number);
+  assert.deepEqual(restored.findings, state.findings, 'persistent blocker history survives the compact display');
 });
 
 test('a product rejection persists across renamed or disappeared acceptance units and cannot impersonate a technical root', () => {

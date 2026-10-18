@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {requestJSON, requestJev, JEV_MODEL} = require('./review-provider.cjs');
+const {decodeJSON, requestJSON, requestJev, JEV_MODEL} = require('./review-provider.cjs');
 
 function keys(run) {
   return async () => {
@@ -50,6 +50,43 @@ test('acceptance truncation retries identical evidence within fixed token and de
   assert.ok(requests.every(request => JSON.stringify(request.messages) === JSON.stringify(messages)));
   assert.equal(result.usage.length, 3); assert.equal(result.usage[0].tokens, null);
 }));
+
+test('JSON punctuation normalization preserves negative judgments, literals and raw replay evidence without another request', keys(async () => {
+  const expected = {decision: 'repair_required', literal: ',} ,]', escaped: 'quote" and backslash\\', values: [1, false, null]};
+  const raw = JSON.stringify(expected).replace('[1,false,null]', '[1,false,null,]').replace(/}$/, ',}');
+  let calls = 0;
+  const result = await requestJSON({model: 'deepseek-flash', messages, fetchImpl: async () => {
+    calls++; return reply({choices: [{finish_reason: 'stop', message: {content: raw}}]});
+  }});
+  assert.deepEqual(result.value, expected); assert.equal(calls, 1);
+  assert.equal(result.raw, raw); assert.equal(result.canonical, JSON.stringify(expected));
+  for (const invalid of ['{"broken":', '{unquoted:true}', '(()=>true)()', undefined]) {
+    assert.throws(() => decodeJSON(invalid), error => {
+      assert.match(error.message, /malformed JSON/); assert.equal(error.details.raw_response, invalid); return true;
+    });
+  }
+  await assert.rejects(requestJSON({model: 'deepseek-flash', messages, fetchImpl: async () =>
+    reply({choices: [{finish_reason: 'stop', message: {content: '{"broken":'}}]})}), error => {
+      assert.equal(error.details.raw_response, '{"broken":'); assert.equal(error.details.model, 'deepseek-flash');
+      assert.equal(error.details.usage.length, 1); return true;
+    });
+}));
+
+test('captured redundant JSON framing is lossless and conflicting or additional judgments remain invalid', () => {
+  const value = {decision: 'blocked_integrity', evidence: ['literal } ], with "quote" and \\'], gates: [{state: 'violated'}]};
+  const canonical = JSON.stringify(value);
+  for (const raw of [canonical + '}', canonical + ']}', canonical + ',"gates":[{"state":"violated"}]}']) {
+    const decoded = decodeJSON(raw);
+    assert.deepEqual(decoded.value, value); assert.equal(decoded.raw, raw); assert.equal(decoded.canonical, canonical);
+  }
+  assert.deepEqual(decodeJSON('[1,2]]').value, [1, 2]);
+  for (const raw of [canonical + ',"decision":"auto_approve"}', canonical + ',"new_claim":true}',
+    canonical + ' APPROVE', '[1],"0":1}', '{broken:1}}', '"value"}', canonical + ',not JSON']) {
+    assert.throws(() => decodeJSON(raw), error => {
+      assert.equal(error.details.raw_response, raw); return /malformed JSON/.test(error.message);
+    });
+  }
+});
 
 test('native structured results bind source identities without allowing arbitrary generated calls', keys(async () => {
   const schemas = {acceptance_report: {type: 'object', properties: {}, required: [], additionalProperties: false}};
