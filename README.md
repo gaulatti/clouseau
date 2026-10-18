@@ -12,6 +12,8 @@ source investigations; a persistent evidence ledger; bounded repairs; and native
 protected auto-merge. Humans decide genuine purpose and authority questions.
 Technical uncertainty goes to automated investigation and cannot be waived by
 an intent comment. Version 1 remains explicit compatibility for existing pins.
+Review examples include direct immutable evidence for every changed file,
+including additions and deletions, with trusted contract authority kept separate.
 
 ## Ownership
 
