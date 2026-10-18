@@ -108,6 +108,16 @@ observations close without creating recurring follow-up work.
 
 ## Repair boundaries and optional improvements
 
+An owner-authorized reviewer installation must pass the required approval job
+in the PR workflow context. A read-only selector loaded from protected `main`
+uses `main` for ordinary PRs. It selects a frozen candidate only for a ready,
+same-repository, owner-authored PR with the owner's exact-revision User comment
+and a `policy-install/pr-NUMBER` anchor contained in that candidate's history.
+Both the read-only assessment and separate native gate use this same immutable
+selection. Missing preparation leaves ordinary review on `main`; invalid or
+inaccessible prepared history fails closed. This changes no scores or protection
+requirements and grants no candidate execution to external contributors.
+
 A verified, blocking result can propose a correction within the original changed
 source paths. It must preserve the accepted outcome. The model returns complete
 file contents as data; a separate author job validates hashes, paths, operations,
