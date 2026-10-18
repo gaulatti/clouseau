@@ -122,6 +122,25 @@ test('multi-file syntax gives every accounting entry its own changed-source proo
   }
 });
 
+test('facts can observe no binding requirement while final positive grades still require trusted contract proof', () => {
+  const {report, snapshot} = fixture();
+  const facts = template(snapshot);
+  facts.units[0].need.binding = {evidence: ['source'], reason: 'The changed code establishes no accepted requirement by itself.'};
+  const materialized = materialize(facts, snapshot);
+  const {validateFacts, validateReport} = require('./acceptance.cjs');
+  assert.equal(validateFacts(materialized, snapshot), undefined, 'fact validation cannot provide an approval score');
+  assert.doesNotThrow(() => validateInspection(materialized, snapshot));
+  assert.throws(() => validateReport(materialized, snapshot), /binding obligation lacks trusted contract authority/);
+  report.units[0].need.binding = {min: 0, max: 0, ...facts.units[0].need.binding};
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'established value and need can justify work without claiming a binding requirement');
+  report.units[0].need.binding.max = 0.25;
+  assert.throws(() => validateReport(report, snapshot), /binding obligation lacks trusted contract authority/);
+  report.units[0].need.binding.evidence = ['contract'];
+  assert.doesNotThrow(() => validateReport(report, snapshot));
+  materialized.units[0].need.binding.evidence = ['undeclared'];
+  assert.throws(() => validateFacts(materialized, snapshot), /missing or unknown citation/);
+});
+
 test('the real inspection transport accepts the citation boundary and holds oversized receipts without resampling', withKey(async () => {
   for (const end of [40, 41, 79]) {
     const f = fixture();

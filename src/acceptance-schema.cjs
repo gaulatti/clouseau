@@ -13,7 +13,7 @@ function schemas(snapshot) {
   const factor = object({evidence: citations, reason: string});
   const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
   const need = group('need');
-  need.properties.binding = object({evidence: {...citations, description: `${referenceRule} Include an ID citing a source marked authority=trusted and kind=contract, even when observing no binding requirement.`}, reason: string});
+  need.properties.binding = object({evidence: {...citations, description: `${referenceRule} An established obligation requires a source marked authority=trusted and kind=contract. For an observed absence, cite the actual evidence without inventing contract authority; positive numeric grades require trusted proof after grading.`}, reason: string});
   const paths = array(enumeration(snapshot.paths));
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   const end = {type: 'integer', minimum: 1, description: `Inclusive last line: start <= end < start + ${MAX_CITATION_LINES}. Select the narrow relevant lines, never a whole receipt or file.`};

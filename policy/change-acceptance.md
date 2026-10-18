@@ -63,9 +63,12 @@ max(necessity,activation*severity*amplifier)). Score >=70 blocks, no PR average.
 Each immutable citation or changed-source anchor selects at most 40 inclusive
 lines. Cite the specific relevant verification steps instead of a whole receipt.
 Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
-Each binding observation cites the trusted contract, including an observation
-that no binding requirement exists. Each file-accounting entry directly cites
-that changed file's own original or proposed source.
+A positive graded binding claim requires trusted contract proof. Before grading,
+an investigator's observation that no binding obligation is established can cite
+the actual source without inventing authority. Fact validation never produces an
+approval score; final graded validation and the write gate enforce the trusted
+proof rule. Each file-accounting entry directly cites that changed file's own
+original or proposed source.
 Every referenced evidence ID must be declared verbatim exactly once in the
 report's evidence register. An undeclared alias is invalid; never infer its source.
 

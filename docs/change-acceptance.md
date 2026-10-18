@@ -13,8 +13,10 @@ Each source citation and changed-source anchor is limited to 40 inclusive lines;
 the reviewer receives the same limit enforced by the validator. Oversized ranges
 stop review without trimming evidence or retrying for a different result.
 The supplied syntax includes direct source references for every changed file.
-File accounting cites the corresponding changed source; binding observations
-cite trusted contract authority, including an observed lack of a requirement.
+File accounting cites the corresponding changed source. An investigator may
+observe the lack of a binding requirement without inventing contract authority.
+That factual phase produces no approval score. Every positive binding grade still
+requires trusted contract proof during final validation and at the write gate.
 
 ## Product acceptance
 
