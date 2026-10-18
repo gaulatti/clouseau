@@ -9,9 +9,11 @@ policy. Every changed file is accounted for. The complete original and proposed
 text, linked tickets, recent file precedent and actual verification receipt are
 bound to immutable revisions. Fork source is read from the fork at its exact SHA.
 Contributor text, source and model output are data, never executable instructions.
-Each source citation and changed-source anchor is limited to 40 inclusive lines;
-the reviewer receives the same limit enforced by the validator. Oversized ranges
-stop review without trimming evidence or retrying for a different result.
+Each stored source citation and changed-source anchor is limited to 40 inclusive
+lines. The controller partitions a longer valid model-selected interval into
+entries within that limit and expands every reference to include all its parts.
+Every cited line and judgment is preserved; no model retry is needed for chunking.
+Unknown sources, invalid coordinates and unmatched references still stop review.
 The supplied syntax includes direct source references for every changed file.
 File accounting cites the corresponding changed source. An investigator may
 observe the lack of a binding requirement without inventing contract authority.

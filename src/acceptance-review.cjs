@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {FACTORS, GATES, validateFacts, validateReport} = require('./acceptance.cjs');
+const {FACTORS, GATES, MAX_CITATION_LINES, digest, validateFacts, validateReport} = require('./acceptance.cjs');
 const {additionalSources} = require('./acceptance-sources.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 const {requestJSON} = require('./review-provider.cjs');
@@ -37,21 +37,40 @@ function modelEvidence(snapshot) {
   return view;
 }
 
-function canonicalReferences(value) {
-  if (Array.isArray(value)) return value.map(canonicalReferences);
+function canonicalReferences(value, spans = new Map()) {
+  if (Array.isArray(value)) return value.map(item => canonicalReferences(item, spans));
   if (!value || typeof value !== 'object') return value;
   return Object.fromEntries(Object.entries(value).map(([key, item]) => [key,
-    key === 'evidence' && Array.isArray(item) && item.every(id => typeof id === 'string') ? [...new Set(item)] : canonicalReferences(item)]));
+    key === 'evidence' && Array.isArray(item) && item.every(id => typeof id === 'string') ?
+      [...new Set(item.flatMap(id => spans.get(id) || [id]))] : canonicalReferences(item, spans)]));
 }
 
 function materialize(facts, snapshot) {
   const report = canonicalReferences(facts);
+  const spans = new Map();
   const quote = entry => {
     if (Object.keys(entry).sort().join(',') !== 'end,id,source,start' || !snapshot.sources[entry.source] ||
         !Number.isSafeInteger(entry.start) || !Number.isSafeInteger(entry.end)) throw new Error('Factual citations require immutable source and integer line references only');
-    entry.quote = snapshot.sources[entry.source].content.split('\n').slice(entry.start - 1, entry.end).join('\n');
+    const lines = snapshot.sources[entry.source].content.split('\n');
+    if (entry.start < 1 || entry.end < entry.start || entry.end > lines.length) throw new Error('Factual citation extends outside its immutable source');
+    entry.quote = lines.slice(entry.start - 1, entry.end).join('\n');
   };
-  report.evidence.forEach(quote);
+  const proof = entry => {
+    quote(entry);
+    if (entry.end - entry.start < MAX_CITATION_LINES) return [entry];
+    // A model-selected interval is data. Partition it losslessly instead of
+    // asking the model to regenerate a judgment just to obey a chunk size.
+    const parts = [];
+    for (let start = entry.start; start <= entry.end; start += MAX_CITATION_LINES) {
+      const end = Math.min(entry.end, start + MAX_CITATION_LINES - 1);
+      const part = {id: parts.length ? `clouseau-span-${digest([entry.id, entry.source, start, end])}` : entry.id,
+        source: entry.source, start, end};
+      quote(part); parts.push(part);
+    }
+    spans.set(entry.id, parts.map(part => part.id));
+    return parts;
+  };
+  report.evidence = report.evidence.flatMap(proof);
   const expand = (values, adverse) => {
     for (const [name, value] of Object.entries(values)) {
       if (!value || Object.keys(value).sort().join(',') !== 'evidence,reason') throw new Error('Factual factors require observations and citations only');
@@ -69,12 +88,12 @@ function materialize(facts, snapshot) {
     }
     const file = snapshot.files.find(item => [item.base_source, item.head_source].includes(finding.anchor.source));
     if (!file) throw new Error('Technical finding anchor is outside changed source');
-    const entry = {id: `clouseau-cause-${index}`, ...finding.anchor}; quote(entry);
-    report.evidence.push(entry); finding.evidence = [...new Set([...finding.evidence, entry.id])];
+    const entry = {id: `clouseau-cause-${index}`, ...finding.anchor};
+    report.evidence.push(...proof(entry)); finding.evidence = [...new Set([...finding.evidence, entry.id])];
     finding.path = file.path; delete finding.anchor;
     expand(finding.factors, false);
   }
-  return report;
+  return canonicalReferences(report, spans);
 }
 
 function validationSnapshot(snapshot, drafts = []) {

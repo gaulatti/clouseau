@@ -65,6 +65,10 @@ test('review syntax includes all gates and uses actual immutable nonblank source
     const invalid = template(fresh); mutate(invalid.evidence[0]);
     assert.throws(() => materialize(invalid, fresh), /immutable source and integer/);
   }
+  for (const [start, end] of [[0, 1], [2, 1], [1, 4]]) {
+    const invalid = template(fresh); Object.assign(invalid.evidence[1], {start, end});
+    assert.throws(() => materialize(invalid, fresh), /outside its immutable source/);
+  }
 });
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
@@ -141,8 +145,8 @@ test('facts can observe no binding requirement while final positive grades still
   assert.throws(() => validateFacts(materialized, snapshot), /missing or unknown citation/);
 });
 
-test('the real inspection transport accepts the citation boundary and holds oversized receipts without resampling', withKey(async () => {
-  for (const end of [40, 41, 79]) {
+test('the real inspection transport losslessly partitions valid long citations without resampling', withKey(async () => {
+  for (const end of [40, 41, 79, 80]) {
     const f = fixture();
     f.snapshot.sources.verification = {authority: 'trusted', kind: 'verification', content:
       Array.from({length: 79}, (_, index) => `Step ${index + 1}: success`).join('\n')};
@@ -160,14 +164,51 @@ test('the real inspection transport accepts the citation boundary and holds over
       assert.match(schema.properties.findings.items.properties.anchor.properties.end.description, /end < start \+ 40/);
       return response(f.report);
     }});
-    if (end === 40) {
+    if (end <= 79) {
       const accepted = await result;
-      assert.equal(accepted.report.evidence.at(-1).end, 40);
-      assert.equal(accepted.report.evidence.at(-1).quote.split('\n').length, 40);
-    } else await assert.rejects(result, /citation source or lines/);
-    assert.equal(calls, 1, 'an invalid completed report is not resampled');
+      const refs = accepted.report.gates.at(-1).evidence;
+      const parts = refs.map(id => accepted.report.evidence.find(entry => entry.id === id));
+      assert.equal(parts.map(part => part.quote).join('\n'), f.snapshot.sources.verification.content.split('\n').slice(0, end).join('\n'));
+      assert.ok(parts.every(part => part.end - part.start < 40));
+      assert.equal(parts[0].id, 'receipt');
+      assert.equal(parts.at(-1).end, end);
+    } else await assert.rejects(result, /outside its immutable source/);
+    assert.equal(calls, 1, 'format normalization never resamples a completed judgment');
   }
 }));
+
+test('long source and causal-anchor proofs preserve all lines, references and blocking scores', async () => {
+  const {snapshot, report} = fixture();
+  snapshot.sources.head.content = Array.from({length: 81}, (_, i) => `production statement ${i + 1}`).join('\n');
+  require('./acceptance-sources.cjs').refresh(snapshot); report.snapshot = snapshot.digest;
+  report.evidence[1] = {id: 'source', source: 'head', start: 1, end: 81, quote: snapshot.sources.head.content};
+  report.findings.push(finding());
+  const {validateReport, scoreReport} = require('./acceptance.cjs');
+  assert.throws(() => validateInspection(report, snapshot), /citation source or lines/, 'the stored-proof validator keeps its 40-line limit');
+  const payload = await response(report).json();
+  const facts = JSON.parse(payload.choices[0].message.tool_calls[0].function.arguments);
+  const original = structuredClone(facts);
+  const value = materialize(facts, snapshot);
+  assert.deepEqual(facts, original, 'the captured model response stays immutable');
+  for (const refs of [value.accounting[0].evidence, value.gates[0].evidence, value.units[0].excess.abstraction.evidence]) {
+    assert.equal(refs.map(id => value.evidence.find(entry => entry.id === id).quote).join('\n'), snapshot.sources.head.content);
+  }
+  const causal = value.findings[0].evidence.filter(id => id.startsWith('clouseau-'));
+  // The finding also retains its original source proof, plus its complete anchor.
+  assert.ok(causal.length >= 3);
+  assert.equal(value.findings[0].path, report.findings[0].path);
+  for (const [i, unit] of value.units.entries()) for (const group of ['fit', 'need', 'excess']) {
+    for (const [key, factor] of Object.entries(unit[group])) {
+      Object.assign(factor, {min: report.units[i][group][key].min, max: report.units[i][group][key].max});
+    }
+  }
+  for (const [key, factor] of Object.entries(value.findings[0].factors)) Object.assign(factor,
+    {min: report.findings[0].factors[key].min, max: report.findings[0].factors[key].max});
+  assert.deepEqual(validateReport(value, snapshot), scoreReport(report));
+  assert.equal(validateReport(value, snapshot).decision, 'repair_required');
+  value.findings[0].evidence.push('invented');
+  assert.throws(() => validateReport(value, snapshot), /missing or unknown citation/);
+});
 
 test('bounded source requests read only immutable repository evidence before completing review', withKey(async () => {
   const f = fixture(); const requests = [];

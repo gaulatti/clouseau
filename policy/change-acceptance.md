@@ -62,6 +62,8 @@ max(necessity,activation*severity*amplifier)). Score >=70 blocks, no PR average.
 
 Each immutable citation or changed-source anchor selects at most 40 inclusive
 lines. Cite the specific relevant verification steps instead of a whole receipt.
+The controller partitions longer valid intervals without dropping cited lines
+or references; it never changes a judgment or retries a completed answer to do so.
 Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
 A positive graded binding claim requires trusted contract proof. Before grading,
 an investigator's observation that no binding obligation is established can cite
