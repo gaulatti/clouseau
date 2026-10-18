@@ -14,7 +14,7 @@ function schemas(snapshot) {
   const paths = array(enumeration(snapshot.paths));
   return {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
-      evidence: array(object({id: string, source: enumeration(Object.keys(snapshot.sources)), start: {type: 'integer', minimum: 1}, end: {type: 'integer', minimum: 1}, quote: string})),
+      evidence: array(object({id: string, source: enumeration(Object.keys(snapshot.sources)), start: {type: 'integer', minimum: 1}, end: {type: 'integer', minimum: 1}})),
       units: array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), paths, obligation: string,
         fit: group('fit'), need: group('need'), excess: group('excess'), alternative: string})),
       findings: array(object({id: string, title: string, path: enumeration(snapshot.paths), cause: string, trigger: string, consequence: string,

@@ -40,7 +40,7 @@ const GUARDS = `test('zero, oversized and unauthenticated uploads never reach st
 const CASES = [
   {name: 'coverage-maintenance', expected: ['auto_approve'], file: 'src/upload.test.js', base: TESTS,
     head: TESTS + GUARDS, title: 'test: cover upload rejection boundaries'},
-  {name: 'purpose-drift', expected: ['owner_decision', 'repair_required'], file: 'src/upload.js', base: ORIGINAL,
+  {name: 'purpose-drift', expected: ['owner_decision'], file: 'src/upload.js', base: ORIGINAL,
     head: ORIGINAL + 'export function composeMusic(topic) { return {song: `A song about ${topic}`}; }\n', title: 'feat: add music composition',
     headTests: (TESTS + GUARDS).replace("import {acceptUpload}", "import {acceptUpload, composeMusic}") + "test('music composition returns its requested topic', () => { assert.deepEqual(composeMusic('light'), {song: 'A song about light'}); });\n"},
   {name: 'unnecessary-framework', expected: ['repair_required'], file: 'src/upload.js', base: ORIGINAL,

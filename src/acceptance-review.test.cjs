@@ -11,6 +11,7 @@ function withKey(run) {return async () => {
 };}
 const response = value => {
   value = structuredClone(value);
+  for (const entry of value.evidence || []) delete entry.quote;
   for (const unit of value.units || []) for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) {delete factor.min; delete factor.max;}
   for (const finding of value.findings || []) for (const factor of Object.values(finding.factors)) {delete factor.min; delete factor.max;}
   return {ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
@@ -21,24 +22,32 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   const {snapshot} = fixture();
   const value = template(snapshot);
   assert.equal(value.snapshot, snapshot.digest);
-  assert.equal(value.evidence[0].quote, 'Validate every upload before durable acceptance.');
-  assert.equal(value.evidence[1].quote, 'validate(input)?;');
+  assert.equal(materialize(value, snapshot).evidence[0].quote, 'Validate every upload before durable acceptance.');
+  assert.equal(materialize(value, snapshot).evidence[1].quote, 'validate(input)?;');
   assert.ok(value.gates.every(gate => gate.state === 'unresolved'));
   snapshot.files[0].base_source = 'head'; delete snapshot.files[0].head_source;
   assert.equal(template(snapshot).evidence[1].source, 'head');
   const original = {evidence: ['same', 'same'], nested: [{evidence: ['a', 'a'], other: null}], malformed: {evidence: [null]}, scalar: 'value'};
   assert.deepEqual(canonicalReferences(original), {evidence: ['same'], nested: [{evidence: ['a'], other: null}], malformed: {evidence: [null]}, scalar: 'value'});
   assert.equal(original.evidence.length, 2);
-  const facts = template(fixture().snapshot);
-  assert.equal(materialize(facts).units[0].fit.outcome.max, 1);
+  const fresh = fixture().snapshot;
+  const facts = template(fresh);
+  assert.equal(materialize(facts, fresh).units[0].fit.outcome.max, 1);
   const concern = finding();
   concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
   facts.findings.push(concern);
-  assert.equal(materialize(facts).findings[0].factors.necessity.max, 1);
+  assert.equal(materialize(facts, fresh).findings[0].factors.necessity.max, 1);
   facts.units[0].fit.outcome.extra = 'unrecognized';
-  assert.throws(() => materialize(facts), /observations and citations only/);
+  assert.throws(() => materialize(facts, fresh), /observations and citations only/);
   facts.units[0].fit.outcome = null;
-  assert.throws(() => materialize(facts), /observations and citations only/);
+  assert.throws(() => materialize(facts, fresh), /observations and citations only/);
+  for (const mutate of [
+    entry => {entry.quote = 'Fabricated quote';}, entry => {entry.source = 'invented';},
+    entry => {entry.start = 1.2;}, entry => {entry.end = '2';},
+  ]) {
+    const invalid = template(fresh); mutate(invalid.evidence[0]);
+    assert.throws(() => materialize(invalid, fresh), /immutable source and integer/);
+  }
 });
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {

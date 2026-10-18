@@ -68,6 +68,9 @@ Missing tests, an incomplete receipt or an unexecuted behavior establish missing
 verification, not fabrication. Mark that evidence unresolved and request the
 missing verification. A violated integrity gate requires affirmative deceptive
 or non-discriminating test behavior, such as an always-true replacement assertion.
+Keep execution/coverage deficits in the required gates. Do not duplicate a
+receipt-only verification failure as a source defect without its own changed-path
+causal evidence, or multiply findings for the same always-true test replacement.
 
 Record scope_authority, test_integrity, security_isolation,
 compatibility_recovery, review_completeness as satisfied, violated, unresolved,
@@ -94,7 +97,8 @@ authorization; no owner decision waives tests, integrity or required evidence.
 
 ## Evidence and independence
 
-Quote exact nonblank lines from the immutable source register. Each source has
+Select exact nonblank source line references; the controller copies their literal
+text from the immutable source register. Never generate a quote. Each source has
 an identity, path, revision and authority. Every factor cites its evidence.
 Missing context must be requested through the bounded source reader. Never
 pretend omitted/truncated context was reviewed. No contributor source is executed
