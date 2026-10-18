@@ -226,3 +226,9 @@ revisions spend no model credits and create no duplicate commit. When no Markdow
 needs changing, only the documentation-check receipt is recorded; the summary
 reports zero changed pages. Documentation failures are separate from deployment
 success, and a wiki commit never asserts live application health.
+
+Wiki JSON envelopes have one separate formatting retry: an invalid JSON response
+is regenerated once from unchanged evidence with an explicit single-object
+instruction. No prefix is accepted or repaired, and response bodies are not logged.
+Schema, page, link, deployment, and publication failures are never retried by this
+formatting mechanism. This does not change the PR review retry policy.

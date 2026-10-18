@@ -111,3 +111,31 @@ test('default wiki completion uses the production provider and accepts an unchan
   try {assert.deepEqual((await planWiki({identity, source: {}, wiki})).updates, []);}
   finally {globalThis.fetch = original;}
 });
+
+
+test('wiki JSON envelope retry regenerates one complete object without salvaging a prefix', async () => {
+  const requests = [], reports = [];
+  const manifest = {pages: [{path: 'Guide.md', reason: 'Update deployment'}]};
+  const page = {path: 'Guide.md', content: '[Home](Home) Complete guide.'};
+  const responses = [JSON.stringify(manifest), JSON.stringify(page) + '\n' + JSON.stringify(page), JSON.stringify(page)];
+  const result = await planWiki({identity, source: {}, wiki, report: line => reports.push(line), complete: async request => {
+    requests.push(request);
+    return {content: responses[requests.length - 1]};
+  }});
+  assert.deepEqual(result.updates, [page]);
+  assert.deepEqual(requests[1].messages[1], requests[2].messages[1]);
+  assert.match(requests[2].messages[0].content, /previous envelope/);
+  assert.match(requests[1].messages[0].content, /"path":"Guide.md"/);
+  assert.ok(reports.some(line => line.includes('JSON envelope invalid')));
+  assert.ok(reports.every(line => !line.includes(page.content)));
+  let calls = 0;
+  await assert.rejects(planWiki({identity, source: {}, wiki, complete: async () => {calls++; return {content: 'private invalid response'};}}), error => {
+    assert.equal(calls, 2);
+    assert.match(error.message, /invalid JSON twice/);
+    assert.ok(!error.message.includes('private invalid response'));
+    return true;
+  });
+  calls = 0;
+  await assert.rejects(planWiki({identity, source: {}, wiki, complete: async () => {calls++; return done({pages: [{path: '../bad.md', reason: 'invalid'}]});}}));
+  assert.equal(calls, 1, 'a valid JSON object with invalid authority must never be retried');
+});

@@ -77,16 +77,25 @@ function validateBundle(bundle, expected, wiki) {
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
-async function planWiki({identity, source, wiki, complete = requestReview, report}) {
+async function planWiki({identity, source, wiki, complete = requestReview, report = () => {}}) {
   validateIdentity(identity);
   assert(Buffer.byteLength(JSON.stringify({source, wiki})) <= 1000000, 'Wiki evidence exceeds the complete-context limit');
   const ask = async (instruction, evidence) => {
-    const result = await complete({report, messages: [
-      {role: 'system', content: `${RULES}\n${instruction}`},
-      {role: 'user', content: JSON.stringify(evidence)},
-    ]});
-    assert(!result.failure, 'Wiki model completion failed; nothing will be published');
-    return JSON.parse(result.content);
+    // A malformed JSON envelope is a transport-format failure, not a review
+    // decision. Regenerate once from the same evidence; never trim or accept
+    // a prefix, and never retry schema, link, scope, or deployment failures.
+    for (let formatAttempt = 1; formatAttempt <= 2; formatAttempt++) {
+      const result = await complete({report, messages: [
+        {role: 'system', content: `${RULES}\n${instruction}\nReturn exactly ONE JSON object. Escape Markdown line breaks inside the content string. Do not append another object, prose, or code fences outside the JSON. ${formatAttempt === 2 ? 'The previous envelope was not valid JSON; regenerate the exact requested object from the same evidence.' : ''}`},
+        {role: 'user', content: JSON.stringify(evidence)},
+      ]});
+      assert(!result.failure, 'Wiki model completion failed; nothing will be published');
+      try {return JSON.parse(result.content);}
+      catch {
+        report(`Wiki generation JSON envelope invalid (attempt ${formatAttempt}/2)`);
+      }
+    }
+    throw new Error('Wiki model returned invalid JSON twice; nothing will be published');
   };
   const manifest = await ask('Return {"pages":[{"path":"Page.md","reason":"evidence-based reason"}]} planning all necessary page changes. Use an empty pages array when documentation already matches. Include navigation updates for new pages.', {identity, source, wiki});
   assert(exact(manifest, ['pages']) && Array.isArray(manifest.pages) && manifest.pages.length <= 20, 'Invalid wiki page plan');
@@ -96,11 +105,13 @@ async function planWiki({identity, source, wiki, complete = requestReview, repor
       page.reason.trim().length > 0 && page.reason.length <= 1000, 'Invalid wiki planned page');
     names.add(page.path);
   }
+  report(`Wiki generation planned ${manifest.pages.length} pages`);
   const updates = [];
   for (const page of manifest.pages) {
-    const rendered = await ask('Return exactly {"path":"requested page name","content":"complete Markdown page"}. Generate only the requested page, consistently with the shared plan and previously generated pages.', {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates});
+    const rendered = await ask(`Return exactly {"path":${JSON.stringify(page.path)},"content":"complete Markdown page"}. Generate only this one requested page, consistently with the shared plan and previously generated pages.`, {identity, source, wiki, plan: manifest.pages, requested_page: page.path, proposed_pages: updates});
     assert(rendered.path === page.path, 'Model returned a different wiki page');
     updates.push(rendered);
+    report(`Wiki generation completed page ${updates.length}/${manifest.pages.length}`);
   }
   return validateBundle({version: 1, ...identity, updates}, identity, wiki);
 }
