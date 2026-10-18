@@ -179,25 +179,32 @@ retained claims. Existing wiki prose can be stale; production control flow takes
 precedence. The full bundle must pass before it becomes a publishable artifact.
 
 Planning and writing use DeepSeek Flash; the independent factual checker uses
-DeepSeek V4 Pro. Both run in non-thinking mode at temperature zero. DeepSeek's
+DeepSeek V4 Pro with low reasoning effort; Flash uses non-thinking mode at
+temperature zero. DeepSeek's
 [beta strict function-return format](https://api-docs.deepseek.com/guides/tool_calls/)
 provides separate schemas for planning, the exact requested page, and factual
 review. The sole return name is `wiki_result`. Its arguments are parsed as data;
 no model-selected function is executed. Plain-text answers, unknown return names,
-multiple returns, and incomplete results fail closed. Token truncation retries
+multiple returns, and incomplete results fail closed. The factual checker uses
+automatic tool choice because the provider forbids forced choices in thinking
+mode; a plain answer still fails validation. Token truncation retries
 use identical evidence and schemas, at most three attempts with 4,096/8,192/16,384
 output tokens and 90-second deadlines. PR review keeps its existing API and
 reasoning policy.
 
-The factual report is a fixed checklist keyed by the planned pages. Each page
+Each page receives a dedicated factual audit with the complete source map and
+the other proposed pages for consistency. The combined factual report is a fixed
+checklist keyed by the planned pages. Each page
 has one source reference, a findings string limited to 2,000 characters, and a
 supported verdict emitted last. Every page must be supported with no unresolved
 findings; contradictory verdicts are rejected. This avoids unbounded evidence
 arrays while retaining an independent judgment for every updated page.
 
-Source references select controller-assigned `path:Lnumber` IDs. The source map
-preserves exact lines, including blanks; invented IDs, blank citations, and
-missing page checks are rejected. The model cannot substitute quotation text.
+Source references select controller-assigned `path:Lnumber` IDs. The native
+response schema restricts paths to actual source filenames; shortened basenames
+are not accepted. The source map preserves exact lines, including blanks.
+Local validation rejects invented IDs, blank citations, and missing page checks.
+The model cannot substitute quotation text.
 This is an AI quality gate rather than a proof of semantic correctness;
 documentation still needs correction when new evidence reveals an error.
 

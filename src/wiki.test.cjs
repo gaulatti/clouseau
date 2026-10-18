@@ -75,7 +75,14 @@ test('wiki generation coordinates three real pages before validating the whole b
     assert.equal(request.messages[0].role, 'system');
     assert.match(request.messages[0].content, /untrusted\s+evidence/);
     const input = JSON.parse(request.messages[1].content);
-    if (input.proposed_update) {assert.deepEqual(input.source_evidence, {'src/app.rs:L1': source['src/app.rs']}); calls++; return done(facts(input.proposed_update, source));}
+    if (input.proposed_update) {
+      assert.deepEqual(input.source_evidence, {'src/app.rs:L1': source['src/app.rs']});
+      assert.equal(input.proposed_update.length, 1, 'each page receives a dedicated factual audit');
+      assert.equal(input.other_proposed_pages.length, 2, 'other pages remain available for consistency');
+      assert.ok(!input.other_proposed_pages.some(page => page.path === input.proposed_update[0].path));
+      assert.deepEqual(request.schema.properties.pages.required, [input.proposed_update[0].path]);
+      calls++; return done(facts(input.proposed_update, source));
+    }
     assert.deepEqual(input.source, source);
     if (calls++ === 0) return done(manifest);
     assert.deepEqual(input.plan, manifest.pages);
@@ -83,7 +90,7 @@ test('wiki generation coordinates three real pages before validating the whole b
     assert.equal(input.proposed_pages.length, calls - 2);
     return done({path: input.requested_page, content: pages[calls - 2]});
   }});
-  assert.equal(calls, 5);
+  assert.equal(calls, 7);
   assert.equal(result.updates.length, 3);
 });
 
@@ -302,6 +309,24 @@ test('an invalid planning decision leaves inspectable diagnostics and never reac
   assert.equal(diagnostics[0].stage, 'planning');
   assert.deepEqual(diagnostics[0].plan, plan);
   assert.equal(diagnostics[0].identity.source_sha, identity.source_sha);
+});
+
+test('native factual references require complete literal source paths while local validation checks line identity', async () => {
+  const source = {'src/a+b.rs': 'Gateway fact.\n\n', '.github/workflows/deploy.yml': 'name: Deploy'};
+  let nativePattern;
+  const result = await planWiki({identity, source, wiki, complete: async ({messages, schema}) => {
+    const input = JSON.parse(messages[1].content);
+    if (input.proposed_update) {
+      nativePattern = new RegExp(schema.properties.pages.properties['Guide.md'].properties.source_id.pattern);
+      assert.match(messages[0].content, /complete repository-relative path/);
+      return done(facts(input.proposed_update, source));
+    }
+    return done(input.requested_page ? {path: 'Guide.md', content: '[Home](Home) Gateway fact.'} :
+      {pages: [{path: 'Guide.md', reason: 'Gateway contract'}]});
+  }});
+  assert.equal(result.updates.length, 1);
+  for (const id of ['src/a+b.rs:L1', '.github/workflows/deploy.yml:L13']) assert.ok(nativePattern.test(id));
+  for (const id of ['a+b.rs:L1', 'deploy.yml:L13', 'src/aaab.rs:L1', 'src/a+bXrs:L1', 'src/a+b.rs:L0', 'src/a+b.rs:L01', 'src/a+b.rs:L1 extra']) assert.ok(!nativePattern.test(id));
 });
 
 

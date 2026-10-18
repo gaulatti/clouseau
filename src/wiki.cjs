@@ -78,7 +78,11 @@ function validateBundle(bundle, expected, wiki) {
 const objectSchema = properties => ({type: 'object', additionalProperties: false, required: Object.keys(properties), properties});
 const textSchema = {type: 'string'};
 const planSchema = objectSchema({pages: {type: 'array', items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', pattern: '^\\S[^\\r\\n]{0,999}$'}})}});
-const reviewSchema = pages => objectSchema({pages: objectSchema(Object.fromEntries(pages.map(page => [page.path, objectSchema({source_id: textSchema, findings: {type: 'string', pattern: '^[\\s\\S]{0,2000}$'}, supported: {type: 'boolean'}})])))});
+const reviewSchema = (pages, source) => {
+  const paths = Object.keys(source).map(file => file.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  const sourceId = {type: 'string', pattern: `^(?:${paths.join('|')}):L[1-9][0-9]*$`};
+  return objectSchema({pages: objectSchema(Object.fromEntries(pages.map(page => [page.path, objectSchema({source_id: sourceId, findings: {type: 'string', pattern: '^[\\s\\S]{0,2000}$'}, supported: {type: 'boolean'}})])))});
+};
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
 
@@ -138,10 +142,18 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
   const sourceEvidence = Object.fromEntries(Object.entries(source).flatMap(([file, content]) =>
     content.split('\n').map((line, index) => [`${file}:L${index + 1}`, line])));
   const reviewUpdate = async (updates, revision) => {
-    const raw = await ask('Fact-check every factual statement in every proposed page against current production control flow, including retained text. Existing wiki prose may be stale. For EACH requested page, select ONE relevant nonblank source_id, write a concise findings string containing ONLY unresolved false or unsupported claims (empty string if none), and decide supported LAST for that page. Never list supported statements, audit commentary, or "no finding" prose in findings. Set a page supported true exactly when its findings string is empty. Check authentication/status/error/retry semantics and protocol distinctions. Copy source IDs exactly. Do not enumerate every claim or source line: the report has exactly one checklist entry per planned page.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: updates}, reviewSchema(updates), 'deepseek-v4-pro');
+    const raw = {pages: {}};
+    for (const page of updates) {
+      const checked = await ask('Audit the ONE proposed page in full, including every retained claim, against current production control flow. Existing wiki prose may be stale. Trace authentication and HTTP statuses; shared HTTP/FTP upload paths and protocol exclusivity; refresh, terminal denial, and retry budgets; durable acknowledgement; configuration selection and storage persistence. Actively look for contradictions rather than summarizing the edit. Use other_proposed_pages only for consistency; return a verdict for this page alone. Select ONE relevant nonblank source_id, write findings containing ONLY unresolved false or unsupported claims (empty string if none), then decide supported LAST. Never list supported statements or audit commentary in findings. Set supported true exactly when findings is empty. Copy source IDs exactly, including the complete repository-relative path, not a shortened basename.', {identity, source_evidence: sourceEvidence, wiki, proposed_update: [page], other_proposed_pages: updates.filter(other => other.path !== page.path)}, reviewSchema([page], source), 'deepseek-v4-pro');
+      if (!exact(checked, ['pages']) || !exact(checked.pages, [page.path])) {
+        diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review: checked, source_evidence: sourceEvidence});
+        throw new Error('Invalid wiki factual review');
+      }
+      raw.pages[page.path] = checked.pages[page.path];
+      report(`Wiki factual review completed page ${Object.keys(raw.pages).length}/${updates.length}`);
+    }
     diagnostic({version: 1, identity, revision, stage: 'factual-review', updates, review: raw, source_evidence: sourceEvidence});
     const paths = updates.map(page => page.path);
-    assert(exact(raw, ['pages']) && exact(raw.pages, paths), 'Invalid wiki factual review');
     const findings = [];
     for (const page of paths) {
       const item = raw.pages[page];
