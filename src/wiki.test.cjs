@@ -109,7 +109,14 @@ test('failed, oversized or malformed generation never returns a publishable part
 
 test('default wiki completion uses the production provider and accepts an unchanged-page plan', async () => {
   const original = globalThis.fetch;
-  globalThis.fetch = async (_, options) => {const body = JSON.parse(options.body); assert.deepEqual(body.thinking, {type: 'disabled'}); assert.equal(body.reasoning_effort, undefined); return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: '{"pages":[]}'}}]})};};
+  globalThis.fetch = async (url, options) => {
+    const body = JSON.parse(options.body);
+    assert.equal(url, 'https://api.deepseek.com/responses');
+    assert.deepEqual(body.reasoning, {effort: 'none'});
+    assert.equal(body.text.format.type, 'json_schema');
+    assert.deepEqual(body.text.format.schema.required, ['pages']);
+    return {ok: true, json: async () => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: '{"pages":[]}'}]}]})};
+  };
   try {assert.deepEqual((await planWiki({identity, source: {}, wiki})).updates, []);}
   finally {globalThis.fetch = original;}
 });
@@ -187,9 +194,9 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
   await assert.rejects(evaluateWiki({complete: async () => ({failure: 'unavailable'})}), /nothing will be published/);
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(++calls === 1 ?
+  globalThis.fetch = async () => ({ok: true, json: async () => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: JSON.stringify(++calls === 1 ?
     {supported: true, findings: [], evidence: [{page: 'Home.md', source_id: 'src/auth.rs:L1'}]} :
-    {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}}]})});
+    {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}]}]})});
   try {await evaluateWiki(); assert.equal(calls, 2);}
   finally {globalThis.fetch = original;}
 });
@@ -258,4 +265,20 @@ test('every generation and factual request has a complete-context budget with no
     return done(calls === 1 ? {pages: [{path: 'Home.md', reason: 'Large document'}]} : {path: 'Home.md', content: 'x'.repeat(128000)});
   }}), /complete-context limit/);
   assert.equal(calls, 2, 'oversized review evidence must fail before a provider call');
+});
+
+test('native response schemas bind planning, the requested page and factual citations to distinct shapes', async () => {
+  const source = {'README.md': '# Upload gateway'};
+  const requests = [];
+  await planWiki({identity, source, wiki, complete: async request => {
+    requests.push(request);
+    const input = JSON.parse(request.messages[1].content);
+    return done(input.proposed_update ? facts(input.proposed_update, source) : input.requested_page ?
+      {path: 'Guide.md', content: '[Home](Home) Upload gateway guide.'} : {pages: [{path: 'Guide.md', reason: 'Gateway contract'}]});
+  }});
+  assert.deepEqual(requests.map(request => request.schema.required), [['pages'], ['path', 'content'], ['supported', 'findings', 'evidence']]);
+  assert.ok(requests.every(request => request.schema.additionalProperties === false));
+  assert.deepEqual(requests[1].schema.properties.path.enum, ['Guide.md']);
+  assert.deepEqual(requests[2].schema.properties.evidence.items.required, ['page', 'source_id']);
+  assert.equal(requests[2].schema.properties.supported.type, 'boolean');
 });
