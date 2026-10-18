@@ -28,7 +28,7 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
       milliseconds: Date.now() - started, tokens: body.usage || null});
     const choice = body.choices?.[0];
     const complete = choice?.finish_reason === (schemas ? 'tool_calls' : 'stop');
-    report(`Acceptance provider: model=${model}, attempt=${attempt + 1}/3, outcome=${complete ? 'complete' : choice?.finish_reason === 'length' ? 'length' : 'incomplete'}`);
+    report(`Acceptance provider: model=${model}, attempt=${attempt + 1}/3, outcome=${choice?.finish_reason || 'missing'}`);
     if (complete) {
       if (schemas) {
         const calls = choice.message.tool_calls;
