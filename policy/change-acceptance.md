@@ -56,6 +56,10 @@ Ordinary mocks at real external boundaries are legitimate; mocks replacing the
 behavior claimed, always-true assertions, fake coverage, swallowed failures,
 disabled checks and special test success paths are not. Integrity cannot be
 waived by owner intent. Percentage reports alone establish no behavioral proof.
+Missing tests, an incomplete receipt or an unexecuted behavior establish missing
+verification, not fabrication. Mark that evidence unresolved and request the
+missing verification. A violated integrity gate requires affirmative deceptive
+or non-discriminating test behavior, such as an always-true replacement assertion.
 
 Record scope_authority, test_integrity, security_isolation,
 compatibility_recovery, review_completeness as satisfied, violated, unresolved,

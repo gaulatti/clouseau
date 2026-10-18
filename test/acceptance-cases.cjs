@@ -39,7 +39,8 @@ const CASES = [
   }
 });\n`, title: 'test: cover upload rejection boundaries'},
   {name: 'purpose-drift', expected: ['owner_decision', 'repair_required'], file: 'src/upload.js', base: ORIGINAL,
-    head: ORIGINAL + 'export function composeMusic(topic) { return {song: `A song about ${topic}`}; }\n', title: 'feat: add music composition'},
+    head: ORIGINAL + 'export function composeMusic(topic) { return {song: `A song about ${topic}`}; }\n', title: 'feat: add music composition',
+    headTests: TESTS.replace("import {acceptUpload}", "import {acceptUpload, composeMusic}") + "test('music composition returns its requested topic', () => { assert.deepEqual(composeMusic('light'), {song: 'A song about light'}); });\n"},
   {name: 'unnecessary-framework', expected: ['repair_required'], file: 'src/upload.js', base: ORIGINAL,
     head: `// Only one implementation and consumer exist; no variation requirement has been accepted.
 export class PluginEngine {
@@ -73,7 +74,7 @@ async function prepareCase(scenario) {
   const files = [{filename: scenario.file, status: 'modified', patch: `@@ -1 +1 @@\n-${scenario.base}\n+${scenario.head}`}];
   const content = (filename, ref) => ['README.md', '.github/clouseau.md'].includes(filename) ? CONTRACT :
     filename === scenario.file ? ref === base ? scenario.base : scenario.head :
-    filename === 'src/upload.js' ? ORIGINAL : filename === 'src/upload.test.js' ? TESTS : null;
+    filename === 'src/upload.js' ? ORIGINAL : filename === 'src/upload.test.js' ? ref === head && scenario.headTests ? scenario.headTests : TESTS : null;
   const github = {rest: {repos: {
     getContent: async ({path, ref}) => {
       const text = content(path, ref); if (text === null) throw new Error('Synthetic fixture has no requested source');

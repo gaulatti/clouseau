@@ -14,7 +14,7 @@ async function main() {
   save();
   for (const scenario of CASES) {
     const context = await prepareCase(scenario);
-    const models = {examiner: 'deepseek-flash', challenger: 'deepseek-flash', grading_model: 'deepseek-flash'};
+    const models = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grading_model: 'deepseek-flash'};
     console.log(`Acceptance qualification: ${scenario.name}`);
     const record = {name: scenario.name, expected: scenario.expected, results: [], observations: []};
     evaluation.cases.push(record); save();
@@ -27,7 +27,7 @@ async function main() {
           const cost = estimate(result.usage);
           record.results.push({grader, ...result, cost, passed: scenario.expected.includes(result.decision)}); save();
           console.log(JSON.stringify({case: scenario.name, grader, expected: scenario.expected, decision: result.decision, cost}));
-        } catch (error) {record.results.push({grader, error: error.message, passed: false}); save();}
+        } catch (error) {record.results.push({grader, error: error.message, details: error.details || null, passed: false}); save();}
       }
       record.passed = record.results.every(result => result.passed) &&
         (record.results[0].decision === 'auto_approve') === (record.results[1].decision === 'auto_approve');

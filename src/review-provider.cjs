@@ -72,7 +72,9 @@ async function requestJev({state, questions, fetchImpl = fetch, wait = delay, re
           !answer.probabilities || Object.keys(answer.probabilities).sort().join('\0') !== options.sort().join('\0') ||
           Object.values(answer.probabilities).some(value => !Number.isFinite(value) || value < 0 || value > 1) ||
           Math.abs(Object.values(answer.probabilities).reduce((sum, value) => sum + value, 0) - 1) > 0.000001) {
-        throw new Error('Jev returned an invalid typed probability distribution');
+        const error = new Error('Jev returned an invalid typed probability distribution');
+        error.details = {question: id, answer};
+        throw error;
       }
     }
     usage.push({provider: 'typesafe', requested_model: JEV_MODEL, model: body.model,

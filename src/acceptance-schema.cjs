@@ -9,8 +9,9 @@ const object = properties => ({type: 'object', properties, required: Object.keys
 
 function schemas(snapshot) {
   const citations = array(string);
-  const factor = object({min: {type: 'number', minimum: 0, maximum: 1}, max: {type: 'number', minimum: 0, maximum: 1}, evidence: citations, reason: string});
-  const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
+  const factor = adverse => object({min: {type: 'number', const: 0},
+    max: adverse ? {type: 'number', enum: [0, 1]} : {type: 'number', const: 1}, evidence: citations, reason: string});
+  const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor(name === 'excess')])));
   const paths = array(enumeration(snapshot.paths));
   return {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
