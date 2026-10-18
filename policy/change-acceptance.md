@@ -79,6 +79,11 @@ ranges. Partial causal evidence must retain confidence.max=1: low confidence
 cannot hide a potentially blocking finding. confidence.max=0 requires decisive
 counterevidence disproving it. Complete source proofs and reproductions can
 establish confidence=1; model agreement and eloquence cannot.
+Possible excess without a narrower alternative holds review incomplete. It can
+never permit approval or erase an independently established integrity veto.
+The controller may remove trailing JSON commas outside strings, preserving every
+value and raw response. Other malformed data stops review with replay evidence;
+it never causes a model retry or changes a judgment.
 
 ## Required gates
 

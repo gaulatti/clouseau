@@ -90,7 +90,7 @@ function createAcceptancePolicy(config, legacy) {
       }
       return assessment;
     } catch (error) {
-      diagnostic({identity, observations, failure: error.message});
+      diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
       return {...identity, decision: 'review_incomplete', reason: 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.'};
     }

@@ -130,7 +130,8 @@ async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, lo
             return {source: entry.source, start: entry.start, end: entry.end};
           })})))})},
     ]});
-    observe({role, round, snapshot: snapshot.digest, report: result.value, usage: result.usage});
+    observe({role, round, snapshot: snapshot.digest, report: result.value, usage: result.usage,
+      transport: {raw: result.raw, canonical: result.canonical}});
     usage.push(...result.usage);
     if (Array.isArray(result.value.request_sources)) {
       if (round === 2 || Object.keys(result.value).length !== 1) throw new Error('Automated source investigation exhausted its bounded evidence budget');

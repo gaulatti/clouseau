@@ -41,6 +41,9 @@ Excess covers abstraction, added surface, duplicated authority, dependencies,
 collateral changes and generalization beyond the demonstrated need. Every excess
 claim needs a concrete narrower alternative preserving the same guarantees.
 Preference, changed-line counts and helper counts alone establish no excess.
+If a possible excess lacks its narrower alternative, review remains incomplete
+and cannot approve. An independent integrity veto still blocks; an incomplete
+repair detail cannot erase established evidence of fabricated tests.
 A binding obligation must cite the trusted contract, never a contributor's claim.
 
 ## Technical findings

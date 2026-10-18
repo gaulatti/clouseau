@@ -4,6 +4,28 @@ const MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4-pro']);
 const JEV_MODEL = 'jev-1.13.0';
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+function decodeJSON(raw) {
+  let canonical = raw;
+  try {return {value: JSON.parse(raw), raw, canonical};} catch {}
+  // Remove only trailing commas outside JSON strings. Preserve every scalar,
+  // source reference and judgment; no model or fuzzy repair chooses new data.
+  if (typeof raw === 'string') {
+    canonical = ''; let quoted = false;
+    for (let i = 0; i < raw.length; i++) {
+      const character = raw[i];
+      if (quoted && character === '\\') {canonical += raw.slice(i, i + 2); i++; continue;}
+      if (character === '"') quoted = !quoted;
+      if (!quoted && character === ',' && /^\s*[}\]]/.test(raw.slice(i + 1))) continue;
+      canonical += character;
+    }
+  }
+  try {return {value: JSON.parse(canonical), raw, canonical};} catch (cause) {
+    const error = new Error('Acceptance provider returned malformed JSON');
+    error.details = {raw_response: raw, canonical_response: canonical, parse_error: cause.message};
+    throw error;
+  }
+}
+
 // A completed answer, including a negative or malformed one, is never resampled.
 async function requestJSON({messages, model, thinking = true, schemas, fetchImpl = fetch, wait = delay, report = () => {}}) {
   if (!MODELS.includes(model)) throw new Error('Unsupported acceptance model');
@@ -40,7 +62,9 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
     if (choice?.finish_reason !== 'length' || attempt === 2) throw new Error('Acceptance provider did not complete the bounded review');
     await wait((attempt + 1) * 1000);
   }
-  return {value: JSON.parse(completed), usage};
+  try {return {...decodeJSON(completed), usage};} catch (error) {
+    error.details = {...error.details, model, usage}; throw error;
+  }
 }
 
 async function requestJev({state, questions, fetchImpl = fetch, wait = delay, report = () => {}}) {
@@ -87,4 +111,4 @@ async function requestJev({state, questions, fetchImpl = fetch, wait = delay, re
   }
 }
 
-module.exports = {MODELS, JEV_MODEL, requestJSON, requestJev};
+module.exports = {MODELS, JEV_MODEL, decodeJSON, requestJSON, requestJev};

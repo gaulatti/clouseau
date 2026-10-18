@@ -51,6 +51,19 @@ test('purpose exclusions and owner authority are never compensated by product sc
   assert.equal(validateReport(report, snapshot).decision, 'repair_required');
 });
 
+test('missing narrower alternatives hold approval without erasing an independent integrity veto', () => {
+  const {report, snapshot} = fixture();
+  for (const [min, max] of [[0, 1], [0.25, 0.25], [1, 1]]) {
+    report.units[0].excess.abstraction = factor(min, max);
+    const scored = validateReport(report, snapshot);
+    assert.equal(scored.decision, 'review_incomplete');
+    assert.equal(scored.units[0].min.proportionality, 100 * (1 - max));
+    report.gates.find(gate => gate.name === 'test_integrity').state = 'violated';
+    assert.equal(validateReport(report, snapshot).decision, 'blocked_integrity');
+    report.gates.find(gate => gate.name === 'test_integrity').state = 'satisfied';
+  }
+});
+
 test('a proposed purpose question cannot delegate unnecessary internal machinery to the owner', () => {
   const {report, snapshot} = fixture();
   report.decisions.push({kind: 'purpose', question: 'Should uploads use a plugin framework?',
@@ -152,7 +165,7 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
     r => {r.units[0].fit.domain.evidence = [];}, r => {r.units[0].fit.domain.evidence = ['unknown'];},
     r => {r.units[0].fit.domain.evidence = ['source', 'source'];}, r => {r.units[0].fit.domain.reason = '';},
     r => {r.units[0].need.binding.evidence = ['source'];}, r => {r.units[0].alternative = null;},
-    r => {r.units[0].excess.abstraction = factor(0.5);}, r => {r.findings = null;},
+    r => {r.findings = null;},
     r => {r.findings = [finding(), finding()];}, r => {r.findings = [{...finding(), path: 'outside.rs'}];},
     r => {r.findings = [{...finding(), trigger: ''}];}, r => {r.findings = [{...finding(), blast_radius: 0}];},
     r => {r.findings = [{...finding(), evidence: ['contract']}];},

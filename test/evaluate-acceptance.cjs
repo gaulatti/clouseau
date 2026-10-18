@@ -37,7 +37,8 @@ async function main() {
       record.passed = record.results.every(result => result.passed) &&
         (record.results[0].decision === 'auto_approve') === (record.results[1].decision === 'auto_approve');
     } catch (error) {
-      record.error = error.message; record.passed = false;
+      record.snapshots[context.snapshot.digest] ??= structuredClone(context.snapshot);
+      record.error = error.message; record.details = error.details || null; record.passed = false;
     }
     save();
   }

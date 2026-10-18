@@ -71,7 +71,8 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
     ]});
     else throw new Error('Unknown factor grading provider');
     const answers = selected === 'typesafe' ? completion.value : completion.value.answers;
-    observe({phase: 'grading_response', provider: selected, packet: {state, questions}, value: completion.value});
+    observe({phase: 'grading_response', provider: selected, packet: {state, questions}, value: completion.value,
+      transport: {raw: completion.raw, canonical: completion.canonical}});
     if (!answers || Object.keys(answers).sort().join('\0') !== batch.map(item => item.id).sort().join('\0')) throw new Error('Incomplete atomic factor grades');
     for (const item of batch) {
       const value = bounds(answers[item.id]);

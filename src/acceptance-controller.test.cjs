@@ -134,7 +134,7 @@ test('a model failure or pending/failed verification cannot reach an approval or
   assert.equal(f.state.writes.length, 0);
 }));
 
-test('failed grading retains exact replay inputs and still cannot approve or waive an inconsistent result', () => fixture(async f => {
+test('incomplete grading retains exact replay inputs and still cannot approve or waive a missing alternative', () => fixture(async f => {
   const assessment = await f.assess({fetchImpl: async (url, options) => {
     const body = JSON.parse(options.body);
     if (body.tools) return f.fetchImpl(url, options);
@@ -145,7 +145,7 @@ test('failed grading retains exact replay inputs and still cannot approve or wai
   }});
   assert.equal(assessment.decision, 'review_incomplete');
   const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
-  assert.match(trace.failure, /excess without a feasible narrower alternative/);
+  assert.equal(trace.failure, undefined, 'missing repair detail is incomplete analysis, not invalid source evidence');
   const response = trace.observations.find(item => item.phase === 'grading_response');
   const graded = trace.observations.find(item => item.phase === 'graded_report');
   const snapshot = trace.snapshots[graded.snapshot];
@@ -153,8 +153,20 @@ test('failed grading retains exact replay inputs and still cannot approve or wai
   assert.equal(response.packet.state.factors.u0_excess_abstraction.context.narrower_alternative, '');
   assert.equal(graded.report.units[0].excess.abstraction.min, 0.25);
   assert.equal(snapshot.digest, graded.report.snapshot);
-  assert.throws(() => require('./acceptance.cjs').validateReport(graded.report, snapshot),
-    /excess without a feasible narrower alternative/, 'the retained inputs reproduce the exact failure without calling a provider');
+  assert.equal(require('./acceptance.cjs').validateReport(graded.report, snapshot).decision,
+    'review_incomplete', 'the retained inputs reproduce the exact hold without calling a provider');
+  await assert.rejects(f.gate(assessment), /incomplete/);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+}));
+
+test('malformed provider JSON retains the exact undecodable response and cannot reach approval', () => fixture(async f => {
+  const raw = '{"units":[';
+  const assessment = await f.assess({fetchImpl: async () => ({ok: true, json: async () => ({choices:
+    [{finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: 'acceptance_report', arguments: raw}}]}}]})})});
+  assert.equal(assessment.decision, 'review_incomplete');
+  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
+  assert.equal(trace.details.raw_response, raw); assert.equal(trace.details.canonical_response, raw);
+  assert.equal(trace.details.model, 'deepseek-flash'); assert.equal(trace.details.usage.length, 1);
   await assert.rejects(f.gate(assessment), /incomplete/);
   assert.equal(f.state.writes.length, 0);
 }));

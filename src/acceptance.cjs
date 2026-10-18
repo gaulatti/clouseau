@@ -83,7 +83,8 @@ function scoreReport(report) {
   const decisions = report.decisions.filter(item => item.kind !== 'purpose' || newOutcome);
   const scopeDecision = decisions.length > 0 && report.gates.find(gate => gate.name === 'scope_authority').state !== 'satisfied';
   const blocked = report.gates.some(gate => gate.state === 'violated' && !(scopeDecision && gate.name === 'scope_authority')) || findings.some(finding => finding.disposition === 'blocking');
-  const incomplete = report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority')) ||
+  const missingAlternative = report.units.some(unit => Object.values(unit.excess).some(value => value.max > 0) && !text(unit.alternative));
+  const incomplete = missingAlternative || report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority')) ||
     units.some(unit => unit.disposition === 'investigate') || findings.some(finding => finding.disposition === 'investigate');
   const rework = units.some(unit => unit.disposition === 'rework');
   const decision = integrity.state === 'violated' ? 'blocked_integrity' : blocked ? 'repair_required' :
@@ -130,7 +131,6 @@ function validateEvidence(report, snapshot, graded) {
       snapshot.sources[evidence.get(id).source].authority === 'trusted' &&
       snapshot.sources[evidence.get(id).source].kind === 'contract'), 'binding obligation lacks trusted contract authority');
     requireThat(typeof unit.alternative === 'string' && unit.alternative.length <= 2000, 'invalid narrower alternative');
-    if (Object.values(unit.excess).some(value => value.max > 0)) requireThat(text(unit.alternative), 'excess without a feasible narrower alternative');
   }
   requireThat(Array.isArray(report.findings), 'missing findings register');
   const findingIds = new Set();
