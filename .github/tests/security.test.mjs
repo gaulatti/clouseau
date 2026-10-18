@@ -8,7 +8,7 @@ import {parse} from 'yaml';
 const workflow = parse(readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8'));
 const repair = workflow.jobs['apply-repair'];
 const typed = value => value === null ? new data.Null() : typeof value === 'boolean' ? new data.BooleanData(value) :
-  typeof value === 'string' ? new data.StringData(value) :
+  typeof value === 'number' ? new data.NumberData(value) : typeof value === 'string' ? new data.StringData(value) :
     new data.Dictionary(...Object.entries(value).map(([key, value]) => ({key, value: typed(value)})));
 
 function eligible({repository = 'gaulatti/clouseau', draft = false, event = 'pull_request_target', proposal = true,
@@ -50,4 +50,27 @@ test('the fork guard and the credential boundary cannot silently disappear from 
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (name !== 'apply-repair') assert.ok(!JSON.stringify(job).includes('secrets.DEPLOYMENT_TOKEN'), name);
   }
+});
+
+test('superseded metadata reviews cancel each other while code verification and different PRs remain independent', () => {
+  assert.equal(workflow.concurrency['cancel-in-progress'], true);
+  const group = (event, number, source = workflow.concurrency.group) => {
+    const context = {github: {event_name: event, ref: 'refs/heads/main', event: {
+      pull_request: {number: event.startsWith('pull_request') ? number : null},
+      issue: {number: event === 'issue_comment' ? number : null},
+    }}, inputs: {pull_request: event === 'workflow_dispatch' ? String(number || '') : ''}};
+    return source.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => {
+      const ast = new Parser(new Lexer(expression).lex().tokens, Object.keys(context), []).parse();
+      return new Evaluator(ast, typed(context)).evaluate().coerceString();
+    });
+  };
+  const review = group('pull_request_target', 19);
+  assert.equal(group('pull_request_target', 19), review);
+  for (const [event, number] of [['pull_request', 19], ['pull_request_target', 20], ['issue_comment', 19], ['workflow_dispatch', 19]]) {
+    assert.notEqual(group(event, number), review);
+  }
+  assert.notEqual(group('workflow_dispatch', 19), group('workflow_dispatch', null));
+  const withoutEvent = workflow.concurrency.group.replace('${{ github.event_name }}-', '');
+  assert.equal(group('pull_request', 19, withoutEvent), group('pull_request_target', 19, withoutEvent),
+    'negative control demonstrates how losing event isolation cancels required verification');
 });
