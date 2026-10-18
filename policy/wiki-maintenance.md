@@ -59,3 +59,9 @@ path without that restriction. Distinguish a retryable refresh failure from a
 terminal denial, and a temporary file write from durable acceptance before an
 acknowledgement. Check consistency between pages rather than approving a retained
 claim because the newly edited paragraph elsewhere is correct.
+
+Keep configuration selection separate from infrastructure provisioning. Missing
+a volume mount does not unset an explicit path environment variable or select
+its default. A temporary directory lacks a durability guarantee; that does not
+mean it is necessarily erased on every process restart. Document the actual
+condition and guarantee rather than inventing a stronger failure outcome.
