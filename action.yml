@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, assess, gate, check-provider, evaluate-review, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: test, coverage, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -26,7 +26,13 @@ inputs:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
   provider-key:
-    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, plan-wiki, or evaluate-wiki
+    description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, evaluate-acceptance, plan-wiki, or evaluate-wiki
+    default: ''
+  typesafe-key:
+    description: TypeSafe API key; supply only to the read-only assessment or acceptance qualification that uses Jev grading
+    default: ''
+  repair-token:
+    description: Independent GitHub author token for bounded repairs; supply only to the separate repair job
     default: ''
   github-token:
     description: Caller-scoped GitHub token; permissions belong to the calling job
@@ -65,7 +71,7 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|assess|gate|check-provider|evaluate-review|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          test|coverage|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
     - name: Test approval policy
@@ -93,6 +99,7 @@ runs:
         CLOUSEAU_ROOT: ${{ github.action_path }}
         CLOUSEAU_CONFIG: ${{ inputs.config }}
         DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+        TYPESAFE_API_KEY: ${{ inputs.typesafe-key }}
         PR_NUMBER: ${{ inputs.pull-request }}
         CLOUSEAU_WAIT_FOR_VERIFICATION: ${{ inputs.wait-for-verification }}
       with:
@@ -121,6 +128,34 @@ runs:
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
           await policy.gate({github, context, core, nativeGate: process.env.CLOUSEAU_NATIVE_GATE === 'true'});
+    - name: Apply bounded repair with an independent author
+      if: inputs.operation == 'repair'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        CLOUSEAU_REPAIR_TOKEN: ${{ inputs.repair-token }}
+        ASSESSMENT: ${{ inputs.assessment }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const controller = require(path.join(root, 'src/acceptance-controller.cjs'));
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          const assessment = JSON.parse(process.env.ASSESSMENT);
+          const record = JSON.parse(fs.readFileSync(controller.RECORD, 'utf8'));
+          controller.verifyRecord(record, assessment, config);
+          const bundle = JSON.parse(fs.readFileSync(`${controller.RECORD}.repair.json`, 'utf8'));
+          if (require(path.join(root, 'src/acceptance.cjs')).digest(bundle) !== assessment.repair_digest) throw new Error('Altered repair artifact');
+          if (!process.env.CLOUSEAU_REPAIR_TOKEN) throw new Error('Provide an independent GitHub author credential through repair-token; approval remains blocked');
+          const repair = require(path.join(root, 'src/acceptance-repair.cjs'));
+          const comments = await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: assessment.number, per_page: 100});
+          const reservations = repair.history(comments, record.snapshot.repository, assessment.number);
+          const authorGithub = new github.constructor({auth: process.env.CLOUSEAU_REPAIR_TOKEN});
+          const result = await repair.apply({github, authorGithub, context, record, proposal: bundle.proposal, reservations});
+          core.info(`Repair revision ${result.head_sha} pushed; fresh CI and independent review are required.`);
     - name: Check DeepSeek provider
       if: inputs.operation == 'check-provider'
       uses: actions/github-script@v7
@@ -140,6 +175,15 @@ runs:
       env:
         DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
       run: node test/evaluate-review.cjs
+    - name: Qualify live acceptance decisions and cost
+      if: inputs.operation == 'evaluate-acceptance'
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      env:
+        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
+        TYPESAFE_API_KEY: ${{ inputs.typesafe-key }}
+        CLOUSEAU_EVALUATION_PATH: ${{ github.workspace }}/work/acceptance-evaluation.json
+      run: node test/evaluate-acceptance.cjs
     - name: Request trusted metadata reassessment
       if: inputs.operation == 'request-reassessment'
       uses: actions/github-script@v7

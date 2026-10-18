@@ -11,7 +11,7 @@ test('configuration is explicit and cannot omit technical or owner requirements'
     assert.throws(() => validateConfig(config), /Invalid Clouseau/, field);
   }
   for (const mutate of [
-    config => {config.version = 2;},
+    config => {config.version = 3;},
     config => {config.repository_policy = '../untrusted.md';},
     config => {config.readme = '/tmp/untrusted.md';},
     config => {config.manual_reviewer = '';},
@@ -41,4 +41,16 @@ test('trusted configuration loading validates files and rejects missing or malfo
     fs.writeFileSync(filename, '{}');
     assert.throws(() => loadConfig(filename), /Invalid Clouseau/);
   } finally { fs.rmSync(directory, {recursive: true}); }
+});
+
+test('version two explicitly selects bounded qualified model roles and cannot alter policy thresholds', () => {
+  const config = {...valid, version: 2, acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro',
+    grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2}};
+  assert.deepEqual(validateConfig(config), config);
+  assert.equal(validateConfig({...config, acceptance: {...config.acceptance, grader: 'typesafe'}}).acceptance.grader, 'typesafe');
+  for (const mutate of [
+    c => {delete c.acceptance;}, c => {c.acceptance.examiner = 'unknown';}, c => {c.acceptance.challenger = 'unknown';},
+    c => {c.acceptance.grader = 'unknown';}, c => {c.acceptance.grading_model = 'unqualified';},
+    c => {c.acceptance.repair_attempts = 100;}, c => {c.acceptance.product_threshold = 0;},
+  ]) {const changed = structuredClone(config); mutate(changed); assert.throws(() => validateConfig(changed), /acceptance configuration/);}
 });

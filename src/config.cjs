@@ -9,7 +9,7 @@ function validateConfig(config) {
   const relative = value => nonempty(value) && !path.isAbsolute(value) &&
     !value.split(/[\\/]/).includes('..') && !value.includes('\\');
   const workflow = value => relative(value) && /^[a-zA-Z0-9_.-]+\.ya?ml$/.test(value);
-  if (!config || config.version !== 1 || !nonempty(config.base_branch) ||
+  if (!config || ![1, 2].includes(config.version) || !nonempty(config.base_branch) ||
       !workflow(config.workflow) || !nonempty(config.verification?.job) ||
       !strings(config.verification?.steps) ||
       !config.verification.steps.includes('Enforce 100% line and branch coverage') ||
@@ -18,7 +18,17 @@ function validateConfig(config) {
       !Array.isArray(config.sensitive_paths) || !config.sensitive_paths.every(relative) ||
       !(config.deployment === null || (workflow(config.deployment?.workflow) &&
         strings(config.deployment?.paths) && config.deployment.paths.every(relative)))) {
-    throw new Error('Invalid Clouseau configuration; see examples/colombo.json (version 1)');
+    throw new Error('Invalid Clouseau configuration; see examples/colombo.json');
+  }
+  if (config.version === 2) {
+    const review = config.acceptance;
+    if (!review || !['deepseek-flash', 'deepseek-v4-pro'].includes(review.examiner) ||
+        !['deepseek-flash', 'deepseek-v4-pro'].includes(review.challenger) ||
+        !['deepseek', 'typesafe'].includes(review.grader) || review.grading_model !== 'deepseek-flash' ||
+        review.repair_attempts !== 2 || Object.keys(review).sort().join(',') !==
+          ['challenger', 'examiner', 'grader', 'grading_model', 'repair_attempts'].join(',')) {
+      throw new Error('Invalid Clouseau acceptance configuration; explicit qualified roles and two bounded repair attempts are required');
+    }
   }
   return structuredClone(config);
 }
