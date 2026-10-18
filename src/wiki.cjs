@@ -77,7 +77,7 @@ function validateBundle(bundle, expected, wiki) {
 
 const objectSchema = properties => ({type: 'object', additionalProperties: false, required: Object.keys(properties), properties});
 const textSchema = {type: 'string'};
-const planSchema = objectSchema({pages: {type: 'array', items: objectSchema({path: textSchema, reason: textSchema})}});
+const planSchema = objectSchema({pages: {type: 'array', maxItems: 20, uniqueItems: true, items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', minLength: 1, maxLength: 1000}})}});
 const reviewSchema = objectSchema({supported: {type: 'boolean'}, findings: {type: 'array', items: textSchema}, evidence: {type: 'array', items: objectSchema({page: textSchema, source_id: textSchema})}});
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
@@ -104,11 +104,15 @@ async function planWiki({identity, source, wiki, complete = requestWiki, report 
     }
     throw new Error('Wiki model returned invalid JSON twice; nothing will be published');
   };
-  const manifest = await ask('Return {"pages":[{"path":"Page.md","reason":"evidence-based reason"}]} planning all necessary page changes. Use an empty pages array when documentation already matches. Include navigation updates for new pages.', {identity, source, wiki}, planSchema);
-  assert(exact(manifest, ['pages']) && Array.isArray(manifest.pages) && manifest.pages.length <= 20, 'Invalid wiki page plan');
+  const manifest = await ask('Return {"pages":[{"path":"Page.md","reason":"evidence-based reason"}]} planning all necessary page changes. Use flat Markdown filenames, and list each path exactly once with a concise nonblank reason. Use an empty pages array when documentation already matches. Include navigation updates for new pages.', {identity, source, wiki}, planSchema);
+  const checkPlan = (condition, message) => {
+    if (!condition) diagnostic({version: 1, identity, revision: 0, stage: 'planning', plan: manifest});
+    assert(condition, message);
+  };
+  checkPlan(exact(manifest, ['pages']) && Array.isArray(manifest.pages) && manifest.pages.length <= 20, 'Invalid wiki page plan');
   const names = new Set();
   for (const page of manifest.pages) {
-    assert(exact(page, ['path', 'reason']) && pageName(page.path) && !names.has(page.path) && typeof page.reason === 'string' &&
+    checkPlan(exact(page, ['path', 'reason']) && pageName(page.path) && !names.has(page.path) && typeof page.reason === 'string' &&
       page.reason.trim().length > 0 && page.reason.length <= 1000, 'Invalid wiki planned page');
     names.add(page.path);
   }

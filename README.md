@@ -274,3 +274,11 @@ Only token-truncated native responses are retried, at most three attempts with
 4,096/8,192/16,384 output tokens and 90-second request deadlines. A completed
 response must contain one assistant text item; tool calls or fragments fail closed.
 PR review continues to use its existing Chat Completions API and reasoning policy.
+
+Rejected plan values are retained in the structured diagnostic before failure,
+without executing the plan or requesting a factual verdict. Native planning
+schemas also declare flat page paths, bounded concise reasons, and at most twenty
+entries. Local path, uniqueness, and authority validation remains mandatory.
+
+Wiki structured-output calls use temperature zero to reduce randomness in
+documentation decisions. This setting does not affect PR review.

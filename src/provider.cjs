@@ -59,7 +59,7 @@ async function requestWiki({messages, schema, fetchImpl = fetch,
     const response = await fetchImpl('https://api.deepseek.com/responses', {
       method: 'POST', signal: AbortSignal.timeout(90000),
       headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
-      body: JSON.stringify({model: 'deepseek-flash', reasoning: {effort: 'none'}, input: messages,
+      body: JSON.stringify({model: 'deepseek-flash', reasoning: {effort: 'none'}, temperature: 0, input: messages,
         max_output_tokens: maxTokens, text: {format: {type: 'json_schema', name: 'wiki_result', schema}}}),
     });
     if (!response.ok) return {failure: `Wiki provider unavailable: HTTP ${response.status}`};

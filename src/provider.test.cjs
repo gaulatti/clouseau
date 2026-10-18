@@ -153,6 +153,7 @@ test('wiki requests use native schemas without changing review API or enabling m
     assert.ok(options.signal instanceof AbortSignal);
     assert.equal(body.model, 'deepseek-flash');
     assert.deepEqual(body.reasoning, {effort: 'none'});
+    assert.equal(body.temperature, 0);
     assert.deepEqual(body.input, messages);
     assert.deepEqual(body.text.format, {type: 'json_schema', name: 'wiki_result', schema: wikiSchema});
     assert.equal(body.tools, undefined);
