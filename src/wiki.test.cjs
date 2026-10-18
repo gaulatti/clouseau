@@ -111,11 +111,11 @@ test('default wiki completion uses the production provider and accepts an unchan
   const original = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
     const body = JSON.parse(options.body);
-    assert.equal(url, 'https://api.deepseek.com/responses');
-    assert.deepEqual(body.reasoning, {effort: 'none'});
-    assert.equal(body.text.format.type, 'json_schema');
-    assert.deepEqual(body.text.format.schema.required, ['pages']);
-    return {ok: true, json: async () => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: '{"pages":[]}'}]}]})};
+    assert.equal(url, 'https://api.deepseek.com/beta/chat/completions');
+    assert.deepEqual(body.thinking, {type: 'disabled'});
+    assert.equal(body.tools[0].function.strict, true);
+    assert.deepEqual(body.tools[0].function.parameters.required, ['pages']);
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: '{"pages":[]}'}}]}}]})};
   };
   try {assert.deepEqual((await planWiki({identity, source: {}, wiki})).updates, []);}
   finally {globalThis.fetch = original;}
@@ -194,9 +194,9 @@ test('live wiki evaluation uses real production fact-checking and refuses a mode
   await assert.rejects(evaluateWiki({complete: async () => ({failure: 'unavailable'})}), /nothing will be published/);
   const original = globalThis.fetch;
   let calls = 0;
-  globalThis.fetch = async () => ({ok: true, json: async () => ({status: 'completed', output: [{type: 'message', role: 'assistant', content: [{type: 'output_text', text: JSON.stringify(++calls === 1 ?
+  globalThis.fetch = async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{type: 'function', function: {name: 'wiki_result', arguments: JSON.stringify(++calls === 1 ?
     {supported: true, findings: [], evidence: [{page: 'Home.md', source_id: 'src/auth.rs:L1'}]} :
-    {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}]}]})});
+    {supported: false, findings: ['Unavailability is not denial.'], evidence: []})}}]}}]})});
   try {await evaluateWiki(); assert.equal(calls, 2);}
   finally {globalThis.fetch = original;}
 });

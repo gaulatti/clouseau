@@ -30,6 +30,7 @@ consumer's privileged approval job. See `examples/colombo.json` for configuratio
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
 | `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
 | `plan-wiki` | `provider-key`, `wiki-config`, wiki/source checkouts | Generate and validate a coordinated multi-page draft after deployment; `wiki-draft: true` permits read-only validation |
+| `evaluate-wiki` | `provider-key` | Read-only live factual checks on supported and deliberately false documentation |
 | `publish-wiki` | `wiki-config`, validated `wiki-plan-path`, wiki/source checkouts | Revalidate deployment and publish every page in one non-force wiki commit; no provider key |
 | `finalize` | `config`, `assessment` | Wait for GitHub auto-merge after the required native gate finishes, then preserve the existing CD handoff |
 
@@ -171,23 +172,52 @@ read-only diagnostic job with the provider key and no repository write token.
 ## Wiki maintenance after deployment
 
 The [shared wiki policy](policy/wiki-maintenance.md) grounds documentation in the
-exact deployment source revision and the existing wiki. A read-only job plans all
-needed pages, then renders each against that common plan. Home/navigation updates
-are included when needed. The full bundle is validated before it becomes an artifact;
-no partial page set is publishable. The source context is complete or the job fails:
-there is no silent truncation. Generation uses the same bounded incomplete-response
-recovery as PR assessment, with at most three completions per manifest or page.
+exact deployment source revision and current wiki. A read-only job plans the
+complete page set, generates each page against that common plan, validates links
+and navigation, and independently fact-checks every proposed page, including
+retained claims. Existing wiki prose can be stale; production control flow takes
+precedence. The full bundle must pass before it becomes a publishable artifact.
 
-A separate publishing job receives no model key. It downloads only the artifact
-from its own deployment run and checks the repository, source SHA, wiki base SHA,
-and run ID. Both normal planning and publication verify that the expected main
-workflow's configured deployment job actually completed successfully. A draft can
-skip deployment verification, but publication never can. Scope `actions: read` and
-`contents: read` to generation; grant `contents: write` only to publication. The
-wiki checkout's credential must be available to Git only in the publishing job.
-No deployment credential belongs in either documentation job.
+Wiki calls use DeepSeek Flash in non-thinking mode at temperature zero. DeepSeek's
+[beta strict function-return format](https://api-docs.deepseek.com/guides/tool_calls/)
+provides separate schemas for planning, the exact requested page, and factual
+review. The sole return name is `wiki_result`. Its arguments are parsed as data;
+no model-selected function is executed. Plain-text answers, unknown return names,
+multiple returns, and incomplete results fail closed. Token truncation retries
+use identical evidence and schemas, at most three attempts with 4,096/8,192/16,384
+output tokens and 90-second deadlines. PR review keeps its existing API and
+reasoning policy.
 
-Consumer `.github/clouseau-wiki.json` must specify all fields explicitly:
+Factual review must support the complete update with no findings. Every updated
+page needs relevant references to controller-assigned `path:Lnumber` source IDs.
+The source map preserves exact lines, including blanks; invented IDs, blank
+citations, and incomplete page evidence are rejected. The model cannot substitute
+its own quotation text. This is an AI quality gate rather than a proof of semantic
+correctness; documentation still needs correction when new evidence reveals an error.
+
+A rejected factual draft may receive one correction pass from actionable findings.
+The complete corrected batch must differ, pass structural/link validation again,
+and receive a fresh supporting factual verdict. Unchanged rejected text is never
+resubmitted. Missing findings or a second rejection stops publication. The
+read-only `evaluate-wiki` operation disables correction and calls the real model
+on a supported authentication document and a deliberate denial/unavailability
+falsehood. Provider, schema, or citation failures cannot count as a successful
+negative result.
+
+Structured diagnostics are saved beside the plan at
+`wiki-plan.json.diagnostic.json`. Rejected planning values are retained before
+any generation. Factual diagnostics contain each reviewed draft, findings, and
+its immutable source-line map. Consumers should upload diagnostics even when
+planning fails. No provider credentials or raw transport bodies are stored.
+
+A separate publisher receives no model key or deployment credentials. It downloads
+only its own workflow run's artifact and independently verifies the repository,
+source SHA, wiki base SHA, run ID, and the expected main workflow's completed
+successful deployment job. Draft generation can skip deployment verification;
+publication never can. Generation needs `actions: read` and `contents: read`.
+Only publication needs `contents: write` and a Git-authenticated wiki checkout.
+
+Consumer `.github/clouseau-wiki.json` specifies every field explicitly:
 
 ```json
 {
@@ -199,86 +229,22 @@ Consumer `.github/clouseau-wiki.json` must specify all fields explicitly:
 }
 ```
 
-Only committed text in those paths is provided; real `.env` files and agent-rule
-paths are refused. The current wiki must be a clean, initialized Git checkout.
-Agent instructions are excluded from its model context. Supported pages are flat
-Markdown filenames, including Home, `_Sidebar`, and `_Footer`. The model cannot
-change configuration or delete pages. At most 20 pages, 128,000 bytes per page,
-512,000 bytes per published bundle, 300 source files, and 1,000,000 bytes of base
-source/wiki context are accepted. Exceeding a limit fails clearly without publishing.
-Generated pages use ordinary inline Markdown links; broken links, orphaned new
-pages, ambiguous names, unsafe paths, unsupported link syntax, and unclosed code
-fences fail validation. External URLs are not fetched by the validator.
+Only committed text in those paths is read. Real `.env` files and agent-rule paths
+are refused; wiki agent instructions are excluded from model context. The wiki
+must be a clean, initialized Git checkout. Pages are flat Markdown filenames,
+including Home, `_Sidebar`, and `_Footer`; the model cannot change configuration,
+edit `AGENTS.md`, or delete pages. Local limits are twenty pages, 128,000 bytes per
+page, 512,000 bytes per bundle, 300 source files, and 1,000,000 bytes per complete
+request. Nothing is silently truncated. Unsafe paths, duplicate/ambiguous names,
+broken internal links, orphaned new pages, unsupported link syntax, and unclosed
+code fences fail validation.
 
-Use `plan-wiki` with `wiki-directory: wiki` and the source checkout at `.`. The
-validated bundle is written to `work/wiki-plan.json` by default. Transfer it with
-same-run Actions upload/download artifacts to `publish-wiki`; its `wiki-plan-path`
-can point to the downloaded file. Pin both operations to a reviewed full commit.
-Serialize the entire deployment-and-documentation workflow, with cancellation
-disabled, so a later deployment cannot overtake documentation for an earlier one.
-
-Publication fetches the wiki again and refuses an advanced base instead of rebasing
-full generated pages over a person's edits. It builds a private Git index, keeping
-working files and symlink targets untouched, and publishes a single non-force
-commit. A push rejection publishes nothing. The controller-owned
-`.clouseau-deployment.json` records the source SHA and deployment run. Repeated source
-revisions spend no model credits and create no duplicate commit. When no Markdown
-needs changing, only the documentation-check receipt is recorded; the summary
-reports zero changed pages. Documentation failures are separate from deployment
-success, and a wiki commit never asserts live application health.
-
-Wiki JSON envelopes have one separate formatting retry: an invalid JSON response
-is regenerated once from unchanged evidence with an explicit single-object
-instruction. No prefix is accepted or repaired, and response bodies are not logged.
-Schema, page, link, deployment, and publication failures are never retried by this
-formatting mechanism. This does not change the PR review retry policy.
-
-After generation and structural/link validation, a separate model call checks the
-whole proposed update against the source, including authentication, HTTP statuses,
-retry classifications, and protocol differences. Publication requires a supporting
-verdict without findings and references to exact source lines for every updated page.
-Unsupported claims, invented source references, or uncovered pages fail closed. This is
-an AI quality gate, not a proof of semantic correctness; generated docs remain
-subject to correction when new evidence reveals a mistake.
-
-Wiki planning, writing, and factual checking use DeepSeek Flash with thinking
-explicitly disabled and native JSON schemas enabled. This leaves the bounded output budget
-for actual structured results; PR review retains its existing reasoning mode.
-The read-only `evaluate-wiki` operation tests the live factual gate on a supported
-authentication document and a deliberately false denial/unavailability claim.
-A false claim must receive a substantive negative verdict; provider failures,
-malformed output, or missing evidence cannot count as a successful rejection.
-
-A substantive rejection may trigger one correction pass using its actionable
-findings and the rejected draft. The corrected batch must differ, retain all
-planned pages, pass structural/link validation, and receive a fresh supporting
-factual verdict with exact citations. An unchanged draft, missing findings, or a
-second rejection stops publication; a verdict is never retried on unchanged text.
-The live negative diagnostic disables correction so the deliberately false claim
-must be substantively rejected. The generator also saves a structured diagnostic
-next to its plan (`wiki-plan.json.diagnostic.json`), including the reviewed draft,
-findings and source evidence, without provider credentials or raw transport data.
-Consumers should retain this diagnostic even when planning fails.
-
-Factual citations use controller-assigned `path:Lnumber` source references rather
-than model-written code quotations. The review receives the full source as indexed
-exact lines and must select existing nonblank IDs for every updated page. Invented
-IDs, unrelated authority, and incomplete page evidence fail closed. Diagnostics
-include the immutable source-line map so each cited text can be inspected without
-trusting a model's transcription. This keeps the same substantive review gate.
-
-Wiki requests use DeepSeek's `/responses` API with native `json_schema` formats
-specific to planning, the exact requested page, and factual review. Local schema,
-identity, page, link, source-reference, and publication validation remain mandatory.
-Only token-truncated native responses are retried, at most three attempts with
-4,096/8,192/16,384 output tokens and 90-second request deadlines. A completed
-response must contain one assistant text item; tool calls or fragments fail closed.
-PR review continues to use its existing Chat Completions API and reasoning policy.
-
-Rejected plan values are retained in the structured diagnostic before failure,
-without executing the plan or requesting a factual verdict. Native planning
-schemas also declare flat page paths, bounded concise reasons, and at most twenty
-entries. Local path, uniqueness, and authority validation remains mandatory.
-
-Wiki structured-output calls use temperature zero to reduce randomness in
-documentation decisions. This setting does not affect PR review.
+Publication uses a private temporary Git index, never model-directed filesystem
+writes. All pages and the `.clouseau-deployment.json` source/run receipt form one
+commit. A changed remote wiki base or rejected non-force push publishes nothing;
+concurrent human edits are never rebased or overwritten. A repeated source SHA
+is idempotent. A new revision with no Markdown changes records a truthful audit
+receipt. Serialize deployment and documentation together to prevent a later
+release from overtaking documentation. Documentation failure leaves the completed
+deployment intact and makes the workflow fail visibly; it does not roll back or
+claim external service health, running image bytes, or terminal upload delivery.

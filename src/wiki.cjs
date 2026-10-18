@@ -77,7 +77,7 @@ function validateBundle(bundle, expected, wiki) {
 
 const objectSchema = properties => ({type: 'object', additionalProperties: false, required: Object.keys(properties), properties});
 const textSchema = {type: 'string'};
-const planSchema = objectSchema({pages: {type: 'array', maxItems: 20, uniqueItems: true, items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', minLength: 1, maxLength: 1000}})}});
+const planSchema = objectSchema({pages: {type: 'array', items: objectSchema({path: {type: 'string', pattern: '^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\\.md$'}, reason: {type: 'string', pattern: '^\\S[^\\r\\n]{0,999}$'}})}});
 const reviewSchema = objectSchema({supported: {type: 'boolean'}, findings: {type: 'array', items: textSchema}, evidence: {type: 'array', items: objectSchema({page: textSchema, source_id: textSchema})}});
 
 const RULES = require('node:fs').readFileSync(require('node:path').join(__dirname, '../policy/wiki-maintenance.md'), 'utf8');
