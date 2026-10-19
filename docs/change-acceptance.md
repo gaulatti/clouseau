@@ -197,6 +197,17 @@ The existing `/approve-intent FULL_HEAD_SHA` confirms only such a decision. It
 cannot waive tests, coverage, integrity failures, technical repairs or incomplete
 evidence. Ordinary coverage improvements do not require a new product decision.
 
+Before the AI assessment, the controller reads the configured human owner's
+exact-revision intent comment and verifies current write, maintain or admin
+permission through GitHub. The literal receipt becomes a content-addressed,
+trusted contract source in the proof catalog. This records accepted purpose,
+not an approval score: each capability and mechanism still needs its own fit,
+need and proportionality evidence, and all technical and integrity gates remain
+mandatory. Contributor claims and issue text do not acquire contract authority.
+Before any approval write, the gate checks that a receipt used in the assessment
+still exists unchanged and that its author remains authorized. Removed, altered
+or revoked confirmation requires reassessment rather than reusing a stale score.
+
 Clouseau's own reviewer upgrades have a separate owner-authorized installation
 route so a defective installed reviewer cannot prevent installing its verified
 replacement. First qualify the frozen candidate and confirm its exact PR head.

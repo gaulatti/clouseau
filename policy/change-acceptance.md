@@ -42,6 +42,16 @@ An accepted contract violation, explicit requirement or mandatory coverage polic
 can establish necessity without a new ticket. Binding obligations must cite
 trusted contract evidence, never the PR's own assertions.
 
+An authenticated exact-revision intent comment from the configured human owner
+is trusted evidence that the proposed purpose is accepted. The controller checks
+the actor's current repository permission and includes the literal confirmation
+in the immutable contract proof catalog; the write gate revalidates it. Reuse
+this accepted purpose when assessing fit and need. It establishes no numeric
+grade and does not make every supporting mechanism necessary or proportionate.
+The PR description, changed source and issue text retain their existing authority.
+Intent is never evidence of implementation correctness, test integrity or the
+absence of a technical defect, and cannot waive any review or execution gate.
+
 ## Causal concerns
 
 Admit a finding only with changed/newly enabled cause, feasible trigger, affected

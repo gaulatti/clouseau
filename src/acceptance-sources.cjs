@@ -44,7 +44,7 @@ async function readSource({github, repo, snapshot, filename, ref, authority = 'u
   return id;
 }
 
-async function collectSnapshot({github, repo, pr, files, config, technical}) {
+async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
     !safePath(file.filename) || !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     throw new Error('Changed-file evidence is incomplete');
@@ -59,6 +59,12 @@ async function collectSnapshot({github, repo, pr, files, config, technical}) {
     content: JSON.stringify(technical, null, 2)};
   for (const filename of [config.repository_policy, config.readme]) {
     await readSource({github, repo, snapshot, filename, ref: pr.base.sha, authority: 'trusted', kind: 'contract'});
+  }
+  snapshot.intent_confirmation = intentConfirmation;
+  if (intentConfirmation) {
+    const ref = digest(intentConfirmation);
+    snapshot.sources[`intent:${ref}`] = {path: `pulls/${pr.number}/intent/${intentConfirmation.comment_id}`, ref,
+      authority: 'trusted', kind: 'contract', content: JSON.stringify(intentConfirmation, null, 2)};
   }
   for (const file of files) {
     const item = {path: file.filename, status: file.status, patch: file.patch};

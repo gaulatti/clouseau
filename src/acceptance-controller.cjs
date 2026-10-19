@@ -62,7 +62,8 @@ function createAcceptancePolicy(config, legacy) {
       const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
-      snapshot = await collectSnapshot({github, repo, pr, files, config, technical});
+      const intentConfirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
+      snapshot = await collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation});
       snapshot.prior_findings = previous.findings;
       const repair = require('./acceptance-repair.cjs');
       const reservations = repair.history(comments, snapshot.repository, number);
@@ -117,6 +118,10 @@ function createAcceptancePolicy(config, legacy) {
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
     if (digest(technical) !== digest(record.technical)) throw new Error('Verification changed after acceptance investigation');
     const comments = await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: pr.number, per_page: 100});
+    if (record.snapshot.intent_confirmation && digest(record.snapshot.intent_confirmation) !==
+        digest(await legacy.purposeConfirmation(github, context.repo, pr, comments))) {
+      throw new Error('Accepted purpose confirmation changed; reassess the current evidence');
+    }
     const current = priorState(comments, record.snapshot.repository, pr.number);
     if (digest(current) !== digest(record.previous)) throw new Error('Acceptance history changed; reassess the current record');
     const links = [];
