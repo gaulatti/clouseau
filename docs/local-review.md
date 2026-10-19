@@ -60,6 +60,11 @@ semantic grading sessions supply descriptive factor levels; the same Clouseau
 code owns citations, formulas, thresholds and final decisions. No investigator
 gets the implementer's conversation or the other investigator's conclusions.
 
+A source-line reference can be normalized only to an existing immutable catalog
+block containing that line. The controller preserves the observation and reads
+the literal source bytes; this correction needs no additional model request.
+Unknown sources, out-of-range lines and unsupplied blocks still stop review.
+
 Reports and response journals stay outside source control. A completed identical
 input is not automatically reviewed again. Fix blocking findings, commit the
 changed implementation and reassess. A negative or incomplete review never
