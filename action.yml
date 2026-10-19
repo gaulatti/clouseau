@@ -14,8 +14,11 @@ inputs:
     description: Trusted repository configuration path (assess and gate)
     default: .github/clouseau.json
   coverage-report:
-    description: LLVM JSON coverage export path (coverage)
+    description: Native LLVM or Istanbul JSON coverage report path (coverage)
     default: ''
+  coverage-format:
+    description: llvm or istanbul; Istanbul requires every application JS/TS source
+    default: llvm
   source-directory:
     description: Application source directory to measure (coverage)
     default: ''
@@ -88,9 +91,10 @@ runs:
         CLOUSEAU_ROOT: ${{ github.action_path }}
         COVERAGE_REPORT: ${{ inputs.coverage-report }}
         SOURCE_DIRECTORY: ${{ inputs.source-directory }}
+        COVERAGE_FORMAT: ${{ inputs.coverage-format }}
       run: |
         test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY"
+        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
     - name: Assess repository intent
       id: assess
       if: inputs.operation == 'assess'
