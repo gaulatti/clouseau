@@ -29,6 +29,8 @@ def counters(report, source_directory):
         seen.add(file)
         statements = paired_maps(entry, "statementMap", "s")
         branches = paired_maps(entry, "branchMap", "b")
+        if not statements:
+            raise ValueError(f"No statements measured for application source: {filename}")
         lines = {}
         for key, location in statements.items():
             if not isinstance(location, dict) or location.get("skip"):

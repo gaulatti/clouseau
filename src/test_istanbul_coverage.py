@@ -49,6 +49,24 @@ class IstanbulGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing application source.*unloaded.ts"):
             self.run_check()
 
+    def test_empty_maps_cannot_hide_an_unloaded_executable_source(self):
+        unloaded = self.root / "unloaded.ts"
+        unloaded.write_text('export function unused() { throw new Error("uncovered"); }\n')
+        name = str(unloaded)
+        self.report[name] = {"path": name, "statementMap": {}, "s": {},
+                             "branchMap": {}, "b": {}}
+        with self.assertRaisesRegex(ValueError, "No statements measured.*unloaded.ts"):
+            self.run_check()
+
+    def test_a_measured_linear_file_needs_no_artificial_branches(self):
+        linear = self.root / "linear.ts"
+        linear.write_text("export const value = 1;\n")
+        name = str(linear)
+        self.report[name] = {"path": name,
+            "statementMap": {"0": {"start": {"line": 1}}}, "s": {"0": 1},
+            "branchMap": {}, "b": {}}
+        self.assertEqual(self.run_check(), {"lines": [3, 3], "branches": [2, 2]})
+
     def test_declaration_files_and_non_code_do_not_add_executable_sources(self):
         (self.root / "types.d.ts").write_text("declare const x: number;\n")
         (self.root / "README.md").write_text("Documentation\n")

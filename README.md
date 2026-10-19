@@ -65,7 +65,10 @@ original application source tree, not compiled output. Every `.ts`, `.tsx`,
 declaration-only `.d.ts` files are not executable. The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
 directives. It derives exact line and branch totals from native hit counters,
-never from rounded summary percentages. Configure c8 `--all` over all compiled
+never from rounded summary percentages. It rejects an application file with empty statement measurements even when
+other files have full coverage. Individual measured files may have no branches;
+the application as a whole must still have nonzero line and branch totals.
+Configure c8 `--all` over all compiled
 JavaScript with source maps to measure unloaded TypeScript sources. Run real
 runtime tests as well as unit tests; this format support does not replace them.
 
