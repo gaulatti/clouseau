@@ -57,6 +57,15 @@ function canonicalReferences(value, spans = new Map()) {
 function materialize(facts, snapshot) {
   const report = canonicalReferences(facts);
   const catalog = new Map(proofCatalog(snapshot).map(entry => [entry.id, entry]));
+  const spans = new Map();
+  const suppliedProof = id => {
+    if (catalog.has(id)) return catalog.get(id);
+    const coordinate = /^proof-(0|[1-9][0-9]*)-([1-9][0-9]*)$/.exec(id);
+    if (!coordinate) return undefined;
+    const line = Number(coordinate[2]);
+    return [...catalog.values()].find(entry => entry.id.startsWith(`proof-${coordinate[1]}-`) &&
+      entry.start <= line && line <= entry.end);
+  };
   if (!Object.hasOwn(report, 'evidence')) {
     const ids = new Set();
     const collect = value => {
@@ -69,12 +78,13 @@ function materialize(facts, snapshot) {
       }
     };
     collect(report);
-    report.evidence = [...ids].map(id => {
-      if (!catalog.has(id)) throw new Error('Unknown controller-supplied source proof');
-      return {...catalog.get(id)};
-    });
+    report.evidence = [...new Map([...ids].map(id => {
+      const entry = suppliedProof(id);
+      if (!entry) throw new Error('Unknown controller-supplied source proof');
+      spans.set(id, [entry.id]);
+      return [entry.id, {...entry}];
+    })).values()];
   }
-  const spans = new Map();
   const quote = entry => {
     if (Object.keys(entry).sort().join(',') !== 'end,id,source,start' || !snapshot.sources[entry.source] ||
         !Number.isSafeInteger(entry.start) || !Number.isSafeInteger(entry.end)) throw new Error('Factual citations require immutable source and integer line references only');
@@ -111,7 +121,7 @@ function materialize(facts, snapshot) {
   }
   for (const [index, finding] of report.findings.entries()) {
     if (typeof finding.anchor === 'string') {
-      const entry = catalog.get(finding.anchor);
+      const entry = suppliedProof(finding.anchor);
       if (!entry) throw new Error('Unknown controller-supplied causal proof');
       const {source, start, end} = entry; finding.anchor = {source, start, end};
     }

@@ -111,6 +111,132 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
+test('authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts', () => fixture(async f => {
+  const crypto = require('node:crypto');
+  const {issueReceipt} = require('./local-receipt.cjs');
+  const {refresh} = require('./acceptance-sources.cjs');
+  const seed = await f.assess();
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const trusted = {...config, local_review: {mode: 'required', reviewer_sha: 'e'.repeat(40),
+    reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 3600,
+    keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted); refresh(record.snapshot);
+  record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
+  record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
+    ({role, phase, harness: 'codex', session: `fictional-${role}-${phase}`, request_digest: digest(role),
+      response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
+  record.result.execution_digest = digest(record.result.usage);
+  for (const item of record.result.reviews) item.report.snapshot = record.snapshot.digest;
+  const bundle = issueReceipt({record, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+    keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
+  const original = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
+    encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
+  }} : original(args);
+  const policy = createPolicy(trusted);
+  f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  let providerCalls = 0;
+  const reports = [];
+  const assess = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, report: line => reports.push(line),
+    fetchImpl: async () => {providerCalls++; throw new Error('CI AI must not be called');}});
+  const assessment = await assess();
+  assert.equal(seed.decision, 'auto_approve');
+  assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+  assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
+  assert.equal(providerCalls, 0);
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true,
+    wait: async () => {}});
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  assert.equal(providerCalls, 0);
+  const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
+  const swapped = structuredClone(verifiedRecord); swapped.controls = true;
+  assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted), /substituted/);
+  const history = structuredClone(verifiedRecord); history.previous.findings.push({id: 'fake'});
+  assert.throws(() => verifyRecord(history, {...assessment, record_digest: digest(history)}, trusted), /history was substituted/);
+  f.state.pr.user.login = 'another-author';
+  await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /author changed/);
+  f.state.pr.user.login = 'contributor';
+  const prior = {version: 2, repository: record.snapshot.repository, number: 3, head_sha: f.state.pr.head.sha,
+    findings: [{id: 'a'.repeat(64), blocking: true, state: 'confirmed', title: 'Boundary failure',
+      path: 'src/upload.test.js', cause: 'Lost input guard', obligation: 'Reject missing input'}]};
+  f.state.comments = [{id: 9, user: {login: 'github-actions[bot]'},
+    body: `<!-- clouseau-acceptance:v2 -->\n<!-- clouseau-state:${Buffer.from(JSON.stringify(prior)).toString('base64')} -->`}];
+  assert.equal((await assess()).decision, 'review_incomplete');
+  f.state.comments = [];
+  bundle.payload.record.result.summary = 'tampered';
+  assert.equal((await assess()).decision, 'review_incomplete');
+  assert.equal(providerCalls, 0);
+  f.state.pr.body = 'No receipt';
+  assert.equal((await assess()).decision, 'review_incomplete');
+  const optional = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'optional'}});
+  assert.equal((await optional.assess({github: f.github, context: f.context, recordPath: f.recordPath, receiptOnly: true})).decision,
+    'review_incomplete');
+  assert.equal(providerCalls, 0);
+}));
+
+test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
+  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`};
+  f.state.comments.push(comment);
+  let investigations = 0; let graders = 0;
+  const assessment = await f.assess({fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body); const packet = JSON.parse(body.messages[1].content);
+    if (body.tools) {
+      investigations++;
+      const source = Object.values(packet.sources).find(item => item.path === 'pulls/3/intent/51');
+      assert.equal(source.authority, 'trusted'); assert.equal(source.kind, 'contract');
+      assert.match(source.numbered_lines, /approve-intent/);
+      assert.ok(packet.proofs.some(item => packet.sources[item.source].path === source.path));
+    } else {
+      graders++;
+      const contract = packet.state.accepted_contract.find(item => item.path === 'pulls/3/intent/51');
+      assert.equal(JSON.parse(contract.content).body, comment.body);
+    }
+    return f.fetchImpl(url, options);
+  }});
+  assert.equal(assessment.decision, 'auto_approve');
+  assert.equal(investigations, 2); assert.equal(graders, 2);
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  assert.equal(record.snapshot.intent_confirmation.actor, 'gaulatti');
+  assert.equal(record.snapshot.intent_confirmation.head_sha, f.state.pr.head.sha);
+  assert.equal(record.snapshot.claims.description, undefined, 'the PR description has not been promoted into the receipt');
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+}));
+
+test('deleted, altered or revoked purpose evidence holds approval before any publication write', async () => {
+  for (const change of ['delete', 'edit', 'revoke']) await fixture(async f => {
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+    const assessment = await f.assess();
+    if (change === 'delete') f.state.comments = [];
+    if (change === 'edit') f.state.comments[0].body = 'Confirmation withdrawn.';
+    if (change === 'revoke') f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: 'read'}});
+    await assert.rejects(f.gate(assessment), /purpose confirmation changed/);
+    assert.equal(f.state.writes.length, 0);
+  });
+});
+
+test('a citable owner purpose receipt cannot waive low product scores or an integrity veto', async () => {
+  for (const failure of ['need', 'integrity']) await fixture(async f => {
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+    if (failure === 'integrity') f.state.alter = report => {report.gates.find(item => item.name === 'test_integrity').state = 'violated';};
+    const assessment = await f.assess({fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.tools || failure === 'integrity') return f.fetchImpl(url, options);
+      const {questions} = JSON.parse(body.messages[1].content);
+      return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers:
+        Object.fromEntries(Object.keys(questions).map(id => [id,
+          id.includes('_need_') || id.includes('_excess_') ? 'level0' : 'level4']))})}}]})};
+    }});
+    assert.equal(assessment.decision, failure === 'need' ? 'repair_required' : 'blocked_integrity');
+    assert.ok(JSON.parse(fs.readFileSync(f.recordPath)).snapshot.intent_confirmation);
+    await assert.rejects(f.gate(assessment), /cannot waive/);
+    assert.equal(f.state.writes.some(item => item.name === 'approve'), false);
+  });
+});
+
 test('all evidence pages must publish before native approval, and a partial publication is safely resumed without new model calls', () => fixture(async f => {
   f.state.alter = report => {
     for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(report.units[0][group])) {

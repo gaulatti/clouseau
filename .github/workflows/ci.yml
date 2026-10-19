@@ -97,6 +97,16 @@ jobs:
         uses: ./
         with:
           operation: test
+      - name: Test distributable action without Git metadata
+        if: *verify-code
+        shell: bash
+        run: |
+          bundle="$(mktemp -d)"
+          trap 'rm -rf "$bundle"' EXIT
+          git archive HEAD | tar -x -C "$bundle"
+          cd "$bundle"
+          python3 -m unittest discover -s src -p 'test_*.py'
+          node --test src/*.test.cjs
       - name: Test workflow security
         if: *verify-code
         run: |

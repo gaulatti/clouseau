@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly remote='https://github.com/gaulatti/clouseau.git'
+user_root="${HOME}"
+cache="${XDG_CACHE_HOME:-${HOME}/.cache}/clouseau"
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --prefix) [[ $# -ge 2 ]] || exit 2; user_root="$2"; shift 2 ;;
+    --cache-root) [[ $# -ge 2 ]] || exit 2; cache="$2"; shift 2 ;;
+    *) printf '%s\n' 'Usage: install-agent [--prefix USER_DIRECTORY] [--cache-root CACHE_DIRECTORY]' >&2; exit 2 ;;
+  esac
+done
+repository="${cache}/source.git"
+mkdir -p "${cache}/revisions"
+locked=false
+for attempt in {1..20}; do
+  if mkdir "${cache}/install.lock" 2>/dev/null; then locked=true; break; fi
+  sleep 0.25
+done
+[[ "${locked}" == true ]] || { printf '%s\n' 'Clouseau installation is already running or has an interrupted lock.' >&2; exit 1; }
+trap 'rmdir "${cache}/install.lock"' EXIT
+if [[ ! -d "${repository}" ]]; then
+  GIT_TERMINAL_PROMPT=0 git clone --quiet --bare "${remote}" "${repository}"
+fi
+[[ "$(git --git-dir="${repository}" config --get remote.origin.url)" == "${remote}" ]] || {
+  printf '%s\n' 'Clouseau cache has an unexpected source; preserved without changes.' >&2
+  exit 1
+}
+GIT_TERMINAL_PROMPT=0 git --git-dir="${repository}" fetch --quiet origin \
+  refs/heads/main:refs/remotes/origin/main
+revision="$(git --git-dir="${repository}" rev-parse refs/remotes/origin/main)"
+checkout="${cache}/revisions/${revision}"
+if [[ ! -d "${checkout}" ]]; then
+  git --git-dir="${repository}" worktree add --quiet --detach "${checkout}" "${revision}"
+fi
+[[ "$(git -C "${checkout}" rev-parse HEAD)" == "${revision}" && \
+  -z "$(git -C "${checkout}" status --porcelain)" && \
+  -f "${checkout}/skills/clouseau/SKILL.md" && -f "${checkout}/bin/clouseau.cjs" ]] || {
+  printf '%s\n' 'Clouseau source is modified or incomplete; no stale installation activated.' >&2
+  exit 1
+}
+
+python3 - "${cache}" "${checkout}" "${user_root}" <<'PY'
+import os
+import sys
+from pathlib import Path
+
+cache, checkout, user_root = (Path(value).resolve() for value in sys.argv[1:])
+(cache / 'user-root').write_text(str(user_root))
+
+def link(destination, target, owned):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if os.path.lexists(destination):
+        if not destination.is_symlink() or not Path(os.readlink(destination)).resolve().is_relative_to(owned.resolve()):
+            raise SystemExit(f"Preserving unrelated installation at {destination}")
+    temporary = destination.with_name(destination.name + '.clouseau-next')
+    if os.path.lexists(temporary):
+        raise SystemExit(f"Concurrent or interrupted Clouseau installation: {temporary}")
+    temporary.symlink_to(target)
+    os.replace(temporary, destination)
+
+link(cache / 'current', checkout, cache / 'revisions')
+for host in ('.agents', '.claude'):
+    link(user_root / host / 'skills/clouseau', cache / 'current/skills/clouseau', cache)
+link(user_root / '.local/bin/clouseau', cache / 'current/scripts/clouseau', cache)
+PY
+printf '%s\n' "${checkout}"

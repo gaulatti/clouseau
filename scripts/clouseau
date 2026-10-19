@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+source_root="$(python3 - "${BASH_SOURCE[0]}" <<'PY'
+import os
+import sys
+print(os.path.dirname(os.path.dirname(os.path.realpath(sys.argv[1]))))
+PY
+)"
+cache_root="$(dirname "$(dirname "${source_root}")")"
+user_root="$(cat "${cache_root}/user-root")"
+current_root="$(bash "${source_root}/scripts/install-agent" --prefix "${user_root}" --cache-root "${cache_root}")"
+exec node "${current_root}/bin/clouseau.cjs" "$@"

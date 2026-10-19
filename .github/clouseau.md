@@ -4,6 +4,14 @@ Clouseau provides shared, evidence-bound repository change assessment, exact
 coverage gates, native PR approval and merge, and deployment-driven wiki updates.
 Consumers provide their own protected purpose contract and verification steps.
 
+Local agent review and authenticated receipt reuse serve the same change
+acceptance purpose. Agent-only installation and refresh are independent of CI
+installation. A protected verifier may reuse an enrolled runner's source-bound
+passing review without another AI request, while preserving native tests, exact
+coverage, existing owner authority and branch protection. Initial workstation
+signing explicitly trusts the enrolled operator and privileged processes; it
+does not claim hardware attestation or protection from a compromised runner.
+
 Changes must preserve the trust boundary between untrusted contributor source,
 secret-free execution checks, read-only AI evaluation and the separate write
 controller. Native protected-main requirements, immutable revision identities,

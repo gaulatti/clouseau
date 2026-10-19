@@ -103,6 +103,52 @@ test('the native inspection selects controller proofs without generating source 
   assert.throws(() => materialize(old, f.snapshot), /Unknown controller-supplied causal proof/);
 }));
 
+test('native source-line citations normalize to existing catalog blocks without another model request', withKey(async () => {
+  const f = fixture();
+  f.snapshot.sources.head.content = Array.from({length: 81}, (_, i) => `production statement ${i + 1}`).join('\n');
+  require('./acceptance-sources.cjs').refresh(f.snapshot);
+  const facts = modelTemplate(f.snapshot);
+  facts.gates.forEach(gate => {gate.state = 'satisfied';});
+  facts.units[0].excess.collateral.evidence = ['proof-1-53', 'proof-1-41', 'proof-1-69'];
+  facts.accounting[0].evidence = ['proof-1-53'];
+  const concern = finding(); delete concern.path;
+  concern.anchor = 'proof-1-69'; concern.evidence = ['proof-1-53'];
+  concern.factors = Object.fromEntries(Object.keys(concern.factors).map(name =>
+    [name, {reason: 'Observable changed production behavior.', evidence: ['proof-1-53']} ]));
+  facts.findings.push(concern);
+  const original = structuredClone(facts);
+  let calls = 0;
+  const result = await inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => {
+    calls++;
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
+      [{function: {name: 'acceptance_report', arguments: JSON.stringify(facts)}}]}}]})};
+  }});
+  assert.equal(calls, 1);
+  assert.deepEqual(facts, original, 'the original observations and causal finding remain intact');
+  assert.doesNotThrow(() => validateInspection(result.report, f.snapshot));
+  assert.deepEqual(result.report.units[0].excess.collateral.evidence, ['proof-1-41']);
+  assert.deepEqual(result.report.accounting[0].evidence, ['proof-1-41']);
+  const proof = result.report.evidence.find(entry => entry.id === 'proof-1-41');
+  assert.deepEqual({source: proof.source, start: proof.start, end: proof.end}, {source: 'head', start: 41, end: 80});
+  assert.equal(proof.quote, f.snapshot.sources.head.content.split('\n').slice(40, 80).join('\n'));
+  assert.equal(result.report.evidence.filter(entry => entry.id === proof.id).length, 1);
+  assert.equal(result.report.findings[0].cause, concern.cause);
+  assert.equal(result.report.findings[0].obligation, concern.obligation);
+  assert.equal(result.report.findings[0].path, 'src/upload.rs');
+}));
+
+test('line normalization rejects unknown sources, out-of-range offsets and unsupplied empty blocks', () => {
+  const {snapshot} = fixture();
+  for (const id of ['proof-2-1', 'proof-1-99', 'proof-01-2', 'proof-1-0', 'proof-1-1.5', 'invented-alias']) {
+    const facts = modelTemplate(snapshot); facts.gates[0].evidence = [id];
+    assert.throws(() => materialize(facts, snapshot), /Unknown controller-supplied source proof/);
+  }
+  snapshot.sources.head.content = 'validate(input)?;\n' + '\n'.repeat(80);
+  require('./acceptance-sources.cjs').refresh(snapshot);
+  const facts = modelTemplate(snapshot); facts.gates[0].evidence = ['proof-1-53'];
+  assert.throws(() => materialize(facts, snapshot), /Unknown controller-supplied source proof/);
+});
+
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
   const f = fixture(); const reports = []; const requests = [];
   const config = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'deepseek', grading_model: 'deepseek-flash'};

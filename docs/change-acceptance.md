@@ -49,6 +49,17 @@ If a possible excess lacks its narrower alternative, review remains incomplete
 and cannot approve. An independent integrity veto still blocks; an incomplete
 repair detail cannot erase established evidence of fabricated tests.
 A binding obligation must cite the trusted contract, never a contributor's claim.
+The controller resolves this authority boundary before calling a semantic grader:
+without a cited trusted contract, binding credit is zero. Untrusted requests and
+runtime receipts cannot be promoted into contractual authority by any model.
+They can still support the independent need-evidence formula. Existing negative
+judgments and all required gates remain effective; only impossible binding
+credit is removed. The controller records this decision alongside model grades.
+Linked requirements have content-addressed entries in the same proof catalog as
+repository sources. Investigators can cite their actual text, URL and author so
+the atomic grader receives the request itself. Issue content remains untrusted;
+authorship never grants contract, execution or merge authority. An issue edit
+changes both its evidence identity and the assessment snapshot digest.
 
 ## Technical findings
 
@@ -191,6 +202,17 @@ Protected reviewer/control installation requires exact-revision confirmation.
 The existing `/approve-intent FULL_HEAD_SHA` confirms only such a decision. It
 cannot waive tests, coverage, integrity failures, technical repairs or incomplete
 evidence. Ordinary coverage improvements do not require a new product decision.
+
+Before the AI assessment, the controller reads the configured human owner's
+exact-revision intent comment and verifies current write, maintain or admin
+permission through GitHub. The literal receipt becomes a content-addressed,
+trusted contract source in the proof catalog. This records accepted purpose,
+not an approval score: each capability and mechanism still needs its own fit,
+need and proportionality evidence, and all technical and integrity gates remain
+mandatory. Contributor claims and issue text do not acquire contract authority.
+Before any approval write, the gate checks that a receipt used in the assessment
+still exists unchanged and that its author remains authorized. Removed, altered
+or revoked confirmation requires reassessment rather than reusing a stale score.
 
 Clouseau's own reviewer upgrades have a separate owner-authorized installation
 route so a defective installed reviewer cannot prevent installing its verified

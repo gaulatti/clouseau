@@ -1,5 +1,12 @@
 # Clouseau
 
+Clouseau also provides a centrally maintained local agent skill and signed review
+receipts. Agent-only installation is independent of CI: it uses authenticated
+coding harnesses and creates no Actions configuration or provider secrets.
+Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
+coverage, and approves/merges without repeating the AI review. See
+[local review, installation and trust boundaries](docs/local-review.md).
+
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,
 compare it with repository contracts and precedent, request the owner's second
@@ -64,11 +71,9 @@ original application source tree, not compiled output. Every `.ts`, `.tsx`,
 `.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules;
 declaration-only `.d.ts` files are not executable. The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
-directives. It derives exact line and branch totals from native hit counters,
-never from rounded summary percentages. It rejects an application file with empty statement measurements even when
-other files have full coverage. Individual measured files may have no branches;
-the application as a whole must still have nonzero line and branch totals.
-Configure c8 `--all` over all compiled
+directives. A source entry with empty statement maps is rejected, so listing an
+unloaded executable file without measuring it cannot satisfy source completeness. It derives exact line and branch totals from native hit counters,
+never from rounded summary percentages. Configure c8 `--all` over all compiled
 JavaScript with source maps to measure unloaded TypeScript sources. Run real
 runtime tests as well as unit tests; this format support does not replace them.
 

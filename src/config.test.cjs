@@ -55,3 +55,8 @@ test('version two explicitly selects bounded qualified model roles and cannot al
     c => {c.acceptance.repair_attempts = 100;}, c => {c.acceptance.product_threshold = 0;},
   ]) {const changed = structuredClone(config); mutate(changed); assert.throws(() => validateConfig(changed), /acceptance configuration/);}
 });
+
+test('receipt trust cannot be silently attached to the legacy reviewer', async () => {
+  const fixture = await require('../test/local-review-fixture.cjs').fixture();
+  assert.throws(() => validateConfig({...valid, version: 1, local_review: fixture.trust}), /protocol version two/);
+});
