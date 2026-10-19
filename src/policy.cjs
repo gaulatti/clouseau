@@ -140,6 +140,19 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
 }
 
+async function purposeConfirmation(github, repo, pr, comments) {
+  const comment = [...comments].reverse().find(item =>
+    item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER &&
+    Number.isSafeInteger(item.id) && item.id > 0 &&
+    typeof item.body === 'string' &&
+    item.body.trim() === `/approve-intent ${pr.head.sha}`);
+  if (!comment) return null;
+  const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
+  if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
+  return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
+    actor: comment.user.login, permission: data.permission, comment_id: comment.id, body: comment.body.trim()};
+}
+
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
   const canConfirm = async user => {
     if (!user || user.type !== 'User') return false;
@@ -358,7 +371,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
+return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
 
 }
 

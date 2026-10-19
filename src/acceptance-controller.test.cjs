@@ -111,6 +111,66 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
+test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
+  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`};
+  f.state.comments.push(comment);
+  let investigations = 0; let graders = 0;
+  const assessment = await f.assess({fetchImpl: async (url, options) => {
+    const body = JSON.parse(options.body); const packet = JSON.parse(body.messages[1].content);
+    if (body.tools) {
+      investigations++;
+      const source = Object.values(packet.sources).find(item => item.path === 'pulls/3/intent/51');
+      assert.equal(source.authority, 'trusted'); assert.equal(source.kind, 'contract');
+      assert.match(source.numbered_lines, /approve-intent/);
+      assert.ok(packet.proofs.some(item => packet.sources[item.source].path === source.path));
+    } else {
+      graders++;
+      const contract = packet.state.accepted_contract.find(item => item.path === 'pulls/3/intent/51');
+      assert.equal(JSON.parse(contract.content).body, comment.body);
+    }
+    return f.fetchImpl(url, options);
+  }});
+  assert.equal(assessment.decision, 'auto_approve');
+  assert.equal(investigations, 2); assert.equal(graders, 2);
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  assert.equal(record.snapshot.intent_confirmation.actor, 'gaulatti');
+  assert.equal(record.snapshot.intent_confirmation.head_sha, f.state.pr.head.sha);
+  assert.equal(record.snapshot.claims.description, undefined, 'the PR description has not been promoted into the receipt');
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+}));
+
+test('deleted, altered or revoked purpose evidence holds approval before any publication write', async () => {
+  for (const change of ['delete', 'edit', 'revoke']) await fixture(async f => {
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+    const assessment = await f.assess();
+    if (change === 'delete') f.state.comments = [];
+    if (change === 'edit') f.state.comments[0].body = 'Confirmation withdrawn.';
+    if (change === 'revoke') f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: 'read'}});
+    await assert.rejects(f.gate(assessment), /purpose confirmation changed/);
+    assert.equal(f.state.writes.length, 0);
+  });
+});
+
+test('a citable owner purpose receipt cannot waive low product scores or an integrity veto', async () => {
+  for (const failure of ['need', 'integrity']) await fixture(async f => {
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+    if (failure === 'integrity') f.state.alter = report => {report.gates.find(item => item.name === 'test_integrity').state = 'violated';};
+    const assessment = await f.assess({fetchImpl: async (url, options) => {
+      const body = JSON.parse(options.body);
+      if (body.tools || failure === 'integrity') return f.fetchImpl(url, options);
+      const {questions} = JSON.parse(body.messages[1].content);
+      return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers:
+        Object.fromEntries(Object.keys(questions).map(id => [id,
+          id.includes('_need_') || id.includes('_excess_') ? 'level0' : 'level4']))})}}]})};
+    }});
+    assert.equal(assessment.decision, failure === 'need' ? 'repair_required' : 'blocked_integrity');
+    assert.ok(JSON.parse(fs.readFileSync(f.recordPath)).snapshot.intent_confirmation);
+    await assert.rejects(f.gate(assessment), /cannot waive/);
+    assert.equal(f.state.writes.some(item => item.name === 'approve'), false);
+  });
+});
+
 test('all evidence pages must publish before native approval, and a partial publication is safely resumed without new model calls', () => fixture(async f => {
   f.state.alter = report => {
     for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(report.units[0][group])) {

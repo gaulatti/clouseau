@@ -3,6 +3,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources} = require('./acceptance-sources.cjs');
+const {packetFor} = require('./acceptance-grading.cjs');
 
 test('controller proof IDs bind bounded immutable spans and remain stable when source context grows', () => {
   const snapshot = {sources: {blank: {content: '\n'}, code: {content: Array.from({length: 85}, (_, i) =>
@@ -63,6 +64,34 @@ test('renamed, added and removed files use only their applicable immutable sourc
     assert.equal(snapshot.history.length, status === 'added' ? 0 : 1);
     if (status === 'renamed') assert.ok(snapshot.files[0].base_source.endsWith(':src/old.rs'));
   }
+});
+
+test('linked requirements survive source collection, proof selection and atomic grading without gaining authority', async () => {
+  const f = fixture();
+  const request = {number: 27, title: 'Support the active native coverage consumer',
+    body: 'The existing consumer produces Istanbul JSON. Preserve its complete source inventory.',
+    url: 'https://github.com/example/upload-gateway/issues/27', author: {login: 'maintainer'}};
+  f.github.graphql = async () => ({repository: {pullRequest: {closingIssuesReferences: {
+    nodes: [request], pageInfo: {hasNextPage: false}}}}});
+  const snapshot = await collectSnapshot(f);
+  const proof = proofCatalog(snapshot).find(item => snapshot.sources[item.source].kind === 'requirement');
+  assert.ok(proof, 'a linked request must be citable, not stranded outside the proof catalog');
+  const source = snapshot.sources[proof.source];
+  assert.equal(source.authority, 'untrusted', 'issue authorship cannot grant contract or execution authority');
+  assert.deepEqual(JSON.parse(source.content), request);
+  const location = {subject: request.title, obligation: 'Preserve exact native coverage', context: {},
+    target: {reason: 'The linked request describes the active consumer limitation.', evidence: [proof.id]}};
+  const report = {evidence: [proof]};
+  const packet = packetFor(location, report, snapshot);
+  assert.equal(packet.evidence[0].text, source.content);
+  assert.equal(packet.evidence[0].authority, 'untrusted');
+  assert.match(packet.evidence[0].text, /Preserve its complete source inventory/);
+  request.body = 'Updated requirement; do not reuse the prior assessment.';
+  const updated = await collectSnapshot(f);
+  const next = proofCatalog(updated).find(item => updated.sources[item.source].kind === 'requirement');
+  assert.notEqual(updated.digest, snapshot.digest);
+  assert.notEqual(next.source, proof.source, 'changed issue content gets a new immutable source identity');
+  assert.notEqual(updated.sources[next.source].ref, source.ref);
 });
 
 test('bounded source reader refuses path traversal, binary data, truncation and invalid UTF-8', async () => {
