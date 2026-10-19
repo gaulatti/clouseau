@@ -3,7 +3,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {createPolicy} = require('./policy.cjs');
-const {assess, gate, scopeReason, assessmentResult, maintainerConfirmed, technicalRun,
+const {assess, gate, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun,
   assertProtection, needsDeployment, VERIFY_STEPS} = createPolicy(require('../test/fixtures/config.json'));
 
 const SHA = 'a'.repeat(40);
@@ -72,6 +72,27 @@ function fixture(overrides = {}) {
   const run = options => gate({github, context, core, assessment: automatic, wait: async () => {}, maxPolls: 1, mergePolls: 1, ...options});
   return {github, state, writes, run, fetches: () => fetches};
 }
+
+test('purpose evidence requires the configured human, exact head and current repository authority', async () => {
+  const f = fixture();
+  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${SHA}`};
+  const invalid = [null, {login: 'gaulatti', type: 'Bot'}, human].map(user => ({...comment, user}));
+  invalid.push(...[null, 0, -1, 1.5].map(id => ({...comment, id})));
+  invalid.push(...[null, `/approve-intent ${BASE}`, `/approve-intent ${SHA}\nwaive checks`].map(body => ({...comment, body})));
+  for (const item of invalid) assert.equal(await purposeConfirmation(f.github, repo, small, [item]), null);
+  assert.equal(await purposeConfirmation(f.github, repo, small, []), null);
+  for (const permission of ['admin', 'maintain', 'write']) {
+    f.state.permission = permission;
+    const proof = await purposeConfirmation(f.github, repo, small, [{...comment, body: ` ${comment.body}\n`}]);
+    assert.deepEqual(proof, {repository: 'gaulatti/colombo', number: 8, head_sha: SHA,
+      actor: 'gaulatti', permission, comment_id: 51, body: comment.body});
+  }
+  f.state.permission = 'read';
+  assert.equal(await purposeConfirmation(f.github, repo, small, [comment]), null);
+  f.github.rest.repos.getCollaboratorPermissionLevel = async () => {throw new Error('permission lookup failed');};
+  await assert.rejects(purposeConfirmation(f.github, repo, small, [comment]), /permission lookup failed/);
+  assert.equal(f.writes.length, 0);
+});
 
 test('repository fit is assessed for large maintenance and ordinary infrastructure changes', () => {
   assert.equal(scopeReason([file], small), null);

@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: test, coverage, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -14,8 +14,11 @@ inputs:
     description: Trusted repository configuration path (assess and gate)
     default: .github/clouseau.json
   coverage-report:
-    description: LLVM JSON coverage export path (coverage)
+    description: Native LLVM or Istanbul JSON coverage report path (coverage)
     default: ''
+  coverage-format:
+    description: llvm or istanbul; Istanbul requires every application JS/TS source
+    default: llvm
   source-directory:
     description: Application source directory to measure (coverage)
     default: ''
@@ -71,7 +74,7 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          test|coverage|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
     - name: Test approval policy
@@ -88,18 +91,20 @@ runs:
         CLOUSEAU_ROOT: ${{ github.action_path }}
         COVERAGE_REPORT: ${{ inputs.coverage-report }}
         SOURCE_DIRECTORY: ${{ inputs.source-directory }}
+        COVERAGE_FORMAT: ${{ inputs.coverage-format }}
       run: |
         test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY"
-    - name: Assess repository intent
+        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+    - name: Verify local review or assess repository intent
       id: assess
-      if: inputs.operation == 'assess'
+      if: inputs.operation == 'assess' || inputs.operation == 'verify-local'
       uses: actions/github-script@v7
       env:
         CLOUSEAU_ROOT: ${{ github.action_path }}
         CLOUSEAU_CONFIG: ${{ inputs.config }}
-        DEEPSEEK_API_KEY: ${{ inputs.provider-key }}
-        TYPESAFE_API_KEY: ${{ inputs.typesafe-key }}
+        DEEPSEEK_API_KEY: ${{ inputs.operation == 'assess' && inputs.provider-key || '' }}
+        TYPESAFE_API_KEY: ${{ inputs.operation == 'assess' && inputs.typesafe-key || '' }}
+        CLOUSEAU_RECEIPT_ONLY: ${{ inputs.operation == 'verify-local' }}
         PR_NUMBER: ${{ inputs.pull-request }}
         CLOUSEAU_WAIT_FOR_VERIFICATION: ${{ inputs.wait-for-verification }}
       with:
@@ -110,7 +115,8 @@ runs:
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
           const assess = process.env.CLOUSEAU_WAIT_FOR_VERIFICATION === 'true' ? policy.assessWhenReady : policy.assess;
-          core.setOutput('assessment', JSON.stringify(await assess({github, context, report: core.info})));
+          core.setOutput('assessment', JSON.stringify(await assess({github, context, report: core.info,
+            receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true'})));
     - name: Approve and ensure auto-merge
       if: inputs.operation == 'gate'
       uses: actions/github-script@v7

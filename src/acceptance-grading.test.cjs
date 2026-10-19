@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {locations, packetFor, bounds, gradeReport} = require('./acceptance-grading.cjs');
+const {locations, packetFor, bounds, authorityBounds, gradeReport} = require('./acceptance-grading.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 const {FACTORS, validateReport} = require('./acceptance.cjs');
 const {JEV_MODEL} = require('./review-provider.cjs');
@@ -49,6 +49,39 @@ test('typed grading uncertainty is preserved and confidence never substitutes fo
   assert.deepEqual(bounds({choice: 'level4', confidence: 0.95, probabilities: {level4: 0.97, level3: 0.03, unknown: 0}}), {min: 0.75, max: 1});
   assert.throws(() => bounds({choice: 'level4', confidence: 1, probabilities: {level4: 0.001, unknown: 0}}), /no supported/);
 });
+
+test('source authority is a controller fact, so untrusted requests and runtime receipts cannot acquire positive binding grades', credentials(async () => {
+  for (const [authority, kind] of [['untrusted', 'contract'], ['trusted', 'verification'], ['untrusted', 'source']]) {
+    const f = fixture(); Object.assign(f.snapshot.sources.contract, {authority, kind});
+    const result = await gradeReport({...f, provider: 'deepseek', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+      const packet = JSON.parse(JSON.parse(options.body).messages[1].content);
+      assert.ok(!Object.hasOwn(packet.questions, 'u0_need_binding'), 'a model cannot promote known non-contract authority');
+      return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers:
+        Object.fromEntries(Object.keys(packet.questions).map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))})}}]})};
+    }});
+    assert.equal(result.report.units[0].need.binding.min, 0); assert.equal(result.report.units[0].need.binding.max, 0);
+    assert.match(result.report.units[0].need.binding.reason, /no trusted contract authority/);
+    assert.equal(result.grading.decisions.find(item => item.id === 'u0_need_binding').provider, 'controller');
+    assert.equal(validateReport(result.report, f.snapshot).decision, 'auto_approve', 'demonstrated need can pass through the unchanged non-binding formula');
+  }
+}));
+
+test('authority constraints preserve negative product judgments and correct only impossible binding credit', credentials(async () => {
+  const f = fixture(); f.report.units[0].need.binding.evidence = ['source'];
+  f.report.units[0].need.binding.min = 0.5; f.report.units[0].need.binding.max = 0.5;
+  const before = structuredClone(f.report);
+  assert.equal(authorityBounds(f.report, f.snapshot).length, 1);
+  assert.equal(f.report.units[0].need.binding.min, 0);
+  for (const group of ['fit', 'excess']) assert.deepEqual(f.report.units[0][group], before.units[0][group]);
+  const result = await gradeReport({...f, provider: 'deepseek', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+    const packet = JSON.parse(JSON.parse(options.body).messages[1].content);
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers:
+      Object.fromEntries(Object.keys(packet.questions).map(id => [id,
+        id === 'u0_need_evidence' ? 'level1' : id.includes('_excess_') ? 'level0' : 'level4']))})}}]})};
+  }});
+  assert.equal(validateReport(result.report, f.snapshot).units[0].min.need, 25);
+  assert.equal(validateReport(result.report, f.snapshot).decision, 'repair_required');
+}));
 
 test('the DeepSeek-only grader and Jev consume the same atomic evidence without doing arithmetic', credentials(async () => {
   const f = fixture();

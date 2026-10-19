@@ -6,7 +6,8 @@ const {requestReview} = require('./provider.cjs');
 function createPolicy(input) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const legacy = createPolicy({...config, version: 1});
+  const {local_review, ...legacyConfig} = config;
+  const legacy = createPolicy({...legacyConfig, version: 1});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
 }
 const CHECK = 'approval-policy';
@@ -25,7 +26,7 @@ function numberFor(context) {
 
 function scopeReason(files, pr) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
-  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
   if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
@@ -138,6 +139,19 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   }
   await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
   core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
+}
+
+async function purposeConfirmation(github, repo, pr, comments) {
+  const comment = [...comments].reverse().find(item =>
+    item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER &&
+    Number.isSafeInteger(item.id) && item.id > 0 &&
+    typeof item.body === 'string' &&
+    item.body.trim() === `/approve-intent ${pr.head.sha}`);
+  if (!comment) return null;
+  const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
+  if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
+  return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
+    actor: comment.user.login, permission: data.permission, comment_id: comment.id, body: comment.body.trim()};
 }
 
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
@@ -358,7 +372,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
+return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
 
 }
 

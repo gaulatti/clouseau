@@ -51,12 +51,31 @@ function bounds(answer) {
   return {min: Math.min(...levels), max: Math.max(...levels)};
 }
 
+function authorityBounds(report, snapshot) {
+  const decisions = [];
+  for (const entry of locations(report)) {
+    if (entry.group !== 'need' || entry.name !== 'binding') continue;
+    const trusted = entry.target.evidence.some(id => {
+      const proof = report.evidence.find(item => item.id === id);
+      const source = snapshot.sources[proof.source];
+      return source.authority === 'trusted' && source.kind === 'contract';
+    });
+    if (trusted) continue;
+    const explanation = 'The cited evidence has no trusted contract authority. Investigator observation: ';
+    Object.assign(entry.target, {min: 0, max: 0,
+      reason: entry.target.reason.startsWith(explanation) ? entry.target.reason : explanation + entry.target.reason});
+    decisions.push({id: entry.id, provider: 'controller', answer: 'no_trusted_contract_citation', range: {min: 0, max: 0}});
+  }
+  return decisions;
+}
+
 async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, log, observe = () => {}}) {
   const graded = structuredClone(report);
   const acceptancePolicy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
-  const entries = locations(graded);
+  const decisions = authorityBounds(graded, snapshot);
+  const controlled = new Set(decisions.map(item => item.id));
+  const entries = locations(graded).filter(item => !controlled.has(item.id));
   const usage = [];
-  const decisions = [];
   const pending = [];
   // Small atomic packets keep unrelated code out of the decision model.
   const width = ['typesafe', 'routed'].includes(provider) ? 12 : entries.length;
@@ -102,4 +121,4 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
   return {report: graded, usage, grading: {provider, escalated: pending.map(item => item.id), decisions}};
 }
 
-module.exports = {JEV_FACTORS, locations, packetFor, bounds, gradeReport};
+module.exports = {JEV_FACTORS, locations, packetFor, bounds, authorityBounds, gradeReport};

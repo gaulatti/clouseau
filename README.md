@@ -1,5 +1,12 @@
 # Clouseau
 
+Clouseau also provides a centrally maintained local agent skill and signed review
+receipts. Agent-only installation is independent of CI: it uses authenticated
+coding harnesses and creates no Actions configuration or provider secrets.
+Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
+coverage, and approves/merges without repeating the AI review. See
+[local review, installation and trust boundaries](docs/local-review.md).
+
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,
 compare it with repository contracts and precedent, request the owner's second
@@ -30,7 +37,7 @@ consumer's privileged approval job. See `examples/colombo.json` for version 2 co
 | Operation | Inputs | Result |
 | --- | --- | --- |
 | `test` | none | Run Clouseau's Python and Node regression suites |
-| `coverage` | `coverage-report`, `source-directory` | Require exact, nonempty 100% application line and branch coverage in LLVM JSON |
+| `coverage` | `coverage-report`, `source-directory`, optional `coverage-format` | Require exact, nonempty 100% application line and branch coverage in native LLVM or Istanbul JSON |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
@@ -57,6 +64,17 @@ code. Vendor/dependency coverage cannot mask application gaps. Counts must match
 exactly; rounded percentages, missing data, or a zero branch total fail. The
 caller owns instrumentation and test execution. Colombo uses Rust nightly branch
 instrumentation with normal application cfgs, followed by docs and Docker tests.
+
+For JavaScript/TypeScript, select `coverage-format: istanbul` and pass the native
+`coverage-final.json` produced by c8/Istanbul. Set `source-directory` to the
+original application source tree, not compiled output. Every `.ts`, `.tsx`,
+`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules;
+declaration-only `.d.ts` files are not executable. The checker rejects omitted,
+duplicate, mismatched, skipped or malformed measurements and coverage-ignore
+directives. It derives exact line and branch totals from native hit counters,
+never from rounded summary percentages. Configure c8 `--all` over all compiled
+JavaScript with source maps to measure unloaded TypeScript sources. Run real
+runtime tests as well as unit tests; this format support does not replace them.
 
 ## Trust and permissions
 
