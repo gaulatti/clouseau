@@ -7,6 +7,7 @@
     "steps": [
       "Enforce 100% line and branch coverage",
       "Test approval policy",
+      "Test distributable action without Git metadata",
       "Accept complete application coverage",
       "Verify rejection is enforced",
       "Test workflow security"

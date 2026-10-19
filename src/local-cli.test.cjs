@@ -8,6 +8,7 @@ const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
 const {options, stateDirectory, initializeIdentity, executeVerification, installation, readHistory, runReview, publishReceipt, main} = require('./local-cli.cjs');
+const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
 function nativeFixture(directory, gap = false) {
   const location = {start: {line: 1, column: 0}, end: {line: 1, column: 10}};
@@ -46,7 +47,21 @@ test('CLI argument and identity setup are explicit and never return private mate
     assert.equal(identity.public_identity.github_actor, 'fixture-author');
     assert.ok(!JSON.stringify(identity).includes('PRIVATE KEY'));
     assert.equal(fs.statSync(identity.identity_file).mode & 0o777, 0o600);
-    assert.equal(installation().sha.length, 40);
+    // External action bundles have no .git metadata. Exercise the Git boundary
+    // in a real temporary repository, independently of the engine's location.
+    const runner = path.join(state, 'runner'); fs.mkdirSync(runner);
+    git(runner, ['init', '-q', '-b', 'main']);
+    git(runner, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '--allow-empty', '-qm', 'test: runner fixture']);
+    const expectedSha = git(runner, ['rev-parse', 'HEAD']).trim();
+    const execute = require('node:child_process').execFileSync;
+    t.mock.method(require('node:child_process'), 'execFileSync', (program, args, settings) => {
+      assert.equal(program, 'git');
+      return execute(program, ['-C', runner, ...args.slice(2)], settings);
+    });
+    assert.equal(installation().sha, expectedSha); assert.equal(installation().clean, true);
+    fs.writeFileSync(path.join(runner, 'uncommitted'), 'fixture');
+    assert.equal(installation().clean, false);
+    t.mock.restoreAll();
     assert.ok(stateDirectory().endsWith('/.local/share/clouseau'));
     const initialized = await main(['init-identity'], {identityDirectory: state, execute: () => 'fixture-author\n'});
     assert.equal(initialized.public_identity.github_actor, 'fixture-author');
@@ -79,7 +94,7 @@ test('agent-only local review needs no CI config or provider keys and does not r
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request, harness: 'claude'};
-    const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true})};
+    const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
     const report = await main(['review', '--directory', f.directory, '--base', f.base, '--request-file', request, '--harness', 'claude'], deps);
     assert.equal(report.decision, 'auto_approve'); assert.equal(report.receipt, null);
     assert.equal(report.provider_api_calls, 0); assert.equal(report.harness_invocations, 4);
@@ -101,12 +116,12 @@ test('a completed negative local review retains evidence and never produces a si
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const result = await runReview({directory: f.directory, base: f.base, 'request-file': request},
-      {state, ask: fakeHarness(true), verify: () => ({fixture_execution_only: true})});
+      {state, ask: fakeHarness(true), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation});
     assert.equal(result.decision, 'blocked_integrity'); assert.equal(result.receipt, null);
     assert.equal(JSON.parse(fs.readFileSync(result.record)).result.reviews.length, 2);
     fs.writeFileSync(request, 'A renamed request cannot erase a failed review.');
     await assert.rejects(runReview({directory: f.directory, base: f.base, 'request-file': request},
-      {state, ask: async () => {throw new Error('Do not resample');}}), /non-passing local review/);
+      {state, ask: async () => {throw new Error('Do not resample');}, installed: fixtureInstallation}), /non-passing local review/);
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
 
@@ -116,7 +131,7 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
     let calls = 0;
-    const deps = {state, verify: () => ({}), ask: async () => {calls++; throw new Error('Fixture transport unavailable');}};
+    const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {calls++; throw new Error('Fixture transport unavailable');}};
     await assert.rejects(runReview(args, deps), /transport unavailable/);
     await assert.rejects(runReview(args, deps), /already run/);
     assert.equal(calls, 1);
@@ -177,7 +192,7 @@ test('local history is bounded and a missing concern cannot disappear on a chang
       const args = {'request-file': request};
       const cwd = process.cwd(); process.chdir(f.directory);
       try {
-        const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true})};
+        const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
         await runReview(args, deps);
         const ledger = path.join(state, 'ledgers', `${digest({repository: 'example/local-fixture', branch: 'main'})}.json`);
         const previous = JSON.parse(fs.readFileSync(ledger));
@@ -206,7 +221,7 @@ test('a workstation with multiple enrolled identities must explicitly choose its
         keys: identities.map(item => item.public_identity)}};
     await repository(async f => {
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
-      await assert.rejects(runReview({directory: f.directory, base: f.base, 'request-file': request}, {state}), /Multiple enrolled/);
+      await assert.rejects(runReview({directory: f.directory, base: f.base, 'request-file': request}, {state, installed: fixtureInstallation}), /Multiple enrolled/);
     }, directory => {
       fs.mkdirSync(path.join(directory, '.github'));
       fs.writeFileSync(path.join(directory, '.github/clouseau.json'), JSON.stringify(config));
