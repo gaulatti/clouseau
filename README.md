@@ -1,5 +1,12 @@
 # Clouseau
 
+Clouseau also provides a centrally maintained local agent skill and signed review
+receipts. Agent-only installation is independent of CI: it uses authenticated
+coding harnesses and creates no Actions configuration or provider secrets.
+Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
+coverage, and approves/merges without repeating the AI review. See
+[local review, installation and trust boundaries](docs/local-review.md).
+
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,
 compare it with repository contracts and precedent, request the owner's second

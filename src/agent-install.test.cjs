@@ -1,0 +1,50 @@
+'use strict';
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const cp = require('node:child_process');
+const {git} = require('./local-git.cjs');
+
+test('agent installer follows source updates, preserves unrelated skills and never installs CI', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-agent-install-'));
+  const source = path.join(temporary, 'source'); const prefix = path.join(temporary, 'user');
+  const cache = path.join(temporary, 'cache'); const root = path.join(__dirname, '..');
+  try {
+    fs.mkdirSync(source);
+    git(source, ['init', '-q', '-b', 'main']);
+    git(source, ['config', 'user.name', 'Fixture']); git(source, ['config', 'user.email', 'fixture@example.invalid']);
+    for (const directory of ['scripts', 'skills/clouseau', 'bin']) fs.mkdirSync(path.join(source, directory), {recursive: true});
+    fs.copyFileSync(path.join(root, 'scripts/install-agent'), path.join(source, 'scripts/install-agent'));
+    fs.copyFileSync(path.join(root, 'scripts/clouseau'), path.join(source, 'scripts/clouseau'));
+    fs.writeFileSync(path.join(source, 'skills/clouseau/SKILL.md'), 'first source revision\n');
+    fs.writeFileSync(path.join(source, 'bin/clouseau.cjs'), 'process.stdout.write("fixture-current-runner");\n');
+    git(source, ['add', '.']); git(source, ['commit', '-qm', 'feat: fixture agent skill']);
+    const gitConfig = path.join(temporary, 'gitconfig');
+    fs.writeFileSync(gitConfig, `[url "${source}"]\n insteadOf = https://github.com/gaulatti/clouseau.git\n`);
+    const env = {...process.env, GIT_CONFIG_GLOBAL: gitConfig};
+    const args = [path.join(root, 'scripts/install-agent'), '--prefix', prefix, '--cache-root', cache];
+    const install = () => cp.execFileSync('bash', args, {encoding: 'utf8', env, stdio: ['pipe', 'pipe', 'pipe']}).trim();
+    const first = install();
+    assert.equal(fs.readFileSync(path.join(prefix, '.agents/skills/clouseau/SKILL.md'), 'utf8'), 'first source revision\n');
+    assert.equal(fs.lstatSync(path.join(prefix, '.claude/skills/clouseau')).isSymbolicLink(), true);
+    assert.equal(fs.existsSync(path.join(prefix, '.github')), false);
+    assert.equal(fs.existsSync(path.join(prefix, '.local/share/clouseau')), false, 'agent install must not create a signing identity');
+    assert.equal(cp.execFileSync('bash', [path.join(prefix, '.local/bin/clouseau')], {encoding: 'utf8', env}), 'fixture-current-runner');
+    fs.writeFileSync(path.join(source, 'skills/clouseau/SKILL.md'), 'updated canonical source\n');
+    git(source, ['add', '.']); git(source, ['commit', '-qm', 'fix: fixture rule update']);
+    const second = install();
+    assert.notEqual(first, second);
+    assert.equal(fs.readFileSync(path.join(prefix, '.agents/skills/clouseau/SKILL.md'), 'utf8'), 'updated canonical source\n');
+    fs.writeFileSync(path.join(second, 'skills/clouseau/SKILL.md'), 'tampered local cache');
+    assert.throws(install, /modified or incomplete/);
+    git(second, ['restore', '--', 'skills/clouseau/SKILL.md']);
+    const globalSkill = path.join(prefix, '.claude/skills/clouseau');
+    fs.unlinkSync(globalSkill); fs.mkdirSync(globalSkill); fs.writeFileSync(path.join(globalSkill, 'local.txt'), 'preserve me');
+    assert.throws(install, /Preserving unrelated/);
+    assert.equal(fs.readFileSync(path.join(globalSkill, 'local.txt'), 'utf8'), 'preserve me');
+    git(source, ['branch', '-m', 'unavailable-main']);
+    assert.throws(install, /remote ref/);
+  } finally {fs.rmSync(temporary, {recursive: true, force: true});}
+});

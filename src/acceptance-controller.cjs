@@ -21,10 +21,21 @@ function decided(result, controls) {
 }
 
 function verifyRecord(record, assessment, config) {
+  if (record.local_receipt) {
+    require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
+      trust: config.local_review, repository: record.snapshot.repository, author: record.local_author,
+      headSha: assessment.head_sha, baseSha: assessment.base_sha,
+      configDigest: digest(config), policyDigest: policyDigest(),
+    });
+    for (const field of ['snapshot', 'result', 'controls']) {
+      if (digest(record[field]) !== digest(record.local_receipt.payload.record[field])) throw new Error('Local review record was substituted');
+    }
+    if (digest(record.previous.findings) !== digest(record.local_receipt.payload.record.previous.findings)) throw new Error('Local review history was substituted');
+  }
   if (assessment.version !== 2 || digest(record) !== assessment.record_digest ||
       record.snapshot.config_digest !== digest(config) || record.snapshot.policy_digest !== policyDigest() ||
       record.snapshot.head_sha !== assessment.head_sha || record.snapshot.base_sha !== assessment.base_sha ||
-      record.snapshot.number !== assessment.number || record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest) {
+      (!record.local_receipt && record.snapshot.number !== assessment.number) || record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest) {
     throw new Error('Stale or altered acceptance record');
   }
   const reviews = record.result.reviews;
@@ -37,11 +48,12 @@ function verifyRecord(record, assessment, config) {
   const state = reconcile(record.result, record.snapshot, record.previous.findings);
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(record.result.decision)) record.result.decision = 'review_incomplete';
   if (assessment.decision !== decided(record.result, record.controls)) throw new Error('Acceptance decision differs from the deterministic record');
-  return {state, ...publication({...record.result, decision: assessment.decision}, record.snapshot, state)};
+  return {state, ...publication({...record.result, decision: assessment.decision},
+    {...record.snapshot, number: assessment.number}, state)};
 }
 
 function createAcceptancePolicy(config, legacy) {
-  async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD}) {
+  async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false}) {
     const repo = context.repo;
     const number = numberFor(context);
     const {data: pr} = await github.rest.pulls.get({...repo, pull_number: number});
@@ -62,6 +74,28 @@ function createAcceptancePolicy(config, legacy) {
       const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
+      const receipts = require('./local-receipt.cjs');
+      const receiptRef = receipts.marker(pr.body);
+      if (receiptRef) {
+        const bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
+        const verified = receipts.verifyReceipt(bundle, {trust: config.local_review,
+          repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
+          configDigest: digest(config), policyDigest: policyDigest()});
+        await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files});
+        if (digest(previous.findings) !== digest(verified.record.previous.findings) || legacy.scopeReason(files, pr)) {
+          throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
+        }
+        const record = {...verified.record, previous, technical, local_author: pr.user.login,
+          local_artifact: receiptRef, local_receipt: bundle};
+        fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
+        if (report) report('Authenticated local Clouseau review verified. CI AI calls: 0.');
+        return {...identity, decision: 'auto_approve', record_digest: digest(record),
+          review_source: 'authenticated_local', provider_api_calls: 0,
+          reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
+      }
+      if (receiptOnly || config.local_review?.mode === 'required') {
+        return {...identity, decision: 'review_incomplete', reason: 'This repository requires an authenticated local Clouseau review receipt.'};
+      }
       const intentConfirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
       snapshot = await collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation});
       snapshot.prior_findings = previous.findings;
@@ -114,6 +148,7 @@ function createAcceptancePolicy(config, legacy) {
     const {body, pages} = verifyRecord(record, assessment, config);
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
+    if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
     if (digest(technical) !== digest(record.technical)) throw new Error('Verification changed after acceptance investigation');
@@ -132,7 +167,10 @@ function createAcceptancePolicy(config, legacy) {
         await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body: page});
       links.push(`[Evidence ${index + 1}/${pages.length}](https://github.com/${record.snapshot.repository}/pull/${pr.number}#issuecomment-${response.data.id})`);
     }
-    const published = links.length ? `${body}\n\nComplete factor inputs and literal evidence: ${links.join(' · ')}` : body;
+    let published = links.length ? `${body}\n\nComplete factor inputs and literal evidence: ${links.join(' · ')}` : body;
+    if (record.local_receipt) published += `\n\nAuthenticated local review: ` +
+      `[signed evidence](https://github.com/${record.snapshot.repository}/blob/${record.local_artifact}/clouseau-review.json). ` +
+      'CI verified the signature, source, scores and passing tests/coverage. **CI AI review calls: 0.**';
     if (current.comment === null) await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body: published});
     else await github.rest.issues.updateComment({...context.repo, comment_id: current.comment, body: published});
     await core.summary.addRaw(published).write();

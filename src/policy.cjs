@@ -6,7 +6,8 @@ const {requestReview} = require('./provider.cjs');
 function createPolicy(input) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const legacy = createPolicy({...config, version: 1});
+  const {local_review, ...legacyConfig} = config;
+  const legacy = createPolicy({...legacyConfig, version: 1});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
 }
 const CHECK = 'approval-policy';
@@ -25,7 +26,7 @@ function numberFor(context) {
 
 function scopeReason(files, pr) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
-  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
   if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }

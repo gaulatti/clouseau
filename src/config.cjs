@@ -30,6 +30,10 @@ function validateConfig(config) {
       throw new Error('Invalid Clouseau acceptance configuration; explicit qualified roles and two bounded repair attempts are required');
     }
   }
+  if (config.local_review !== undefined) {
+    require('./local-receipt.cjs').validateTrust(config.local_review);
+    if (config.version !== 2) throw new Error('Local receipt integration requires acceptance protocol version two');
+  }
   return structuredClone(config);
 }
 

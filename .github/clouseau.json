@@ -17,6 +17,8 @@
   "readme": "README.md",
   "sensitive_paths": [
     "action.yml",
+    "bin/",
+    "skills/",
     "src/",
     "policy/",
     "test/",
