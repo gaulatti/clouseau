@@ -25,6 +25,9 @@ the application repository or invent a passing report.
    unchanged review in search of approval. At most two repair cycles belong to
    one implementation attempt. Missing purpose or authority requires a concrete
    owner decision; source or verification gaps require investigation.
+   This pre-PR assessment requires the accepted local recipe and behavioral
+   evidence. CI's separate technical checks remain mandatory before approval
+   and merge; pending CI execution is not a claimed local result.
 5. An enrolled runner selects its installed signing identity automatically.
    Pass `--identity FILE` when multiple enrolled identities require selection.
    A passing final review produces a signed receipt automatically. Never read,

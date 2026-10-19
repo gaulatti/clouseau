@@ -147,6 +147,15 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  f.state.pending = true;
+  assert.equal((await assess()).decision, 'pending_technical', 'a valid local receipt cannot replace pending CI');
+  f.state.pending = false; f.state.failed = true;
+  assert.equal((await assess()).decision, 'blocked_technical', 'a valid local receipt cannot replace failed CI');
+  await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
+    assessment, nativeGate: true}), /Verification changed/);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  assert.equal(providerCalls, 0);
+  f.state.failed = false;
   await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true,
     wait: async () => {}});
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
