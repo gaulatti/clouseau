@@ -49,6 +49,11 @@ If a possible excess lacks its narrower alternative, review remains incomplete
 and cannot approve. An independent integrity veto still blocks; an incomplete
 repair detail cannot erase established evidence of fabricated tests.
 A binding obligation must cite the trusted contract, never a contributor's claim.
+Linked requirements have content-addressed entries in the same proof catalog as
+repository sources. Investigators can cite their actual text, URL and author so
+the atomic grader receives the request itself. Issue content remains untrusted;
+authorship never grants contract, execution or merge authority. An issue edit
+changes both its evidence identity and the assessment snapshot digest.
 
 ## Technical findings
 

@@ -73,12 +73,17 @@ async function collectSnapshot({github, repo, pr, files, config, technical}) {
   }
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
     repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
-      closingIssuesReferences(first:10) { nodes { number title body url } pageInfo { hasNextPage } }
+      closingIssuesReferences(first:10) { nodes { number title body url author { login } } pageInfo { hasNextPage } }
     } }
   }`, {...repo, number: pr.number});
   const tickets = linked.repository.pullRequest.closingIssuesReferences;
   if (tickets.pageInfo.hasNextPage) throw new Error('Linked requirement evidence is incomplete');
   snapshot.tickets = tickets.nodes;
+  for (const ticket of snapshot.tickets) {
+    const ref = digest(ticket);
+    snapshot.sources[`ticket:${ticket.number}:${ref}`] = {path: `issues/${ticket.number}`, ref,
+      authority: 'untrusted', kind: 'requirement', content: JSON.stringify(ticket, null, 2)};
+  }
   snapshot.claims = {title: pr.title, description: pr.body};
   return refresh(snapshot);
 }
