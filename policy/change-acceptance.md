@@ -42,6 +42,13 @@ An accepted contract violation, explicit requirement or mandatory coverage polic
 can establish necessity without a new ticket. Binding obligations must cite
 trusted contract evidence, never the PR's own assertions.
 
+Binding authority is checked by the controller before semantic grading. When a
+binding observation cites no source marked both trusted and contract, its binding
+credit is exactly zero and no model is asked to manufacture authority. Explicit
+requests, source defects and verification evidence can still establish need
+through the separate evidence/value/unmetness/timeliness formula. This does not
+raise any grade or relax the final trusted-proof check.
+
 An authenticated exact-revision intent comment from the configured human owner
 is trusted evidence that the proposed purpose is accepted. The controller checks
 the actor's current repository permission and includes the literal confirmation

@@ -49,6 +49,12 @@ If a possible excess lacks its narrower alternative, review remains incomplete
 and cannot approve. An independent integrity veto still blocks; an incomplete
 repair detail cannot erase established evidence of fabricated tests.
 A binding obligation must cite the trusted contract, never a contributor's claim.
+The controller resolves this authority boundary before calling a semantic grader:
+without a cited trusted contract, binding credit is zero. Untrusted requests and
+runtime receipts cannot be promoted into contractual authority by any model.
+They can still support the independent need-evidence formula. Existing negative
+judgments and all required gates remain effective; only impossible binding
+credit is removed. The controller records this decision alongside model grades.
 Linked requirements have content-addressed entries in the same proof catalog as
 repository sources. Investigators can cite their actual text, URL and author so
 the atomic grader receives the request itself. Issue content remains untrusted;
