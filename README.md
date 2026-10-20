@@ -71,7 +71,8 @@ original application source tree, not compiled output. Every `.ts`, `.tsx`,
 `.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules;
 declaration-only `.d.ts` files are not executable. The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
-directives. It derives exact line and branch totals from native hit counters,
+directives. A source entry with empty statement maps is rejected, so listing an
+unloaded executable file without measuring it cannot satisfy source completeness. It derives exact line and branch totals from native hit counters,
 never from rounded summary percentages. Configure c8 `--all` over all compiled
 JavaScript with source maps to measure unloaded TypeScript sources. Run real
 runtime tests as well as unit tests; this format support does not replace them.
