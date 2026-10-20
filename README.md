@@ -139,6 +139,13 @@ immutable source excerpts. Large audits retain lossless evidence pages. Summary
 formatting uses the already validated record and makes no model requests. A
 review decision never claims that merge, deployment or live verification finished.
 
+The display regression includes the actual public Palazzo #27 review, linked to
+its immutable signed evidence. Its original comment contains 36,564 characters;
+5,388 remain visible with evidence sections closed. The new overview contains
+1,033 visible characters, over five times shorter, with the same approved
+verdict, both reviewers' 100/100 product scores and no technical findings. This
+is an offline display fixture, never a substitute for fresh review or CI evidence.
+
 Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
 bound artifact and downloads it into `work/` in the separate approval and repair
 jobs. Select examiner, challenger and grader explicitly in `acceptance`; see

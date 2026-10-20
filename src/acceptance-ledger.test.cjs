@@ -39,6 +39,26 @@ test('the initial view has one scorecard and preserves the complete audit and ex
     snapshot.repository, snapshot.number).findings, state.findings);
 });
 
+test('the published Palazzo review becomes five times shorter to read with the same verdict and scores', () => {
+  const fixture = require('../test/fixtures/palazzo27-report.json');
+  const before = JSON.stringify(fixture);
+  const body = render(fixture.result, fixture.snapshot, {findings: [], unresolved: []}, {compact: true, verified: true});
+  const visible = body.replace(/<!--[\s\S]*?-->/g, '').trim();
+  assert.equal(fixture.original_comment_characters, 36564);
+  assert.ok(fixture.original_visible_report.length > 5000);
+  assert.ok(visible.length * 5 < fixture.original_visible_report.length);
+  assert.equal(fixture.result.decision, 'auto_approve');
+  assert.match(visible, /Clouseau — Approved/);
+  for (const review of fixture.result.reviews) {
+    assert.equal(review.scores.decision, 'auto_approve');
+    for (const unit of review.scores.units) {
+      assert.deepEqual(unit.min, {fit: 100, need: 100, proportionality: 100, acceptance: 100});
+    }
+  }
+  assert.match(visible, /Technical findings:\*\* None/);
+  assert.equal(JSON.stringify(fixture), before);
+});
+
 test('one reviewer blocker stays visible once with its evidence even when the other reviewer accepts it', () => {
   const {result, snapshot} = setup();
   result.reviews[0].report.findings[0].factors.necessity = factor(0.25);
