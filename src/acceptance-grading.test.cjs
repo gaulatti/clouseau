@@ -181,3 +181,39 @@ test('unknown providers and incomplete factor results cannot become an acceptanc
       ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(value)}}]})})}), /Incomplete/);
   }
 }));
+
+
+test('typed packets split by serialized size without losing contracts, evidence or settled grades', credentials(async () => {
+  const f = fixture();
+  f.snapshot.sources.head.content = 'literal citation ' + 'x'.repeat(18000);
+  const packets = [];
+  const result = await gradeReport({...f, provider: 'typesafe', model: 'deepseek-flash', fetchImpl: async (url, options) => {
+    assert.ok(url.includes('typesafe'), 'definite answers require no reasoning rerun');
+    const packet = JSON.parse(options.body); packets.push(packet);
+    assert.ok(JSON.stringify({state: packet.state, questions: packet.questions}).length <= 100000);
+    assert.equal(packet.state.accepted_contract[0].content, f.snapshot.sources.contract.content);
+    for (const [id, factor] of Object.entries(packet.state.factors)) {
+      const expected = packetFor(locations(f.report).find(item => item.id === id), f.report, f.snapshot);
+      assert.deepEqual(factor, expected, 'splitting cannot trim or rewrite evidence');
+    }
+    const answers = Object.fromEntries(Object.keys(packet.questions).map(id => {
+      const choice = id === 'u0_fit_domain' || id.includes('_excess_') ? 'level0' : 'level4';
+      return [id, {type: 'choice', choice, confidence: 1,
+        probabilities: Object.fromEntries(Object.keys(packet.questions[id].criteria).map(key => [key, key === choice ? 1 : 0]))}];
+    }));
+    return {ok: true, json: async () => ({model: JEV_MODEL, answers})};
+  }});
+  assert.ok(packets.length > 2, 'question count alone previously allowed oversized packets');
+  const ids = packets.flatMap(packet => Object.keys(packet.questions));
+  assert.deepEqual([...ids].sort(), locations(f.report).map(item => item.id).sort());
+  assert.equal(new Set(ids).size, ids.length, 'each atomic judgment runs exactly once');
+  assert.equal(result.report.units[0].fit.domain.max, 0, 'a negative survives partitioning');
+  assert.equal(result.usage.length, packets.length);
+}));
+
+test('one indivisible oversized factor fails before any provider call', credentials(async () => {
+  const f = fixture(); f.snapshot.sources.contract.content = 'x'.repeat(100001);
+  let calls = 0;
+  await assert.rejects(gradeReport({...f, provider: 'routed', fetchImpl: async () => {calls++;}}), /bounded atomic-question packet/);
+  assert.equal(calls, 0);
+}));
