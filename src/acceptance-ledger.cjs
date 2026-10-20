@@ -70,7 +70,7 @@ function reconcile(result, snapshot, previous = []) {
   return {findings: [...records.values()], unresolved};
 }
 
-function overview(result, snapshot, state, verified) {
+function overview(result, snapshot, state) {
   const decisions = {
     auto_approve: ['Approved', 'Automatic approval and protected merge, after the independent CI checks pass.'],
     repair_required: ['Repair required', 'The implementation agent fixes the findings and runs verification and review again.'],
@@ -141,19 +141,18 @@ function overview(result, snapshot, state, verified) {
     lines.push('', '**Outstanding prior blockers:** ' + state.findings.filter(finding => state.unresolved.includes(finding.id))
       .map(finding => `${clean(finding.title)} (${clean(finding.path)})`).join('; ') + '.');
   }
-  if (verified) lines.push('', '**CI verification:** Required tests and exact 100% line and branch coverage passed.');
   lines.push('', `**Next action:** ${next}`, '', `Reviewed revision: \`${snapshot.head_sha.slice(0, 7)}\`. CI, merge and deployment are reported separately.`);
   return lines;
 }
 
-function render(result, snapshot, state, {compact = false, unbounded = false, verified = false} = {}) {
+function render(result, snapshot, state, {compact = false, unbounded = false} = {}) {
   const sources = new Map();
   for (const review of result.reviews) for (const evidence of review.report.evidence) {
     if (!sources.has(evidence.source)) sources.set(evidence.source, {id: `S${sources.size + 1}`, lines: new Set()});
     const source = sources.get(evidence.source);
     for (let line = evidence.start; line <= evidence.end; line++) source.lines.add(line);
   }
-  const lines = overview(result, snapshot, state, verified);
+  const lines = overview(result, snapshot, state);
   if (!compact) lines.push('', '<details><summary>Scoring and evidence</summary>', '',
     `Revision: \`${snapshot.head_sha}\` · Policy: \`${snapshot.policy_digest}\``, '',
     'Scores are policy indices. Product acceptance requires at least 80 in every dimension; a technical finding at or above 70 blocks. Uncertainty crossing a threshold requires investigation. Display rounding never decides eligibility.', '');
@@ -219,8 +218,8 @@ function render(result, snapshot, state, {compact = false, unbounded = false, ve
   return body;
 }
 
-function publication(result, snapshot, state, {verified = false} = {}) {
-  const full = render(result, snapshot, state, {unbounded: true, verified});
+function publication(result, snapshot, state) {
+  const full = render(result, snapshot, state, {unbounded: true});
   if (full.length <= 64000) return {body: full, pages: []};
   const identity = digest(full);
   const content = full.replace(MARKER, '').replace(STATE, '');
@@ -233,7 +232,7 @@ function publication(result, snapshot, state, {verified = false} = {}) {
   const pages = chunks.map((chunk, index) =>
     `<!-- clouseau-evidence:v2 ${snapshot.head_sha} ${identity} ${index + 1} -->\n` +
     `### Acceptance evidence ${index + 1}/${chunks.length}\nRevision: ${snapshot.head_sha} · Ledger: ${identity}\n\n${chunk}`);
-  const body = render(result, snapshot, state, {compact: true, verified});
+  const body = render(result, snapshot, state, {compact: true});
   return {body, pages};
 }
 

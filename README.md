@@ -142,7 +142,7 @@ review decision never claims that merge, deployment or live verification finishe
 The display regression includes the actual public Palazzo #27 review, linked to
 its immutable signed evidence. Its original comment contains 36,564 characters;
 5,388 remain visible with evidence sections closed. The new overview contains
-1,033 visible characters, over five times shorter, with the same approved
+948 visible characters, over five times shorter, with the same approved
 verdict, both reviewers' 100/100 product scores and no technical findings. This
 is an offline display fixture, never a substitute for fresh review or CI evidence.
 

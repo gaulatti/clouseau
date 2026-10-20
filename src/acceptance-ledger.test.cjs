@@ -42,7 +42,7 @@ test('the initial view has one scorecard and preserves the complete audit and ex
 test('the published Palazzo review becomes five times shorter to read with the same verdict and scores', () => {
   const fixture = require('../test/fixtures/palazzo27-report.json');
   const before = JSON.stringify(fixture);
-  const body = render(fixture.result, fixture.snapshot, {findings: [], unresolved: []}, {compact: true, verified: true});
+  const body = render(fixture.result, fixture.snapshot, {findings: [], unresolved: []}, {compact: true});
   const visible = body.replace(/<!--[\s\S]*?-->/g, '').trim();
   assert.equal(fixture.original_comment_characters, 36564);
   assert.ok(fixture.original_visible_report.length > 5000);

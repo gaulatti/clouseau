@@ -49,7 +49,7 @@ function verifyRecord(record, assessment, config) {
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(record.result.decision)) record.result.decision = 'review_incomplete';
   if (assessment.decision !== decided(record.result, record.controls)) throw new Error('Acceptance decision differs from the deterministic record');
   return {state, ...publication({...record.result, decision: assessment.decision},
-    {...record.snapshot, number: assessment.number}, state, {verified: true})};
+    {...record.snapshot, number: assessment.number}, state)};
 }
 
 function createAcceptancePolicy(config, legacy) {
