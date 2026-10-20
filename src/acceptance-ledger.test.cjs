@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const {clean, score, priorState, reconcile, render, publication, MARKER} = require('./acceptance-ledger.cjs');
 const {validateReport} = require('./acceptance.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
+const {combine} = require('./acceptance-review.cjs');
 
 function setup(includeFinding = true) {
   const {report, snapshot} = fixture();
@@ -12,6 +13,111 @@ function setup(includeFinding = true) {
   const reviews = ['examiner', 'challenger'].map(role => ({role, report: structuredClone(report), scores: validateReport(report, snapshot)}));
   return {snapshot, result: {decision: reviews[0].scores.decision, reviews}};
 }
+
+function grade(result, snapshot) {
+  for (const review of result.reviews) review.scores = validateReport(review.report, snapshot);
+  result.decision = combine(result.reviews);
+  return render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
+}
+
+test('the initial view has one scorecard and preserves the complete audit and exact result without AI work', () => {
+  const {result, snapshot} = setup(false);
+  const state = reconcile(result, snapshot);
+  const before = JSON.stringify({result, snapshot, state});
+  const body = render(result, snapshot, state);
+  const visible = body.split('<details>')[0];
+  assert.match(visible, /Clouseau — Approved/);
+  assert.equal((visible.match(/^\| Assessment /gm) || []).length, 1);
+  assert.ok(visible.length < 1600);
+  assert.match(visible, /Technical findings:\*\* None/);
+  assert.doesNotMatch(visible, /Technical Q|Fit =|\| Unit |\| Gate |\| Finding |examiner|challenger/);
+  for (const value of ['Scoring and evidence', 'confidence', 'binding', 'Literal immutable source excerpts']) {
+    assert.ok(body.includes(value));
+  }
+  assert.equal(JSON.stringify({result, snapshot, state}), before);
+  assert.deepEqual(priorState([{id: 1, user: {login: 'github-actions[bot]'}, body}],
+    snapshot.repository, snapshot.number).findings, state.findings);
+});
+
+test('one reviewer blocker stays visible once with its evidence even when the other reviewer accepts it', () => {
+  const {result, snapshot} = setup();
+  result.reviews[0].report.findings[0].factors.necessity = factor(0.25);
+  result.reviews[0].report.findings[0].factors.activation = factor(0);
+  const visible = grade(result, snapshot);
+  assert.match(visible, /Repair required/);
+  assert.match(visible, /Reviewer disagreement/);
+  assert.equal((visible.match(/\*\*Blocking:/g) || []).length, 1);
+  assert.match(visible, /\*\*Score:\*\* 100.00 \/ 100/);
+  assert.match(visible, /blob\/a{40}\/src\/upload.rs#L1-L2/);
+  assert.match(visible, /Affected area/);
+  assert.match(visible, /Required outcome/);
+  assert.doesNotMatch(visible, /Owner decision required|\*\*Optional:/);
+});
+
+test('uncertain findings, optional benefits and missing integrity evidence remain distinct', () => {
+  const {result, snapshot} = setup();
+  for (const review of result.reviews) {
+    review.report.findings[0].factors.necessity = factor(0.25, 1);
+    review.report.findings[0].factors.activation = factor(0);
+    review.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
+  }
+  let visible = grade(result, snapshot);
+  assert.match(visible, /Review incomplete/);
+  assert.match(visible, /\*\*Investigate:/);
+  assert.match(visible, /25.00–100.00/);
+  assert.match(visible, /Check requiring attention — review completeness/);
+  assert.doesNotMatch(visible, /Owner decision required/);
+  for (const verified of [false, true]) {
+    for (const review of result.reviews) {
+      review.report.gates.find(gate => gate.name === 'review_completeness').state = 'satisfied';
+      review.report.findings[0].factors.necessity = factor(0.25);
+      review.report.findings[0].opportunity = {mechanical: verified, beneficial: verified, within_scope: verified, verified};
+    }
+    visible = grade(result, snapshot);
+    assert.match(visible, /Clouseau — Approved/);
+    assert.match(visible, /\*\*Optional:/);
+    assert.match(visible, new RegExp(`Expected benefit:\\*\\* ${verified ? 'Verified' : 'Not established'}`));
+    assert.match(visible, /Optional priority/);
+  }
+});
+
+test('product rework, owner choices and test integrity vetoes have actionable separate summaries', () => {
+  const {result, snapshot} = setup(false);
+  for (const review of result.reviews) review.report.units[0].fit.outcome = factor(0);
+  let visible = grade(result, snapshot);
+  assert.match(visible, /Change requiring attention: Validate before acceptance/);
+  assert.match(visible, /65.00 \/ 100/);
+  for (const review of result.reviews) {
+    review.report.units[0].fit.outcome = factor(1);
+    review.report.decisions = [{kind: 'authority', question: 'May uploads grant a new privilege?',
+      options: ['Keep existing privileges', 'Authorize the new privilege'], evidence: ['source']}];
+  }
+  visible = grade(result, snapshot);
+  assert.match(visible, /Owner decision required/);
+  assert.match(visible, /May uploads grant a new privilege/);
+  assert.match(visible, /Keep existing privileges; Authorize the new privilege/);
+  for (const review of result.reviews) review.report.decisions = [];
+  result.decision = 'owner_decision';
+  assert.match(render(result, snapshot, reconcile(result, snapshot)), /Confirm this exact revision/);
+  for (const review of result.reviews) review.report.gates.find(gate => gate.name === 'test_integrity').state = 'violated';
+  visible = grade(result, snapshot);
+  assert.match(visible, /Test integrity repair required/);
+  assert.match(visible, /Check requiring attention — test integrity/);
+  assert.doesNotMatch(visible, /Owner decision required/);
+});
+
+test('summary shortening preserves Unicode and non-file evidence never receives a fabricated file link', () => {
+  const {result, snapshot} = setup();
+  result.reviews[0].report.summary = 'a'.repeat(499) + '😀 suffix';
+  snapshot.sources.head.kind = 'verification';
+  let visible = render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
+  assert.match(visible, /😀…/);
+  assert.match(visible, /\*\*Evidence:\*\* source/);
+  assert.doesNotMatch(visible, /\/blob\//);
+  snapshot.sources.head.ref = 'not-a-commit';
+  visible = render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
+  assert.doesNotMatch(visible, /\/blob\//);
+});
 
 test('rendered acceptance records expose every factor and preserve exact decision values separately from display rounding', () => {
   const {result, snapshot} = setup();
@@ -87,10 +193,15 @@ test('only the review bot ledger with matching repository and PR identity is acc
   }
 });
 
-test('oversized ledgers fail visibly rather than truncating findings or evidence', () => {
+test('oversized summaries remain lossless in evidence pages while the primary summary stays concise', () => {
   const {result, snapshot} = setup();
   result.reviews[0].report.summary = 'Complete evidence '.repeat(4000);
   assert.throws(() => render(result, snapshot, reconcile(result, snapshot)), /comment budget/);
+  const {body, pages} = publication(result, snapshot, reconcile(result, snapshot));
+  assert.ok(body.length < 64000);
+  assert.ok(pages.length > 0);
+  assert.ok(pages.map(page => page.slice(page.indexOf('\n\n') + 2)).join('').includes(result.reviews[0].report.summary));
+  result.reviews[0].report.findings[0].consequence = 'A large unresolved consequence '.repeat(3000);
   assert.throws(() => publication(result, snapshot, reconcile(result, snapshot)), /comment budget/);
 });
 
@@ -111,7 +222,7 @@ test('large evidence is published losslessly in bounded Unicode-safe pages witho
     const {body, pages} = publication(result, snapshot, state);
     assert.ok(pages.length >= 3); assert.ok(body.length < 64000);
     assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
-    assert.match(body, /Fit | Need | Proportionality/);
+    assert.match(body, /Fits the repository/);
     const chunks = pages.map(page => {
       assert.ok(page.length < 64000); assert.ok(!page.includes(MARKER));
       const chunk = page.slice(page.indexOf('\n\n') + 2);

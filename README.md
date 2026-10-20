@@ -125,6 +125,20 @@ All tests and exact coverage remain mandatory. Changes invalidate the decision.
 The Actions bot cannot approve its own PR; it needs an independent human review.
 First-time fork workflow authorization remains GitHub's responsibility.
 
+The PR report starts with a plain-language decision, one conservative scorecard,
+and one entry per causal technical finding. Each entry shows its consequence,
+blocking score, affected area, evidence and required outcome. Reviewer
+disagreements, product rework, missing evidence and owner decisions stay visible.
+The lowest product scores across all material changes and both reviewers are
+shown; unrelated good scores never compensate for a failing change. Optional
+findings show expected benefit and optional priority without creating a blocker.
+
+Expand **Scoring and evidence** for the unchanged formulas, every individual
+grade and explanation, both independent reviews, persistent finding history and
+immutable source excerpts. Large audits retain lossless evidence pages. Summary
+formatting uses the already validated record and makes no model requests. A
+review decision never claims that merge, deployment or live verification finished.
+
 Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
 bound artifact and downloads it into `work/` in the separate approval and repair
 jobs. Select examiner, challenger and grader explicitly in `acceptance`; see
