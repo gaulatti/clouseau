@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {FACTORS} = require('./acceptance.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
-const {requestJSON, requestJev} = require('./review-provider.cjs');
+const {requestJSON, requestJev, JEV_PACKET_LIMIT} = require('./review-provider.cjs');
 
 const JEV_FACTORS = Object.freeze(['fit.domain', 'excess.abstraction', 'excess.authority']);
 const delegated = entry => JEV_FACTORS.includes(`${entry.group}.${entry.name}`);
@@ -89,6 +89,15 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
       criteria: {...Object.fromEntries(RUBRICS[item.group][item.name].map((description, i) => [`level${i}`, description])),
         unknown: 'The provided evidence cannot establish a condition without further investigation.'},
     }]));
+    // Count includes literal contracts, policy, citations and question rubrics.
+    // Split before transport; retain every byte and grade each factor once.
+    // A single oversized factor still fails closed in the provider guard.
+    if (selected === 'typesafe' && batch.length > 1 && JSON.stringify({state, questions}).length > JEV_PACKET_LIMIT) {
+      const middle = Math.ceil(batch.length / 2);
+      await evaluate(batch.slice(0, middle), selected);
+      await evaluate(batch.slice(middle), selected);
+      return;
+    }
     let completion;
     if (selected === 'typesafe') completion = await requestJev({state, questions, fetchImpl, wait, report: log});
     else if (selected === 'deepseek') completion = await requestJSON({model, thinking: false, fetchImpl, wait, report: log, messages: [

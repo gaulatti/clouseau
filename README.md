@@ -121,9 +121,45 @@ approving reviews must be enabled. Runtime tokens do not get administration acce
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
 The owner can comment `/approve-intent FULL_HEAD_SHA`; this confirms intent only.
+An owner confirmation can carry the actual accepted requirement, rather than
+leaving investigators to infer it from a revision alone:
+
+```text
+/approve-intent FULL_HEAD_SHA
+
+Accepted purpose:
+Describe the accepted outcome and its boundaries.
+```
+
+Clouseau authenticates the configured owner and current permission, binds the
+literal requirement to that revision and revalidates it before writing. Ordinary
+PR prose remains untrusted; every mechanism still earns its own justification.
+An agent delegated to install an accepted scope may record these confirmations
+on the owner's behalf through its repairs without repeated approval prompts.
 All tests and exact coverage remain mandatory. Changes invalidate the decision.
 The Actions bot cannot approve its own PR; it needs an independent human review.
 First-time fork workflow authorization remains GitHub's responsibility.
+
+The PR report starts with a plain-language decision, one conservative scorecard,
+and one entry per causal technical finding. Each entry shows its consequence,
+blocking score, affected area, evidence and required outcome. Reviewer
+disagreements, product rework, missing evidence and owner decisions stay visible.
+The lowest product scores across all material changes and both reviewers are
+shown; unrelated good scores never compensate for a failing change. Optional
+findings show expected benefit and optional priority without creating a blocker.
+
+Expand **Scoring and evidence** for the unchanged formulas, every individual
+grade and explanation, both independent reviews, persistent finding history and
+immutable source excerpts. Large audits retain lossless evidence pages. Summary
+formatting uses the already validated record and makes no model requests. A
+review decision never claims that merge, deployment or live verification finished.
+
+The display regression includes the actual public Palazzo #27 review, linked to
+its immutable signed evidence. Its original comment contains 36,564 characters;
+5,388 remain visible with evidence sections closed. The new overview contains
+948 visible characters, over five times shorter, with the same approved
+verdict, both reviewers' 100/100 product scores and no technical findings. This
+is an offline display fixture, never a substitute for fresh review or CI evidence.
 
 Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
 bound artifact and downloads it into `work/` in the separate approval and repair

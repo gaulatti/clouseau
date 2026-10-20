@@ -1,0 +1,409 @@
+{
+  "fixture_kind": "public_report_display_projection",
+  "source": "https://github.com/gaulatti/palazzo/blob/b432ab2584616ecc28cc5c8b6f51c5b921f74595/clouseau-review.json",
+  "original_comment": "https://github.com/gaulatti/palazzo/pull/27#issuecomment-6279521350",
+  "original_comment_sha256": "82d2f2f0b845e25672790d88219a775717bbe148765d29f7f98fc907edd06e55",
+  "original_comment_characters": 36564,
+  "original_visible_report": "## Clouseau acceptance\n\nDecision: **auto_approve**\nRevision: `1bfd6cc8fd9258ce6b8b918839640af2545ed12a` · Policy: `52de8d5e447bdfa121d735eb894076692e7f3af7cc4b1e0ce8bfec0be3d77d71`\n\nScores are policy indices. Product acceptance requires at least 80 in every dimension; a technical finding at or above 70 blocks. Uncertainty crossing a threshold requires investigation. Display rounding never decides eligibility.\n\nFit = 35 outcome + 25 workflow + 20 domain + 10 boundary + 10 operating model. Need = 100 × max(binding, evidence × (.50 value + .30 unmetness + .20 timeliness)). Proportionality = 100 × (1 − greatest excess). Unit acceptance = min(Fit, Need, Proportionality).\n\nTechnical Q = 100 × confidence × min(1, max(necessity, activation × severity × (1 + .25 irreversibility + .20 reach + .20 detection + .20 propagation + .15 recurrence))). xG affects optional priority only; it never creates a blocker.\n\n### examiner\n\nThe change repairs UTF-8 response decoding within the existing Telnet client. Connection resets discard decoder state, real TCP regressions exercise every byte split, and companion documentation matches the implementation. No causal defects or unnecessary mechanisms were identified. The trusted receipt establishes the local recipe and exact coverage only; independent CI remains mandatory.\n\n| Unit | Fit | Need | Proportionality | Acceptance | Disposition |\n|---|---:|---:|---:|---:|---|\n| utf8-response-correctness | 100.00 | 100.00 | 100.00 | 100.00 | accepted |\n\n| Finding | Score | BR | xG | Optional priority | Disposition |\n|---|---:|---:|---:|---:|---|\n| No admitted technical findings | — | — | — | — | — |\n\n| Gate | State | Evidence |\n|---|---|---|\n| scope_authority | satisfied | The protected purpose explicitly accepts protocol correctness and accurate telemetry repairs. The implementation, tests and documentation serve that obligation without expanding product scope. |\n| test_integrity | satisfied | Tests instantiate the production client against real TCP sockets. Observing incoming bytes delays the suffix until the prefix reaches the production handler, making multibyte splits discriminating against the prior decoder. Assertions check exact Unicode output, both framing styles, connection reuse and replacement isolation. The trusted local receipt records successful coverage and typecheck with exact nonempty line and branch coverage. |\n| security_isolation | satisfied | The change introduces only internal decoding state and a Node built-in import. Private host defaults and socket identity checks remain intact; no credentials, privilege or public interface are introduced. |\n| compatibility_recovery | satisfied | Existing framing, command serialization, timeout and retry behavior remain intact. Explicit close, connection establishment and current-socket failure reset decoder state. Stale socket data is excluded before decoding. TCP tests verify LF/CRLF, persistence and replacement isolation. |\n| review_completeness | satisfied | All changed files and complete supplied production/test paths were assessed. The trusted receipt covers both accepted local commands and exact coverage. No unresolved source concern remains. CI audits, workflow and container checks remain separate downstream requirements; this assessment authorizes no merge. |\n\n\n### challenger\n\nThe change repairs split UTF-8 metadata decoding with connection-scoped decoder resets, meaningful TCP regressions and accurate documentation. No causal defect or unnecessary machinery identified. Local verification passed; independent CI remains required.\n\n| Unit | Fit | Need | Proportionality | Acceptance | Disposition |\n|---|---:|---:|---:|---:|---|\n| utf8-response-correctness | 100.00 | 100.00 | 100.00 | 100.00 | accepted |\n\n| Finding | Score | BR | xG | Optional priority | Disposition |\n|---|---:|---:|---:|---:|---|\n| No admitted technical findings | — | — | — | — | — |\n\n| Gate | State | Evidence |\n|---|---|---|\n| scope_authority | satisfied | Protocol correctness and accurate telemetry are protected obligations. The repair and supporting artifacts remain within the existing client. |\n| test_integrity | satisfied | Tests use the production client over real TCP, delay suffix delivery until prefix receipt, assert exact Unicode output and verify replacement isolation. Prior per-buffer decoding fails multibyte splits. Trusted execution reports passing tests and exact nonempty line/branch coverage. |\n| security_isolation | satisfied | The change introduces only built-in decoding state. Existing host defaults, socket ownership checks and private transport boundaries remain intact. |\n| compatibility_recovery | satisfied | Framing and queue/retry logic are preserved. Decoder state resets on explicit close, connection establishment and active socket failure. TCP tests verify LF/CRLF, persistence and recovery. |\n| review_completeness | satisfied | All changed sources and supplied behavioral evidence were assessed. Trusted verification completes the local coverage and typecheck recipe. Independent CI and container checks remain downstream requirements; this assessment authorizes no merge. |\n\n\n\n\n\nAuthenticated local review: [signed evidence](https://github.com/gaulatti/palazzo/blob/b432ab2584616ecc28cc5c8b6f51c5b921f74595/clouseau-review.json). CI verified the signature, source, scores and passing tests/coverage. **CI AI review calls: 0.**",
+  "snapshot": {
+    "repository": "gaulatti/palazzo",
+    "head_sha": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a",
+    "policy_digest": "52de8d5e447bdfa121d735eb894076692e7f3af7cc4b1e0ce8bfec0be3d77d71",
+    "number": 27,
+    "sources": {}
+  },
+  "result": {
+    "decision": "auto_approve",
+    "reviews": [
+      {
+        "role": "examiner",
+        "report": {
+          "summary": "The change repairs UTF-8 response decoding within the existing Telnet client. Connection resets discard decoder state, real TCP regressions exercise every byte split, and companion documentation matches the implementation. No causal defects or unnecessary mechanisms were identified. The trusted receipt establishes the local recipe and exact coverage only; independent CI remains mandatory.",
+          "evidence": [
+            {
+              "id": "proof-1-1",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:.github/clouseau.md",
+              "start": 1,
+              "end": 40
+            },
+            {
+              "id": "proof-8-121",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 121,
+              "end": 160
+            },
+            {
+              "id": "proof-9-41",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:test/liquidsoap-telnet.utf8.test.js",
+              "start": 41,
+              "end": 70
+            },
+            {
+              "id": "proof-8-41",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 41,
+              "end": 80
+            },
+            {
+              "id": "proof-9-1",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:test/liquidsoap-telnet.utf8.test.js",
+              "start": 1,
+              "end": 40
+            },
+            {
+              "id": "proof-8-1",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 1,
+              "end": 40
+            },
+            {
+              "id": "proof-8-81",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 81,
+              "end": 120
+            },
+            {
+              "id": "proof-7-121",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:src/stream/liquidsoap-telnet.client.ts",
+              "start": 121,
+              "end": 160
+            },
+            {
+              "id": "proof-4-1",
+              "source": "local-request",
+              "start": 1,
+              "end": 29
+            },
+            {
+              "id": "proof-6-41",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:docs/playback-telemetry.md",
+              "start": 41,
+              "end": 80
+            },
+            {
+              "id": "proof-3-1",
+              "source": "verification",
+              "start": 1,
+              "end": 1
+            },
+            {
+              "id": "proof-2-1",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:.clouseau-local.json",
+              "start": 1,
+              "end": 13
+            },
+            {
+              "id": "proof-1-41",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:.github/clouseau.md",
+              "start": 41,
+              "end": 64
+            }
+          ],
+          "gates": [
+            {
+              "name": "scope_authority",
+              "state": "satisfied",
+              "reason": "The protected purpose explicitly accepts protocol correctness and accurate telemetry repairs. The implementation, tests and documentation serve that obligation without expanding product scope.",
+              "evidence": [
+                "proof-1-1",
+                "proof-8-1",
+                "proof-8-121",
+                "proof-6-41",
+                "proof-9-41"
+              ]
+            },
+            {
+              "name": "test_integrity",
+              "state": "satisfied",
+              "reason": "Tests instantiate the production client against real TCP sockets. Observing incoming bytes delays the suffix until the prefix reaches the production handler, making multibyte splits discriminating against the prior decoder. Assertions check exact Unicode output, both framing styles, connection reuse and replacement isolation. The trusted local receipt records successful coverage and typecheck with exact nonempty line and branch coverage.",
+              "evidence": [
+                "proof-9-1",
+                "proof-9-41",
+                "proof-7-121",
+                "proof-3-1"
+              ]
+            },
+            {
+              "name": "security_isolation",
+              "state": "satisfied",
+              "reason": "The change introduces only internal decoding state and a Node built-in import. Private host defaults and socket identity checks remain intact; no credentials, privilege or public interface are introduced.",
+              "evidence": [
+                "proof-8-1",
+                "proof-8-41",
+                "proof-8-121"
+              ]
+            },
+            {
+              "name": "compatibility_recovery",
+              "state": "satisfied",
+              "reason": "Existing framing, command serialization, timeout and retry behavior remain intact. Explicit close, connection establishment and current-socket failure reset decoder state. Stale socket data is excluded before decoding. TCP tests verify LF/CRLF, persistence and replacement isolation.",
+              "evidence": [
+                "proof-8-41",
+                "proof-8-81",
+                "proof-8-121",
+                "proof-9-41"
+              ]
+            },
+            {
+              "name": "review_completeness",
+              "state": "satisfied",
+              "reason": "All changed files and complete supplied production/test paths were assessed. The trusted receipt covers both accepted local commands and exact coverage. No unresolved source concern remains. CI audits, workflow and container checks remain separate downstream requirements; this assessment authorizes no merge.",
+              "evidence": [
+                "proof-2-1",
+                "proof-3-1",
+                "proof-1-41",
+                "proof-6-41",
+                "proof-8-121",
+                "proof-9-41"
+              ]
+            }
+          ],
+          "findings": [],
+          "decisions": [],
+          "resolutions": [],
+          "units": [
+            {
+              "id": "utf8-response-correctness",
+              "title": "Preserve Unicode metadata across TCP chunks and isolate connection decoding",
+              "paths": [
+                "docs/playback-telemetry.md",
+                "src/stream/liquidsoap-telnet.client.ts",
+                "test/liquidsoap-telnet.utf8.test.js"
+              ],
+              "obligation": "Preserve protocol correctness and accurate playback metadata through the existing private Liquidsoap transport, including connection replacement.",
+              "alternative": "Retain the existing parser and use the built-in incremental decoder with resets at connection boundaries, as implemented."
+            }
+          ]
+        },
+        "scores": {
+          "rules": {
+            "version": 2,
+            "product_threshold": 80,
+            "defect_threshold": 70,
+            "xg_bonus": 20
+          },
+          "units": [
+            {
+              "id": "utf8-response-correctness",
+              "min": {
+                "fit": 100,
+                "need": 100,
+                "proportionality": 100,
+                "acceptance": 100
+              },
+              "max": {
+                "fit": 100,
+                "need": 100,
+                "proportionality": 100,
+                "acceptance": 100
+              },
+              "disposition": "accepted"
+            }
+          ],
+          "findings": [],
+          "decision": "auto_approve"
+        }
+      },
+      {
+        "role": "challenger",
+        "report": {
+          "summary": "The change repairs split UTF-8 metadata decoding with connection-scoped decoder resets, meaningful TCP regressions and accurate documentation. No causal defect or unnecessary machinery identified. Local verification passed; independent CI remains required.",
+          "evidence": [
+            {
+              "id": "proof-1-1",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:.github/clouseau.md",
+              "start": 1,
+              "end": 40
+            },
+            {
+              "id": "proof-8-121",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 121,
+              "end": 160
+            },
+            {
+              "id": "proof-9-41",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:test/liquidsoap-telnet.utf8.test.js",
+              "start": 41,
+              "end": 70
+            },
+            {
+              "id": "proof-8-41",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 41,
+              "end": 80
+            },
+            {
+              "id": "proof-9-1",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:test/liquidsoap-telnet.utf8.test.js",
+              "start": 1,
+              "end": 40
+            },
+            {
+              "id": "proof-8-1",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 1,
+              "end": 40
+            },
+            {
+              "id": "proof-8-81",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:src/stream/liquidsoap-telnet.client.ts",
+              "start": 81,
+              "end": 120
+            },
+            {
+              "id": "proof-7-121",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:src/stream/liquidsoap-telnet.client.ts",
+              "start": 121,
+              "end": 160
+            },
+            {
+              "id": "proof-0-41",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:README.md",
+              "start": 41,
+              "end": 80
+            },
+            {
+              "id": "proof-4-1",
+              "source": "local-request",
+              "start": 1,
+              "end": 29
+            },
+            {
+              "id": "proof-6-41",
+              "source": "1bfd6cc8fd9258ce6b8b918839640af2545ed12a:docs/playback-telemetry.md",
+              "start": 41,
+              "end": 80
+            },
+            {
+              "id": "proof-3-1",
+              "source": "verification",
+              "start": 1,
+              "end": 1
+            },
+            {
+              "id": "proof-2-1",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:.clouseau-local.json",
+              "start": 1,
+              "end": 13
+            },
+            {
+              "id": "proof-1-41",
+              "source": "2c49ff36230323cfe2808627cb240ae993693ae3:.github/clouseau.md",
+              "start": 41,
+              "end": 64
+            }
+          ],
+          "gates": [
+            {
+              "name": "scope_authority",
+              "state": "satisfied",
+              "reason": "Protocol correctness and accurate telemetry are protected obligations. The repair and supporting artifacts remain within the existing client.",
+              "evidence": [
+                "proof-1-1",
+                "proof-8-121",
+                "proof-6-41",
+                "proof-9-41"
+              ]
+            },
+            {
+              "name": "test_integrity",
+              "state": "satisfied",
+              "reason": "Tests use the production client over real TCP, delay suffix delivery until prefix receipt, assert exact Unicode output and verify replacement isolation. Prior per-buffer decoding fails multibyte splits. Trusted execution reports passing tests and exact nonempty line/branch coverage.",
+              "evidence": [
+                "proof-9-1",
+                "proof-9-41",
+                "proof-7-121",
+                "proof-3-1"
+              ]
+            },
+            {
+              "name": "security_isolation",
+              "state": "satisfied",
+              "reason": "The change introduces only built-in decoding state. Existing host defaults, socket ownership checks and private transport boundaries remain intact.",
+              "evidence": [
+                "proof-8-1",
+                "proof-8-41",
+                "proof-8-121"
+              ]
+            },
+            {
+              "name": "compatibility_recovery",
+              "state": "satisfied",
+              "reason": "Framing and queue/retry logic are preserved. Decoder state resets on explicit close, connection establishment and active socket failure. TCP tests verify LF/CRLF, persistence and recovery.",
+              "evidence": [
+                "proof-8-41",
+                "proof-8-81",
+                "proof-8-121",
+                "proof-9-41",
+                "proof-3-1"
+              ]
+            },
+            {
+              "name": "review_completeness",
+              "state": "satisfied",
+              "reason": "All changed sources and supplied behavioral evidence were assessed. Trusted verification completes the local coverage and typecheck recipe. Independent CI and container checks remain downstream requirements; this assessment authorizes no merge.",
+              "evidence": [
+                "proof-2-1",
+                "proof-3-1",
+                "proof-6-41",
+                "proof-8-1",
+                "proof-8-41",
+                "proof-8-81",
+                "proof-8-121",
+                "proof-9-1",
+                "proof-9-41",
+                "proof-1-41"
+              ]
+            }
+          ],
+          "findings": [],
+          "decisions": [],
+          "resolutions": [],
+          "units": [
+            {
+              "id": "utf8-response-correctness",
+              "title": "Preserve UTF-8 metadata across TCP chunks and isolate replacement connections",
+              "paths": [
+                "docs/playback-telemetry.md",
+                "src/stream/liquidsoap-telnet.client.ts",
+                "test/liquidsoap-telnet.utf8.test.js"
+              ],
+              "obligation": "Preserve protocol correctness and accurate telemetry through the existing private Liquidsoap command client.",
+              "alternative": "Retain the direct built-in decoder and lifecycle resets; no narrower remedy preserving incremental decoding and connection isolation is evident."
+            }
+          ]
+        },
+        "scores": {
+          "rules": {
+            "version": 2,
+            "product_threshold": 80,
+            "defect_threshold": 70,
+            "xg_bonus": 20
+          },
+          "units": [
+            {
+              "id": "utf8-response-correctness",
+              "min": {
+                "fit": 100,
+                "need": 100,
+                "proportionality": 100,
+                "acceptance": 100
+              },
+              "max": {
+                "fit": 100,
+                "need": 100,
+                "proportionality": 100,
+                "acceptance": 100
+              },
+              "disposition": "accepted"
+            }
+          ],
+          "findings": [],
+          "decision": "auto_approve"
+        }
+      }
+    ]
+  },
+  "purpose": "Display-only projection of an actual public review; full signed evidence stays at source. This fixture grants no approval or receipt authority."
+}

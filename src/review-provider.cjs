@@ -3,6 +3,7 @@
 const {isDeepStrictEqual} = require('node:util');
 const MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4-pro']);
 const JEV_MODEL = 'jev-1.13.0';
+const JEV_PACKET_LIMIT = 100000;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function rootEnd(raw) {
@@ -101,7 +102,7 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
 async function requestJev({state, questions, fetchImpl = fetch, wait = delay, report = () => {}}) {
   if (!process.env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY is not configured');
   const ids = Object.keys(questions);
-  if (!ids.length || JSON.stringify({state, questions}).length > 100000) throw new Error('Jev requires a bounded atomic-question packet');
+  if (!ids.length || JSON.stringify({state, questions}).length > JEV_PACKET_LIMIT) throw new Error('Jev requires a bounded atomic-question packet');
   const usage = [];
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
@@ -142,4 +143,4 @@ async function requestJev({state, questions, fetchImpl = fetch, wait = delay, re
   }
 }
 
-module.exports = {MODELS, JEV_MODEL, decodeJSON, requestJSON, requestJev};
+module.exports = {MODELS, JEV_MODEL, JEV_PACKET_LIMIT, decodeJSON, requestJSON, requestJev};

@@ -3,6 +3,13 @@
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
 
+function intentText(body, sha) {
+  if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
+  const match = new RegExp(`^/approve-intent ${sha}(?:\\n\\nAccepted purpose:\\n([\\s\\S]*\\S))?$`).exec(body.trim());
+  if (!match) return null;
+  return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
+}
+
 function createPolicy(input) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
@@ -117,7 +124,7 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   const pull_number = numberFor(context);
   const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
   const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-  if (context.eventName === 'issue_comment' && context.payload.comment.body.trim() !== `/approve-intent ${pr.head.sha}`) {
+  if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
     throw new Error('Stale or malformed intent confirmation');
   }
   const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
@@ -145,13 +152,12 @@ async function purposeConfirmation(github, repo, pr, comments) {
   const comment = [...comments].reverse().find(item =>
     item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER &&
     Number.isSafeInteger(item.id) && item.id > 0 &&
-    typeof item.body === 'string' &&
-    item.body.trim() === `/approve-intent ${pr.head.sha}`);
+    intentText(item.body, pr.head.sha));
   if (!comment) return null;
   const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
   if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
   return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
-    actor: comment.user.login, permission: data.permission, comment_id: comment.id, body: comment.body.trim()};
+    actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intentText(comment.body, pr.head.sha)};
 }
 
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
@@ -171,7 +177,7 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
   if (reviewOnly) return false;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number, per_page: 100});
   for (const comment of comments) {
-    if (comment.body.trim() === `/approve-intent ${pr.head.sha}` && await canConfirm(comment.user)) return true;
+    if (intentText(comment.body, pr.head.sha) && await canConfirm(comment.user)) return true;
   }
   return false;
 }
@@ -376,4 +382,4 @@ return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReaso
 
 }
 
-module.exports = {createPolicy};
+module.exports = {createPolicy, intentText};

@@ -2,7 +2,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {createPolicy} = require('./policy.cjs');
+const {createPolicy, intentText} = require('./policy.cjs');
 const {assess, gate, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun,
   assertProtection, needsDeployment, VERIFY_STEPS} = createPolicy(require('../test/fixtures/config.json'));
 
@@ -91,6 +91,29 @@ test('purpose evidence requires the configured human, exact head and current rep
   assert.equal(await purposeConfirmation(f.github, repo, small, [comment]), null);
   f.github.rest.repos.getCollaboratorPermissionLevel = async () => {throw new Error('permission lookup failed');};
   await assert.rejects(purposeConfirmation(f.github, repo, small, [comment]), /permission lookup failed/);
+  assert.equal(f.writes.length, 0);
+});
+
+test('an authenticated purpose can carry the accepted requirement without trusting contributor descriptions', async () => {
+  const purpose = 'Make the review decision and causal findings readable before the complete expandable audit.';
+  const body = `/approve-intent ${SHA}\n\nAccepted purpose:\n${purpose}`;
+  assert.deepEqual(intentText(` ${body}\n`, SHA), {body, accepted_purpose: purpose});
+  for (const value of [null, '', `/approve-intent ${SHA}\nwaive checks`,
+    `/approve-intent ${SHA}\n\nAccepted purpose:\n  `, `/approve-intent ${BASE}\n\nAccepted purpose:\n${purpose}`]) {
+    assert.equal(intentText(value, SHA), null);
+  }
+  assert.equal(intentText(body, 'invalid'), null);
+  const f = fixture();
+  const comment = {id: 52, user: {login: 'gaulatti', type: 'User'}, body};
+  const proof = await purposeConfirmation(f.github, repo, small, [comment]);
+  assert.equal(proof.accepted_purpose, purpose);
+  assert.equal(proof.body, body);
+  assert.equal(await purposeConfirmation(f.github, repo, small, [{...comment, user: bot}]), null);
+  f.state.comments = [comment];
+  assert.equal(await maintainerConfirmed(f.github, repo, small), true);
+  f.state.permission = 'read';
+  assert.equal(await purposeConfirmation(f.github, repo, small, [comment]), null);
+  assert.equal(await maintainerConfirmed(f.github, repo, small), false);
   assert.equal(f.writes.length, 0);
 });
 
@@ -692,6 +715,11 @@ test('intent comment reruns only the trusted metadata workflow for the exact rev
   const manual = reassessmentFixture();
   await policy.requestReassessment({github: manual.github, context: {...context, actor: human.login, eventName: 'workflow_dispatch'}, core: {info() {}}, wait: async () => {}});
   assert.ok(manual.writes.some(w => w.name === 'rerun'));
+  const accepted = reassessmentFixture();
+  const acceptedContext = commentTrigger();
+  acceptedContext.payload.comment.body += '\n\nAccepted purpose:\nRestore the established naming behavior.';
+  await policy.requestReassessment({github: accepted.github, context: acceptedContext, core: {info() {}}, wait: async () => {}});
+  assert.equal(accepted.writes.filter(w => w.name === 'rerun').length, 1);
 });
 
 test('reassessment rejects unauthorized, stale, unrelated and missing metadata runs', async () => {
