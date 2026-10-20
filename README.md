@@ -121,6 +121,21 @@ approving reviews must be enabled. Runtime tokens do not get administration acce
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
 The owner can comment `/approve-intent FULL_HEAD_SHA`; this confirms intent only.
+An owner confirmation can carry the actual accepted requirement, rather than
+leaving investigators to infer it from a revision alone:
+
+```text
+/approve-intent FULL_HEAD_SHA
+
+Accepted purpose:
+Describe the accepted outcome and its boundaries.
+```
+
+Clouseau authenticates the configured owner and current permission, binds the
+literal requirement to that revision and revalidates it before writing. Ordinary
+PR prose remains untrusted; every mechanism still earns its own justification.
+An agent delegated to install an accepted scope may record these confirmations
+on the owner's behalf through its repairs without repeated approval prompts.
 All tests and exact coverage remain mandatory. Changes invalidate the decision.
 The Actions bot cannot approve its own PR; it needs an independent human review.
 First-time fork workflow authorization remains GitHub's responsibility.

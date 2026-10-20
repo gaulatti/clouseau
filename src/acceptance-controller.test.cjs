@@ -187,7 +187,9 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
 }));
 
 test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
-  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`};
+  const purpose = 'Preserve durable upload acceptance with meaningful production-path regression tests.';
+  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'},
+    body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\n${purpose}`};
   f.state.comments.push(comment);
   let investigations = 0; let graders = 0;
   const assessment = await f.assess({fetchImpl: async (url, options) => {
@@ -197,11 +199,14 @@ test('authenticated accepted purpose reaches both independent investigations and
       const source = Object.values(packet.sources).find(item => item.path === 'pulls/3/intent/51');
       assert.equal(source.authority, 'trusted'); assert.equal(source.kind, 'contract');
       assert.match(source.numbered_lines, /approve-intent/);
+      assert.equal(packet.intent_confirmation.accepted_purpose, purpose);
+      assert.ok(source.numbered_lines.includes(purpose));
       assert.ok(packet.proofs.some(item => packet.sources[item.source].path === source.path));
     } else {
       graders++;
       const contract = packet.state.accepted_contract.find(item => item.path === 'pulls/3/intent/51');
       assert.equal(JSON.parse(contract.content).body, comment.body);
+      assert.equal(JSON.parse(contract.content).accepted_purpose, purpose);
     }
     return f.fetchImpl(url, options);
   }});
@@ -216,11 +221,13 @@ test('authenticated accepted purpose reaches both independent investigations and
 }));
 
 test('deleted, altered or revoked purpose evidence holds approval before any publication write', async () => {
-  for (const change of ['delete', 'edit', 'revoke']) await fixture(async f => {
-    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+  for (const change of ['delete', 'edit', 'revoke', 'purpose']) await fixture(async f => {
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'},
+      body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve durable upload acceptance.`});
     const assessment = await f.assess();
     if (change === 'delete') f.state.comments = [];
     if (change === 'edit') f.state.comments[0].body = 'Confirmation withdrawn.';
+    if (change === 'purpose') f.state.comments[0].body += '\nIntroduce an unrelated capability.';
     if (change === 'revoke') f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: 'read'}});
     await assert.rejects(f.gate(assessment), /purpose confirmation changed/);
     assert.equal(f.state.writes.length, 0);
@@ -229,7 +236,8 @@ test('deleted, altered or revoked purpose evidence holds approval before any pub
 
 test('a citable owner purpose receipt cannot waive low product scores or an integrity veto', async () => {
   for (const failure of ['need', 'integrity']) await fixture(async f => {
-    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'},
+      body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve durable upload acceptance.`});
     if (failure === 'integrity') f.state.alter = report => {report.gates.find(item => item.name === 'test_integrity').state = 'violated';};
     const assessment = await f.assess({fetchImpl: async (url, options) => {
       const body = JSON.parse(options.body);

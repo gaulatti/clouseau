@@ -59,6 +59,17 @@ The PR description, changed source and issue text retain their existing authorit
 Intent is never evidence of implementation correctness, test integrity or the
 absence of a technical defect, and cannot waive any review or execution gate.
 
+The confirmation may include an `Accepted purpose:` block after its revision
+line. Its literal owner-authenticated requirement is trusted contract evidence;
+the PR description and contributor-authored requirements gain no authority from
+it. Assess whether each outcome and supporting mechanism actually serves that
+requirement. The presence of a confirmation grants no automatic grade. A changed
+requirement, revoked permission or withdrawn confirmation invalidates reuse.
+When the owner has delegated an installation within a bounded accepted scope,
+the implementation agent may record the changing revision on the owner's behalf
+under that authorization. Do not request a new human decision for each repair
+inside the same scope; ask only for a new purpose, authority or outcome tradeoff.
+
 ## Causal concerns
 
 Admit a finding only with changed/newly enabled cause, feasible trigger, affected
