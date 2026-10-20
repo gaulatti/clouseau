@@ -60,6 +60,14 @@ semantic grading sessions supply descriptive factor levels; the same Clouseau
 code owns citations, formulas, thresholds and final decisions. No investigator
 gets the implementer's conversation or the other investigator's conclusions.
 
+The controller identifies this as a pre-PR assessment in both investigation and
+grading. It requires the accepted local recipe and meaningful evidence for the
+changed behavior. CI audit, workflow and container execution remains pending
+until the independent protected workflow runs; a local receipt does not claim
+those results or authorize GitHub approval. Missing local evidence, deceptive
+tests and unresolved code concerns still prevent a passing receipt. CI must
+pass every mandatory technical gate before consuming the review for approval.
+
 A source-line reference can be normalized only to an existing immutable catalog
 block containing that line. The controller preserves the observation and reads
 the literal source bytes; this correction needs no additional model request.

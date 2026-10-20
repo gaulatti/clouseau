@@ -108,6 +108,15 @@ it never causes a model retry or changes a judgment.
 
 ## Required gates
 
+The controller identifies the review stage. A pre-PR local assessment evaluates
+the change, its behavioral evidence and every check in the accepted local recipe.
+It does not authorize GitHub approval or merge. Independent CI tests, coverage,
+audits, workflow and container checks remain mandatory downstream conditions;
+their pending execution alone does not make the local assessment incomplete.
+Never claim those checks ran locally. Missing local execution or behavioral
+evidence, deceptive tests and unresolved source concerns still hold the local
+review. CI must execute its own required checks before reusing a local receipt.
+
 All tests and exact nonempty 100% line/branch coverage are mandatory. Check test
 integrity: actual production paths and meaningful assertions/failure cases,
 including whether the claimed regression would distinguish the prior behavior.
