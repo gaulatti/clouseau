@@ -236,4 +236,27 @@ test('a newly generated verification receipt cannot reopen a closed source alleg
   assert.throws(() => validateReport(f.report, f.snapshot), /repository evidence/);
   f.report.reopenings[0].evidence.push('source');
   assert.equal(validateReport(f.report, f.snapshot).decision, 'repair_required');
+  const mixed = reconcile(result(f), f.snapshot, previous);
+  assert.deepEqual(mixed.unresolved, [previous[0].id], 'an unchanged source plus a new receipt is not fresh repository evidence');
+  assert.equal(mixed.findings[0].state, 'dismissed');
+});
+
+test('an optional repetition cannot erase a closure and bypass the next revision reopening guard', () => {
+  for (const disposition of ['corrected', 'dismissed']) {
+    const f = complete(); f.report.findings = [finding()];
+    const original = reconcile(result(f), f.snapshot).findings;
+    f.snapshot.prior_findings = original; f.report.findings = [];
+    f.report.resolutions = [{id: original[0].id, state: disposition, reason: 'Source proves the concern is closed.', evidence: ['source']}];
+    const closed = reconcile(result(f), f.snapshot, original).findings;
+    f.snapshot.prior_findings = closed; f.report.resolutions = [];
+    f.report.findings = [{...finding(), id: original[0].id}];
+    for (const factor of Object.values(f.report.findings[0].factors)) Object.assign(factor, {min: 0, max: 0});
+    const optional = reconcile(result(f), f.snapshot, closed).findings;
+    assert.deepEqual(optional, closed, 'optional observations retain the accepted closure and evidence');
+    f.snapshot.prior_findings = optional;
+    f.report.findings = [{...finding(), id: original[0].id}];
+    const repeated = reconcile(result(f), f.snapshot, optional);
+    assert.equal(repeated.findings[0].state, disposition);
+    assert.deepEqual(repeated.unresolved, [original[0].id]);
+  }
 });

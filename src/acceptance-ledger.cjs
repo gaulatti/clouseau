@@ -75,18 +75,22 @@ function reconcile(result, snapshot, previous = []) {
   const unresolved = [];
   for (const old of previous) {
     const active = records.get(old.id);
-    if (active?.blocking) {
-      if (snapshot.review_manifest_version && ['corrected', 'dismissed'].includes(old.state)) {
-        const entries = roots.get(old.id);
-        const priorBasis = new Set(old.closed_basis || old.basis || []);
-        const fresh = priorBasis.size && entries.every(({report}) => {
-          const reopening = report.reopenings.find(item => item.id === old.id);
-          return reopening && basis(report, reopening.evidence).some(value => !priorBasis.has(value));
+    if (snapshot.review_manifest_version && ['corrected', 'dismissed'].includes(old.state)) {
+      if (!active?.blocking) { records.set(old.id, old); roots.delete(old.id); continue; }
+      const entries = roots.get(old.id);
+      const priorBasis = new Set(old.closed_basis || old.basis || []);
+      const fresh = priorBasis.size && entries.every(({report}) => {
+        const reopening = report.reopenings.find(item => item.id === old.id);
+        const sourceIds = reopening?.evidence.filter(id => {
+          const source = snapshot.sources[report.evidence.find(item => item.id === id).source];
+          return source.ref === snapshot.head_sha && ['source', 'contract'].includes(source.kind);
         });
-        if (!fresh) { records.set(old.id, old); unresolved.push(old.id); }
-      }
+        return reopening && basis(report, sourceIds).some(value => !priorBasis.has(value));
+      });
+      if (!fresh) { records.set(old.id, old); roots.delete(old.id); unresolved.push(old.id); }
       continue;
     }
+    if (active?.blocking) continue;
     const resolutions = result.reviews.map(review => review.report.resolutions.find(item => item.id === old.id));
     if (old.blocking && !resolutions.every(Boolean)) {
       records.set(old.id, {...old, state: 'outstanding'}); unresolved.push(old.id);
