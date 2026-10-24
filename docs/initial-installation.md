@@ -27,8 +27,11 @@ not CI model keys or a new credential service.
    into source, prompts, logs or artifacts.
 3. Prepare the supported local recipe, version-two CI policy, purpose,
    ownership and thin workflows. The proposed CI policy must enroll that one
-   public identity for its native GitHub actor, name the reported engine digest,
-   and select that actor as manual reviewer. Commit and push the complete
+   public identity for its native GitHub actor, authorize the fixed public
+   `central_source` from the [released upgrade protocol](automatic-ci-upgrades.md)
+   or name the reported legacy engine digest, and select that actor as manual
+   reviewer. The initial manifest and receipt always bind one exact engine SHA
+   and digest, including in central-source mode. Commit and push the complete
    candidate. Store the literal accepted requirement outside the checkout.
 4. Prepare a new manifest outside the checkout:
 

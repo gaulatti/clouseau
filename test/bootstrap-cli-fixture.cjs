@@ -6,7 +6,7 @@ const {git} = require('../src/local-git.cjs');
 const {digest} = require('../src/acceptance.cjs');
 const bootstrap = require('../src/installation-bootstrap.cjs');
 
-function harness(negative = false) {
+function harness(negative = false, {engineSource = false} = {}) {
   let calls = 0;
   const ask = async task => {
     calls++;
@@ -15,7 +15,9 @@ function harness(negative = false) {
       const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
       const report = packet.template;
       report.gates.forEach(gate => {gate.state = negative && gate.name === 'test_integrity' ? 'violated' : 'satisfied';});
-      value = {kind: 'report', report, request_sources: []};
+      value = engineSource && !Object.values(packet.evidence.sources).some(source => source.path === '.clouseau-ci/src/config.cjs') ?
+        {kind: 'source_request', report: null, request_sources: ['.clouseau-ci/src/config.cjs']} :
+        {kind: 'report', report, request_sources: []};
     } else value = {answers: Object.fromEntries(Object.keys(task.schema.properties.answers.properties)
       .map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))};
     return {value, provenance: {harness: 'codex', role: task.role, phase: task.phase, session: `fictional-cli-bootstrap-${calls}`,
@@ -25,7 +27,7 @@ function harness(negative = false) {
   return ask;
 }
 
-async function fixture(run) {
+async function fixture(run, options = {}) {
   return core(async f => {
     f.manifestFile = path.join(f.temporary, 'manifest.json');
     f.requestFile = path.join(f.temporary, 'requirement.txt');
@@ -33,7 +35,7 @@ async function fixture(run) {
     fs.writeFileSync(f.requestFile, f.request);
     f.reviewArgs = {directory: f.directory, manifest: f.manifestFile, 'grant-comment': String(f.grant.comment_id)};
     f.reviewRuntime = {api: f.api, installed: () => f.reviewer, state: f.state, clock: () => f.now,
-      ask: harness(), verify: () => ({fixture_only: true, exact_coverage: {lines: [1, 1], branches: [2, 2]}})};
+      ask: harness(false, options), verify: () => ({fixture_only: true, exact_coverage: {lines: [1, 1], branches: [2, 2]}})};
     f.refresh = async () => {
       f.head = git(f.directory, ['rev-parse', 'HEAD']).trim();
       f.manifest = bootstrap.prepareManifest({directory: f.directory, base: f.base, request: f.request,
@@ -93,7 +95,7 @@ async function fixture(run) {
         runtime: {api, installed: () => f.reviewer, clock: () => f.now, maxPolls: 1, pause: async () => {}}};
     };
     return run(f);
-  });
+  }, options);
 }
 
 module.exports = {fixture, harness};

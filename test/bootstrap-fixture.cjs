@@ -13,7 +13,7 @@ const {issueReceipt} = require('../src/local-receipt.cjs');
 
 const NOW = 10_000_000;
 
-async function fixture(run, {nativePython = false} = {}) {
+async function fixture(run, {nativePython = false, centralSource = false, engineSource = false} = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-bootstrap-fixture-'));
   const directory = path.join(temporary, 'repository');
   const state = path.join(temporary, 'runner');
@@ -47,6 +47,10 @@ async function fixture(run, {nativePython = false} = {}) {
       repository_policy: '.github/clouseau.md', readme: 'README.md', sensitive_paths: [], deployment: null,
       acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
       local_review: {mode: 'optional', reviewer_digest: reviewer.digest, max_age_seconds: 3600, keys: [enrolled.public_identity]}};
+    if (centralSource) {
+      delete config.local_review.reviewer_digest;
+      config.local_review.central_source = {repository: 'gaulatti/clouseau', ref: 'refs/heads/main'};
+    }
     fs.mkdirSync(path.join(directory, '.github/workflows'), {recursive: true});
     fs.mkdirSync(path.join(directory, 'docs'));
     for (const [name, text] of Object.entries({
@@ -89,9 +93,9 @@ async function fixture(run, {nativePython = false} = {}) {
     const grant = await verifyGrant({api, manifest, commentId: live.comment.id, now: NOW});
     const f = {temporary, directory, state, enrolled, reviewer, local, config, base, head, request, manifest, live, calls, api, grant, now: NOW};
     f.options = () => ({api, grant: f.grant, author: 'fixture-owner', reviewerSha: reviewer.sha, reviewerDigest: reviewer.digest, now: NOW});
-    f.record = async (mutateSnapshot = () => {}) => {
+    f.record = async (mutateSnapshot = () => {}, mutateRequestedSources = () => {}) => {
       const technical = {fixture_only: true, exact_coverage: {lines: [1, 1], branches: [2, 2]}};
-      const collected = collectLocal({directory, base, request, technical, ciConfig: config, installation: f.grant});
+      const collected = collectLocal({directory, base, request, technical, ciConfig: config, reviewerSha: reviewer.sha, installation: f.grant});
       mutateSnapshot(collected.snapshot);
       refresh(collected.snapshot);
       let count = 0;
@@ -100,14 +104,18 @@ async function fixture(run, {nativePython = false} = {}) {
         if (task.phase === 'investigation') {
           const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
           const report = packet.template; report.gates.forEach(gate => {gate.state = 'satisfied';});
-          value = {kind: 'report', report, request_sources: []};
+          value = engineSource && !Object.values(packet.evidence.sources).some(source => source.path === '.clouseau-ci/src/config.cjs') ?
+            {kind: 'source_request', report: null, request_sources: ['.clouseau-ci/src/config.cjs']} :
+            {kind: 'report', report, request_sources: []};
         } else value = {answers: Object.fromEntries(Object.keys(task.schema.properties.answers.properties)
           .map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))};
         return {value, provenance: {harness: 'codex', role: task.role, phase: task.phase,
           session: `fictional-bootstrap-session-${++count}`, request_digest: digest(task), response_digest: digest(value),
           transport_digest: digest({fixture_only: value})}};
       };
-      const result = await localReview({...collected, ask});
+      const result = await localReview({...collected, ask, addSources: async paths => {
+        await collected.addSources(paths); mutateRequestedSources(collected.snapshot); refresh(collected.snapshot);
+      }});
       return {version: 2, snapshot: collected.snapshot, result, controls: true, installation: f.grant,
         technical, previous: {comment: null, findings: []}};
     };

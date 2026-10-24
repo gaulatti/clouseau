@@ -8,6 +8,7 @@ const {git, githubRepository, readLocalConfig, assertUnchanged} = require('./loc
 const {safePath} = require('./acceptance-sources.cjs');
 const {validateConfig} = require('./config.cjs');
 const {validateTrust, verifySignedRecord} = require('./local-receipt.cjs');
+const {centralSource} = require('./central-version.cjs');
 
 const HEADER = '/authorize-clouseau-installation v1\n';
 const INSTALLATION_MARKER = /<!-- clouseau-installation-review:v1 ([a-f0-9]{40}) -->/g;
@@ -114,7 +115,8 @@ function candidateConfiguration(directory, head) {
 function bindConfiguration(local, config, identity, reviewerDigest) {
   requireInstallation(config.version === 2 && config.local_review && local.base_branch === config.base_branch &&
     config.local_review.keys.length === 1 && digest(config.local_review.keys[0]) === digest(identity) &&
-    config.local_review.reviewer_digest === reviewerDigest && config.manual_reviewer === identity.github_actor,
+    (config.local_review.reviewer_digest === reviewerDigest || centralSource(config.local_review.central_source)) &&
+    config.manual_reviewer === identity.github_actor,
   'the proposed local/CI policy, one public enrollment, runner actor and frozen engine must agree');
 }
 

@@ -22,6 +22,32 @@ test('first-install manifest freezes real committed controls without pretending 
   bootstrap.assertManifestLocal(f.directory, f.manifest, f.reviewer, f.now);
 }));
 
+test('central-source installation configuration freezes one released engine without creating ordinary approval authority', () => fixture(async f => {
+  assert.deepEqual(f.config.local_review.central_source, {repository: 'gaulatti/clouseau', ref: 'refs/heads/main'});
+  assert.equal(f.config.local_review.reviewer_digest, undefined);
+  assert.equal(f.manifest.reviewer_sha, f.reviewer.sha);
+  assert.equal(f.manifest.reviewer_digest, f.reviewer.digest);
+  assert.equal(f.manifest.config_digest, digest(f.config));
+  bootstrap.assertManifestLocal(f.directory, f.manifest, f.reviewer, f.now);
+  for (const central_source of [{repository: 'attacker/clouseau', ref: 'refs/heads/main'},
+    {repository: 'gaulatti/clouseau', ref: 'refs/heads/feature'}, {...f.config.local_review.central_source, extra: true}]) {
+    assert.throws(() => bootstrap.bindConfiguration(f.local,
+      {...f.config, local_review: {...f.config.local_review, central_source}}, f.manifest.identity, f.reviewer.digest), /frozen engine must agree/);
+  }
+  const record = await f.record(); const bundle = f.sign(record);
+  assert.equal((await bootstrap.verifyInstallationReceipt(bundle, f.options())).decision, 'auto_approve');
+  for (const changed of [{reviewerSha: 'f'.repeat(40)}, {reviewerDigest: '0'.repeat(64)}]) {
+    await assert.rejects(bootstrap.verifyInstallationReceipt(bundle, {...f.options(), ...changed}), /frozen shared engine/);
+  }
+  const engine = {...f.config.local_review.central_source, sha: f.reviewer.sha, digest: f.reviewer.digest};
+  const options = {trust: f.config.local_review, engine, repository: f.manifest.repository, author: 'fixture-owner',
+    headSha: f.head, baseSha: f.base, reviewerSha: f.reviewer.sha, reviewerDigest: f.reviewer.digest,
+    configDigest: f.manifest.config_digest, policyDigest: f.manifest.policy_digest, now: f.now};
+  assert.throws(() => verifyReceipt(bundle, options), /owner authority/);
+  assert.throws(() => verifyReceipt(bundle, {...options, engine: {...engine, sha: 'f'.repeat(40)}}), /engine mismatch/);
+  assert.throws(() => verifyReceipt(bundle, {...options, engine: {...engine, digest: '0'.repeat(64)}}), /engine mismatch/);
+}, {centralSource: true}));
+
 test('existing identity export selects explicitly and never exports private material', () => fixture(f => {
   const exported = bootstrap.exportIdentity({state: f.state});
   assert.equal(exported.identity_file, f.enrolled.identity_file);

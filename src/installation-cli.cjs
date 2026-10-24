@@ -11,6 +11,7 @@ const {askHarness} = require('./local-harness.cjs');
 const {reconcile, priorState} = require('./acceptance-ledger.cjs');
 const {issueReceipt, loadReceipt, verifySources} = require('./local-receipt.cjs');
 const {validateConfig} = require('./config.cjs');
+const {SOURCE} = require('./central-version.cjs');
 const normal = require('./local-cli.cjs');
 const bootstrap = require('./installation-bootstrap.cjs');
 const {cliApi, githubFromApi} = require('./installation-github.cjs');
@@ -96,7 +97,8 @@ async function runReview(args, {api, installed, state, clock, ask = askHarness, 
   requireInput(output !== directory && !output.startsWith(directory + path.sep), 'store installation evidence outside the checkout');
   requireInput(!fs.existsSync(output), 'preserve the existing report and choose a new output path');
   const technical = verify({directory, config: local});
-  const collected = collectLocal({directory, base: manifest.base_sha, request: manifest.request, technical, ciConfig: config, installation: grant});
+  const collected = collectLocal({directory, base: manifest.base_sha, request: manifest.request, technical, ciConfig: config,
+    reviewerSha: reviewer.sha, installation: grant});
   collected.snapshot.prior_findings = prior;
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
@@ -203,11 +205,12 @@ async function check(args, {api, installed, clock, maxPolls = 240, pause = wait}
   requireInput(!(repository.private && !base.protected) || (config.merge_mode === 'manual' && repository.allow_auto_merge === false),
     'unprotected private installations require explicit manual mode and disabled repository auto-merge');
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
-  await verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, installation: grant});
+  await verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: reviewer.sha, installation: grant});
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
   const previous = priorState(comments, manifest.repository, number);
   requireInput(previous.comment === null && previous.findings.length === 0, 'initial trust cannot discard an existing review ledger');
-  const policy = require('./policy.cjs').createPolicy(config);
+  const policy = require('./policy.cjs').createPolicy(config,
+    {engine: {...SOURCE, sha: reviewer.sha, digest: reviewer.digest}});
   let technical;
   for (let attempt = 0; attempt < maxPolls; attempt++) {
     readyPull(await getPull(), manifest);

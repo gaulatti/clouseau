@@ -130,6 +130,36 @@ test('installation review executes qualified verification, actual shared scoring
   await assert.rejects(cli.runReview(f.reviewArgs, runtime), /already ran/);
 }));
 
+test('central-source first installation prepares, reviews requested frozen engine bytes and checks only the same engine', () => fixture(async f => {
+  const output = path.join(f.temporary, 'central-prepared.json');
+  const prepared = await cli.main(['installation-prepare', '--directory', f.directory, '--base', f.base,
+    '--request-file', f.requestFile, '--output', output], f.reviewRuntime);
+  assert.deepEqual(JSON.parse(fs.readFileSync(prepared.manifest)), f.manifest);
+  const review = await cli.runReview(f.reviewArgs, f.reviewRuntime);
+  assert.equal(review.decision, 'auto_approve'); assert.equal(review.provider_api_calls, 0);
+  assert.equal(review.harness_invocations, 5, 'one real source-request round precedes the four semantic fixture responses');
+  const bundle = JSON.parse(fs.readFileSync(review.receipt));
+  const sourceId = `engine:${f.reviewer.sha}:src/config.cjs`;
+  const source = bundle.payload.record.snapshot.sources[sourceId];
+  assert.deepEqual(source, {path: '.clouseau-ci/src/config.cjs', ref: f.reviewer.sha, authority: 'untrusted', kind: 'source',
+    content: fs.readFileSync(path.join(__dirname, 'config.cjs'), 'utf8')});
+  assert.ok(bundle.payload.record.result.reviews.every(item => item.report.coverage.sources.some(entry => entry.source === sourceId && entry.state === 'inspected')));
+  const remote = await f.remote(); remote.state.bundle = bundle;
+  const forbidden = () => {throw new Error('Read-only installation checking must not run setup, signing or AI');};
+  const checked = await cli.check(remote.args, {...remote.runtime, ask: forbidden, verify: forbidden, state: '/unavailable-identities'});
+  assert.equal(checked.installation_verified, true); assert.equal(checked.ordinary_pr_approval, false);
+  assert.equal(checked.auto_merge_authorized, false); assert.equal(checked.provider_api_calls, 0);
+  assert.ok(remote.state.calls.every(call => call.method === 'GET'));
+  assert.ok(!remote.state.calls.some(call => call.endpoint.includes('.clouseau-ci')), 'the checker compares the trusted engine checkout, never contributor bytes');
+  for (const changed of [{sha: 'f'.repeat(40)}, {digest: '0'.repeat(64)}]) {
+    await assert.rejects(cli.check(remote.args, {...remote.runtime, installed: () => ({...f.reviewer, ...changed})}), /frozen shared engine/);
+  }
+  remote.state.bundle = f.sign(await f.record(undefined, snapshot => {snapshot.sources[sourceId].content += '\n// altered engine evidence\n';}));
+  await assert.rejects(cli.check(remote.args, remote.runtime), /differs from the accepted engine/);
+  remote.state.bundle = f.sign(await f.record(undefined, snapshot => {snapshot.sources[sourceId].ref = 'f'.repeat(40);}));
+  await assert.rejects(cli.check(remote.args, remote.runtime), /invalid frozen engine/);
+}, {centralSource: true, engineSource: true}));
+
 test('a negative review remains recorded, unsigned and ineligible for unchanged resampling', () => fixture(async f => {
   const ask = harness(true);
   const output = path.join(f.temporary, 'negative-record.json');
