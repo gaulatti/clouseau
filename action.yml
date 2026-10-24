@@ -16,6 +16,9 @@ inputs:
   coverage-report:
     description: Native LLVM, Istanbul or coverage.py JSON report path (coverage)
     default: ''
+  coverage-config:
+    description: Accepted-base version 2 local recipe with separate native coverage parts (coverage); read as data only
+    default: ''
   coverage-format:
     description: llvm, istanbul or coveragepy; require the complete application source inventory
     default: llvm
@@ -92,9 +95,16 @@ runs:
         COVERAGE_REPORT: ${{ inputs.coverage-report }}
         SOURCE_DIRECTORY: ${{ inputs.source-directory }}
         COVERAGE_FORMAT: ${{ inputs.coverage-format }}
+        COVERAGE_CONFIG: ${{ inputs.coverage-config }}
       run: |
-        test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+        if [[ -n "$COVERAGE_CONFIG" ]]; then
+          test -z "$COVERAGE_REPORT"
+          test -z "$SOURCE_DIRECTORY"
+          python3 "$CLOUSEAU_ROOT/src/coverage_plan.py" "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+        else
+          test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+          python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+        fi
     - name: Verify local review or assess repository intent
       id: assess
       if: inputs.operation == 'assess' || inputs.operation == 'verify-local'
