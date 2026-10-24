@@ -196,6 +196,27 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
+test('job-output data still requires the complete scored record and fresh head/base and CI before approval', () => fixture(async f => {
+  const transport = require('./record-transport.cjs');
+  const assessment = await f.assess();
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const payload = transport.encode({assessment, record, repair: null, context: f.context, runAttempt: '1'});
+  fs.rmSync(f.recordPath);
+  transport.receive({mode: 'job-output', payload, assessment, context: f.context, runAttempt: '1', recordPath: f.recordPath});
+  assert.equal(verifyRecord(JSON.parse(fs.readFileSync(f.recordPath)), assessment, config).state.unresolved.length, 0);
+  for (const field of ['head', 'base']) {
+    const previous = f.state.pr[field].sha; f.state.pr[field].sha = 'e'.repeat(40);
+    await assert.rejects(f.gate(assessment), /PR changed/);
+    f.state.pr[field].sha = previous;
+  }
+  f.state.failed = true;
+  await assert.rejects(f.gate(assessment), /Verification changed/);
+  assert.equal(f.state.writes.length, 0);
+  f.state.failed = false;
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+}));
+
 for (const central of [false, true, 'controls']) test(`central=${central}: authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts`, () => fixture(async f => {
   const crypto = require('node:crypto');
   const {issueReceipt} = require('./local-receipt.cjs');
