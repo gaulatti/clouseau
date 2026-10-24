@@ -69,7 +69,8 @@ async function authority({github, repo, pr, files}) {
         location = path; break;
       } catch (error) { if (error.status !== 404) throw error; }
     }
-    if (content === undefined) throw new Error('No CODEOWNERS exists on the protected base');
+    if (content === undefined) return {automatic: true, configured: false, groups: [], base_sha: pr.base.sha,
+      reason: 'No CODEOWNERS exists on the protected base; the optional code-owner gate is inactive.'};
     if (!files.length || files.length !== pr.changed_files) throw new Error('Incomplete ownership path inventory');
     const entries = parse(content);
     const paths = [...new Set(files.flatMap(file => file.previous_filename ? [file.previous_filename, file.filename] : [file.filename]))];

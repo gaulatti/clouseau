@@ -89,10 +89,13 @@ workstation's evidence; it does not defend against a compromised workstation.
 Find `clouseau-engine-<run id>-<attempt>` and each engine step's workflow summary
 for the full central SHA, source and digest. Acceptance records carry the same
 engine identity. Keep review, receipt reuse, hosted tests, approval, merge and
-deployment as distinct evidence. Automatic merge remains restricted to authors
+deployment as distinct evidence. When CODEOWNERS exists on the protected base,
+automatic merge remains restricted to authors
 who own every affected path under protected-base CODEOWNERS; other contributors
 need code-owner involvement and manual merge. Write access alone grants no
 ownership.
+Confirmed absence leaves the optional ownership gate inactive; unavailable or
+invalid ownership evidence does not. All other acceptance gates remain mandatory.
 
 Normal central releases reach the next consumer run without consumer pin or
 digest PRs. The stable bootstrap pin changes only when its selection protocol

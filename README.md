@@ -147,7 +147,7 @@ approving reviews must be enabled for automatic merge. Runtime tokens do not get
 Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
 configuration. Repository auto-merge must be disabled in this mode, including
 for owner-authored PRs. Tests, exact coverage, review, source binding and
-current-head code-owner approval for external contributors remain mandatory.
+current-head code-owner approval for external contributors when CODEOWNERS is configured remain mandatory.
 Available branch protection is still enforced. Only GitHub's specific HTTP 403
 private-plan upgrade response, together with verified private visibility and an
 unprotected branch, permits approval without host-enforced protection. Generic
@@ -385,8 +385,10 @@ claim external service health, running image bytes, or terminal upload delivery.
 
 Reviews retain fixed/dismissed findings across pushes and explicitly inventory
 inspected, excluded and missing evidence. Missing material context prevents
-approval. Protocol v2 enables automatic merge only for code-owner-authored PRs;
+approval. When protected-base CODEOWNERS exists, protocol v2 enables automatic merge only for code-owner-authored PRs;
 other contributions require current-head code-owner approval and manual merge.
+Confirmed absence leaves that ownership gate inactive; existing invalid files or
+unavailable ownership evidence still block. Other acceptance gates are unchanged.
 See [the review contract](docs/change-acceptance.md#review-convergence-and-completeness).
 
 The frozen qualification corpus in `test/acceptance-cases.cjs` includes clean

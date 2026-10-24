@@ -314,7 +314,7 @@ audit, keeping the initial report concise.
 
 ## Code-owner merge authority
 
-For protocol v2, automatic merge requires the PR's GitHub author to be a verified
+When CODEOWNERS exists on the protected base, protocol v2 automatic merge requires the PR's GitHub author to be a verified
 code owner for every changed path, including both paths of a rename. Clouseau
 reads the first CODEOWNERS file in GitHub's precedence order from the exact
 protected base revision, applies the last matching rule, and checks current
@@ -322,8 +322,15 @@ repository write access and team membership. The documented `docs/*` pattern
 matches immediate files only; use `/docs/` for all descendants. Ambiguous
 terminal prefix patterns such as `/private*` require manual ownership verification
 instead of granting authority through an earlier broad rule. Changes to CODEOWNERS
-are protected review controls. Missing files, uncovered paths, unsupported patterns, email-only
+are protected review controls. Uncovered paths, unsupported patterns, email-only
 identities or unavailable membership evidence never grant automatic merge.
+
+If all three supported CODEOWNERS locations return confirmed absence on the
+protected base, the optional ownership gate is inactive. Other review, coverage,
+test and branch-protection gates remain mandatory. Permission or API errors are
+not absence; an existing empty or malformed file still blocks. This does not
+infer code ownership from general write access. A proposed CODEOWNERS file
+cannot supply its own protected-base authority.
 
 A PR from another author can receive a passing AI review and bot approval, but
 Clouseau disables an existing auto-merge request and never enables a new one.
@@ -339,7 +346,7 @@ merges must remain with a code owner. This mode requires repository auto-merge
 to be disabled, disables any surviving PR auto-merge request and never dispatches
 deployment. Owner-authored PRs can receive automated approval after the same
 verification and acceptance checks, but are never automatically merged. External
-contributors still need fresh human code-owner approval for every affected path
+contributors still need fresh human code-owner approval for every affected path when CODEOWNERS is configured,
 and a manual merge. Proposed configuration cannot select its own merge authority.
 
 The controller enforces available protection in manual mode. It permits the
