@@ -1,5 +1,10 @@
 # Freezing protected central main
 
+Review source inventories use controller-assigned numeric indices over the model
+transport. The controller restores each full immutable source ID before the
+existing completeness validation. Unknown, duplicated or substituted sources
+remain errors; malformed evidence cannot authorize approval.
+
 The stable `scripts/resolve` composite bootstrap defines “latest” as the commit
 on `gaulatti/clouseau` protected `main` when its isolated resolution job executes.
 Its repository and branch are fixed in reviewed source. It takes no source

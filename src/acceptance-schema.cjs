@@ -33,7 +33,7 @@ function schemas(snapshot) {
       decisions: array(object({kind: enumeration(['purpose', 'authority', 'tradeoff']), question: string, options: array(string), evidence: citations})),
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
       ...(snapshot.review_manifest_version ? {
-        coverage: object({sources: array(object({source: enumeration(Object.keys(snapshot.sources)), state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations})),
+        coverage: object({sources: array(object({source: {type: 'integer', enum: Object.keys(snapshot.sources).map((_, index) => index), description: 'Select the exact source_index supplied in the source catalog; the controller restores its full immutable ID.'}, state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations})),
           dependencies: array(object({path: string, state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations}))}),
         reopenings: array(object({id: string, reason: string, evidence: citations})),
       } : {}),
