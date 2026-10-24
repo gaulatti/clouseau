@@ -4,11 +4,22 @@ from pathlib import Path
 import re
 
 
+def production_js(relative):
+    return not (
+        set(relative.parts[:-1]) & {".git", "node_modules", "vendor", "test", "tests", "__tests__"}
+        or relative.name.endswith(".d.ts")
+        or re.search(r"\.(?:test|spec)\.(?:ts|tsx|js|jsx|cjs|mjs)$", relative.name)
+    )
+
+
 def counters(report, source_directory):
     root = Path(source_directory).resolve()
-    sources = {file.resolve() for file in root.rglob("*")
-               if file.is_file() and file.suffix in {".ts", ".tsx", ".js", ".jsx", ".cjs", ".mjs"}
-               and not file.name.endswith(".d.ts")}
+    candidates = [file for file in root.rglob("*")
+                  if file.is_file() and file.suffix in {".ts", ".tsx", ".js", ".jsx", ".cjs", ".mjs"}
+                  and production_js(file.relative_to(root))]
+    if any(file.is_symlink() or not file.resolve().is_relative_to(root) for file in candidates):
+        raise ValueError("Symbolic or escaped JS/TS application source")
+    sources = {file.resolve() for file in candidates}
     if not sources:
         raise ValueError("No application JS/TS sources found")
     for file in sources:
@@ -21,6 +32,8 @@ def counters(report, source_directory):
     for filename, entry in report.items():
         file = Path(filename).resolve()
         if not file.is_relative_to(root):
+            continue
+        if not production_js(file.relative_to(root)):
             continue
         if file not in sources or file in seen:
             raise ValueError(f"Unexpected or duplicate application coverage: {filename}")

@@ -81,12 +81,54 @@ test('local verifier executes commands and the real shared parser, rejecting nat
   const receipt = executeVerification({directory: f.directory, config});
   assert.deepEqual(receipt.exact_coverage, {lines: [2, 2], branches: [4, 4]});
   assert.equal(receipt.commands[0].exit_code, 0);
+  assert.equal(receipt.coverage_reports, undefined, 'version 1 keeps its existing evidence shape');
   fs.writeFileSync(report, JSON.stringify(nativeFixture(f.directory, true)));
   assert.throws(() => executeVerification({directory: f.directory, config}), /coverage failed/);
   assert.throws(() => executeVerification({directory: f.directory,
     config: {...config, verification: [[process.execPath, '-e', 'process.exit(3)']]}}), /verification failed/);
   assert.throws(() => executeVerification({directory: f.directory,
     config: {...config, verification: [['/nonexistent-fixture-command']]}}), /verification failed/);
+}));
+
+test('v2 local verification binds every native artifact and allows only aggregate-measured branches', () => repository(f => {
+  const original = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
+  const frontend = path.join(f.directory, 'frontend'); fs.mkdirSync(frontend);
+  const source = path.join(frontend, 'linear.js'); fs.writeFileSync(source, 'module.exports = 1;\n');
+  const location = {start: {line: 1}, end: {line: 1}};
+  const linear = {[source]: {path: source, statementMap: {0: location}, s: {0: 1}, fnMap: {}, f: {}, branchMap: {}, b: {}}};
+  const first = path.join(f.directory, 'coverage.json');
+  const second = path.join(f.directory, 'frontend.json');
+  fs.writeFileSync(first, JSON.stringify(nativeFixture(f.directory)));
+  fs.writeFileSync(second, JSON.stringify(linear));
+  const config = {...original, version: 2, coverage: [original.coverage,
+    {format: 'istanbul', report: 'frontend.json', source_directory: 'frontend'}]};
+  const result = executeVerification({directory: f.directory, config});
+  assert.deepEqual(result.exact_coverage, {lines: [3, 3], branches: [4, 4]});
+  assert.equal(result.coverage_reports.length, 2);
+  assert.deepEqual(result.coverage_reports[1].exact_coverage, {lines: [1, 1], branches: [0, 0]});
+  assert.equal(result.coverage_reports[0].report_digest, digest(fs.readFileSync(first, 'utf8')));
+  assert.equal(result.coverage_reports[1].report_digest, digest(fs.readFileSync(second, 'utf8')));
+  assert.equal(result.local_config_digest, digest(config));
+  assert.equal(result.report_digest, digest(result.coverage_reports.map(({exact_coverage, ...entry}) => entry)));
+  linear[source].s[0] = 0; fs.writeFileSync(second, JSON.stringify(linear));
+  assert.throws(() => executeVerification({directory: f.directory, config}), /coverage failed/);
+  assert.throws(() => executeVerification({directory: f.directory,
+    config: {...config, coverage: [config.coverage[1]]}}), /coverage failed/);
+  let calls = 0;
+  assert.throws(() => executeVerification({directory: f.directory,
+    config: {...config, coverage: []}, run: () => {calls++;}}), /Invalid local-only/);
+  assert.throws(() => executeVerification({directory: f.directory,
+    config: {...config, exclude: ['frontend']}, run: () => {calls++;}}), /Invalid local-only/);
+  assert.equal(calls, 0, 'invalid accepted recipe stops before executing any command');
+}));
+
+test('local native artifact loading rejects duplicate JSON keys before an approval record exists', () => repository(f => {
+  const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
+  const report = nativeFixture(f.directory);
+  const name = Object.keys(report)[0];
+  const duplicate = JSON.stringify(report).slice(0, -1) + ',' + JSON.stringify(name) + ':' + JSON.stringify(report[name]) + '}';
+  fs.writeFileSync(path.join(f.directory, 'coverage.json'), duplicate);
+  assert.throws(() => executeVerification({directory: f.directory, config}), /coverage failed/);
 }));
 
 test('agent-only local review needs no CI config or provider keys and does not resample unchanged findings', () => repository(async f => {

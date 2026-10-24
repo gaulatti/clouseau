@@ -37,7 +37,7 @@ consumer's privileged approval job. See `examples/colombo.json` for version 2 co
 | Operation | Inputs | Result |
 | --- | --- | --- |
 | `test` | none | Run Clouseau's Python and Node regression suites |
-| `coverage` | `coverage-report`, `source-directory`, optional `coverage-format` | Require exact, nonempty 100% application line and branch coverage in native LLVM, Istanbul or coverage.py JSON |
+| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
@@ -68,8 +68,12 @@ instrumentation with normal application cfgs, followed by docs and Docker tests.
 For JavaScript/TypeScript, select `coverage-format: istanbul` and pass the native
 `coverage-final.json` produced by c8/Istanbul. Set `source-directory` to the
 original application source tree, not compiled output. Every `.ts`, `.tsx`,
-`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules;
-declaration-only `.d.ts` files are not executable. The checker rejects omitted,
+`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules.
+Declaration-only `.d.ts` files, concrete test conventions and dependency
+directories are not application sources; generated application code remains
+included. The fixed inventory conventions and multi-artifact configuration are
+documented in [local coverage plans](docs/local-review.md#multiple-native-coverage-artifacts).
+The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
 directives. A source entry with empty statement maps is rejected, so listing an
 unloaded executable file without measuring it cannot satisfy source completeness. It derives exact line and branch totals from native hit counters,
@@ -84,6 +88,12 @@ report generation, path binding and exact native counter validation. This reads
 coverage.py's executable lines and branch decision exits, not statement
 percentages or every traced transition. Empty global totals, omitted application
 modules, exclusions, partial coverage and inconsistent counters fail closed.
+
+Monorepos may use the accepted-base version 2 local recipe with separate native
+Istanbul and coverage.py parts. `operation: coverage` accepts that recipe through
+`coverage-config` and runs the same shared per-part and aggregate checks as the
+local runner. Each part must be complete and exact; there is no consumer-side
+report merging. Legacy single-report inputs remain supported.
 
 ## Trust and permissions
 

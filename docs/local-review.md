@@ -46,6 +46,92 @@ The accepted base supplies the recipe; a change cannot weaken its own checks.
 The source checkout must be committed and clean before review. Verification
 artifacts should use the repository's established ignored output locations.
 
+### Multiple native coverage artifacts
+
+Version 2 keeps separate native reports for applications with multiple source
+roots. Its `coverage` field is a nonempty array with at most 32 explicit parts:
+
+```json
+{
+  "version": 2,
+  "base_branch": "main",
+  "readme": "README.md",
+  "repository_policy": "AGENTS.md",
+  "verification": [
+    ["python3", "-m", "coverage", "run", "--branch", "--source", "backend", "-m", "unittest", "discover", "-s", "backend/tests"],
+    ["python3", "-m", "coverage", "json", "-o", "coverage/backend.json"],
+    ["npm", "--prefix", "frontend", "run", "test:coverage"]
+  ],
+  "coverage": [
+    {"format": "coveragepy", "report": "coverage/backend.json", "source_directory": "backend"},
+    {"format": "istanbul", "report": "frontend/coverage/coverage-final.json", "source_directory": "frontend/app"}
+  ]
+}
+```
+
+Only the six documented top-level fields are accepted in version 2: `version`,
+`base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
+Misspelled or additional policy fields fail before local command execution and
+at the CI data entrypoint. Each coverage part likewise accepts only its three
+documented fields. Version 1 keeps its existing compatibility behavior.
+
+Adapt commands to the repository's real test suite. The runner passes argument
+arrays directly, runs every command, and checks each untouched native report.
+It does not generate a combined artifact or reinterpret counters. Every part
+requires a complete application inventory, nonempty measured lines, and exact
+100% lines and branches. A genuinely branchless part may have zero branches
+when another part supplies measured branches; an entirely branchless plan fails.
+Uncovered or missing data in one part cannot be compensated by another part.
+
+Report and source paths must be repository-relative. Resolved source roots must
+exist and must not overlap, and report paths must be unique, including aliases.
+Paths that escape the checkout fail. There is no arbitrary exclusion option.
+Generated application code, executable configuration and entry points remain
+in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
+`*.test.*`/`*.spec.*` files and the fixed `test`, `tests`, `__tests__`, `.git`,
+`node_modules` and `vendor` directories. Native coverage.py uses its documented
+Python test/dependency conventions. Those non-application entries may appear in
+a native report but cannot contribute passing counters.
+
+Version 2 supports the complete-inventory `istanbul` and `coveragepy` adapters.
+Version 1's single-report interface, including LLVM, remains supported. LLVM
+multi-root plans require a complete compiled-source inventory capability and
+are not accepted by version 2; Go statement reports do not become line/branch
+coverage through this interface.
+
+The accepted base supplies the complete recipe in normal local review. Local
+evidence records exact counters and a content digest for every native artifact,
+aggregate counters, and the accepted configuration digest. One frozen engine
+checks every part throughout the review.
+
+CI invokes the same shared verifier through `operation: coverage` with
+`coverage-config`. Supply the recipe from the exact accepted base, separately
+from the candidate checkout. For example, in an unprivileged PR verification
+job with no provider credentials:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}
+    fetch-depth: 0
+- name: Read accepted coverage recipe
+  env:
+    BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  run: git show "$BASE_SHA:.clouseau-local.json" > "$RUNNER_TEMP/accepted-coverage.json"
+# Run the repository's actual tests and native instrumentation here.
+- uses: gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA
+  with:
+    operation: coverage
+    coverage-config: ${{ runner.temp }}/accepted-coverage.json
+```
+
+The coverage action reads that JSON as data and never executes its verification
+commands. Do not supply proposed PR policy as the accepted recipe. Configuration
+selection belongs to trusted workflow wiring; source execution, credentialed
+assessment and the write-capable controller remain separate. `coverage-config`
+cannot be combined with legacy `coverage-report` or `source-directory` inputs.
+The legacy single-report inputs are unchanged.
+
 Store the requirement outside the checkout, then run:
 
 ```bash
