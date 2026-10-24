@@ -116,7 +116,20 @@ The controller requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
 administrator must also verify no bypass actors. Repository auto-merge and Actions
-approving reviews must be enabled. Runtime tokens do not get administration access.
+approving reviews must be enabled for automatic merge. Runtime tokens do not get administration access.
+
+Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
+configuration. Repository auto-merge must be disabled in this mode, including
+for owner-authored PRs. Tests, exact coverage, review, source binding and
+current-head code-owner approval for external contributors remain mandatory.
+Available branch protection is still enforced. Only GitHub's specific HTTP 403
+private-plan upgrade response, together with verified private visibility and an
+unprotected branch, permits approval without host-enforced protection. Generic
+permission failures, unavailable APIs, public unprotected repositories and
+incomplete available rules fail closed. The summary states when GitHub cannot
+enforce the checks; trusted maintainers must honor them before manually merging.
+The controller never merges or dispatches deployment in manual mode. Omitting
+`merge_mode`, or choosing `"automatic"`, retains the protected owner-only flow.
 
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
