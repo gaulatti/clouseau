@@ -12,11 +12,15 @@ test('the installed updater rejects a fetched central revision lacking its execu
   try {
     git(['init', '--initial-branch=main', 'central']);
     fs.writeFileSync(path.join(root, 'central/README.md'), 'Incomplete fetched standard\n');
+    const installed = '.agents/skills/ai-agentic-update/scripts/update';
     git(['-C', 'central', 'add', 'README.md']);
     git(['-C', 'central', '-c', 'user.name=Updater fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-m', 'fixture']);
     git(['clone', '--bare', 'central', 'origin.git']);
     git(['clone', 'origin.git', 'reference']);
     git(['init', '--initial-branch=main', 'target']);
+    fs.mkdirSync(path.dirname(path.join(root, 'target', installed)), {recursive: true});
+    fs.copyFileSync(path.join(__dirname, '..', installed), path.join(root, 'target', installed));
+    fs.chmodSync(path.join(root, 'target', installed), 0o755);
     const result = spawnSync('bash', [path.join(__dirname, '../.agents/skills/ai-agentic-update/scripts/update'),
       '--repository', path.join(root, 'target'), '--reference-repository', path.join(root, 'reference')], {encoding: 'utf8'});
     assert.equal(result.status, 1);

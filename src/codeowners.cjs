@@ -8,9 +8,10 @@ function pattern(value) {
   const rooted = value.startsWith('/');
   const directory = value.endsWith('/');
   const input = value.replace(/^\//, '').replace(/\/$/, '');
+  // https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
   // GitHub documents docs/* as non-recursive. Other terminal prefix globs
   // may refer to directories; do not fall through to a broader owner rule.
-  if (!directory && /[^/ *?][*?]$/.test(input)) throw new Error('Ambiguous CODEOWNERS prefix glob; manual ownership verification required');
+  if (!directory && /[*?]$/.test(input) && !['*', '**'].includes(input.split('/').at(-1))) throw new Error('Ambiguous CODEOWNERS prefix glob; manual ownership verification required');
   let expression = '';
   for (let i = 0; i < input.length; i++) {
     if (input.slice(i, i + 3) === '**/') { expression += '(?:.*/)?'; i += 2; }

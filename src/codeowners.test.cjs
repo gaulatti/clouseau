@@ -32,7 +32,7 @@ test('GitHub path precedence, rooted paths, directories, globstars and empty own
     ['/root.json', 'root.json', 'deep/root.json'], ['a+b.js', 'deep/a+b.js', 'deep/ab.js'],
   ]) { assert.equal(pattern(glob).test(yes), true, glob); assert.equal(pattern(glob).test(no), false, glob); }
   assert.equal(parse('  # ignored\n*.js @alice @bob # comment\n')[0].owners.length, 2);
-  for (const glob of ['', '!src', '[ab].js', '\\#src', 'a\0b', '***.js', '/private*', 'prefix?']) assert.throws(() => pattern(glob));
+  for (const glob of ['', '!src', '[ab].js', '\\#src', 'a\0b', '***.js', '/private*', 'prefix?', '/private?*', '/private??', '/private*?', '/a/??']) assert.throws(() => pattern(glob));
   for (const text of [null, 'x'.repeat(3000000), '* person@example.test', '* @bad/name/again']) assert.throws(() => parse(text));
 });
 
