@@ -32,6 +32,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   resolve-clouseau:
+    # Explicit controller installation already freezes its owner-authorized candidate.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/policy-install/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

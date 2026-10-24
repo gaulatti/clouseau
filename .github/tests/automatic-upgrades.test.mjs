@@ -9,10 +9,11 @@ import {assertFrozenWorkflow} from '../../test/automatic-upgrade-contract.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const action = parse(readFileSync(path.join(root, 'action.yml'), 'utf8'));
 const workflow = parse(readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
-const typed = value => typeof value === 'string' ? new data.StringData(value) :
+const typed = value => value === null ? new data.Null() : typeof value === 'boolean' ? new data.BooleanData(value) :
+  typeof value === 'string' ? new data.StringData(value) :
   new data.Dictionary(...Object.entries(value).map(([key, value]) => ({key, value: typed(value)})));
 const evaluate = (expression, context) => new Evaluator(
-  new Parser(new Lexer(expression.slice(3, -2)).lex().tokens, Object.keys(context), []).parse(), typed(context)).evaluate();
+  new Parser(new Lexer(expression.startsWith('${{') ? expression.slice(3, -2) : expression).lex().tokens, Object.keys(context), []).parse(), typed(context)).evaluate();
 
 test('the actual job expressions keep the original engine after main advances and reject missing resolver output', () => {
   assertFrozenWorkflow(workflow, evaluate);
@@ -38,4 +39,30 @@ test('protected self review uses one frozen engine while candidate tests and exp
   const repair = action.runs.steps.find(s => s.name === 'Apply bounded repair with an independent author');
   assert.match(repair.with.script, /verifyRecord\(record, assessment, config,.*environmentEngine/);
   assert.ok(action.runs.steps.find(s => s.name === 'Verify and record this run frozen engine').with.script.includes('environmentEngine'));
+});
+
+
+test('explicit controller installation freezes its own candidate without publishing an unused automatic selection', () => {
+  const condition = workflow.jobs['resolve-clouseau'].if;
+  for (const event_name of ['pull_request', 'pull_request_target', 'issue_comment', 'workflow_dispatch']) {
+    assert.equal(evaluate(condition, {github: {event_name, ref: 'refs/heads/main'}}).value, true);
+  }
+  assert.equal(evaluate(condition, {github: {event_name: 'push', ref: 'refs/heads/main'}}).value, true);
+  assert.equal(evaluate(condition, {github: {event_name: 'push', ref: 'refs/heads/policy-install/pr-43'}}).value, false);
+  assert.equal(workflow.jobs['assess-installation'].steps[0].with.ref, '${{ needs.prepare-installation.outputs.head }}');
+});
+
+test('resolver failures keep the required approval check red while an authorized candidate installation remains independent', () => {
+  const gate = workflow.jobs['approve-and-merge'];
+  assert.equal(gate.if, 'always()');
+  for (const result of ['failure', 'cancelled', 'skipped']) {
+    const context = {github: {event_name: 'pull_request_target', event: {pull_request: {draft: false}}},
+      needs: {'resolve-clouseau': {result, outputs: {}}, 'assess-intent': {result: 'skipped'}, 'assess-installation': {result: 'skipped'}}};
+    assert.equal(evaluate(gate.name, context).coerceString(), 'approve-and-merge');
+    assert.equal(evaluate(gate.steps[0].if, context).value, true);
+    assert.equal(gate.steps[0].run, 'exit 1');
+  }
+  const installation = {github: {event_name: 'push', deleted: false, ref: 'refs/heads/policy-install/pr-43'},
+    needs: {'resolve-clouseau': {result: 'skipped'}, 'assess-intent': {result: 'skipped'}, 'assess-installation': {result: 'success'}}};
+  assert.equal(evaluate(gate.steps[0].if, installation).value, false);
 });

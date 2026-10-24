@@ -27,7 +27,9 @@ cannot silently select a default branch. The required approval job also fails
 when resolution prevents assessment.
 Tests of Clouseau itself still exercise proposed code; ordinary protected review
 uses central main. The existing explicit owner-authorized installation path is
-separate from automatic source selection.
+separate from automatic source selection. Explicit controller-installation pushes
+skip the automatic resolver and use only their guarded, frozen candidate. They
+do not publish an unused protected-main selection as their engine evidence.
 
 GitHub action `uses` references cannot select a revision from runtime outputs.
 Use a literal local action path after `actions/checkout` with an expression in
