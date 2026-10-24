@@ -86,8 +86,9 @@ workstation's evidence; it does not defend against a compromised workstation.
 
 ## Operations and boundaries
 
-Find `clouseau-engine-<run id>-<attempt>` and each engine step's workflow summary
-for the full central SHA, source and digest. Acceptance records carry the same
+In artifact mode, find `clouseau-engine-<run id>-<attempt>` for the full central
+SHA, source and digest. In summary mode, use the resolver's workflow summary;
+every engine step also records its identity there. Acceptance records carry the same
 engine identity. Keep review, receipt reuse, hosted tests, approval, merge and
 deployment as distinct evidence. When CODEOWNERS exists on the protected base,
 automatic merge remains restricted to authors
@@ -96,6 +97,15 @@ need code-owner involvement and manual merge. Write access alone grants no
 ownership.
 Confirmed absence leaves the optional ownership gate inactive; unavailable or
 invalid ownership evidence does not. All other acceptance gates remain mandatory.
+
+The resolver's `provenance` input defaults to `artifact`. Repositories without
+Actions artifact storage can explicitly select `summary`; this skips only the
+additional provenance artifact upload. Resolution, protected-source validation,
+immutable checkout, digest computation, SHA/digest outputs, the full workflow
+summary and the run-bound engine identity in review records remain mandatory.
+Unknown modes fail before resolution. This does not change review-record
+transport: use its separately supported `job-output` mode when needed. Neither
+mode turns a failed resolution, verification or review into success.
 
 Normal central releases reach the next consumer run without consumer pin or
 digest PRs. The stable bootstrap pin changes only when its selection protocol

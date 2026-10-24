@@ -1,5 +1,9 @@
 name: Freeze protected Clouseau main
 description: Stable bootstrap; resolve once in an isolated job and share immutable outputs
+inputs:
+  provenance:
+    description: Retain immutable engine provenance in an artifact (default) or the workflow summary only
+    default: artifact
 outputs:
   sha:
     description: Protected central main at resolution time
@@ -10,6 +14,15 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Validate provenance retention
+      shell: bash
+      env:
+        CLOUSEAU_PROVENANCE: ${{ inputs.provenance }}
+      run: |
+        case "$CLOUSEAU_PROVENANCE" in
+          artifact|summary) ;;
+          *) echo 'Unknown Clouseau provenance retention mode' >&2; exit 1 ;;
+        esac
     - id: resolve
       uses: actions/github-script@v7
       env:
@@ -42,6 +55,7 @@ runs:
           core.setOutput('digest', engine.digest);
           await core.summary.addRaw(`Clouseau source: ${engine.repository} ${engine.ref}\n\nFrozen commit: ${engine.sha}\n\nEngine digest: ${engine.digest}\n`).write();
     - uses: actions/upload-artifact@v4
+      if: inputs.provenance == 'artifact'
       with:
         name: clouseau-engine-${{ github.run_id }}-${{ github.run_attempt }}
         path: work/clouseau-engine.json
