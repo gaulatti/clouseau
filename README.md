@@ -6,6 +6,9 @@ coding harnesses and creates no Actions configuration or provider secrets.
 Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
 coverage, and approves/merges without repeating the AI review. See
 [local review, installation and trust boundaries](docs/local-review.md).
+Consumers without accepted recipe/enrollment/workflows use the separate
+[initial owner-authorized trust installation](docs/initial-installation.md).
+Its signed evidence cannot approve ordinary changes or automatically merge.
 
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,

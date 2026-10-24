@@ -7,6 +7,13 @@ Clouseau owns the review protocol, evidence validation, semantic rubrics and sco
 calculation. Consume its current public source; do not copy the review rules into
 the application repository or invent a passing report.
 
+If neither the local recipe nor CI policy exists on the accepted base, use the
+shared `docs/initial-installation.md` procedure instead of repeating normal
+review. Initial trust requires an explicit owner/admin frozen commit-comment
+grant, full local review and independent CI. Its installation-only receipt is
+published before the ready PR and requires manual owner acceptance under existing
+controls. It cannot authorize ordinary changes, auto-merge or deployment.
+
 1. Run the global `clouseau` entry point, which refreshes protected Clouseau main
    before execution. Reread this skill from the refreshed installation. The
    runner freezes one Clouseau revision throughout the review.

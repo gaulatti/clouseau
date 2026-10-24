@@ -223,6 +223,38 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
+test('optional local review rejects every malformed receipt claim without paid fallback while unstamped changes receive CI review', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const trusted = {...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
+    max_age_seconds: 3600, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  const policy = createPolicy(trusted);
+  const local = `<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`;
+  const unknown = `<!-- clouseau-local-review:v2 ${'b'.repeat(40)} -->`;
+  const installation = `<!-- clouseau-installation-review:v1 ${'c'.repeat(40)} -->`;
+  const readContent = f.github.rest.repos.getContent;
+  let artifactReads = 0;
+  f.github.rest.repos.getContent = async args => {
+    if (args.path === 'clouseau-review.json') artifactReads++;
+    return readContent(args);
+  };
+  for (const body of [`<!-- clouseau-local-review:v1 malformed-sha -->`, unknown,
+    `${local}\n${unknown}`, `${local}\n${local}`, installation, `${local}\n${installation}`]) {
+    f.state.pr.body = body;
+    const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+    assert.equal(result.decision, 'review_incomplete', body);
+    assert.equal(f.state.calls, 0, 'a claimed but invalid local review cannot become a paid CI fallback');
+    assert.equal(artifactReads, 0, 'ambiguous or unsupported claims are rejected before fetching an artifact');
+    assert.equal(f.state.writes.length, 0, 'invalid claims cannot write an approval or acceptance ledger');
+  }
+  f.state.pr.body = 'Useful application regression fix with no local receipt.';
+  const ordinary = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  assert.equal(ordinary.decision, 'auto_approve', ordinary.reason);
+  assert.ok(f.state.calls > 0, 'a genuinely unstamped change receives the configured independent CI AI review');
+  assert.equal(artifactReads, 0);
+  assert.equal(f.state.writes.length, 0, 'assessment itself does not grant a GitHub approval');
+}));
+
 test('job-output data still requires the complete scored record and fresh head/base and CI before approval', () => fixture(async f => {
   const transport = require('./record-transport.cjs');
   const assessment = await f.assess();
