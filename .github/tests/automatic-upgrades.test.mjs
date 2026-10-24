@@ -47,6 +47,7 @@ test('explicit controller installation freezes its own candidate without publish
   for (const event_name of ['pull_request', 'pull_request_target', 'issue_comment', 'workflow_dispatch']) {
     assert.equal(evaluate(condition, {github: {event_name, ref: 'refs/heads/main'}}).value, true);
   }
+  assert.equal(evaluate(condition, {github: {event_name: 'pull_request_target', ref: 'refs/heads/policy-install/pr-43'}}).value, true);
   assert.equal(evaluate(condition, {github: {event_name: 'push', ref: 'refs/heads/main'}}).value, true);
   assert.equal(evaluate(condition, {github: {event_name: 'push', ref: 'refs/heads/policy-install/pr-43'}}).value, false);
   assert.equal(workflow.jobs['assess-installation'].steps[0].with.ref, '${{ needs.prepare-installation.outputs.head }}');
@@ -62,7 +63,7 @@ test('resolver failures keep the required approval check red while an authorized
     assert.equal(evaluate(gate.steps[0].if, context).value, true);
     assert.equal(gate.steps[0].run, 'exit 1');
   }
-  const installation = {github: {event_name: 'push', deleted: false, ref: 'refs/heads/policy-install/pr-43'},
+  const installation = {github: {event_name: 'push', event: {deleted: false}, ref: 'refs/heads/policy-install/pr-43'},
     needs: {'resolve-clouseau': {result: 'skipped'}, 'assess-intent': {result: 'skipped'}, 'assess-installation': {result: 'success'}}};
   assert.equal(evaluate(gate.steps[0].if, installation).value, false);
 });
