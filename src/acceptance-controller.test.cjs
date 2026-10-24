@@ -268,6 +268,15 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     f.state.comments = [];
     f.github.rest.pulls.listFiles = list;
   }
+  if (central === true) {
+    const newer = createPolicy(trusted, {engine: {...engine, sha: 'd'.repeat(40)}});
+    const mismatch = await newer.assess({github: f.github, context: f.context, recordPath: f.recordPath,
+      fetchImpl: async () => {providerCalls++; throw new Error('No paid mismatch fallback');}});
+    assert.equal(mismatch.decision, 'review_incomplete');
+    assert.equal(mismatch.provider_api_calls, 0);
+    assert.equal(mismatch.review_source, 'authenticated_local_rejected');
+    assert.match(mismatch.reason, /engine mismatch.*refresh.*fresh CI run.*No paid fallback/);
+  }
   const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
   const swapped = structuredClone(verifiedRecord); swapped.controls = true;
   assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted, engine), /substituted/);

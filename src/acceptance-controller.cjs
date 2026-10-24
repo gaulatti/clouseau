@@ -135,7 +135,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     } catch (error) {
       diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
-      return {...identity, decision: 'review_incomplete', reason: 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.'};
+      const engineMismatch = error.message.startsWith('Invalid local review receipt: engine mismatch;');
+      return {...identity, decision: 'review_incomplete',
+        ...(engineMismatch ? {review_source: 'authenticated_local_rejected', provider_api_calls: 0} : {}),
+        reason: engineMismatch ? error.message : 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.'};
     }
   }
 
