@@ -66,7 +66,7 @@ class CoveragePlanTests(unittest.TestCase):
 
     def test_empty_lines_or_an_entirely_branchless_plan_never_pass(self):
         self.mutate("frontend", lambda entry: (entry.__setitem__("statementMap", {}), entry.__setitem__("s", {})))
-        with self.assertRaisesRegex(ValueError, "Every coverage part requires nonempty"):
+        with self.assertRaisesRegex(ValueError, "No statements measured.*frontend/service.js"):
             check_plan(self.parts, self.root)
         self.mutate("backend", lambda entry: (entry.__setitem__("branchMap", {}), entry.__setitem__("b", {})))
         with self.assertRaisesRegex(ValueError, "No branches measured"):
@@ -76,6 +76,13 @@ class CoveragePlanTests(unittest.TestCase):
         (self.root / "frontend" / "service.test.js").write_text("test('fixture', () => {});\n")
         with self.assertRaisesRegex(ValueError, "No application JS/TS"):
             check_plan(self.parts, self.root)
+
+    def test_real_empty_python_part_cannot_borrow_another_parts_measurements(self):
+        report = native_report(self.root / "empty-python", driver="import service", source="")
+        (self.root / "empty-python.json").write_text(json.dumps(report))
+        empty = {"format": "coveragepy", "report": "empty-python.json", "source_directory": "empty-python"}
+        with self.assertRaisesRegex(ValueError, "Every coverage part requires nonempty"):
+            check_plan([self.parts[0], empty], self.root)
 
     def test_invalid_plan_shape_format_and_ignored_policy_fields_fail(self):
         values = [None, {}, [], "not a plan", self.parts * 17,

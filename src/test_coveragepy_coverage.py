@@ -19,10 +19,10 @@ SOURCE = "def choose(ok):\n    if ok:\n        return 1\n    return 0\n"
 
 
 def native_report(root, driver="import service; service.choose(True); service.choose(False)", branch=True,
-                  config=None):
+                  config=None, source=SOURCE):
     """Use the actual coverage.py command, not handcrafted passing counters."""
     root.mkdir(exist_ok=True)
-    (root / "service.py").write_text(SOURCE)
+    (root / "service.py").write_text(source)
     (root / "__init__.py").touch()
     entrypoint = root.parent / "driver.py"
     entrypoint.write_text("import sys; sys.path.insert(0, '.')\n" + driver + "\n")
