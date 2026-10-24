@@ -127,6 +127,23 @@ jobs:
                       'lines': {'count': 2, 'covered': 2},
                       'branches': {'count': 2, 'covered': covered}}}]}]}
               Path(f'work/{name}.json').write_text(json.dumps(report))
+          parts = []
+          for name, branched in [('backend-js', True), ('frontend-js', False)]:
+              source = Path(f'work/{name}/main.js').resolve()
+              source.parent.mkdir(parents=True, exist_ok=True)
+              source.write_text('module.exports = value => value ? 1 : 0;\n' if branched else 'module.exports = 1;\n')
+              report = {str(source): {'path': str(source),
+                  'statementMap': {'0': {'start': {'line': 1}}}, 's': {'0': 1},
+                  'branchMap': {'0': {'locations': [{}, {}]}} if branched else {},
+                  'b': {'0': [1, 1]} if branched else {}}}
+              Path(f'work/{name}.json').write_text(json.dumps(report))
+              parts.append({'format': 'istanbul', 'report': f'work/{name}.json', 'source_directory': f'work/{name}'})
+          Path('work/multi-full.json').write_text(json.dumps({'version': 2, 'coverage': parts}))
+          branched = json.loads(Path('work/backend-js.json').read_text())
+          next(iter(branched.values()))['b']['0'][1] = 0
+          Path('work/backend-js-gap.json').write_text(json.dumps(branched))
+          parts[0] = {**parts[0], 'report': 'work/backend-js-gap.json'}
+          Path('work/multi-gap.json').write_text(json.dumps({'version': 2, 'coverage': parts}))
       - name: Accept complete application coverage
         if: *verify-code
         uses: ./
@@ -148,6 +165,25 @@ jobs:
         env:
           GAP_OUTCOME: ${{ steps.gap.outcome }}
         run: test "$GAP_OUTCOME" = failure
+      - name: Accept complete multi-artifact application coverage
+        if: *verify-code
+        uses: ./
+        with:
+          operation: coverage
+          coverage-config: work/multi-full.json
+      - name: Reject an uncovered multi-artifact component
+        if: *verify-code
+        id: multi-gap
+        continue-on-error: true
+        uses: ./
+        with:
+          operation: coverage
+          coverage-config: work/multi-gap.json
+      - name: Verify multi-artifact rejection is enforced
+        if: *verify-code
+        env:
+          MULTI_GAP_OUTCOME: ${{ steps.multi-gap.outcome }}
+        run: test "$MULTI_GAP_OUTCOME" = failure
 
   prepare-installation:
     if: &install-event >-

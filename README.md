@@ -68,8 +68,12 @@ instrumentation with normal application cfgs, followed by docs and Docker tests.
 For JavaScript/TypeScript, select `coverage-format: istanbul` and pass the native
 `coverage-final.json` produced by c8/Istanbul. Set `source-directory` to the
 original application source tree, not compiled output. Every `.ts`, `.tsx`,
-`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules;
-declaration-only `.d.ts` files are not executable. The checker rejects omitted,
+`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules.
+Declaration-only `.d.ts` files, concrete test conventions and dependency
+directories are not application sources; generated application code remains
+included. The fixed inventory conventions and multi-artifact configuration are
+documented in [local coverage plans](docs/local-review.md#multiple-native-coverage-artifacts).
+The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
 directives. It derives exact line and branch totals from native hit counters,
 never from rounded summary percentages. Configure c8 `--all` over all compiled
@@ -83,6 +87,12 @@ report generation, path binding and exact native counter validation. This reads
 coverage.py's executable lines and branch decision exits, not statement
 percentages or every traced transition. Empty global totals, omitted application
 modules, exclusions, partial coverage and inconsistent counters fail closed.
+
+Monorepos may use the accepted-base version 2 local recipe with separate native
+Istanbul and coverage.py parts. `operation: coverage` accepts that recipe through
+`coverage-config` and runs the same shared per-part and aggregate checks as the
+local runner. Each part must be complete and exact; there is no consumer-side
+report merging. Legacy single-report inputs remain supported.
 
 ## Trust and permissions
 
