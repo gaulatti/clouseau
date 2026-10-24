@@ -19,6 +19,7 @@ fail the workflow. There is no previous-version fallback or private dependency.
 Every engine job directly needs that resolver and checks out its SHA. Jobs pass
 `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` from those job outputs; the
 local action verifies the actual content and, when available, checkout commit.
+Bootstrap identification checks the clean revision both before and after hashing.
 These are trusted workflow values, never PR text or uploaded evidence. Git-free
 action bundles verify their content digest against the same immutable selection.
 Tests of Clouseau itself still exercise proposed code; ordinary protected review
@@ -97,3 +98,14 @@ they do not share a run identity. Colombo's source CI uses this mechanism. Its
 older documentation action pins are inside `backend-deploy.yml`, whose changes
 trigger production deployment; those remain outside this installation. Deployment
 commands, triggers and documentation publication boundaries are unchanged.
+
+## Review evidence transport
+
+Review source inventories use controller-assigned numeric indices over the model
+transport. The controller restores each full immutable source ID before the
+existing completeness validation. Unknown, duplicated or substituted sources
+remain errors; malformed evidence cannot authorize approval.
+The report schema permits an inspected dependency only when its current-head
+source is supplied. Call-site evidence cannot establish dependency inspection;
+missing material source must be requested or explicitly reported missing.
+

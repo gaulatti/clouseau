@@ -4,7 +4,8 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture, finding} = require('../test/fixtures/acceptance.cjs');
 const {validateReport, digest} = require('./acceptance.cjs');
-const {template, modelTemplate, materialize} = require('./acceptance-review.cjs');
+const {template, modelTemplate, modelEvidence, materialize} = require('./acceptance-review.cjs');
+const {schemas} = require('./acceptance-schema.cjs');
 const {refresh} = require('./acceptance-sources.cjs');
 const {reconcile, render, priorState} = require('./acceptance-ledger.cjs');
 
@@ -81,12 +82,31 @@ test('the actual model template and materializer preserve the complete immutable
   assert.equal(sample.coverage.sources.length, 3);
   assert.equal(sample.coverage.sources.at(-1).state, 'excluded');
   const facts = modelTemplate(f.snapshot);
+  assert.deepEqual(facts.coverage.sources.map(item => item.source), [0, 1, 2]);
+  assert.deepEqual(Object.values(modelEvidence(f.snapshot).sources).map(item => item.source_index), [0, 1, 2]);
+  const selection = schemas(f.snapshot).acceptance_report.properties.coverage.properties.sources.items.properties.source;
+  assert.equal(selection.type, 'integer');
+  assert.deepEqual(selection.enum, [0, 1, 2]);
+  const dependencies = schemas(f.snapshot).acceptance_report.properties.coverage.properties.dependencies.items;
+  assert.deepEqual(dependencies.anyOf[0].properties.state.enum, ['excluded', 'missing']);
+  assert.ok(!dependencies.anyOf[1].properties.path.enum.includes('unseen-dependency.cjs'));
+  assert.ok(dependencies.anyOf[1].properties.path.enum.includes(f.snapshot.sources.head.path));
+  const noHead = structuredClone(f.snapshot); Object.values(noHead.sources).forEach(source => {source.ref = 'base';});
+  assert.equal(schemas(noHead).acceptance_report.properties.coverage.properties.dependencies.items.anyOf.length, 1);
   const report = materialize(facts, f.snapshot);
   assert.equal(report.coverage.sources.length, 3);
   assert.equal(report.coverage.sources[0].source, 'contract');
   assert.ok(report.coverage.sources[1].evidence.length);
   // A real new review is fail-closed until its observed gates and grades exist.
   assert.equal(validateReport(report, f.snapshot).decision, 'review_incomplete');
+  for (const source of [-1, 3, 'truncated-sha:src/upload.rs']) {
+    const invalid = structuredClone(facts); invalid.coverage.sources[1].source = source;
+    assert.throws(() => validateReport(materialize(invalid, f.snapshot), f.snapshot), /unknown inventoried source/);
+  }
+  const duplicate = structuredClone(facts); duplicate.coverage.sources[1].source = 0;
+  assert.throws(() => validateReport(materialize(duplicate, f.snapshot), f.snapshot), /incomplete source inventory/);
+  const substituted = structuredClone(facts); substituted.coverage.sources[1].source = 2; substituted.coverage.sources[2].source = 1;
+  assert.throws(() => validateReport(materialize(substituted, f.snapshot), f.snapshot), /inspection lacks direct immutable evidence/);
   f.snapshot.sources.added = {content: 'supporting source', path: 'helper.rs', ref: f.snapshot.head_sha}; refresh(f.snapshot);
   assert.equal(template(f.snapshot).coverage.sources.find(item => item.source === 'added').state, 'inspected');
   const empty = structuredClone(report); empty.coverage.sources[2].state = 'excluded';
