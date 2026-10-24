@@ -114,7 +114,7 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
-test('authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts', () => fixture(async f => {
+for (const central of [false, true, 'controls']) test(`central=${central}: authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts`, () => fixture(async f => {
   const crypto = require('node:crypto');
   const {issueReceipt} = require('./local-receipt.cjs');
   const {refresh} = require('./acceptance-sources.cjs');
@@ -125,6 +125,9 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
     reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 3600,
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  const engine = central ? {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha, digest: trusted.local_review.reviewer_digest} : null;
+  if (central) {delete trusted.local_review.reviewer_digest; trusted.local_review.central_source = {...require('./central-version.cjs').SOURCE};}
+  if (central === 'controls') trusted.sensitive_paths = [...trusted.sensitive_paths, 'src/upload.test.js'];
   record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted); refresh(record.snapshot);
   record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
   record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
@@ -138,15 +141,16 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
   f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
     encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
   }} : original(args);
-  const policy = createPolicy(trusted);
+  const policy = createPolicy(trusted, {engine});
   f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  if (central === 'controls') f.state.comments = [{id: 87, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
   let providerCalls = 0;
   const reports = [];
   const assess = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, report: line => reports.push(line),
     fetchImpl: async () => {providerCalls++; throw new Error('CI AI must not be called');}});
   const assessment = await assess();
   assert.equal(seed.decision, 'auto_approve');
-  assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+  assert.equal(assessment.decision, central === 'controls' ? 'owner_decision' : 'auto_approve', assessment.reason);
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
@@ -163,11 +167,30 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
     wait: async () => {}});
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
   assert.equal(providerCalls, 0);
+  if (central === 'controls') {
+    const owner = f.state.comments;
+    f.state.comments = [];
+    await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /owner authorization changed/);
+    const held = await assess();
+    assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
+    f.state.comments = owner;
+  }
+  if (central === true) {
+    const list = f.github.rest.pulls.listFiles;
+    f.github.rest.pulls.listFiles = async (...args) => {
+      const result = await list(...args);
+      return {data: result.data.map(({patch, ...file}) => file)};
+    };
+    f.state.comments = [{id: 88, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+    assert.equal((await assess()).decision, 'review_incomplete', 'owner intent cannot waive incomplete GitHub patch evidence');
+    f.state.comments = [];
+    f.github.rest.pulls.listFiles = list;
+  }
   const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
   const swapped = structuredClone(verifiedRecord); swapped.controls = true;
-  assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted), /substituted/);
+  assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted, engine), /substituted/);
   const history = structuredClone(verifiedRecord); history.previous.findings.push({id: 'fake'});
-  assert.throws(() => verifyRecord(history, {...assessment, record_digest: digest(history)}, trusted), /history was substituted/);
+  assert.throws(() => verifyRecord(history, {...assessment, record_digest: digest(history)}, trusted, engine), /history was substituted/);
   f.state.pr.user.login = 'another-author';
   await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /author changed/);
   f.state.pr.user.login = 'contributor';
@@ -183,10 +206,14 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
   assert.equal(providerCalls, 0);
   f.state.pr.body = 'No receipt';
   assert.equal((await assess()).decision, 'review_incomplete');
-  const optional = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'optional'}});
+  const optional = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'optional'}}, {engine});
   assert.equal((await optional.assess({github: f.github, context: f.context, recordPath: f.recordPath, receiptOnly: true})).decision,
     'review_incomplete');
   assert.equal(providerCalls, 0);
+  await policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0});
+  const saved = process.env.ASSESSMENT; process.env.ASSESSMENT = JSON.stringify(assessment);
+  try {await policy.finalize({github: f.github, context: f.context, core, mergePolls: 0});}
+  finally {if (saved === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = saved;}
 }));
 
 test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
@@ -457,6 +484,20 @@ test('failed repair generation retains the blocking review and an inspectable ca
   assert.equal(f.state.writes.length, 0);
 }));
 
+test('ordinary CI AI assessment and approval bind the frozen engine without a local receipt', () => fixture(async f => {
+  const engine = {...require('./central-version.cjs').SOURCE, sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest()};
+  const policy = createPolicy(config, {engine});
+  const assessment = await policy.assess({github: f.github, context: f.context, fetchImpl: f.fetchImpl, recordPath: f.recordPath});
+  assert.equal(assessment.decision, 'auto_approve');
+  assert.deepEqual(assessment.engine, engine);
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  assert.deepEqual(record.engine, engine);
+  assert.ok(f.state.calls > 0);
+  verifyRecord(record, assessment, config, engine);
+  const substituted = {...engine, sha: 'f'.repeat(40)};
+  await assert.rejects(createPolicy(config, {engine: substituted}).gate({github: f.github, context: f.context,
+    recordPath: f.recordPath, assessment, core: {info() {}}}), /different frozen engine/);
+}));
 
 test('a green AI-approved external PR is approved but never armed for merge and waits for a current code owner', () => fixture(async f => {
   f.state.pr.user = {login: 'external', type: 'User'};
