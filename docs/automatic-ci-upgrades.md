@@ -60,6 +60,11 @@ local installation, review the current committed source again, publish a fresh
 receipt, and start a fresh CI run. A central advance during that interval may
 require another fresh review; previous evidence must remain available.
 
+Local investigators can inspect `.clouseau-ci/` source requests through their
+own frozen public engine. This alias requires no consumer CI checkout and
+adds no authority to the source. Signed engine excerpts carry the exact engine
+revision; CI compares their bytes to its accepted frozen source before reuse.
+
 Local-only installations still need only the public Clouseau source and an
 authenticated coding harness. CI configuration and provider credentials are not
 installed by bastille startup. The signature authenticates an enrolled

@@ -87,7 +87,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
           repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
           configDigest: digest(config), policyDigest: policyDigest()});
-        await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files});
+        await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || legacy.scopeReason(files, pr)) {
           throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
         }

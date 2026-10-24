@@ -152,7 +152,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   const technical = verify({directory, config});
   if (git(directory, ['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed during local verification');
-  const collected = collectLocal({directory, base, request, technical, ciConfig});
+  const collected = collectLocal({directory, base, request, technical, ciConfig, reviewerSha});
   collected.snapshot.prior_findings = priorFindings;
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});

@@ -84,3 +84,20 @@ test('config command, report and policy boundaries fail before execution', () =>
 }));
 
 module.exports = {repository};
+
+test('local evidence can inspect the frozen public engine without a consumer CI checkout', t => repository(async f => {
+  const collected = collectLocal({directory: f.directory, base: f.base, request: 'Inspect the shared action.', technical: {fixture_only: true}, reviewerSha: 'e'.repeat(40)});
+  await collected.addSources(['.clouseau-ci/src/config.cjs']);
+  const source = Object.values(collected.snapshot.sources).find(item => item.path === '.clouseau-ci/src/config.cjs');
+  assert.equal(source.authority, 'untrusted'); assert.equal(source.kind, 'source');
+  assert.equal(source.content, fs.readFileSync(path.join(__dirname, 'config.cjs'), 'utf8'));
+  assert.equal(source.ref, 'e'.repeat(40));
+  const missing = collectLocal({directory: f.directory, base: f.base, request: 'Inspect.', technical: {}});
+  await assert.rejects(missing.addSources(['.clouseau-ci/src/config.cjs']), /Frozen reviewer identity/);
+  const read = fs.readFileSync;
+  for (const content of ['binary\0source', 'x'.repeat(300001)]) {
+    t.mock.method(fs, 'readFileSync', (filename, ...args) => filename === path.join(__dirname, 'config.cjs') ? content : read(filename, ...args));
+    await assert.rejects(collected.addSources(['.clouseau-ci/src/config.cjs']), /Binary or oversized engine/);
+    t.mock.restoreAll();
+  }
+}));

@@ -174,3 +174,8 @@ configuration and authorize protected Clouseau main instead of a recurring
 reviewer digest. An engine mismatch blocks without a paid fallback: refresh,
 review again and start a fresh workflow. The selected commit and digest are in
 the run summary and engine artifact.
+
+Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
+engine. The collector records that engine revision as untrusted source evidence
+without requiring a consumer CI checkout. CI verifies the exact signed excerpt
+against its accepted engine; engine source cannot become a repository contract.

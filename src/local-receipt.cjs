@@ -125,7 +125,7 @@ async function loadReceipt({github, repo, ref}) {
   return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
 }
 
-async function verifySources({github, repo, pr, snapshot, config, files}) {
+async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha}) {
   requireReceipt(files.length === pr.changed_files && files.length > 0 &&
     digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs');
   requireReceipt(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
@@ -146,6 +146,17 @@ async function verifySources({github, repo, pr, snapshot, config, files}) {
     if (id === 'local-request') {
       requireReceipt(source.authority === 'untrusted' && source.kind === 'requirement' &&
         source.ref === digest(source.content), 'local request is not sealed untrusted evidence');
+      continue;
+    }
+    if (source.path.startsWith('.clouseau-ci/')) {
+      const relative = source.path.slice('.clouseau-ci/'.length);
+      requireReceipt(sha(reviewerSha) && source.ref === reviewerSha && safePath(relative) &&
+        source.authority === 'untrusted' && source.kind === 'source', 'invalid frozen engine evidence');
+      const root = require('node:path').join(__dirname, '..');
+      // The action has already checked this source against the run digest.
+      // Git-free distributions compare the same file bytes without invoking Git.
+      const content = require('node:fs').readFileSync(require('node:path').join(root, relative), 'utf8');
+      requireReceipt(content === source.content, 'signed engine evidence differs from the accepted engine');
       continue;
     }
     requireReceipt(safePath(source.path) && [pr.base.sha, pr.head.sha].includes(source.ref) &&
