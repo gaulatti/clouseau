@@ -39,15 +39,16 @@ function template(snapshot) {
 function modelEvidence(snapshot) {
   const view = structuredClone(snapshot);
   view.proofs = proofCatalog(snapshot);
-  view.sources = Object.fromEntries(Object.entries(view.sources).map(([id, source]) => {
+  view.sources = Object.fromEntries(Object.entries(view.sources).map(([id, source], source_index) => {
     const {content, ...metadata} = source;
-    return [id, {...metadata, numbered_lines: content.split('\n').map((line, i) => `L${i + 1}: ${line}`).join('\n')}];
+    return [id, {...metadata, source_index, numbered_lines: content.split('\n').map((line, i) => `L${i + 1}: ${line}`).join('\n')}];
   }));
   return view;
 }
 
 function modelTemplate(snapshot) {
   const sample = template(snapshot); const catalog = proofCatalog(snapshot);
+  if (sample.coverage) sample.coverage.sources.forEach((item, index) => {item.source = index;});
   const aliases = new Map(sample.evidence.map(entry => [entry.id,
     [catalog.find(proof => proof.source === entry.source && proof.start <= entry.start && proof.end >= entry.end).id]]));
   delete sample.evidence;
@@ -64,6 +65,12 @@ function canonicalReferences(value, spans = new Map()) {
 
 function materialize(facts, snapshot) {
   const report = canonicalReferences(facts);
+  // Transport indices select exact controller-owned IDs, including empty files.
+  // Never repair a truncated SHA, invent a source or change a disposition.
+  const inventory = Object.fromEntries(Object.keys(snapshot.sources).map((source, index) => [index, source]));
+  for (const item of report.coverage?.sources || []) {
+    if (Object.hasOwn(inventory, item.source)) item.source = inventory[item.source];
+  }
   const catalog = new Map(proofCatalog(snapshot).map(entry => [entry.id, entry]));
   const spans = new Map();
   const suppliedProof = id => {

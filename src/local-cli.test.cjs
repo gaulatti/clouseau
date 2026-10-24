@@ -183,7 +183,7 @@ test('a failed first harness request remains inspectable and cannot be blindly s
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
 
-test('signed local runner requires protected enrollment and publishes its artifact outside the reviewed commit', async () => {
+for (const central of [false, true]) test(`central=${central}: signed local runner requires protected enrollment and publishes its artifact outside the reviewed commit`, async () => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-signed-fixture-'));
   try {
     const identity = initializeIdentity(state, 'fixture-author');
@@ -191,6 +191,7 @@ test('signed local runner requires protected enrollment and publishes its artifa
     const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: 'AGENTS.md', readme: 'README.md',
       acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
       local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity]}};
+    if (central) {delete config.local_review.reviewer_digest; config.local_review.central_source = {...require('./central-version.cjs').SOURCE};}
     await repository(async f => {
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
       const args = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};

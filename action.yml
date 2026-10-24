@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: verify-engine, test, coverage, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -88,7 +88,7 @@ runs:
         CLOUSEAU_HAS_REVIEW_RECORD: ${{ inputs.review-record != '' }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          verify-engine|test|coverage|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
         case "$CLOUSEAU_RECORD_TRANSPORT" in
@@ -101,6 +101,20 @@ runs:
             esac ;;
           *) echo 'Unknown Clouseau record transport' >&2; exit 1 ;;
         esac
+    - name: Verify and record this run frozen engine
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+      with:
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const engine = require(path.join(process.env.CLOUSEAU_ROOT, 'src/central-version.cjs')).environmentEngine();
+          if (engine) {
+            fs.mkdirSync('work', {recursive: true});
+            fs.writeFileSync('work/clouseau-engine.json', JSON.stringify(engine, null, 2) + '\n');
+            await core.summary.addRaw(`Clouseau frozen commit: ${engine.sha}\n\nEngine digest: ${engine.digest}\n`).write();
+          }
     - name: Test approval policy
       if: inputs.operation == 'test'
       shell: bash
@@ -145,7 +159,7 @@ runs:
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()});
           const assess = process.env.CLOUSEAU_WAIT_FOR_VERIFICATION === 'true' ? policy.assessWhenReady : policy.assess;
           const transport = require(path.join(root, 'src/record-transport.cjs'));
           const mode = process.env.CLOUSEAU_RECORD_TRANSPORT;
@@ -182,7 +196,7 @@ runs:
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()});
           const transport = require(path.join(root, 'src/record-transport.cjs'));
           const mode = process.env.CLOUSEAU_RECORD_TRANSPORT;
           const payload = mode === 'job-output' ? transport.joinParts([process.env.CLOUSEAU_RECORD_PART_0,
@@ -190,6 +204,7 @@ runs:
             process.env.CLOUSEAU_RECORD_CANONICAL === 'true') : '';
           transport.receive({mode, payload, assessment: JSON.parse(process.env.ASSESSMENT),
             context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});
+
           await policy.gate({github, context, core, nativeGate: process.env.CLOUSEAU_NATIVE_GATE === 'true'});
     - name: Apply bounded repair with an independent author
       if: inputs.operation == 'repair'
@@ -226,7 +241,7 @@ runs:
             process.env.CLOUSEAU_RECORD_CANONICAL === 'true') : '';
           transport.receive({mode, payload, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});
           const record = JSON.parse(fs.readFileSync(controller.RECORD, 'utf8'));
-          controller.verifyRecord(record, assessment, config);
+          controller.verifyRecord(record, assessment, config, require(path.join(root, 'src/central-version.cjs')).environmentEngine());
           const bundle = JSON.parse(fs.readFileSync(`${controller.RECORD}.repair.json`, 'utf8'));
           if (require(path.join(root, 'src/acceptance.cjs')).digest(bundle) !== assessment.repair_digest) throw new Error('Altered repair artifact');
           if (!process.env.CLOUSEAU_REPAIR_TOKEN) throw new Error('Provide an independent GitHub author credential through repair-token; approval remains blocked');
@@ -277,7 +292,7 @@ runs:
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          await require(path.join(root, 'src/policy.cjs')).createPolicy(config).requestReassessment({github, context, core});
+          await require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()}).requestReassessment({github, context, core});
     - name: Finalize merged revision and preserve deployment handoff
       if: inputs.operation == 'finalize'
       uses: actions/github-script@v7
@@ -292,7 +307,7 @@ runs:
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          await require(path.join(root, 'src/policy.cjs')).createPolicy(config).finalize({github, context, core});
+          await require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()}).finalize({github, context, core});
 
     - name: Prepare coordinated wiki documentation
       id: plan-wiki

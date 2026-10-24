@@ -126,3 +126,24 @@ test('even a trusted signer cannot submit incomplete execution, altered review b
   assert.throws(() => verifyReceipt(reSign(p => {p.nonce = 'weak';}), f.expected), /challenge/);
   assert.throws(() => verifyReceipt(reSign(p => {p.record.result.decision = 'owner_decision'; p.record_digest = digest(p.record);}), f.expected), /calculated/);
 });
+
+test('signed engine source requests are checked against accepted engine bytes and never promoted into repository authority', async () => {
+  const f = await fixture();
+  const snapshot = structuredClone(f.snapshot);
+  const source = {path: '.clouseau-ci/src/config.cjs', ref: f.issue.reviewerSha, authority: 'untrusted', kind: 'source',
+    content: require('node:fs').readFileSync(require('node:path').join(__dirname, 'config.cjs'), 'utf8')};
+  snapshot.sources.engine = source;
+  const files = [{filename: 'src/upload.test.js', status: 'modified'}];
+  const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
+    repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
+    files, reviewerSha: f.issue.reviewerSha};
+  await verifySources(options);
+  for (const changed of [{ref: 'f'.repeat(40)}, {path: '.clouseau-ci/../outside'}, {authority: 'trusted'}, {kind: 'contract'}]) {
+    snapshot.sources.engine = {...source, ...changed};
+    await assert.rejects(verifySources(options), /invalid frozen engine/);
+  }
+  snapshot.sources.engine = {...source, content: 'substituted'};
+  await assert.rejects(verifySources(options), /differs from the accepted engine/);
+  snapshot.sources.engine = source;
+  await assert.rejects(verifySources({...options, reviewerSha: undefined}), /invalid frozen engine/);
+});
