@@ -298,7 +298,13 @@ materializes an empty array for missing context. Factor and gate citation arrays
 retain their existing format. This uses supported object and enum constraints:
 [DeepSeek strict tools do not support array cardinality keywords](https://api-docs.deepseek.com/guides/tool_calls/#array).
 The existing evidence validator remains authoritative; no citation is invented
-for an uncited claim, and malformed or repeated proof selections fail closed.
+for an uncited claim. Coverage proof objects reject malformed selections and
+repeated raw proof IDs.
+Coverage proof objects use the same bounded coordinate resolver as legacy
+arrays: a coordinate inside a supplied proof chunk selects that exact chunk.
+Distinct coordinates selecting one chunk retain the existing canonical set
+semantics. Unknown sources, unsupplied chunks and out-of-range coordinates remain
+invalid; no source or citation is invented.
 Inspected dependencies require direct evidence from the current head. A relevant
 missing dependency has empty inspection evidence and makes review completeness
 unresolved even when tests and exact coverage pass. Source requests expand the

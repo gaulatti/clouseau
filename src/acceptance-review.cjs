@@ -77,6 +77,14 @@ function materialize(facts, snapshot) {
     if (Object.hasOwn(inventory, item.source)) item.source = inventory[item.source];
   }
   const catalog = new Map(proofCatalog(snapshot).map(entry => [entry.id, entry]));
+  const suppliedProof = id => {
+    if (catalog.has(id)) return catalog.get(id);
+    const coordinate = /^proof-(0|[1-9][0-9]*)-([1-9][0-9]*)$/.exec(id);
+    if (!coordinate) return undefined;
+    const line = Number(coordinate[2]);
+    return [...catalog.values()].find(entry => entry.id.startsWith(`proof-${coordinate[1]}-`) &&
+      entry.start <= line && line <= entry.end);
+  };
   for (const item of [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])]) {
     if (item.state === 'missing' && !Object.hasOwn(item, 'evidence')) {
       item.evidence = [];
@@ -88,21 +96,13 @@ function materialize(facts, snapshot) {
         throw new Error('Factual coverage requires a primary proof and an additional-proof array');
       }
       const ids = [value.primary, ...value.additional];
-      if (ids.some(id => !catalog.has(id)) || new Set(ids).size !== ids.length) {
+      if (ids.some(id => !suppliedProof(id)) || new Set(ids).size !== ids.length) {
         throw new Error('Factual coverage requires distinct controller-supplied proof IDs');
       }
       item.evidence = ids;
     }
   }
   const spans = new Map();
-  const suppliedProof = id => {
-    if (catalog.has(id)) return catalog.get(id);
-    const coordinate = /^proof-(0|[1-9][0-9]*)-([1-9][0-9]*)$/.exec(id);
-    if (!coordinate) return undefined;
-    const line = Number(coordinate[2]);
-    return [...catalog.values()].find(entry => entry.id.startsWith(`proof-${coordinate[1]}-`) &&
-      entry.start <= line && line <= entry.end);
-  };
   if (!Object.hasOwn(report, 'evidence')) {
     const ids = new Set();
     const collect = value => {
