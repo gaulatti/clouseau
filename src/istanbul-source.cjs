@@ -11,7 +11,28 @@ const statementSites = new Set([
 const branchSites = new Set(['AssignmentPattern', 'ConditionalExpression', 'LogicalExpression',
   'IfStatement', 'SwitchStatement']);
 const metadata = new Set(['loc', 'start', 'end', 'extra', 'comments', 'tokens',
-  'leadingComments', 'trailingComments', 'innerComments']);
+  'leadingComments', 'trailingComments', 'innerComments', 'typeAnnotation',
+  'returnType', 'typeParameters', 'typeArguments', 'superTypeParameters',
+  'superTypeArguments', 'implements', 'predicate']);
+const erasedDeclarations = new Set(['TSInterfaceDeclaration', 'TSTypeAliasDeclaration',
+  'TSDeclareFunction', 'TSDeclareMethod', 'TSNamespaceExportDeclaration']);
+
+function* runtimeNodes(ast) {
+  const pending = [ast];
+  while (pending.length) {
+    const node = pending.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      for (let index = node.length - 1; index >= 0; index--) pending.push(node[index]);
+      continue;
+    }
+    // Ambient context erases the whole declaration tree, including literal
+    // initializers nested in a declared namespace or class. Siblings remain.
+    if (node.declare === true || erasedDeclarations.has(node.type)) continue;
+    yield node;
+    for (const [key, value] of Object.entries(node)) if (!metadata.has(key)) pending.push(value);
+  }
+}
 
 function counterSites(source, extension) {
   const plugins = [];
@@ -20,9 +41,7 @@ function counterSites(source, extension) {
   const ast = parser.parse(source, {sourceType: 'unambiguous', allowReturnOutsideFunction: true,
     allowAwaitOutsideFunction: true, plugins});
   const result = {statements: false, branches: false};
-  function visit(node) {
-    if (!node || typeof node !== 'object') return;
-    if (Array.isArray(node)) { node.forEach(visit); return; }
+  for (const node of runtimeNodes(ast)) {
     if (statementSites.has(node.type) ||
         (node.type === 'VariableDeclarator' && node.init) ||
         ((node.type === 'ClassProperty' || node.type === 'ClassPrivateProperty') && node.value) ||
@@ -30,9 +49,7 @@ function counterSites(source, extension) {
       result.statements = true;
     }
     if (branchSites.has(node.type)) result.branches = true;
-    for (const [key, value] of Object.entries(node)) if (!metadata.has(key)) visit(value);
   }
-  visit(ast);
   return result;
 }
 

@@ -16,6 +16,15 @@ TypeScript/TSX and CommonJS top-level returns. A missing runtime, parser failure
 timeout or invalid helper response stops validation.
 
 The helper recognizes native Istanbul statement and branch counter sites. It
+first traverses the runtime AST subgraph: complete ambient declaration trees and
+type-only metadata are omitted because the compiler erases them. This includes
+literal initializers inside `declare const`, declared namespaces and declared
+classes. Adjacent runtime declarations and ordinary object property names remain
+in the traversal; an ambient declaration never excludes the rest of its file.
+Strict TypeScript compiler fixtures and unmodified native instrumenter output
+exercise those cases through both checker entry points.
+
+The counter-site pass
 checks presence rather than asserting identical counts or source locations across
 producers. An empty statement map is rejected when a statement counter site is
 present. A branch-only declaration, such as a function with a default parameter,

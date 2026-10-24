@@ -31,6 +31,19 @@ test('native branch-only declarations retain their independent branch requiremen
   assert.deepEqual(counterSites('switch (flag) {}', '.js'), {statements: true, branches: true});
 });
 
+test('runtime projection omits entire compiler-erased scopes without hiding live siblings or property names', () => {
+  const fixture = require('../test/fixtures/istanbul-erased-typescript.json');
+  for (const item of fixture.ambient) {
+    assert.deepEqual(counterSites(item.source, '.ts'), {statements: false, branches: false}, item.filename);
+  }
+  for (const item of fixture.runtime) {
+    assert.equal(counterSites(item.source, '.ts').statements, true, item.filename);
+  }
+  assert.equal(counterSites('export const value: number = 1;', '.ts').statements, true);
+  assert.equal(counterSites('function declaration() { return 1; }', '.js').statements, true);
+  assert.equal(counterSites('export default {declare: true, typeAnnotation: () => 1};', '.js').statements, true);
+});
+
 test('CLI parses stdin as data and fails closed without echoing source on syntax errors', () => {
   const script = path.join(__dirname, 'istanbul-source.cjs');
   const inspect = input => cp.spawnSync(process.execPath, [script, '.js'], {input, encoding: 'utf8'});
