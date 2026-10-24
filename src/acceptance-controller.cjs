@@ -50,7 +50,7 @@ function verifyRecord(record, assessment, config, engine = null) {
   record.result.decision = combine(reviews);
   const state = reconcile(record.result, record.snapshot, record.previous.findings);
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(record.result.decision)) record.result.decision = 'review_incomplete';
-  if (assessment.decision !== decided(record.result, record.controls)) throw new Error('Acceptance decision differs from the deterministic record');
+  if (assessment.decision !== decided(record.result, record.controls || Boolean(record.local_authorization))) throw new Error('Acceptance decision differs from the deterministic record');
   return {state, ...publication({...record.result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
@@ -88,14 +88,16 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
           configDigest: digest(config), policyDigest: policyDigest()});
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
-        if (digest(previous.findings) !== digest(verified.record.previous.findings) || legacy.scopeReason(files, pr)) {
+        const controls = legacy.scopeReason(files, pr);
+        const authorization = controls ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
+        if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
           throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
         }
-        const record = {...verified.record, ...(engine ? {engine} : {}), previous, technical, local_author: pr.user.login,
+        const record = {...verified.record, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical, local_author: pr.user.login,
           local_artifact: receiptRef, local_receipt: bundle};
         fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
         if (report) report('Authenticated local Clouseau review verified. CI AI calls: 0.');
-        return {...identity, decision: 'auto_approve', record_digest: digest(record),
+        return {...identity, decision: authorization ? 'owner_decision' : 'auto_approve', record_digest: digest(record),
           review_source: 'authenticated_local', provider_api_calls: 0,
           reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
       }
@@ -162,6 +164,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     if (record.snapshot.intent_confirmation && digest(record.snapshot.intent_confirmation) !==
         digest(await legacy.purposeConfirmation(github, context.repo, pr, comments))) {
       throw new Error('Accepted purpose confirmation changed; reassess the current evidence');
+    }
+    if (record.local_authorization && digest(record.local_authorization) !==
+        digest(await legacy.purposeConfirmation(github, context.repo, pr, comments))) {
+      throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
     if (digest(current) !== digest(record.previous)) throw new Error('Acceptance history changed; reassess the current record');

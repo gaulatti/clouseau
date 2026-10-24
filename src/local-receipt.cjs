@@ -92,7 +92,7 @@ function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, rev
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
     typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge');
-  if (trust.central_source) {
+  if (trust.central_source || engine) {
     requireReceipt(acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
       p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha,
     'engine mismatch; refresh public Clouseau and review again, then start a fresh CI run. No paid fallback is allowed');
@@ -102,7 +102,7 @@ function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, rev
   requireReceipt(p.record_digest === digest(record) && snapshot.repository === repository &&
     sha(headSha) && snapshot.head_sha === headSha && sha(baseSha) && snapshot.base_sha === baseSha &&
     sha(p.reviewer_sha) && (!reviewerSha || p.reviewer_sha === reviewerSha) &&
-    p.reviewer_digest === reviewerDigest && (trust.central_source || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
+    p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
     snapshot.policy_digest === policyDigest, 'repository, revisions, policy, configuration or record changed');
   requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
     Array.isArray(snapshot.prior_findings) && record.controls === false, 'receipt cannot grant owner authority');

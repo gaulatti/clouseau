@@ -45,15 +45,20 @@ with:
 "central_source": {"repository": "gaulatti/clouseau", "ref": "refs/heads/main"}
 ```
 
-The two authorization modes are exclusive. Proposed PR configuration cannot
+The two configuration modes are exclusive. During the owner-confirmed
+installation transition, a frozen central identity supplied by trusted workflow
+configuration can authorize the engine while protected signer configuration
+still contains its legacy digest. Without that trusted run identity, the legacy
+digest remains mandatory. A receipt never supplies that authorization. Proposed PR configuration cannot
 enroll a source or signer. CI checks the receipt's exact engine SHA and digest
 against its frozen, checked-out source. A receipt cannot supply its own accepted
 digest. No version-label or implicit cross-version compatibility is supported.
 
 A matching eligible signature reuses the independent local review with zero CI
 AI calls. Independent tests, exact 100% line and branch coverage, current source,
-base, policy and configuration checks remain mandatory. Owner authorization for
-review-control changes remains separate. Missing receipts in optional mode use
+base, policy and configuration checks remain mandatory. Review-control changes require a separate, current-head owner purpose
+confirmation. The receipt supplies the scored review only; CI records and
+revalidates that separate authorization before approval. Missing receipts in optional mode use
 the ordinary CI AI reviewer. Invalid, expired, revoked or engine-mismatched
 receipts block approval without an unexpected paid fallback. Refresh the public
 local installation, review the current committed source again, publish a fresh

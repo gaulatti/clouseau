@@ -113,3 +113,14 @@ test('run environment is verified against actual engine source; local-only mode 
     }
   }
 });
+
+test('a trusted frozen workflow can migrate legacy digest enrollment without accepting receipt-provided identity', async () => {
+  const f = await fixture();
+  const engine = {...SOURCE, sha: f.issue.reviewerSha, digest: f.trust.reviewer_digest};
+  const oldTrust = {...f.trust, reviewer_digest: '0'.repeat(64)};
+  const bundle = issueReceipt(f.issue);
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust}), /changed/);
+  assert.equal(verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine}).decision, 'auto_approve');
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, sha: second}}), /engine mismatch/);
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, repository: 'attacker/reviewer'}}), /engine mismatch/);
+});

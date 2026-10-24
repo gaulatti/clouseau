@@ -127,8 +127,9 @@ an independently isolated execution/signing service and is not claimed here.
 
 An enrolled runner selects its matching installed identity automatically. Use
 `--identity /path/to/identity.json` to select explicitly when needed. The runner
-requires unmodified Clouseau engine content already enrolled in accepted CI
-policy. It records the exact Clouseau commit and binds the executable engine,
+requires an unmodified public Clouseau engine and the enrolled signer. CI
+authorizes the exact engine separately from the signature. Legacy CI without a
+trusted frozen-source selection still requires its configured digest. It records the exact Clouseau commit and binds the executable engine,
 skill, scripts and policy by a SHA-256 content digest. Legacy fixed-digest installations permit identical engine content across squash
 identities. [Automatic CI upgrades](automatic-ci-upgrades.md) require both the
 exact selected central commit and its computed digest; no cross-version
@@ -137,7 +138,9 @@ the same source and installation remain unchanged before
 issuing a passing receipt. Signing material is never placed in model packets,
 child-process environments, project source, reports or the published artifact.
 Protected review-control changes still require the separate owner-authorized
-installation path; an ordinary local receipt cannot grant that authority.
+installation path; a local receipt cannot grant that authority. A current-head owner confirmation
+is independently recorded and revalidated by CI when a signed review accompanies
+a review-control change.
 
 The receipt signs a domain-separated SHA-256 payload with Ed25519. It includes
 the complete review record, exact repository/head/base, Clouseau and policy/config

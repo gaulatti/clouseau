@@ -52,9 +52,13 @@ function environmentEngine(root) {
 }
 
 function acceptsEngine(trust, engine) {
-  return trust.central_source ? centralSource(trust.central_source) && engine &&
-    engine.repository === SOURCE.repository && engine.ref === SOURCE.ref && sha(engine.sha) && hash(engine.digest) :
-    Boolean(engine && trust.reviewer_digest === engine.digest);
+  const frozen = Boolean(engine && engine.repository === SOURCE.repository && engine.ref === SOURCE.ref &&
+    sha(engine.sha) && hash(engine.digest));
+  // An explicit engine identity is supplied only by the trusted frozen-source
+  // workflow (or the refreshed public local runner), never by receipt data.
+  // This also permits the one-time migration from legacy digest enrollment.
+  return trust.central_source ? centralSource(trust.central_source) && frozen :
+    frozen || Boolean(engine && trust.reviewer_digest === engine.digest);
 }
 
 module.exports = {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine};

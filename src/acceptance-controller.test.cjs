@@ -111,7 +111,7 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
-for (const central of [false, true]) test(`central=${central}: authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts`, () => fixture(async f => {
+for (const central of [false, true, 'controls']) test(`central=${central}: authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts`, () => fixture(async f => {
   const crypto = require('node:crypto');
   const {issueReceipt} = require('./local-receipt.cjs');
   const {refresh} = require('./acceptance-sources.cjs');
@@ -124,6 +124,7 @@ for (const central of [false, true]) test(`central=${central}: authenticated loc
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
   const engine = central ? {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha, digest: trusted.local_review.reviewer_digest} : null;
   if (central) {delete trusted.local_review.reviewer_digest; trusted.local_review.central_source = {...require('./central-version.cjs').SOURCE};}
+  if (central === 'controls') trusted.sensitive_paths = [...trusted.sensitive_paths, 'src/upload.test.js'];
   record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted); refresh(record.snapshot);
   record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
   record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
@@ -139,13 +140,14 @@ for (const central of [false, true]) test(`central=${central}: authenticated loc
   }} : original(args);
   const policy = createPolicy(trusted, {engine});
   f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  if (central === 'controls') f.state.comments = [{id: 87, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
   let providerCalls = 0;
   const reports = [];
   const assess = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, report: line => reports.push(line),
     fetchImpl: async () => {providerCalls++; throw new Error('CI AI must not be called');}});
   const assessment = await assess();
   assert.equal(seed.decision, 'auto_approve');
-  assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+  assert.equal(assessment.decision, central === 'controls' ? 'owner_decision' : 'auto_approve', assessment.reason);
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
@@ -162,6 +164,14 @@ for (const central of [false, true]) test(`central=${central}: authenticated loc
     wait: async () => {}});
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
   assert.equal(providerCalls, 0);
+  if (central === 'controls') {
+    const owner = f.state.comments;
+    f.state.comments = [];
+    await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /owner authorization changed/);
+    const held = await assess();
+    assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
+    f.state.comments = owner;
+  }
   const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
   const swapped = structuredClone(verifiedRecord); swapped.controls = true;
   assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted, engine), /substituted/);
