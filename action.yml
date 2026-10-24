@@ -14,10 +14,10 @@ inputs:
     description: Trusted repository configuration path (assess and gate)
     default: .github/clouseau.json
   coverage-report:
-    description: Native LLVM or Istanbul JSON coverage report path (coverage)
+    description: Native LLVM, Istanbul or coverage.py JSON report path (coverage)
     default: ''
   coverage-format:
-    description: llvm or istanbul; Istanbul requires every application JS/TS source
+    description: llvm, istanbul or coveragepy; require the complete application source inventory
     default: llvm
   source-directory:
     description: Application source directory to measure (coverage)

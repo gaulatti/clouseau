@@ -93,7 +93,8 @@ function scoreReport(report) {
 }
 
 function validateEvidence(report, snapshot, graded) {
-  keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions', 'resolutions']);
+  keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions', 'resolutions',
+    ...(snapshot.review_manifest_version ? ['coverage', 'reopenings'] : [])]);
   requireThat(report.version === RULES.version && report.snapshot === snapshot.digest && text(report.summary), 'stale identity or missing summary');
   requireThat(Array.isArray(report.evidence) && report.evidence.length > 0, 'missing evidence register');
   const evidence = new Map();
@@ -169,6 +170,7 @@ function validateEvidence(report, snapshot, graded) {
       snapshot.files.some(file => file.path === item.path && [file.base_source, file.head_source].includes(evidence.get(id).source))),
       'accounting lacks direct changed-file evidence');
   }
+  if (snapshot.review_manifest_version) validateCompleteness(report, snapshot, evidence, citations);
   requireThat(Array.isArray(report.decisions), 'missing authority decisions');
   for (const item of report.decisions) {
     keys(item, ['kind', 'question', 'options', 'evidence']);
@@ -185,6 +187,57 @@ function validateEvidence(report, snapshot, graded) {
     citations(item.evidence);
     requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].ref === snapshot.head_sha), 'resolution lacks current-revision evidence');
     resolved.add(item.id);
+  }
+}
+
+
+// The manifest accounts for supplied context and explicitly unresolved boundaries.
+// It cannot prove semantic attention, but omitted material evidence cannot be
+// disguised by a satisfied generic gate or a passing test-coverage percentage.
+function validateCompleteness(report, snapshot, evidence, citations) {
+  keys(report.coverage, ['sources', 'dependencies']);
+  const manifest = report.coverage;
+  requireThat(Array.isArray(manifest.sources) && manifest.sources.length === Object.keys(snapshot.sources).length &&
+    new Set(manifest.sources.map(item => item.source)).size === manifest.sources.length, 'incomplete source inventory');
+  requireThat(Array.isArray(manifest.dependencies) && new Set(manifest.dependencies.map(item => item.path)).size === manifest.dependencies.length,
+    'invalid dependency inventory');
+  let missing = false;
+  const check = (item, dependency) => {
+    keys(item, [dependency ? 'path' : 'source', 'state', 'reason', 'evidence']);
+    requireThat(['inspected', 'excluded', 'missing'].includes(item.state) && text(item.reason), 'source disposition');
+    unique(item.evidence, 'source disposition citations');
+    if (item.state === 'missing') { missing = true; requireThat(item.evidence.length === 0, 'missing source cannot claim inspection evidence'); return; }
+    citations(item.evidence);
+    const selected = item.evidence.map(id => snapshot.sources[evidence.get(id).source]);
+    requireThat(item.state === 'excluded' || selected.some(source => dependency ? source.path === item.path && source.ref === snapshot.head_sha :
+      source === snapshot.sources[item.source]), 'inspection lacks direct immutable evidence');
+  };
+  for (const item of manifest.sources) {
+    requireThat(Object.hasOwn(snapshot.sources, item.source), 'unknown inventoried source');
+    check(item, false);
+    const changed = snapshot.files.some(file => [file.base_source, file.head_source].includes(item.source));
+    requireThat(!changed || item.state !== 'excluded' || !snapshot.sources[item.source].content.trim(), 'changed source cannot be excluded');
+  }
+  for (const item of manifest.dependencies) {
+    requireThat(typeof item.path === 'string' && item.path.length > 0 && item.path.length < 500 &&
+      !item.path.startsWith('/') && !item.path.includes('\0') && !item.path.includes('\\') && !item.path.split('/').some(part => !part || ['.', '..', '.git'].includes(part)),
+      'unsafe dependency path');
+    check(item, true);
+  }
+  requireThat(!missing || report.gates.find(gate => gate.name === 'review_completeness').state === 'unresolved',
+    'missing material source requires unresolved completeness');
+  requireThat(Array.isArray(report.reopenings), 'missing reopening register');
+  const reopened = new Set();
+  for (const item of report.reopenings) {
+    keys(item, ['id', 'reason', 'evidence']);
+    requireThat(!reopened.has(item.id) && text(item.reason) && snapshot.prior_findings?.some(old => old.id === item.id &&
+      ['corrected', 'dismissed'].includes(old.state)), 'invalid finding reopening');
+    citations(item.evidence);
+    requireThat(item.evidence.some(id => {
+      const source = snapshot.sources[evidence.get(id).source];
+      return source.ref === snapshot.head_sha && ['source', 'contract'].includes(source.kind);
+    }), 'reopening lacks current-revision repository evidence');
+    reopened.add(item.id);
   }
 }
 

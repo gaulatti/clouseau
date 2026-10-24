@@ -14,6 +14,88 @@ const config = {...require('../test/fixtures/config.json'), version: 2, reposito
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
 
+test('explicit manual mode approves independently verified owner work without ever arming auto-merge or deployment', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  assert.equal(assessment.decision, 'auto_approve');
+  const messages = [];
+  const core = {info(message) {messages.push(message);}, summary: {addRaw(message) {messages.push(message); return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'disable-auto').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  assert.equal(f.state.pr.auto_merge, null);
+  assert.ok(messages.some(message => message.includes('GitHub cannot enforce protection')));
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.ok(messages.some(message => message.includes('never arms auto-merge or dispatches deployment')));
+  f.state.pr.auto_merge = {};
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
+test('manual mode still refuses failed tests, stale revisions and an unsuccessful auto-merge disable', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  f.state.pr.auto_merge = null;
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  f.state.failed = true;
+  await assert.rejects(gate(), /Verification changed/);
+  f.state.failed = false;
+  f.state.pr.head.sha = 'd'.repeat(40);
+  await assert.rejects(gate(), /PR changed/);
+  f.state.pr.head.sha = assessment.head_sha;
+  f.state.pr.auto_merge = {};
+  f.github.graphql = async () => ({});
+  await assert.rejects(gate(), /Automatic merge remains enabled/);
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 0);
+}));
+
+test('manual mode preserves available protection and denies newly enabled auto-merge or revoked ownership before approval', async () => {
+  for (const failure of [null, 'settings', 'owner']) await fixture(async f => {
+    const policy = createPolicy({...config, merge_mode: 'manual'});
+    f.state.pr.auto_merge = null;
+    const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+    let settingsReads = 0; let ownerReads = 0;
+    f.github.rest.repos.get = async () => ({data: {private: false, allow_auto_merge: failure === 'settings' && ++settingsReads > 1}});
+    f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: failure === 'owner' && ++ownerReads > 1 ? 'read' : 'write'}});
+    const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+    const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+    if (failure) {
+      await assert.rejects(gate(), failure === 'settings' ? /auto-merge to be disabled/ : /ownership changed/);
+      assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 0);
+    } else {
+      await gate();
+      assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+    }
+    assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  });
+});
+
+test('manual-only external work retains the exact-head code-owner approval requirement even on an unsupported private plan', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const original = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = args => args.path === '.github/CODEOWNERS' ? Promise.resolve({data: {
+    encoding: 'base64', content: Buffer.from('* @maintainer').toString('base64')}}) : original(args);
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  const messages = [];
+  const core = {info() {}, summary: {addRaw(value) {messages.push(value); return this;}, async write() {}}};
+  const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  await assert.rejects(gate(), /current-head code-owner approval/);
+  f.state.reviews = [{user: {login: 'maintainer', type: 'User'}, state: 'APPROVED', commit_id: f.state.pr.head.sha}];
+  await gate();
+  assert.ok(messages.some(value => value.includes('GitHub cannot enforce protection')));
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
 async function fixture(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-acceptance-'));
   const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
@@ -22,12 +104,12 @@ async function fixture(run) {
     const policy = createPolicy(config);
     const context = {repo, runId: 7, eventName: 'pull_request_target', payload: {pull_request: {number: 3}}};
     const state = {comments: [], reviews: [], writes: [], failed: false, calls: 0, pending: false,
-      pr: {number: 3, node_id: 'PR_3', state: 'open', draft: false, changed_files: 1, user: {login: 'contributor'},
+      pr: {number: 3, node_id: 'PR_3', state: 'open', draft: false, changed_files: 1, user: {login: 'contributor', type: 'User'},
         head: {sha: snapshot.head_sha, ref: 'fix/upload', repo: {id: 7, owner: {login: repo.owner}, name: repo.repo}},
         base: {sha: snapshot.base_sha, ref: 'main'}, auto_merge: {enabled_by: {login: 'github-actions[bot]'}}}};
     const graphql = github.graphql;
     github.graphql = async (query, args) => {
-      if (query.startsWith('mutation')) {state.writes.push({name: 'enable-auto'}); state.pr.auto_merge = {}; return {};}
+      if (query.startsWith('mutation')) {const disable = query.includes('disablePullRequestAutoMerge'); state.writes.push({name: disable ? 'disable-auto' : 'enable-auto'}); state.pr.auto_merge = disable ? null : {}; return {};}
       return graphql(query, args);
     };
     const endpoint = (name, fn) => Object.assign(fn, {endpointName: name});
@@ -49,6 +131,9 @@ async function fixture(run) {
       listJobsForWorkflowRun: endpoint('jobs', async () => ({data: [{id: 10, name: 'verify', conclusion: 'success',
         steps: config.verification.steps.map(name => ({name, conclusion: 'success'}))}]})),
     };
+    const readContent = github.rest.repos.getContent;
+    github.rest.repos.getContent = args => args.path === '.github/CODEOWNERS' ? Promise.resolve({data: {
+      encoding: 'base64', content: Buffer.from('* @contributor').toString('base64'), size: 14}}) : readContent(args);
     Object.assign(github.rest.repos, {
       get: async () => ({data: {allow_auto_merge: true}}), getBranch: async () => ({data: {protected: true}}),
       getCollaboratorPermissionLevel: async () => ({data: {permission: 'write'}}),
@@ -187,7 +272,9 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
 }));
 
 test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
-  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`};
+  const purpose = 'Preserve durable upload acceptance with meaningful production-path regression tests.';
+  const comment = {id: 51, user: {login: 'gaulatti', type: 'User'},
+    body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\n${purpose}`};
   f.state.comments.push(comment);
   let investigations = 0; let graders = 0;
   const assessment = await f.assess({fetchImpl: async (url, options) => {
@@ -197,11 +284,14 @@ test('authenticated accepted purpose reaches both independent investigations and
       const source = Object.values(packet.sources).find(item => item.path === 'pulls/3/intent/51');
       assert.equal(source.authority, 'trusted'); assert.equal(source.kind, 'contract');
       assert.match(source.numbered_lines, /approve-intent/);
+      assert.equal(packet.intent_confirmation.accepted_purpose, purpose);
+      assert.ok(source.numbered_lines.includes(purpose));
       assert.ok(packet.proofs.some(item => packet.sources[item.source].path === source.path));
     } else {
       graders++;
       const contract = packet.state.accepted_contract.find(item => item.path === 'pulls/3/intent/51');
       assert.equal(JSON.parse(contract.content).body, comment.body);
+      assert.equal(JSON.parse(contract.content).accepted_purpose, purpose);
     }
     return f.fetchImpl(url, options);
   }});
@@ -216,11 +306,13 @@ test('authenticated accepted purpose reaches both independent investigations and
 }));
 
 test('deleted, altered or revoked purpose evidence holds approval before any publication write', async () => {
-  for (const change of ['delete', 'edit', 'revoke']) await fixture(async f => {
-    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+  for (const change of ['delete', 'edit', 'revoke', 'purpose']) await fixture(async f => {
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'},
+      body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve durable upload acceptance.`});
     const assessment = await f.assess();
     if (change === 'delete') f.state.comments = [];
     if (change === 'edit') f.state.comments[0].body = 'Confirmation withdrawn.';
+    if (change === 'purpose') f.state.comments[0].body += '\nIntroduce an unrelated capability.';
     if (change === 'revoke') f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: 'read'}});
     await assert.rejects(f.gate(assessment), /purpose confirmation changed/);
     assert.equal(f.state.writes.length, 0);
@@ -229,7 +321,8 @@ test('deleted, altered or revoked purpose evidence holds approval before any pub
 
 test('a citable owner purpose receipt cannot waive low product scores or an integrity veto', async () => {
   for (const failure of ['need', 'integrity']) await fixture(async f => {
-    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+    f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'},
+      body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve durable upload acceptance.`});
     if (failure === 'integrity') f.state.alter = report => {report.gates.find(item => item.name === 'test_integrity').state = 'violated';};
     const assessment = await f.assess({fetchImpl: async (url, options) => {
       const body = JSON.parse(options.body);
@@ -444,4 +537,55 @@ test('failed repair generation retains the blocking review and an inspectable ca
   assert.equal(assessment.decision, 'blocked_integrity'); assert.equal(assessment.repair_digest, undefined);
   assert.match(JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`)).repair_unavailable, /repair provider offline/);
   assert.equal(f.state.writes.length, 0);
+}));
+
+
+test('a green AI-approved external PR is approved but never armed for merge and waits for a current code owner', () => fixture(async f => {
+  f.state.pr.user = {login: 'external', type: 'User'};
+  const assessment = await f.assess();
+  assert.equal(assessment.decision, 'auto_approve');
+  await assert.rejects(f.gate(assessment), /code-owner approval/);
+  assert.equal(f.state.writes.some(item => item.name === 'approve'), true);
+  assert.equal(f.state.writes.some(item => item.name === 'enable-auto'), false);
+  assert.equal(f.state.writes.some(item => item.name === 'disable-auto'), true);
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
+test('a fresh code-owner review permits manual merge of an external contribution without enabling auto-merge', () => fixture(async f => {
+  f.state.pr.user = {login: 'external', type: 'User'};
+  f.state.pr.auto_merge = null;
+  f.state.reviews = [{user: {login: 'contributor', type: 'User'}, state: 'APPROVED', commit_id: f.state.pr.head.sha}];
+  const assessment = await f.assess();
+  await f.gate(assessment);
+  assert.equal(f.state.writes.some(item => item.name === 'approve'), true);
+  assert.equal(f.state.writes.some(item => item.name === 'enable-auto'), false);
+  assert.equal(f.state.pr.auto_merge, null);
+  await f.policy.finalize({github: f.github, context: f.context, core: {info() {}}, assessment});
+  assert.equal(f.state.writes.some(item => item.name === 'enable-auto'), false);
+}));
+
+
+test('revoked author ownership at the final write boundary cannot release an automatic merge', () => fixture(async f => {
+  const assessment = await f.assess();
+  let permissions = 0;
+  f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: ++permissions === 1 ? 'write' : 'read'}});
+  await assert.rejects(f.gate(assessment), /ownership changed/);
+}));
+
+test('non-native checks also hold an external PR and finalization rechecks owner authorship', () => fixture(async f => {
+  const assessment = await f.assess();
+  f.state.pr.user = {login: 'external', type: 'User'};
+  const request = f.github.request;
+  f.github.request = async (...args) => {
+    const value = await request(...args);
+    value.data.find(rule => rule.type === 'required_status_checks').parameters.required_status_checks.push({context: 'approval-policy', integration_id: 15368});
+    return value;
+  };
+  f.github.rest.checks = {create: async () => ({data: {id: 1}}), update: async () => ({data: {}})};
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await f.policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: false, wait: async () => {}});
+  assert.equal(f.state.pr.auto_merge, null);
+  f.state.pr.user.login = 'contributor';
+  await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, files: [{filename: 'src/upload.test.js'}]});
+  await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, pr: {...f.state.pr, merged: true}, files: []});
 }));

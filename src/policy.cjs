@@ -3,11 +3,18 @@
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
 
-function createPolicy(input) {
+function intentText(body, sha) {
+  if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
+  const match = new RegExp(`^/approve-intent ${sha}(?:\\n\\nAccepted purpose:\\n([\\s\\S]*\\S))?$`).exec(body.trim());
+  if (!match) return null;
+  return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
+}
+
+function createPolicy(input, {codeownersRequired = false, manualMerge = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const {local_review, ...legacyConfig} = config;
-  const legacy = createPolicy({...legacyConfig, version: 1});
+  const {local_review, merge_mode, ...legacyConfig} = config;
+  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual'});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
 }
 const CHECK = 'approval-policy';
@@ -26,7 +33,7 @@ function numberFor(context) {
 
 function scopeReason(files, pr) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
-  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS', '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
   if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
@@ -117,7 +124,7 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   const pull_number = numberFor(context);
   const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
   const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-  if (context.eventName === 'issue_comment' && context.payload.comment.body.trim() !== `/approve-intent ${pr.head.sha}`) {
+  if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
     throw new Error('Stale or malformed intent confirmation');
   }
   const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
@@ -145,13 +152,12 @@ async function purposeConfirmation(github, repo, pr, comments) {
   const comment = [...comments].reverse().find(item =>
     item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER &&
     Number.isSafeInteger(item.id) && item.id > 0 &&
-    typeof item.body === 'string' &&
-    item.body.trim() === `/approve-intent ${pr.head.sha}`);
+    intentText(item.body, pr.head.sha));
   if (!comment) return null;
   const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
   if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
   return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
-    actor: comment.user.login, permission: data.permission, comment_id: comment.id, body: comment.body.trim()};
+    actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intentText(comment.body, pr.head.sha)};
 }
 
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
@@ -171,7 +177,7 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
   if (reviewOnly) return false;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number, per_page: 100});
   for (const comment of comments) {
-    if (comment.body.trim() === `/approve-intent ${pr.head.sha}` && await canConfirm(comment.user)) return true;
+    if (intentText(comment.body, pr.head.sha) && await canConfirm(comment.user)) return true;
   }
   return false;
 }
@@ -244,10 +250,10 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       throw new Error('Only a maintainer can confirm repository intent');
     }
   }
-  const {data: settings} = await github.rest.repos.get(repo);
-  const {data: branch} = await github.rest.repos.getBranch({...repo, branch: config.base_branch});
-  if (!settings.allow_auto_merge || !branch.protected) throw new Error('Repository auto-merge and main protection must be enabled');
-  await assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK);
+  const protection = () => require('./merge-protection.cjs').assertMergeProtection({github, repo,
+    baseBranch: config.base_branch, manual: manualMerge,
+    assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
+  await protection();
   // The native job is the required check. Additional GITHUB_TOKEN API checks
   // can attach to another run's suite; publish detail in this job's summary.
   const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
@@ -260,14 +266,21 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   };
 
   try {
-    if (!pr.auto_merge) {
+    const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
+    const codeowners = require('./codeowners.cjs');
+    const ownership = codeownersRequired ? await codeowners.authority({github, repo, pr, files}) : {automatic: true};
+    const automatic = ownership.automatic && !manualMerge;
+    if (!automatic && pr.auto_merge) {
+      await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+    }
+    if (automatic && !pr.auto_merge) {
       await github.graphql(`mutation($id:ID!) { enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH}) {
         pullRequest { autoMergeRequest { enabledAt } }
       } }`, {id: pr.node_id});
     }
     pr = await getPr();
-    if (pr.head.sha !== assessment.head_sha || !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
-    const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
+    if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha || automatic && !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
+    if (!automatic && pr.auto_merge) throw new Error('Automatic merge remains enabled for a PR that requires manual merge');
     const selfAuthored = pr.user?.login === 'github-actions[bot]';
     if (assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity') throw new Error(assessment.reason);
     const intentPending = assessment.decision === 'pending_technical';
@@ -293,7 +306,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       if (!comments.some(comment => comment.user.type === 'Bot' && comment.body.includes(marker))) {
         await github.rest.issues.createComment({...repo, issue_number: pull_number, body: `${marker}\n${summary}`});
       }
-      core.info('Auto-merge is armed; waiting for a maintainer intent confirmation.');
+      core.info(automatic ? 'Auto-merge is armed; waiting for a maintainer intent confirmation.' : 'Automatic merge is disabled; waiting for a maintainer intent confirmation.');
       if (nativeGate) throw new Error('A maintainer intent confirmation is required');
       return;
     }
@@ -323,11 +336,32 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       return;
     }
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
+    const currentProtection = manualMerge ? await protection() : null;
+    if (manualMerge && ownership.automatic && codeownersRequired &&
+        !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before manual-mode approval');
     if (!selfAuthored) {
       await github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
         body: `All tests and exact 100% line and branch coverage passed: ${technical.url}\n\n` +
           (humanRequired ? 'Repository intent confirmed by a maintainer.' : `Repository fit and supported intent assessed: ${assessment.reason}`)});
     }
+    if (!ownership.automatic) {
+      if (!await codeowners.approved({github, repo, pr, ownership})) {
+        await finish('action_required', ownership.reason);
+        core.info(ownership.reason);
+        if (nativeGate) throw new Error('A current-head code-owner approval is required; automatic merge is disabled');
+        return;
+      }
+      await finish('success', 'Tests, exact coverage and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.' +
+        (currentProtection && !currentProtection.enforced ? `\n\n${currentProtection.reason}` : ''));
+      return;
+    }
+    if (manualMerge) {
+      await finish('success', 'Tests, exact coverage and review passed. Automatic merge is disabled; the code owner must merge manually.' +
+        (currentProtection.enforced ? '' : `\n\n${currentProtection.reason}`));
+      return;
+    }
+    // Ownership is read again at the write boundary, including current team membership.
+    if (codeownersRequired && !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before automatic approval');
     await finish('success', `All required tests and coverage passed. Intent ${humanRequired ? 'confirmed by a maintainer' : 'supported by repository fit and evidence'}.\n\n${technical.url}`);
 
     if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
@@ -345,6 +379,18 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   if (!pr) pr = await getPr();
   if (assessment.number !== pull_number || pr.head.sha !== assessment.head_sha || pr.base.ref !== config.base_branch) {
     throw new Error('PR changed before merge finalization');
+  }
+  if (manualMerge) {
+    if (pr.auto_merge) await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+    core.info('Manual merge mode never arms auto-merge or dispatches deployment. A code owner must merge manually.');
+    return;
+  }
+  if (codeownersRequired && !pr.merged) {
+    if (!files) files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
+    if (!(await require('./codeowners.cjs').authority({github, repo, pr, files})).automatic) {
+      core.info('Code-owner-authored PRs alone qualify for automatic merge; this PR requires manual code-owner merge.');
+      return;
+    }
   }
   for (let attempt = 0; attempt < mergePolls; attempt++) {
     pr = await getPr();
@@ -376,4 +422,4 @@ return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReaso
 
 }
 
-module.exports = {createPolicy};
+module.exports = {createPolicy, intentText};

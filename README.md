@@ -37,7 +37,7 @@ consumer's privileged approval job. See `examples/colombo.json` for version 2 co
 | Operation | Inputs | Result |
 | --- | --- | --- |
 | `test` | none | Run Clouseau's Python and Node regression suites |
-| `coverage` | `coverage-report`, `source-directory`, optional `coverage-format` | Require exact, nonempty 100% application line and branch coverage in native LLVM or Istanbul JSON |
+| `coverage` | `coverage-report`, `source-directory`, optional `coverage-format` | Require exact, nonempty 100% application line and branch coverage in native LLVM, Istanbul or coverage.py JSON |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
@@ -76,6 +76,14 @@ unloaded executable file without measuring it cannot satisfy source completeness
 never from rounded summary percentages. Configure c8 `--all` over all compiled
 JavaScript with source maps to measure unloaded TypeScript sources. Run real
 runtime tests as well as unit tests; this format support does not replace them.
+
+For Python, select `coverage-format: coveragepy` and supply the unmodified JSON
+format 3 report from `coverage.py` with branch measurement enabled. See the
+[native Python coverage contract](docs/python-coverage.md) for source inventory,
+report generation, path binding and exact native counter validation. This reads
+coverage.py's executable lines and branch decision exits, not statement
+percentages or every traced transition. Empty global totals, omitted application
+modules, exclusions, partial coverage and inconsistent counters fail closed.
 
 ## Trust and permissions
 
@@ -117,14 +125,63 @@ The controller requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
 administrator must also verify no bypass actors. Repository auto-merge and Actions
-approving reviews must be enabled. Runtime tokens do not get administration access.
+approving reviews must be enabled for automatic merge. Runtime tokens do not get administration access.
+
+Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
+configuration. Repository auto-merge must be disabled in this mode, including
+for owner-authored PRs. Tests, exact coverage, review, source binding and
+current-head code-owner approval for external contributors remain mandatory.
+Available branch protection is still enforced. Only GitHub's specific HTTP 403
+private-plan upgrade response, together with verified private visibility and an
+unprotected branch, permits approval without host-enforced protection. Generic
+permission failures, unavailable APIs, public unprotected repositories and
+incomplete available rules fail closed. The summary states when GitHub cannot
+enforce the checks; trusted maintainers must honor them before manually merging.
+The controller never merges or dispatches deployment in manual mode. Omitting
+`merge_mode`, or choosing `"automatic"`, retains the protected owner-only flow.
 
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
 The owner can comment `/approve-intent FULL_HEAD_SHA`; this confirms intent only.
+An owner confirmation can carry the actual accepted requirement, rather than
+leaving investigators to infer it from a revision alone:
+
+```text
+/approve-intent FULL_HEAD_SHA
+
+Accepted purpose:
+Describe the accepted outcome and its boundaries.
+```
+
+Clouseau authenticates the configured owner and current permission, binds the
+literal requirement to that revision and revalidates it before writing. Ordinary
+PR prose remains untrusted; every mechanism still earns its own justification.
+An agent delegated to install an accepted scope may record these confirmations
+on the owner's behalf through its repairs without repeated approval prompts.
 All tests and exact coverage remain mandatory. Changes invalidate the decision.
 The Actions bot cannot approve its own PR; it needs an independent human review.
 First-time fork workflow authorization remains GitHub's responsibility.
+
+The PR report starts with a plain-language decision, one conservative scorecard,
+and one entry per causal technical finding. Each entry shows its consequence,
+blocking score, affected area, evidence and required outcome. Reviewer
+disagreements, product rework, missing evidence and owner decisions stay visible.
+The lowest product scores across all material changes and both reviewers are
+shown; unrelated good scores never compensate for a failing change. Optional
+findings show expected benefit and optional priority without creating a blocker.
+
+Expand **Scoring and evidence** for the unchanged formulas, every individual
+grade and explanation, both independent reviews, persistent finding history and
+immutable source excerpts. Large audits retain lossless evidence pages. Summary
+formatting uses the already validated record and makes no model requests. A
+review decision never claims that merge, deployment or live verification finished.
+
+The display regression includes the actual public Palazzo #27 review, linked to
+its immutable signed evidence. Its original comment contains 36,564 characters;
+5,388 remain visible with evidence sections closed. The new overview contains
+948 visible characters, over five times shorter, with the same approved
+verdict, both reviewers' 100/100 product scores and no technical findings. This
+is an offline display fixture, never a substitute for fresh review or CI evidence.
 
 Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
 bound artifact and downloads it into `work/` in the separate approval and repair
@@ -305,3 +362,35 @@ receipt. Serialize deployment and documentation together to prevent a later
 release from overtaking documentation. Documentation failure leaves the completed
 deployment intact and makes the workflow fail visibly; it does not roll back or
 claim external service health, running image bytes, or terminal upload delivery.
+
+
+### Review reliability and provider qualification
+
+Reviews retain fixed/dismissed findings across pushes and explicitly inventory
+inspected, excluded and missing evidence. Missing material context prevents
+approval. Protocol v2 enables automatic merge only for code-owner-authored PRs;
+other contributions require current-head code-owner approval and manual merge.
+See [the review contract](docs/change-acceptance.md#review-convergence-and-completeness).
+
+The frozen qualification corpus in `test/acceptance-cases.cjs` includes clean
+maintenance, a real executable zero-body regression, product drift, unnecessary
+machinery, deceptive tests, a dismissed false allegation and unavailable material
+context. Each case has an expected disposition and an evidence-based rationale.
+A blocking verdict on an unrelated issue does not qualify the known-defect case.
+
+`node test/evaluate-acceptance.cjs` performs live judgment qualification using the
+existing provider credentials and routes. `CLOUSEAU_EVALUATION_GRADERS` selects
+`deepseek`, `typesafe` or `routed` (comma-separated for comparisons). Optional
+`CLOUSEAU_EVALUATION_CASES` selects named diagnostic cases; such a partial run does
+not qualify a replacement. Output records the corpus and protocol fingerprints,
+selected cases, route, literal evidence, responses and bounded request usage.
+At most 48 provider requests, including historical replay usage, are permitted.
+Completed negative decisions are retained, never retried to seek approval.
+
+Recorded-response tests exercise transport parsing, validation, history and
+scoring without calling a model. They are deterministic software evidence,
+not evidence of a replacement model's review quality. Provider changes require
+a complete live corpus qualification against the same frozen inputs and expected
+outcomes; no provider is switched automatically by these tests. Replay is allowed
+only for unchanged source/policy/routing inputs and is labeled separately from
+new live calls. Qualification fixtures do not establish a genuine PR merge.
