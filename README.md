@@ -30,15 +30,23 @@ There is no application-specific deployment infrastructure in Clouseau.
 
 ## Operations
 
-Use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`. Pin the full commit, and update
-that reference through a reviewed PR. Do not track `main` or a movable tag in a
-consumer's privileged approval job. See `examples/colombo.json` for version 2 configuration.
+Automatic CI integrations pin the small `gaulatti/clouseau/scripts/resolve`
+bootstrap once at a reviewed full commit. It selects protected Clouseau main,
+freezes its SHA and computes its digest. Every engine job checks out that SHA
+and invokes the local action with the same trusted outputs. Normal central
+releases need no consumer pin or digest update. See [automatic CI upgrades](docs/automatic-ci-upgrades.md)
+for source authorization, failure behavior and exact local-receipt compatibility.
+Legacy fixed installations may still use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`;
+upgrading those installations requires a reviewed PR. See `examples/colombo.json`
+for the version 2 policy configuration.
 
 | Operation | Inputs | Result |
 | --- | --- | --- |
+| `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
 | `test` | none | Run Clouseau's Python and Node regression suites |
 | `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
+| `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
 | `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |

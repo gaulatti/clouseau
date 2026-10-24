@@ -241,7 +241,12 @@ auto-merge. No provider key enters the approval or repair writer. The author
 token enters only the repair writer. Same-revision intent comments reassess
 metadata without rebuilding the application container.
 
-Consumers pin a reviewed full Clouseau commit. Both required native checks must
+Automatic integrations pin a reviewed stable bootstrap, resolve protected
+Clouseau main once and use its frozen SHA and computed digest throughout the
+workflow. [Automatic CI upgrades](automatic-ci-upgrades.md) bind receipts,
+assessment, scoring, approval and merge to that selection; normal central
+releases need no consumer pin or digest PR. Legacy fixed installations retain
+their explicit full-commit pin. Both required native checks must
 come from GitHub Actions; main requires strict up-to-date checks, stale-review
 dismissal, last-push approval, no deletion, no force pushes and no bypass actors.
 The installing administrator verifies those settings; routine tokens do not

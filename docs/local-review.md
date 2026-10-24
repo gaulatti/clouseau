@@ -180,7 +180,7 @@ An owner must install the public enrollment entry in protected CI configuration:
 {
   "local_review": {
     "mode": "required",
-    "reviewer_digest": "APPROVED_64_CHARACTER_ENGINE_SHA256",
+    "central_source": {"repository": "gaulatti/clouseau", "ref": "refs/heads/main"},
     "max_age_seconds": 3600,
     "keys": [{
       "id": "PUBLIC_KEY_IDENTIFIER",
@@ -192,6 +192,12 @@ An owner must install the public enrollment entry in protected CI configuration:
   }
 }
 ```
+
+This source authorization requires the [automatic CI resolver wiring](automatic-ci-upgrades.md)
+and its frozen SHA/digest; configuration alone cannot select an engine. Legacy
+fixed installations instead enroll `reviewer_digest` and omit `central_source`.
+The modes are exclusive, and only the central-source integration avoids recurring
+release enrollment PRs.
 
 Only existing protected configuration can enroll or revoke a key. A contributor
 cannot authorize their own key through the proposed PR. Keys are restricted to
