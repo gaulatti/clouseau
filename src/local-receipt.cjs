@@ -73,7 +73,7 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   return {payload, signature};
 }
 
-function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
+function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
   now = Date.now(), engine = null}) {
   validateTrust(trust);
   requireReceipt(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
@@ -104,14 +104,22 @@ function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, rev
     sha(p.reviewer_sha) && (!reviewerSha || p.reviewer_sha === reviewerSha) &&
     p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
     snapshot.policy_digest === policyDigest, 'repository, revisions, policy, configuration or record changed');
-  requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
-    Array.isArray(snapshot.prior_findings) && record.controls === false, 'receipt cannot grant owner authority');
   const result = reviewDecision(record);
   requireReceipt(result.decision === 'auto_approve', 'review did not pass');
   return {record, ...result};
 }
 
+function verifyReceipt(bundle, options) {
+  const result = verifySignedRecord(bundle, options);
+  const {snapshot} = result.record;
+  requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
+    Array.isArray(snapshot.prior_findings) && result.record.controls === false &&
+    !Object.hasOwn(result.record, 'installation'), 'receipt cannot grant owner authority');
+  return result;
+}
+
 function marker(body) {
+  requireReceipt(!(body || '').includes('clouseau-installation-review:'), 'installation-only evidence cannot approve an ordinary PR');
   const matches = [...(body || '').matchAll(MARKER)];
   requireReceipt(matches.length <= 1, 'multiple receipt references');
   return matches[0]?.[1] || null;
@@ -125,7 +133,7 @@ async function loadReceipt({github, repo, ref}) {
   return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
 }
 
-async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha}) {
+async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha, installation = null}) {
   requireReceipt(files.length === pr.changed_files && files.length > 0 &&
     digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs');
   requireReceipt(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
@@ -134,10 +142,16 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements');
   for (const filename of [config.readme, config.repository_policy]) {
     requireReceipt(Object.values(snapshot.sources).some(source => source.path === filename &&
-      source.ref === pr.base.sha && source.authority === 'trusted' && source.kind === 'contract'),
+      source.ref === (installation ? pr.head.sha : pr.base.sha) && source.authority === 'trusted' && source.kind === 'contract'),
     'protected purpose evidence omitted');
   }
   for (const [id, source] of Object.entries(snapshot.sources)) {
+    if (id === 'installation-authorization') {
+      requireReceipt(installation && source.authority === 'trusted' && source.kind === 'contract' &&
+        source.path === `commits/${pr.head.sha}/comments/${installation.comment_id}` && source.ref === digest(installation) &&
+        source.content === JSON.stringify(installation), 'installation authority was substituted');
+      continue;
+    }
     if (id === 'verification') {
       requireReceipt(source.authority === 'trusted' && source.kind === 'verification' && source.ref === pr.head.sha,
         'invalid local execution receipt');
@@ -161,7 +175,7 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     }
     requireReceipt(safePath(source.path) && [pr.base.sha, pr.head.sha].includes(source.ref) &&
       ['source', 'contract'].includes(source.kind), 'source outside exact repository revisions');
-    const contract = source.ref === pr.base.sha && [config.readme, config.repository_policy].includes(source.path);
+    const contract = (source.ref === pr.base.sha || (installation && source.ref === pr.head.sha)) && [config.readme, config.repository_policy].includes(source.path);
     requireReceipt(source.authority === (contract ? 'trusted' : 'untrusted') &&
       source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted');
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
@@ -181,4 +195,4 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
   }
 }
 
-module.exports = {DOMAIN, validateTrust, reviewDecision, issueReceipt, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {DOMAIN, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};

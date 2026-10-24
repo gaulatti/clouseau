@@ -168,6 +168,11 @@ ledger rather than dropping its findings.
 
 ## Enrolling a trusted runner
 
+Consumers with neither accepted recipe nor CI policy use the separate
+[explicit initial trust installation](initial-installation.md). Its frozen
+owner/admin commit-comment grant and installation-only evidence cannot replace
+ordinary approval or authorize automatic merge.
+
 `clouseau init-identity` creates an Ed25519 identity outside the repository with
 private file permissions. Its output contains only the public enrollment entry
 and local identity-file path. Identity creation is explicit and is never part of

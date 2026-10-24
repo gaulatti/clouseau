@@ -29,12 +29,13 @@ function githubRepository(directory) {
   return {owner: match[1], repo: match[2]};
 }
 
-function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null}) {
+function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null, installation = null}) {
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const baseSha = git(directory, ['rev-parse', '--verify', `${base}^{commit}`]).trim();
   const repo = githubRepository(directory);
   if (git(directory, ['status', '--porcelain']).trim()) throw new Error('Commit the complete change before creating a signed local review');
-  const localConfig = readLocalConfig(JSON.parse(git(directory, ['show', `${baseSha}:.clouseau-local.json`])));
+  const configurationRef = installation ? head : baseSha;
+  const localConfig = readLocalConfig(JSON.parse(git(directory, ['show', `${configurationRef}:.clouseau-local.json`])));
   const config = ciConfig || localConfig;
   const tokens = git(directory, ['diff', '--name-status', '-z', '--find-renames', baseSha, head]).split('\0');
   const changed = [];
@@ -70,12 +71,20 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     if (snapshot.sources[id]) return id;
     const content = git(directory, ['show', `${ref}:${filename}`]);
     if (content.includes('\0') || Buffer.byteLength(content) > 300000) throw new Error('Binary or oversized local evidence');
-    const contract = ref === baseSha && [config.readme, config.repository_policy].includes(filename);
+    const contract = (ref === baseSha || (installation && ref === head)) && [config.readme, config.repository_policy].includes(filename);
     snapshot.sources[id] = {path: filename, ref, authority: contract ? 'trusted' : 'untrusted',
       kind: contract ? 'contract' : 'source', content};
     return id;
   };
-  source(config.readme, baseSha); source(config.repository_policy, baseSha); source('.clouseau-local.json', baseSha);
+  for (const filename of [config.readme, config.repository_policy]) {
+    if (!installation || git(directory, ['ls-tree', baseSha, '--', filename]).trim()) source(filename, baseSha);
+  }
+  source('.clouseau-local.json', configurationRef);
+  if (installation) {
+    for (const file of installation.manifest.files) source(file.path, head);
+    snapshot.sources['installation-authorization'] = {authority: 'trusted', kind: 'contract',
+      path: `commits/${head}/comments/${installation.comment_id}`, ref: digest(installation), content: JSON.stringify(installation)};
+  }
   snapshot.sources.verification = {authority: 'trusted', kind: 'verification', path: 'verification', ref: head,
     content: JSON.stringify(technical)};
   snapshot.sources['local-request'] = {authority: 'untrusted', kind: 'requirement', path: 'local-request',
