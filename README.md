@@ -340,3 +340,35 @@ receipt. Serialize deployment and documentation together to prevent a later
 release from overtaking documentation. Documentation failure leaves the completed
 deployment intact and makes the workflow fail visibly; it does not roll back or
 claim external service health, running image bytes, or terminal upload delivery.
+
+
+### Review reliability and provider qualification
+
+Reviews retain fixed/dismissed findings across pushes and explicitly inventory
+inspected, excluded and missing evidence. Missing material context prevents
+approval. Protocol v2 enables automatic merge only for code-owner-authored PRs;
+other contributions require current-head code-owner approval and manual merge.
+See [the review contract](docs/change-acceptance.md#review-convergence-and-completeness).
+
+The frozen qualification corpus in `test/acceptance-cases.cjs` includes clean
+maintenance, a real executable zero-body regression, product drift, unnecessary
+machinery, deceptive tests, a dismissed false allegation and unavailable material
+context. Each case has an expected disposition and an evidence-based rationale.
+A blocking verdict on an unrelated issue does not qualify the known-defect case.
+
+`node test/evaluate-acceptance.cjs` performs live judgment qualification using the
+existing provider credentials and routes. `CLOUSEAU_EVALUATION_GRADERS` selects
+`deepseek`, `typesafe` or `routed` (comma-separated for comparisons). Optional
+`CLOUSEAU_EVALUATION_CASES` selects named diagnostic cases; such a partial run does
+not qualify a replacement. Output records the corpus and protocol fingerprints,
+selected cases, route, literal evidence, responses and bounded request usage.
+At most 48 provider requests, including historical replay usage, are permitted.
+Completed negative decisions are retained, never retried to seek approval.
+
+Recorded-response tests exercise transport parsing, validation, history and
+scoring without calling a model. They are deterministic software evidence,
+not evidence of a replacement model's review quality. Provider changes require
+a complete live corpus qualification against the same frozen inputs and expected
+outcomes; no provider is switched automatically by these tests. Replay is allowed
+only for unchanged source/policy/routing inputs and is labeled separately from
+new live calls. Qualification fixtures do not establish a genuine PR merge.

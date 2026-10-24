@@ -15,7 +15,7 @@ const sourceRoot = path.resolve(__dirname, '..');
 function protocolFingerprint(read) {
   const files = ['policy/change-acceptance.md', 'src/acceptance.cjs', 'src/acceptance-rubrics.cjs',
     'src/acceptance-grading.cjs', 'src/acceptance-review.cjs', 'src/acceptance-schema.cjs',
-    'src/acceptance-sources.cjs', 'src/config.cjs', 'test/acceptance-cases.cjs'];
+    'src/acceptance-sources.cjs', 'src/acceptance-ledger.cjs', 'src/config.cjs', 'test/acceptance-cases.cjs'];
   const provider = read('src/review-provider.cjs');
   const start = provider.indexOf('// A completed answer');
   const end = provider.indexOf('\nmodule.exports');
@@ -55,8 +55,11 @@ async function main() {
   const graders = (process.env.CLOUSEAU_EVALUATION_GRADERS || 'routed').split(',');
   assert.ok(graders.length && new Set(graders).size === graders.length &&
     graders.every(grader => ['deepseek', 'typesafe', 'routed'].includes(grader)), 'Choose explicit distinct supported grading routes');
-  const requestLimit = Number(process.env.CLOUSEAU_EVALUATION_REQUEST_LIMIT || 40);
-  assert.ok(Number.isSafeInteger(requestLimit) && requestLimit >= 0 && requestLimit <= 40, 'Qualification permits at most forty provider requests');
+  const requestLimit = Number(process.env.CLOUSEAU_EVALUATION_REQUEST_LIMIT || 48);
+  assert.ok(Number.isSafeInteger(requestLimit) && requestLimit >= 0 && requestLimit <= 48, 'Qualification permits at most forty-eight provider requests');
+  const names = process.env.CLOUSEAU_EVALUATION_CASES?.split(',');
+  assert.ok(!names || names.length && new Set(names).size === names.length && names.every(name => CASES.some(item => item.name === name)), 'Select distinct known qualification cases');
+  const cases = names ? CASES.filter(item => names.includes(item.name)) : CASES;
   const output = process.env.CLOUSEAU_EVALUATION_PATH || 'work/acceptance-evaluation.json';
   fs.mkdirSync(require('node:path').dirname(output), {recursive: true});
   const fingerprint = protocolFingerprint(file => fs.readFileSync(path.join(sourceRoot, file), 'utf8'));
@@ -81,16 +84,17 @@ async function main() {
     assert.equal(recorded, fingerprint, 'Source, policy, routing, rubric or request meaning changed; recorded judgments cannot be reused');
   }
   const historical = replay ? replay.request_budget.used + (replay.request_budget.historical_requests || 0) : 0;
-  assert.ok(Number.isSafeInteger(historical) && historical >= 0 && historical <= 40, 'Invalid recorded provider request count');
-  const evaluation = {version: 2, synthetic: true, qualification_only: true, graders,
+  assert.ok(Number.isSafeInteger(historical) && historical >= 0 && historical <= 48, 'Invalid recorded provider request count');
+  const evaluation = {version: 2, synthetic: true, qualification_only: true, mode: 'live_judgment_qualification', graders,
+    corpus_digest: digest(CASES), selected_cases: cases.map(item => item.name), full_corpus: cases.length === CASES.length,
     protocol_fingerprint: fingerprint, replay_source: replay ? {digest: digest(replay), run_id: process.env.CLOUSEAU_EVALUATION_REPLAY_RUN_ID || null} : null,
-    request_budget: {limit: requestLimit, used: 0, historical_requests: historical, hard_total_limit: 40}, live_usage: [], pricing: PRICING, cases: []};
+    request_budget: {limit: requestLimit, used: 0, historical_requests: historical, hard_total_limit: 48}, live_usage: [], pricing: PRICING, cases: []};
   const save = () => {
     evaluation.incremental_cost = estimate(evaluation.live_usage);
     fs.writeFileSync(output, JSON.stringify(evaluation, null, 2) + '\n');
   };
   const budgetedFetch = async (...args) => {
-    assert.ok(evaluation.request_budget.used < requestLimit && historical + evaluation.request_budget.used < 40, 'Live provider request budget exhausted');
+    assert.ok(evaluation.request_budget.used < requestLimit && historical + evaluation.request_budget.used < 48, 'Live provider request budget exhausted');
     evaluation.request_budget.used++;
     const request = JSON.parse(args[1].body);
     const usage = {provider: args[0].includes('typesafe') ? 'typesafe' : 'deepseek', requested_model: request.model, model: request.model, tokens: null};
@@ -100,11 +104,11 @@ async function main() {
     save(); return response;
   };
   save();
-  for (const scenario of CASES) {
+  for (const scenario of cases) {
     const context = await prepareCase(scenario);
     const models = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grading_model: 'deepseek-flash'};
     console.log(`Acceptance qualification: ${scenario.name}`);
-    const record = {name: scenario.name, expected: scenario.expected, results: [], observations: [], snapshots: {}};
+    const record = {name: scenario.name, category: scenario.category, rationale: scenario.rationale, expected: scenario.expected, results: [], observations: [], snapshots: {}};
     evaluation.cases.push(record); save();
     const observe = (observation, grader) => {
       record.snapshots[context.snapshot.digest] ??= structuredClone(context.snapshot);
@@ -133,7 +137,7 @@ async function main() {
           }
           record.results = structuredClone(prior.results); record.observations = structuredClone(prior.observations);
           record.snapshots = structuredClone(prior.snapshots); record.reused_complete_results = true;
-          record.passed = record.results.length === graders.length && record.results.every(result => scenario.expected.includes(result.decision));
+          record.passed = record.results.length === graders.length && record.results.every(result => casePassed(scenario, result));
           save(); continue;
         }
         cached = factualReplay(prior, models);
@@ -160,7 +164,7 @@ async function main() {
           const result = await gradeInvestigations({...context, investigation, config: {...models, grader}, log: console.log, fetchImpl: fetchForCase,
             observe: observation => observe(observation, grader)});
           const cost = estimate(result.usage);
-          record.results.push({grader, ...result, cost, passed: scenario.expected.includes(result.decision)}); save();
+          record.results.push({grader, ...result, cost, passed: casePassed(scenario, result)}); save();
           console.log(JSON.stringify({case: scenario.name, grader, expected: scenario.expected, decision: result.decision, cost}));
         } catch (error) {record.results.push({grader, error: error.message, details: error.details || null, passed: false}); save();}
       }
@@ -168,13 +172,24 @@ async function main() {
         new Set(record.results.map(result => result.decision === 'auto_approve')).size === 1;
     } catch (error) {
       record.snapshots[context.snapshot.digest] ??= structuredClone(context.snapshot);
-      record.error = error.message; record.details = error.details || null; record.passed = false;
+      record.error = error.message; record.details = error.details || null;
+      record.passed = scenario.unavailableSource === error.path && error.code === 'QUALIFICATION_MISSING_SOURCE' &&
+        record.observations.some(item => item.report?.request_sources?.includes(scenario.unavailableSource));
+      if (record.passed) record.fail_closed = {decision: 'review_incomplete', missing_source: error.path};
     }
     save();
   }
   evaluation.passed = evaluation.cases.every(record => record.passed); save();
   assert.ok(evaluation.passed, 'One or more qualification cases failed; inspect the complete retained case results');
-  console.log('All qualification cases passed. These synthetic cases do not establish a genuine PR merge.');
+  console.log('All selected qualification cases passed. Only a full corpus qualifies a route; synthetic cases do not establish a genuine PR merge.');
 }
 
-main().catch(error => {console.error(error.message); process.exitCode = 1;});
+function casePassed(scenario, result) {
+  return scenario.expected.includes(result.decision) && (!scenario.unavailableSource ||
+    result.reviews.every(view => view.report.coverage.dependencies.some(item => item.path === scenario.unavailableSource && item.state === 'missing'))) && (!scenario.requiredFindingPath ||
+    result.reviews.some(view => view.report.findings.some(item => item.path === scenario.requiredFindingPath &&
+      view.scores.findings.some(score => score.id === item.id && score.disposition === 'blocking'))));
+}
+
+module.exports = {protocolFingerprint, equivalentInputs, factualReplay, casePassed, main};
+if (require.main === module) main().catch(error => {console.error(error.message); process.exitCode = 1;});

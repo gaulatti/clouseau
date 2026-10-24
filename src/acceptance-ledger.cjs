@@ -33,20 +33,35 @@ function priorState(comments, repository, number) {
 function reconcile(result, snapshot, previous = []) {
   const records = new Map();
   const previousById = new Map(previous.map(item => [item.id, item]));
+  const roots = new Map();
+  const normalized = text => text.trim().toLowerCase().replace(/\s+/g, ' ');
+  const related = (candidate, kind) => previousById.get(candidate.id) || (snapshot.review_manifest_version && previous.find(old =>
+    old.kind === kind && normalized(old.obligation) === normalized(candidate.obligation) &&
+    (old.path === candidate.path || snapshot.files.some(file => file.path === candidate.path && snapshot.sources[file.base_source]?.path === old.path))));
+  const basis = (report, ids) => [...new Set(ids.map(id => {
+    const proof = report.evidence.find(item => item.id === id);
+    const source = snapshot.sources[proof.source];
+    // Line offsets, title wording and commit identity do not make new evidence.
+    return digest({kind: source.kind, content: normalized(source.content.split('\n').slice(proof.start - 1, proof.end).join('\n'))});
+  }))].sort();
+  const remember = (id, report, ids) => {
+    const entries = roots.get(id) || []; entries.push({report, basis: basis(report, ids)}); roots.set(id, entries);
+  };
   for (const review of result.reviews) {
     for (const [index, unit] of review.report.units.entries()) {
       const current = review.scores.units[index];
       if (current.disposition === 'accepted') continue;
-      const old = previousById.get(unit.id);
+      const old = related({...unit, path: unit.paths[0]}, 'product');
       const cause = `The material unit does not establish the required product acceptance: ${unit.title}`;
       const id = old?.kind === 'product' ? old.id : digest({repository: snapshot.repository, kind: 'product',
         obligation: unit.obligation.trim().toLowerCase().replace(/\s+/g, ' '), title: unit.title.trim().toLowerCase().replace(/\s+/g, ' ')});
       records.set(id, {id, kind: 'product', title: unit.title, path: unit.paths[0], cause, obligation: unit.obligation,
         blocking: true, state: current.disposition === 'rework' ? 'confirmed' : 'investigating'});
+      if (snapshot.review_manifest_version) remember(id, review.report, Object.values(unit.fit).flatMap(factor => factor.evidence));
     }
     for (const [index, finding] of review.report.findings.entries()) {
       const current = review.scores.findings[index];
-      const old = previousById.get(finding.id);
+      const old = related(finding, 'technical');
       const id = old && old.kind !== 'product' ? old.id : digest({repository: snapshot.repository, path: finding.path,
         cause: finding.cause.trim().toLowerCase().replace(/\s+/g, ' '), obligation: finding.obligation.trim().toLowerCase().replace(/\s+/g, ' ')});
       const blocking = current.disposition !== 'nonblocking';
@@ -54,18 +69,45 @@ function reconcile(result, snapshot, previous = []) {
       const record = {id, kind: 'technical', title: finding.title, path: finding.path, cause: finding.cause,
         obligation: finding.obligation, blocking, state: blocking ? current.disposition === 'blocking' ? 'confirmed' : 'investigating' : 'advisory_closed'};
       if (!existing || blocking) records.set(id, record);
+      if (snapshot.review_manifest_version) remember(id, review.report, finding.evidence);
     }
   }
   const unresolved = [];
   for (const old of previous) {
     const active = records.get(old.id);
-    if (active?.blocking) continue;
+    if (active?.blocking) {
+      if (snapshot.review_manifest_version && ['corrected', 'dismissed'].includes(old.state)) {
+        const entries = roots.get(old.id);
+        const priorBasis = new Set(old.closed_basis || old.basis || []);
+        const fresh = priorBasis.size && entries.every(({report}) => {
+          const reopening = report.reopenings.find(item => item.id === old.id);
+          return reopening && basis(report, reopening.evidence).some(value => !priorBasis.has(value));
+        });
+        if (!fresh) { records.set(old.id, old); unresolved.push(old.id); }
+      }
+      continue;
+    }
     const resolutions = result.reviews.map(review => review.report.resolutions.find(item => item.id === old.id));
     if (old.blocking && !resolutions.every(Boolean)) {
       records.set(old.id, {...old, state: 'outstanding'}); unresolved.push(old.id);
     } else if (old.blocking) {
-      records.set(old.id, {...old, blocking: false, state: resolutions.every(item => item.state === 'corrected') ? 'corrected' : 'dismissed'});
-    } else if (!active) records.set(old.id, {...old, state: 'advisory_closed'});
+      records.set(old.id, {...old, blocking: false, state: resolutions.every(item => item.state === 'corrected') ? 'corrected' : 'dismissed',
+        ...(snapshot.review_manifest_version ? {closed_basis: [...new Set(result.reviews.flatMap((review, i) => basis(review.report, resolutions[i].evidence)))].sort(),
+          resolution: resolutions.map(item => item.reason).join(' | ')} : {})});
+    } else if (!active) records.set(old.id, {...old});
+  }
+  if (snapshot.review_manifest_version) for (const [id, record] of records) {
+    const old = previousById.get(id);
+    const entries = roots.get(id);
+    const evidence = entries ? [...new Set(entries.flatMap(item => item.basis))].sort() : record.basis || [];
+    const events = [...(old?.events || [])];
+    if (!old || old.state !== record.state || old.path !== record.path) {
+      const reopening = entries?.map(item => item.report.reopenings.find(value => value.id === id)).find(Boolean);
+      events.push({head_sha: snapshot.head_sha, state: record.state, path: record.path,
+        reason: reopening?.reason || record.resolution || record.cause});
+    }
+    if (events.length > 32) throw new Error('Finding history exceeds the bounded review budget; investigate without dropping decisions');
+    records.set(id, {...record, basis: evidence, events});
   }
   return {findings: [...records.values()], unresolved};
 }
@@ -207,7 +249,10 @@ function render(result, snapshot, state, {compact = false, unbounded = false} = 
   }
   if (!compact && state.findings.length) {
     lines.push('', '| Persistent finding | State | Blocking | Path |', '|---|---|---|---|');
-    for (const finding of state.findings) lines.push(`| ${clean(finding.title)} (${finding.id}) | ${finding.state} | ${finding.blocking} | ${clean(finding.path)} |`);
+    for (const finding of state.findings) {
+      lines.push(`| ${clean(finding.title)} (${finding.id}) | ${finding.state} | ${finding.blocking} | ${clean(finding.path)} |`);
+      for (const event of finding.events || []) lines.push('', `History ${finding.id}: ${clean(event.head_sha)} — **${clean(event.state)}** — ${clean(event.reason)}`);
+    }
   }
   if (state.unresolved.length) lines.push('', `Outstanding prior blockers: ${state.unresolved.join(', ')}. Absence from a new review is not a resolution.`);
   if (!compact) lines.push('', '</details>');

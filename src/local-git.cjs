@@ -43,7 +43,7 @@ function collectLocal({directory, base, request, technical, ciConfig = null}) {
     changed.push({filename, previous_filename: oldPath, status: {A: 'added', M: 'modified', D: 'removed', R: 'renamed'}[status[0]]});
   }
   if (!changed.length) throw new Error('A nonempty change against the protected base is required');
-  const snapshot = {version: 2, repository: `${repo.owner}/${repo.repo}`, number: 0,
+  const snapshot = {version: 2, review_manifest_version: 1, repository: `${repo.owner}/${repo.repo}`, number: 0,
     base_sha: baseSha, head_sha: head, head_repository: repo,
     paths: changed.map(file => file.filename).sort(), config_digest: digest(config),
     policy_digest: digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8')),
