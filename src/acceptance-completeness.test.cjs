@@ -131,6 +131,7 @@ test('native inspection sends the cited-exclusion schema and preserves an invali
       fetchImpl: async (_, options) => {
         calls++;
         const request = JSON.parse(options.body);
+        assert.match(request.messages[0].content, /coverage evidence selects \{primary,additional\}/);
         const tool = request.tools.find(item => item.function.name === 'acceptance_report').function;
         assert.equal(tool.strict, true);
         for (const name of ['sources', 'dependencies']) {
