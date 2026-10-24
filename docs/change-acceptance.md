@@ -290,6 +290,11 @@ records without that marker remain readable; they do not acquire new claims.
 
 Each review inventories every supplied immutable source as inspected, excluded
 with a cited reason, or missing. Nonempty changed source cannot be excluded.
+The structured response schema requires at least one supplied proof ID for
+inspected and excluded dispositions; only missing dispositions permit an empty
+evidence array, and they require it to remain empty. Ordinary factor and gate
+citations also require at least one proof ID. These constraints match the existing
+evidence validator; the controller never invents a citation for an uncited claim.
 Inspected dependencies require direct evidence from the current head. A relevant
 missing dependency has empty inspection evidence and makes review completeness
 unresolved even when tests and exact coverage pass. Source requests expand the

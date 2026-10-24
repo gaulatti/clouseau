@@ -11,7 +11,9 @@ const object = properties => ({type: 'object', properties, required: Object.keys
 function schemas(snapshot) {
   const catalog = proofCatalog(snapshot);
   const referenceRule = 'Select only the controller-supplied proof IDs. The controller owns the evidence register, exact source bytes and line ranges; never invent an alias.';
-  const citations = {...array(enumeration(catalog.map(entry => entry.id))), description: referenceRule};
+  const citations = {...array(enumeration(catalog.map(entry => entry.id))), minItems: 1, description: referenceRule};
+  const missingCitations = {...array(enumeration(catalog.map(entry => entry.id))), maxItems: 0,
+    description: 'Missing source has no inspection evidence; leave this array empty and keep review completeness unresolved.'};
   const factor = object({evidence: citations, reason: string});
   const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
   const need = group('need');
@@ -19,9 +21,16 @@ function schemas(snapshot) {
   const paths = array(enumeration(snapshot.paths));
   const available = [...new Set(Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha).map(source => source.path))];
   const dependencies = {anyOf: [
-    object({path: string, state: enumeration(['excluded', 'missing']), reason: string, evidence: citations}),
+    object({path: string, state: enumeration(['excluded']), reason: string, evidence: citations}),
+    object({path: string, state: enumeration(['missing']), reason: string, evidence: missingCitations}),
     ...(available.length ? [object({path: enumeration(available), state: enumeration(['inspected']), reason: string, evidence: citations})] : []),
   ], description: 'Inspected dependencies require their own supplied current-head source and direct proof. A call site is not dependency inspection. Call source_request for absent material source before reporting inspected; otherwise explicitly exclude it or mark it missing.'};
+  const source = {type: 'integer', enum: Object.keys(snapshot.sources).map((_, index) => index),
+    description: 'Select the exact source_index supplied in the source catalog; the controller restores its full immutable ID.'};
+  const sources = {anyOf: [
+    object({source, state: enumeration(['inspected', 'excluded']), reason: string, evidence: citations}),
+    object({source, state: enumeration(['missing']), reason: string, evidence: missingCitations}),
+  ]};
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   return {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
@@ -38,7 +47,7 @@ function schemas(snapshot) {
       decisions: array(object({kind: enumeration(['purpose', 'authority', 'tradeoff']), question: string, options: array(string), evidence: citations})),
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
       ...(snapshot.review_manifest_version ? {
-        coverage: object({sources: array(object({source: {type: 'integer', enum: Object.keys(snapshot.sources).map((_, index) => index), description: 'Select the exact source_index supplied in the source catalog; the controller restores its full immutable ID.'}, state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations})),
+        coverage: object({sources: array(sources),
           dependencies: array(dependencies)}),
         reopenings: array(object({id: string, reason: string, evidence: citations})),
       } : {}),
