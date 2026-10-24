@@ -29,7 +29,7 @@ function githubRepository(directory) {
   return {owner: match[1], repo: match[2]};
 }
 
-function collectLocal({directory, base, request, technical, ciConfig = null}) {
+function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null}) {
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const baseSha = git(directory, ['rev-parse', '--verify', `${base}^{commit}`]).trim();
   const repo = githubRepository(directory);
@@ -53,6 +53,19 @@ function collectLocal({directory, base, request, technical, ciConfig = null}) {
     local_config_digest: digest(localConfig), claims: {title: git(directory, ['log', '-1', '--format=%s']).trim(), description: request}};
   const source = (filename, ref) => {
     if (!safePath(filename)) throw new Error('Unsafe local evidence path');
+    // Reviewers may inspect their own frozen public engine through the CI
+    // checkout alias without requiring CI to be installed on this workstation.
+    if (filename.startsWith('.clouseau-ci/')) {
+      const relative = filename.slice('.clouseau-ci/'.length);
+      const engineRoot = path.join(__dirname, '..');
+      if (!/^[a-f0-9]{40}$/.test(reviewerSha || '')) throw new Error('Frozen reviewer identity is required for engine source evidence');
+      const revision = reviewerSha;
+      const id = `engine:${revision}:${relative}`;
+      const content = fs.readFileSync(path.join(engineRoot, relative), 'utf8');
+      if (content.includes('\0') || Buffer.byteLength(content) > 300000) throw new Error('Binary or oversized engine evidence');
+      snapshot.sources[id] = {path: filename, ref: revision, authority: 'untrusted', kind: 'source', content};
+      return id;
+    }
     const id = `${ref}:${filename}`;
     if (snapshot.sources[id]) return id;
     const content = git(directory, ['show', `${ref}:${filename}`]);

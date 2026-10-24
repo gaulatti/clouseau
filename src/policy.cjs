@@ -10,12 +10,12 @@ function intentText(body, sha) {
   return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
 }
 
-function createPolicy(input, {codeownersRequired = false, manualMerge = false} = {}) {
+function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
   const {local_review, merge_mode, ...legacyConfig} = config;
   const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual'});
-  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
+  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
 const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
@@ -418,7 +418,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
+return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 

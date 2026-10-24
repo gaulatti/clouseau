@@ -3,9 +3,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
+const {engineDigest} = require('./local-version.cjs');
 const SOURCE = Object.freeze({repository: 'gaulatti/clouseau', ref: 'refs/heads/main'});
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+
+function centralSource(source) {
+  return Boolean(source && Object.keys(source).sort().join(',') === 'ref,repository' &&
+    source.repository === SOURCE.repository && source.ref === SOURCE.ref);
+}
 
 async function resolveCentral(github) {
   // No caller-controlled repository, branch, PR metadata or artifact input.
@@ -37,4 +43,30 @@ function identifyEngine(revision, root) {
   return {...SOURCE, sha: revision, digest: checksum};
 }
 
-module.exports = {SOURCE, resolveCentral, identifyEngine};
+function verifyEngine(engine, root) {
+  if (!engine || engine.repository !== SOURCE.repository || engine.ref !== SOURCE.ref ||
+      !sha(engine.sha) || !hash(engine.digest) || engine.digest !== engineDigest(root)) {
+    throw new Error('Frozen Clouseau engine source or digest differs from this run selection');
+  }
+  verifyRevision(engine.sha, root);
+  return Object.freeze({...engine});
+}
+
+function environmentEngine(root) {
+  const revision = process.env.CLOUSEAU_ENGINE_SHA;
+  const checksum = process.env.CLOUSEAU_ENGINE_DIGEST;
+  if (!revision && !checksum) return null;
+  return verifyEngine({...SOURCE, sha: revision, digest: checksum}, root);
+}
+
+function acceptsEngine(trust, engine) {
+  const frozen = Boolean(engine && engine.repository === SOURCE.repository && engine.ref === SOURCE.ref &&
+    sha(engine.sha) && hash(engine.digest));
+  // An explicit engine identity is supplied only by the trusted frozen-source
+  // workflow (or the refreshed public local runner), never by receipt data.
+  // This also permits the one-time migration from legacy digest enrollment.
+  return trust.central_source ? centralSource(trust.central_source) && frozen :
+    frozen || Boolean(engine && trust.reviewer_digest === engine.digest);
+}
+
+module.exports = {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine};

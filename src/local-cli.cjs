@@ -11,6 +11,7 @@ const {localReview} = require('./local-review.cjs');
 const {askHarness} = require('./local-harness.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
+const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {refresh, safePath} = require('./acceptance-sources.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
@@ -102,6 +103,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (git(directory, ['status', '--porcelain']).trim()) throw new Error('Commit the complete change before local review');
   const reviewer = installed();
   const reviewerSha = reviewer.sha;
+  const engine = {...SOURCE, sha: reviewer.sha, digest: reviewer.digest};
   const request = fs.readFileSync(args['request-file'], 'utf8');
   if (!request.trim() || request.length > 20000) throw new Error('A bounded, nonempty requirement is required');
   let ciConfig = null;
@@ -135,7 +137,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (ciConfig?.local_review && fs.existsSync(cachedReceipt)) {
     const bundle = JSON.parse(fs.readFileSync(cachedReceipt, 'utf8'));
     const key = ciConfig.local_review.keys.find(item => item.id === bundle.payload.key_id);
-    const verified = verifyReceipt(bundle, {trust: ciConfig.local_review, repository,
+    const verified = verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
       author: key?.github_actor, headSha: head, baseSha: git(directory, ['rev-parse', base]).trim(),
       reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
       policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))});
@@ -151,7 +153,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (identityPath) {
     if (fs.statSync(identityPath).mode & 0o077) throw new Error('Signing identity permissions must be private');
     identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-    if (!ciConfig?.local_review || ciConfig.local_review.reviewer_digest !== reviewer.digest ||
+    if (!ciConfig?.local_review || !acceptsEngine(ciConfig.local_review, engine) ||
       !ciConfig.local_review.keys.some(key => !key.revoked && key.id === identity.id &&
         key.issuer === identity.issuer && key.github_actor === identity.github_actor && key.public_key === identity.public_key)) {
       throw new Error('The signer and reviewer revision must already be enrolled in the protected CI configuration');
@@ -159,7 +161,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   const technical = verify({directory, config});
   if (git(directory, ['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed during local verification');
-  const collected = collectLocal({directory, base, request, technical, ciConfig});
+  const collected = collectLocal({directory, base, request, technical, ciConfig, reviewerSha});
   collected.snapshot.prior_findings = priorFindings;
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
@@ -182,7 +184,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest});
-    verifyReceipt(bundle, {trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
+    verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
     receipt = path.join(cache, 'receipt.json');
