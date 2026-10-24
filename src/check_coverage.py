@@ -5,13 +5,27 @@ from pathlib import Path
 import sys
 
 from istanbul_coverage import counters as istanbul_counters
+from coveragepy_coverage import counters as coveragepy_counters
 
 
-def check(report, source_directory="src", coverage_format="llvm"):
+def load_report(filename):
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"Duplicate coverage JSON key: {key}")
+            value[key] = item
+        return value
+    return json.loads(Path(filename).read_text(), object_pairs_hook=unique_object)
+
+
+def counters(report, source_directory="src", coverage_format="llvm"):
     if coverage_format == "istanbul":
-        return enforce(istanbul_counters(report, source_directory))
+        return istanbul_counters(report, source_directory)
+    if coverage_format == "coveragepy":
+        return coveragepy_counters(report, source_directory)
     if coverage_format != "llvm":
-        raise ValueError("Unknown coverage format; use llvm or istanbul")
+        raise ValueError("Unknown coverage format; use llvm, istanbul or coveragepy")
     if report.get("type") != "llvm.coverage.json.export":
         raise ValueError("Expected an LLVM coverage export")
     data = report.get("data")
@@ -44,7 +58,11 @@ def check(report, source_directory="src", coverage_format="llvm"):
                 counts[metric][1] += covered
     if not source_files:
         raise ValueError("No application source coverage was measured")
-    return enforce(counts)
+    return counts
+
+
+def check(report, source_directory="src", coverage_format="llvm"):
+    return enforce(counters(report, source_directory, coverage_format))
 
 
 def enforce(counts):
@@ -63,8 +81,8 @@ def enforce(counts):
 if __name__ == "__main__":
     try:
         if len(sys.argv) not in (3, 4):
-            raise ValueError("Usage: check_coverage.py REPORT SOURCE_DIRECTORY [llvm|istanbul]")
-        check(json.loads(Path(sys.argv[1]).read_text()), sys.argv[2],
+            raise ValueError("Usage: check_coverage.py REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy]")
+        check(load_report(sys.argv[1]), sys.argv[2],
               sys.argv[3] if len(sys.argv) == 4 else "llvm")
     except (OSError, ValueError, TypeError, AttributeError) as error:
         print(f"Coverage gate failed: {error}", file=sys.stderr)
