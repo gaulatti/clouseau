@@ -187,3 +187,19 @@ test('product obligations keep their history identity and legacy closures withou
   state = reconcile(result(g), g.snapshot, prior);
   assert.equal(state.findings[0].state, 'confirmed');
 });
+
+
+test('a newly generated verification receipt cannot reopen a closed source allegation', () => {
+  const f = complete(); f.report.findings = [finding()];
+  const previous = reconcile(result(f), f.snapshot).findings;
+  previous[0].blocking = false; previous[0].state = 'dismissed';
+  f.snapshot.prior_findings = previous;
+  f.snapshot.sources.verification = {kind: 'verification', authority: 'trusted', path: 'verification', ref: f.snapshot.head_sha, content: 'A fresh successful test run.'};
+  f.report.evidence.push({id: 'run', source: 'verification', start: 1, end: 1, quote: 'A fresh successful test run.'});
+  f.report.coverage.sources.push({source: 'verification', state: 'inspected', reason: 'Verified the execution receipt.', evidence: ['run']});
+  f.report.reopenings = [{id: previous[0].id, reason: 'Another CI run completed.', evidence: ['run']}];
+  refresh(f.snapshot); f.report.snapshot = f.snapshot.digest;
+  assert.throws(() => validateReport(f.report, f.snapshot), /repository evidence/);
+  f.report.reopenings[0].evidence.push('source');
+  assert.equal(validateReport(f.report, f.snapshot).decision, 'repair_required');
+});

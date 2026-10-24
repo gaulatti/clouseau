@@ -233,7 +233,10 @@ function validateCompleteness(report, snapshot, evidence, citations) {
     requireThat(!reopened.has(item.id) && text(item.reason) && snapshot.prior_findings?.some(old => old.id === item.id &&
       ['corrected', 'dismissed'].includes(old.state)), 'invalid finding reopening');
     citations(item.evidence);
-    requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].ref === snapshot.head_sha), 'reopening lacks current-revision evidence');
+    requireThat(item.evidence.some(id => {
+      const source = snapshot.sources[evidence.get(id).source];
+      return source.ref === snapshot.head_sha && ['source', 'contract'].includes(source.kind);
+    }), 'reopening lacks current-revision repository evidence');
     reopened.add(item.id);
   }
 }
