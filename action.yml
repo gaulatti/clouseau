@@ -80,20 +80,6 @@ outputs:
 runs:
   using: composite
   steps:
-    - name: Verify and record this run frozen engine
-      uses: actions/github-script@v7
-      env:
-        CLOUSEAU_ROOT: ${{ github.action_path }}
-      with:
-        script: |
-          const fs = require('node:fs');
-          const path = require('node:path');
-          const engine = require(path.join(process.env.CLOUSEAU_ROOT, 'src/central-version.cjs')).environmentEngine();
-          if (engine) {
-            fs.mkdirSync('work', {recursive: true});
-            fs.writeFileSync('work/clouseau-engine.json', JSON.stringify(engine, null, 2) + '\n');
-            await core.summary.addRaw(`Clouseau frozen commit: ${engine.sha}\n\nEngine digest: ${engine.digest}\n`).write();
-          }
     - name: Validate Clouseau operation
       shell: bash
       env:
@@ -115,6 +101,20 @@ runs:
             esac ;;
           *) echo 'Unknown Clouseau record transport' >&2; exit 1 ;;
         esac
+    - name: Verify and record this run frozen engine
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+      with:
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const engine = require(path.join(process.env.CLOUSEAU_ROOT, 'src/central-version.cjs')).environmentEngine();
+          if (engine) {
+            fs.mkdirSync('work', {recursive: true});
+            fs.writeFileSync('work/clouseau-engine.json', JSON.stringify(engine, null, 2) + '\n');
+            await core.summary.addRaw(`Clouseau frozen commit: ${engine.sha}\n\nEngine digest: ${engine.digest}\n`).write();
+          }
     - name: Test approval policy
       if: inputs.operation == 'test'
       shell: bash
