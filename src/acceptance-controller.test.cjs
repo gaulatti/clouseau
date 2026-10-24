@@ -14,6 +14,88 @@ const config = {...require('../test/fixtures/config.json'), version: 2, reposito
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
 
+test('explicit manual mode approves independently verified owner work without ever arming auto-merge or deployment', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  assert.equal(assessment.decision, 'auto_approve');
+  const messages = [];
+  const core = {info(message) {messages.push(message);}, summary: {addRaw(message) {messages.push(message); return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'disable-auto').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  assert.equal(f.state.pr.auto_merge, null);
+  assert.ok(messages.some(message => message.includes('GitHub cannot enforce protection')));
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.ok(messages.some(message => message.includes('never arms auto-merge or dispatches deployment')));
+  f.state.pr.auto_merge = {};
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
+test('manual mode still refuses failed tests, stale revisions and an unsuccessful auto-merge disable', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  f.state.pr.auto_merge = null;
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  f.state.failed = true;
+  await assert.rejects(gate(), /Verification changed/);
+  f.state.failed = false;
+  f.state.pr.head.sha = 'd'.repeat(40);
+  await assert.rejects(gate(), /PR changed/);
+  f.state.pr.head.sha = assessment.head_sha;
+  f.state.pr.auto_merge = {};
+  f.github.graphql = async () => ({});
+  await assert.rejects(gate(), /Automatic merge remains enabled/);
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 0);
+}));
+
+test('manual mode preserves available protection and denies newly enabled auto-merge or revoked ownership before approval', async () => {
+  for (const failure of [null, 'settings', 'owner']) await fixture(async f => {
+    const policy = createPolicy({...config, merge_mode: 'manual'});
+    f.state.pr.auto_merge = null;
+    const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+    let settingsReads = 0; let ownerReads = 0;
+    f.github.rest.repos.get = async () => ({data: {private: false, allow_auto_merge: failure === 'settings' && ++settingsReads > 1}});
+    f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: failure === 'owner' && ++ownerReads > 1 ? 'read' : 'write'}});
+    const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+    const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+    if (failure) {
+      await assert.rejects(gate(), failure === 'settings' ? /auto-merge to be disabled/ : /ownership changed/);
+      assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 0);
+    } else {
+      await gate();
+      assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+    }
+    assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  });
+});
+
+test('manual-only external work retains the exact-head code-owner approval requirement even on an unsupported private plan', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const original = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = args => args.path === '.github/CODEOWNERS' ? Promise.resolve({data: {
+    encoding: 'base64', content: Buffer.from('* @maintainer').toString('base64')}}) : original(args);
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  const messages = [];
+  const core = {info() {}, summary: {addRaw(value) {messages.push(value); return this;}, async write() {}}};
+  const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  await assert.rejects(gate(), /current-head code-owner approval/);
+  f.state.reviews = [{user: {login: 'maintainer', type: 'User'}, state: 'APPROVED', commit_id: f.state.pr.head.sha}];
+  await gate();
+  assert.ok(messages.some(value => value.includes('GitHub cannot enforce protection')));
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
 async function fixture(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-acceptance-'));
   const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';

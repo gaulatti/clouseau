@@ -328,3 +328,23 @@ After the owner approval, the trusted metadata gate can be reassessed; passing i
 still leaves automatic merge disabled and requires a manual merge. Review and
 merge authority are independent. Native tests, coverage and protection remain
 mandatory. Legacy v1 consumers must upgrade to v2 to receive this restriction.
+
+An accepted protocol-v2 configuration can set `"merge_mode": "manual"` when all
+merges must remain with a code owner. This mode requires repository auto-merge
+to be disabled, disables any surviving PR auto-merge request and never dispatches
+deployment. Owner-authored PRs can receive automated approval after the same
+verification and acceptance checks, but are never automatically merged. External
+contributors still need fresh human code-owner approval for every affected path
+and a manual merge. Proposed configuration cannot select its own merge authority.
+
+The controller enforces available protection in manual mode. It permits the
+absence of host enforcement only after GitHub returns the specific HTTP 403
+request to upgrade the private-repository plan, the repository is verified
+private, and the branch is verified unprotected. It does not interpret arbitrary
+403/404 errors or missing rules as that limitation. Settings and protection are
+read again before approval; enabling auto-merge or revoking ownership stops the
+write. Public repositories and private repositories with available protection
+must satisfy the full protection contract. The report distinguishes independently
+passed review and tests from unavailable host enforcement. On an unsupported
+private plan, GitHub cannot prevent a trusted maintainer from ignoring a failed
+check; no automatic merge is available as an alternate release path.

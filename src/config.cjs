@@ -34,6 +34,10 @@ function validateConfig(config) {
     require('./local-receipt.cjs').validateTrust(config.local_review);
     if (config.version !== 2) throw new Error('Local receipt integration requires acceptance protocol version two');
   }
+  if (config.merge_mode !== undefined &&
+      (config.version !== 2 || !['automatic', 'manual'].includes(config.merge_mode))) {
+    throw new Error('Invalid Clouseau merge mode; protocol version two requires automatic or manual');
+  }
   return structuredClone(config);
 }
 
