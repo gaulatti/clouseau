@@ -132,7 +132,9 @@ class CoveragePlanTests(unittest.TestCase):
             self.assertEqual(main([str(filename)])["totals"], measured["totals"])
         with patch.object(sys, "argv", ["coverage_plan.py", str(filename), str(self.root)]), contextlib.redirect_stdout(io.StringIO()):
             runpy.run_module("coverage_plan", run_name="__main__")
-        for value in ({"version": 1, "coverage": self.parts[0]}, [], {"version": 2, "coverage": []}):
+        for value in ({"version": 1, "coverage": self.parts[0]}, [], {"version": 2, "coverage": []},
+                      {"version": 2, "coverage": self.parts, "exclude": ["uncovered.js"]},
+                      {"version": 2, "coverage": self.parts, "verfication": [["must-not-execute"]]}):
             filename.write_text(json.dumps(value))
             with self.subTest(value=value), self.assertRaises(ValueError):
                 main([str(filename)])
