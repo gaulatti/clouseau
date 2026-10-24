@@ -213,6 +213,7 @@ function publishReceipt({directory, receipt}) {
 }
 
 async function main(argv, runtime = {}) {
+  if (argv[0] === 'public-identity' || argv[0]?.startsWith('installation-')) return require('./installation-cli.cjs').main(argv, runtime);
   const args = options(argv);
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
