@@ -21,6 +21,7 @@ function engineDigest(root = path.join(__dirname, '..')) {
     }
   }
   for (const relative of ['action.yml', 'src', 'policy', 'bin', 'skills', 'scripts']) visit(relative);
+  if (fs.existsSync(path.join(root, 'vendor'))) visit('vendor');
   return digest(entries);
 }
 module.exports = {engineDigest};

@@ -35,6 +35,10 @@ rewrites reports nor invents counters to compensate for producer behavior.
 The dependency-free CommonJS parser bundle is unmodified. Its exact upstream
 tarball, integrity and SHA-256 are recorded in
 `vendor/babel-parser/provenance.json`; its MIT license is stored alongside it.
+The authenticated engine digest includes the vendored runtime tree, including
+file contents and executable modes, and rejects symbolic substitutions. A parser
+change therefore changes the engine identity bound to local receipts as well as
+the Git revision; deleting the dependency cannot retain the expected digest.
 Updates must preserve that provenance and verify the real producer regression
 cases. `test/fixtures/istanbul-statement-free.json` contains actual
 `istanbul-lib-instrument` 6.0.3 output, including a real executed branch-only
