@@ -92,7 +92,8 @@ function parseGrant(body, now = Date.now()) {
 function installationMarker(body) {
   const text = body || '';
   const matches = [...text.matchAll(INSTALLATION_MARKER)];
-  requireInstallation(matches.length === 1 && !text.includes('clouseau-local-review:'), 'one installation-only receipt marker is required');
+  requireInstallation(matches.length === 1 && [...text.matchAll(/clouseau-installation-review:/g)].length === 1 &&
+    !text.includes('clouseau-local-review:'), 'one installation-only receipt marker is required');
   return matches[0][1];
 }
 

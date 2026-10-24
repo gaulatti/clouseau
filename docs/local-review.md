@@ -211,6 +211,10 @@ its future receipts. `optional` mode permits the separately installed CI AI
 reviewer for PRs without a receipt. An invalid receipt never falls back to a paid
 AI review. `required` mode needs no CI AI provider credentials.
 
+Malformed, unknown-version, duplicate or mixed receipt marker claims block
+before any provider call; only genuinely unstamped optional-mode PRs can enter
+the ordinary CI AI route. Do not normalize or discard an invalid stamp.
+
 The initial trust boundary is an enrolled maintainer workstation, including its
 operator and privileged processes. The identity is not remote or hardware
 attestation. A private key held by that operating-system account cannot protect

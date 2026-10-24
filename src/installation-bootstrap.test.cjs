@@ -137,7 +137,8 @@ test('installation authorization has a distinct canonical grant and an installat
   }
   const stamp = `<!-- clouseau-installation-review:v1 ${'a'.repeat(40)} -->`;
   assert.equal(bootstrap.installationMarker(`Installation evidence\n${stamp}`), 'a'.repeat(40));
-  for (const invalid of [null, '', stamp + stamp, stamp + `<!-- clouseau-local-review:v1 ${'b'.repeat(40)} -->`]) assert.throws(() => bootstrap.installationMarker(invalid), /installation-only/);
+  for (const invalid of [null, '', stamp + stamp, stamp + `<!-- clouseau-local-review:v1 ${'b'.repeat(40)} -->`,
+    stamp + '<!-- clouseau-installation-review:v2 invalid -->', stamp + '<!-- clouseau-installation-review:v1 invalid -->']) assert.throws(() => bootstrap.installationMarker(invalid), /installation-only/);
   assert.throws(() => marker(stamp), /ordinary PR/);
 }));
 

@@ -18,6 +18,19 @@ test('signed passing local receipt is verified and graded without a provider', a
   assert.throws(() => marker(`<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->\n<!-- clouseau-local-review:v1 ${'b'.repeat(40)} -->`), /multiple/);
 });
 
+test('any local receipt claim must be one complete supported immutable marker', () => {
+  const valid = `<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`;
+  const unknown = `<!-- clouseau-local-review:v2 ${'b'.repeat(40)} -->`;
+  for (const body of ['clouseau-local-review:', `<!-- clouseau-local-review:v1 invalid -->`, unknown,
+    `<!-- clouseau-local-review:v1 ${'a'.repeat(39)} -->`, valid.slice(0, -3), `${valid}\n${unknown}`]) {
+    assert.throws(() => marker(body), /receipt|marker|claim/i);
+  }
+  assert.throws(() => marker(`${valid}\n${valid}`), /multiple receipt/);
+  assert.throws(() => marker(`<!-- clouseau-installation-review:v2 invalid -->\n${valid}`), /installation-only/);
+  assert.equal(marker('Ordinary PR with no receipt claim.'), null);
+  assert.equal(marker(`Ready application change.\n${valid}`), 'a'.repeat(40));
+});
+
 test('tampered report, signature, key, repository, revision and policy never authorize reuse', async () => {
   const f = await fixture();
   const bundle = issueReceipt(f.issue);

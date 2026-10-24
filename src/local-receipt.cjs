@@ -119,9 +119,12 @@ function verifyReceipt(bundle, options) {
 }
 
 function marker(body) {
-  requireReceipt(!(body || '').includes('clouseau-installation-review:'), 'installation-only evidence cannot approve an ordinary PR');
-  const matches = [...(body || '').matchAll(MARKER)];
+  const text = body || '';
+  requireReceipt(!text.includes('clouseau-installation-review:'), 'installation-only evidence cannot approve an ordinary PR');
+  const matches = [...text.matchAll(MARKER)];
   requireReceipt(matches.length <= 1, 'multiple receipt references');
+  requireReceipt([...text.matchAll(/clouseau-local-review:/g)].length === matches.length,
+    'malformed or unsupported receipt reference; no paid fallback is allowed');
   return matches[0]?.[1] || null;
 }
 
