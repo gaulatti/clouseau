@@ -37,7 +37,7 @@ consumer's privileged approval job. See `examples/colombo.json` for version 2 co
 | Operation | Inputs | Result |
 | --- | --- | --- |
 | `test` | none | Run Clouseau's Python and Node regression suites |
-| `coverage` | `coverage-report`, `source-directory`, optional `coverage-format` | Require exact, nonempty 100% application line and branch coverage in native LLVM, Istanbul or coverage.py JSON |
+| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |

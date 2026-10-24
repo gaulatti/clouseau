@@ -117,6 +117,8 @@ test('v2 local verification binds every native artifact and allows only aggregat
   let calls = 0;
   assert.throws(() => executeVerification({directory: f.directory,
     config: {...config, coverage: []}, run: () => {calls++;}}), /Invalid local-only/);
+  assert.throws(() => executeVerification({directory: f.directory,
+    config: {...config, exclude: ['frontend']}, run: () => {calls++;}}), /Invalid local-only/);
   assert.equal(calls, 0, 'invalid accepted recipe stops before executing any command');
 }));
 

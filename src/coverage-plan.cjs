@@ -5,6 +5,8 @@ const {safePath} = require('./acceptance-sources.cjs');
 function coverageParts(config) {
   const fail = () => {throw new Error('Invalid local-only Clouseau coverage configuration');};
   if (!config || ![1, 2].includes(config.version)) fail();
+  if (config.version === 2 && Object.keys(config).some(key =>
+    !['version', 'base_branch', 'readme', 'repository_policy', 'verification', 'coverage'].includes(key))) fail();
   const parts = config.version === 1 ? [config.coverage] : config.coverage;
   if (!Array.isArray(parts) || !parts.length || parts.length > 32) fail();
   const reports = new Set();

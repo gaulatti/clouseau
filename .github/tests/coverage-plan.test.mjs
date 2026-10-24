@@ -35,6 +35,12 @@ test('the actual packaged coverage step verifies each native artifact without cr
     assert.deepEqual(JSON.parse(passing.stdout).totals, {lines: [2, 2], branches: [2, 2]});
     assert.notEqual(run({COVERAGE_REPORT: 'backend.json'}).status, 0, 'ambiguous legacy report must fail');
     assert.notEqual(run({SOURCE_DIRECTORY: 'backend'}).status, 0, 'ambiguous legacy root must fail');
+    const accepted = fs.readFileSync(path.join(directory, 'accepted.json'), 'utf8');
+    fs.writeFileSync(path.join(directory, 'accepted.json'), JSON.stringify({...JSON.parse(accepted), exclude: ['backend']}));
+    const unknownPolicy = run();
+    assert.notEqual(unknownPolicy.status, 0, 'unknown top-level policy fields must fail');
+    assert.match(unknownPolicy.stderr, /Unknown version 2 coverage recipe field/);
+    fs.writeFileSync(path.join(directory, 'accepted.json'), accepted);
     const report = JSON.parse(fs.readFileSync(path.join(directory, 'backend.json')));
     Object.values(report)[0].b[0][1] = 0;
     fs.writeFileSync(path.join(directory, 'backend.json'), JSON.stringify(report));

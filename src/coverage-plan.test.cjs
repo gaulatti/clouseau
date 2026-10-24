@@ -15,7 +15,7 @@ const recipe = coverage => ({version: 2, base_branch: 'main', readme: 'README.md
 test('v2 explicit native parts preserve the v1 single-artifact contract', () => {
   for (const format of ['llvm', 'istanbul', 'coveragepy']) {
     const coverage = {...part('src', 'native.json', format), legacy_metadata: true};
-    const config = {...recipe(coverage), version: 1};
+    const config = {...recipe(coverage), version: 1, legacy_metadata: true};
     assert.deepEqual(coverageParts(config), [coverage]);
     assert.equal(readLocalConfig(config), config);
   }
@@ -32,11 +32,17 @@ test('coverage configuration rejects unsafe paths, unknown policy fields and amb
     recipe([{...part(), report: '../outside.json'}]), recipe([{...part(), report: null}]),
     recipe([{...part(), source_directory: '/outside'}]), recipe([{...part(), source_directory: null}]),
     recipe([{...part(), excludes: ['uncovered.ts']}]),
+    {...recipe([part()]), exclude: ['uncovered.ts']},
+    {...recipe([part()]), verfication: [['must-not-execute']]},
+    {...recipe([part()]), provider_key: 'fixture-not-a-real-credential'},
     recipe([part('backend'), part('frontend', 'coverage.json')]),
     recipe([part('src'), part('src', 'other.json')]),
     recipe([part('src'), part('src/nested', 'other.json')]),
     recipe([part('src/nested'), part('src', 'other.json')])];
-  for (const config of invalid) assert.throws(() => coverageParts(config), /Invalid local-only/);
+  for (const config of invalid) {
+    assert.throws(() => coverageParts(config), /Invalid local-only/);
+    assert.throws(() => readLocalConfig(config), /Invalid local-only/);
+  }
 });
 
 test('the complete v2 plan comes from accepted base rather than the proposed recipe', () => repository(f => {
