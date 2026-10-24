@@ -32,6 +32,11 @@ function schemas(snapshot) {
         description: `${referenceRule} Include an ID citing this path's own changed base_source or head_source, not only other files or verification.`}, reason: string})),
       decisions: array(object({kind: enumeration(['purpose', 'authority', 'tradeoff']), question: string, options: array(string), evidence: citations})),
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
+      ...(snapshot.review_manifest_version ? {
+        coverage: object({sources: array(object({source: enumeration(Object.keys(snapshot.sources)), state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations})),
+          dependencies: array(object({path: string, state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations}))}),
+        reopenings: array(object({id: string, reason: string, evidence: citations})),
+      } : {}),
     }),
     source_request: object({request_sources: array(string)}),
   };
