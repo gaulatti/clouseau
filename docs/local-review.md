@@ -129,8 +129,10 @@ An enrolled runner selects its matching installed identity automatically. Use
 `--identity /path/to/identity.json` to select explicitly when needed. The runner
 requires unmodified Clouseau engine content already enrolled in accepted CI
 policy. It records the exact Clouseau commit and binds the executable engine,
-skill, scripts and policy by a SHA-256 content digest. Identical reviewed engine
-content remains compatible across squash-merge commit identities. It verifies
+skill, scripts and policy by a SHA-256 content digest. Legacy fixed-digest installations permit identical engine content across squash
+identities. [Automatic CI upgrades](automatic-ci-upgrades.md) require both the
+exact selected central commit and its computed digest; no cross-version
+compatibility is inferred. It verifies
 the same source and installation remain unchanged before
 issuing a passing receipt. Signing material is never placed in model packets,
 child-process environments, project source, reports or the published artifact.
@@ -166,3 +168,9 @@ non-passing or unauthorized receipts cannot approve.
 Tests, exact 100% coverage and branch protection remain mandatory. Review-control
 changes retain their existing exact-revision owner installation requirements.
 Post-deployment wiki generation and factual review remain separate operations.
+
+Automatic central-source installations retain signer enrollment in protected base
+configuration and authorize protected Clouseau main instead of a recurring
+reviewer digest. An engine mismatch blocks without a paid fallback: refresh,
+review again and start a fresh workflow. The selected commit and digest are in
+the run summary and engine artifact.

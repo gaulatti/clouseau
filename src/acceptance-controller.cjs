@@ -20,10 +20,13 @@ function decided(result, controls) {
   return controls && result.decision === 'auto_approve' ? 'owner_decision' : result.decision;
 }
 
-function verifyRecord(record, assessment, config) {
+function verifyRecord(record, assessment, config, engine = null) {
+  if (engine && (digest(record.engine) !== digest(engine) || digest(assessment.engine) !== digest(engine))) {
+    throw new Error('Acceptance record belongs to a different frozen engine');
+  }
   if (record.local_receipt) {
     require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
-      trust: config.local_review, repository: record.snapshot.repository, author: record.local_author,
+      engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author,
       headSha: assessment.head_sha, baseSha: assessment.base_sha,
       configDigest: digest(config), policyDigest: policyDigest(),
     });
@@ -52,12 +55,15 @@ function verifyRecord(record, assessment, config) {
     {...record.snapshot, number: assessment.number}, state)};
 }
 
-function createAcceptancePolicy(config, legacy) {
+function createAcceptancePolicy(config, legacy, engine = null) {
+  if (config.local_review?.central_source && !require('./central-version.cjs').acceptsEngine(config.local_review, engine)) {
+    throw new Error('Protected central-source integration requires this run frozen engine identity');
+  }
   async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false}) {
     const repo = context.repo;
     const number = numberFor(context);
     const {data: pr} = await github.rest.pulls.get({...repo, pull_number: number});
-    const identity = {version: 2, number, head_sha: pr.head.sha, base_sha: pr.base.sha};
+    const identity = {version: 2, number, head_sha: pr.head.sha, base_sha: pr.base.sha, ...(engine ? {engine} : {})};
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
     const technical = await legacy.technicalRun(github, repo, pr, {receipt: true});
     if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
@@ -78,14 +84,14 @@ function createAcceptancePolicy(config, legacy) {
       const receiptRef = receipts.marker(pr.body);
       if (receiptRef) {
         const bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
-        const verified = receipts.verifyReceipt(bundle, {trust: config.local_review,
+        const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
           repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
           configDigest: digest(config), policyDigest: policyDigest()});
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files});
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || legacy.scopeReason(files, pr)) {
           throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
         }
-        const record = {...verified.record, previous, technical, local_author: pr.user.login,
+        const record = {...verified.record, ...(engine ? {engine} : {}), previous, technical, local_author: pr.user.login,
           local_artifact: receiptRef, local_receipt: bundle};
         fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
         if (report) report('Authenticated local Clouseau review verified. CI AI calls: 0.');
@@ -109,7 +115,7 @@ function createAcceptancePolicy(config, legacy) {
       if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
       const controls = legacy.scopeReason(files, pr);
       const decision = decided(result, Boolean(controls));
-      const record = {version: 2, snapshot, result, previous, controls: Boolean(controls), technical};
+      const record = {version: 2, ...(engine ? {engine} : {}), snapshot, result, previous, controls: Boolean(controls), technical};
       // Retain the complete record. Never place the large, model-controlled
       // ledger in workflow outputs or interpolate it into shell commands.
       fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
@@ -145,7 +151,7 @@ function createAcceptancePolicy(config, legacy) {
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) return hold(assessment.reason);
     const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
-    const {body, pages} = verifyRecord(record, assessment, config);
+    const {body, pages} = verifyRecord(record, assessment, config, engine);
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
@@ -184,7 +190,12 @@ function createAcceptancePolicy(config, legacy) {
       assessment: {...assessment, decision: assessment.decision === 'owner_decision' ? 'second_opinion' : 'auto_approve'}});
   }
 
-  return {...legacy, assess, assessWhenReady, gate};
+  async function finalize({assessment = JSON.parse(process.env.ASSESSMENT), ...options}) {
+    if (engine && digest(assessment.engine) !== digest(engine)) throw new Error('Merge assessment belongs to a different frozen engine');
+    return legacy.finalize({...options, assessment});
+  }
+
+  return {...legacy, assess, assessWhenReady, gate, finalize};
 }
 
 module.exports = {RECORD, policyDigest, numberFor, decided, verifyRecord, createAcceptancePolicy};

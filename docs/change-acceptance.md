@@ -270,3 +270,10 @@ that framework a product direction; unnecessary machinery remains repair work.
 Technical necessity and severity are graded for distinct runtime, data, security,
 compatibility, or verification consequences. Product scope and proportionality
 are still enforced by the independent product scores and scope gate.
+
+## Frozen CI engine
+
+See [automatic CI upgrades](automatic-ci-upgrades.md) for the protected central
+source, immutable run selection, exact receipt compatibility and operator evidence.
+Assessment and gate records bind that same engine; failed selection or mismatched
+evidence never authorizes approval.

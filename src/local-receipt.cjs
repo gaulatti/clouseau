@@ -6,6 +6,7 @@ const {refresh, safePath} = require('./acceptance-sources.cjs');
 const {validateInspection, combine} = require('./acceptance-review.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
+const {centralSource, acceptsEngine} = require('./central-version.cjs');
 
 const DOMAIN = 'clouseau.local-review.v1';
 const MARKER = /<!-- clouseau-local-review:v1 ([a-f0-9]{40}) -->/g;
@@ -14,7 +15,8 @@ const fail = message => {throw new Error(`Invalid local review receipt: ${messag
 const requireReceipt = (value, message) => {if (!value) fail(message);};
 
 function validateTrust(trust) {
-  requireReceipt(trust && /^[a-f0-9]{64}$/.test(trust.reviewer_digest) && ['required', 'optional'].includes(trust.mode) &&
+  requireReceipt(trust && (centralSource(trust.central_source) && trust.reviewer_digest === undefined ||
+    trust.central_source === undefined && /^[a-f0-9]{64}$/.test(trust.reviewer_digest)) && ['required', 'optional'].includes(trust.mode) &&
     Array.isArray(trust.keys) && trust.keys.length > 0 &&
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
     trust.max_age_seconds <= 86400, 'explicit trust policy and maximum age required');
@@ -72,7 +74,7 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
 }
 
 function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now()}) {
+  now = Date.now(), engine = null}) {
   validateTrust(trust);
   requireReceipt(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
@@ -90,12 +92,17 @@ function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, rev
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
     typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge');
+  if (trust.central_source) {
+    requireReceipt(acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
+      p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha,
+    'engine mismatch; refresh public Clouseau and review again, then start a fresh CI run. No paid fallback is allowed');
+  }
   const record = p.record;
   const snapshot = record.snapshot;
   requireReceipt(p.record_digest === digest(record) && snapshot.repository === repository &&
     sha(headSha) && snapshot.head_sha === headSha && sha(baseSha) && snapshot.base_sha === baseSha &&
     sha(p.reviewer_sha) && (!reviewerSha || p.reviewer_sha === reviewerSha) &&
-    p.reviewer_digest === reviewerDigest && trust.reviewer_digest === reviewerDigest && snapshot.config_digest === configDigest &&
+    p.reviewer_digest === reviewerDigest && (trust.central_source || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
     snapshot.policy_digest === policyDigest, 'repository, revisions, policy, configuration or record changed');
   requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
     Array.isArray(snapshot.prior_findings) && record.controls === false, 'receipt cannot grant owner authority');

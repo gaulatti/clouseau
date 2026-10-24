@@ -30,9 +30,10 @@ There is no application-specific deployment infrastructure in Clouseau.
 
 ## Operations
 
-Use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`. Pin the full commit, and update
-that reference through a reviewed PR. Do not track `main` or a movable tag in a
-consumer's privileged approval job. See `examples/colombo.json` for version 2 configuration.
+Integrated consumers [freeze protected central main once per run](docs/automatic-ci-upgrades.md).
+A stable pinned bootstrap selects an immutable SHA; every stage checks out and
+uses that identity. Normal releases require no consumer pin or digest update.
+See `examples/colombo.json` for version 2 configuration.
 
 | Operation | Inputs | Result |
 | --- | --- | --- |

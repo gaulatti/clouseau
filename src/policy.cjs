@@ -10,12 +10,12 @@ function intentText(body, sha) {
   return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
 }
 
-function createPolicy(input) {
+function createPolicy(input, {engine = null} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
   const {local_review, ...legacyConfig} = config;
   const legacy = createPolicy({...legacyConfig, version: 1});
-  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
+  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
 const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
