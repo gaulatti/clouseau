@@ -35,14 +35,14 @@ function reconcile(result, snapshot, previous = []) {
   const previousById = new Map(previous.map(item => [item.id, item]));
   const roots = new Map();
   const normalized = text => text.trim().toLowerCase().replace(/\s+/g, ' ');
-  const related = (candidate, kind) => previousById.get(candidate.id) || (snapshot.review_manifest_version && previous.find(old =>
-    old.kind === kind && normalized(old.obligation) === normalized(candidate.obligation) &&
-    (old.path === candidate.path || snapshot.files.some(file => file.path === candidate.path && snapshot.sources[file.base_source]?.path === old.path))));
+  // The investigator must reuse the old identifier when paraphrasing a cause.
+  // Sharing an obligation and path does not establish the same defect.
+  const related = candidate => previousById.get(candidate.id);
   const basis = (report, ids) => [...new Set(ids.map(id => {
     const proof = report.evidence.find(item => item.id === id);
     const source = snapshot.sources[proof.source];
     // Line offsets, title wording and commit identity do not make new evidence.
-    return digest({kind: source.kind, content: normalized(source.content.split('\n').slice(proof.start - 1, proof.end).join('\n'))});
+    return digest({kind: source.kind, content: source.content.split('\n').slice(proof.start - 1, proof.end).join('\n')});
   }))].sort();
   const remember = (id, report, ids) => {
     const entries = roots.get(id) || []; entries.push({report, basis: basis(report, ids)}); roots.set(id, entries);
@@ -51,7 +51,7 @@ function reconcile(result, snapshot, previous = []) {
     for (const [index, unit] of review.report.units.entries()) {
       const current = review.scores.units[index];
       if (current.disposition === 'accepted') continue;
-      const old = related({...unit, path: unit.paths[0]}, 'product');
+      const old = related(unit);
       const cause = `The material unit does not establish the required product acceptance: ${unit.title}`;
       const id = old?.kind === 'product' ? old.id : digest({repository: snapshot.repository, kind: 'product',
         obligation: unit.obligation.trim().toLowerCase().replace(/\s+/g, ' '), title: unit.title.trim().toLowerCase().replace(/\s+/g, ' ')});
@@ -61,9 +61,9 @@ function reconcile(result, snapshot, previous = []) {
     }
     for (const [index, finding] of review.report.findings.entries()) {
       const current = review.scores.findings[index];
-      const old = related(finding, 'technical');
+      const old = related(finding);
       const id = old && old.kind !== 'product' ? old.id : digest({repository: snapshot.repository, path: finding.path,
-        cause: finding.cause.trim().toLowerCase().replace(/\s+/g, ' '), obligation: finding.obligation.trim().toLowerCase().replace(/\s+/g, ' ')});
+        cause: finding.cause.trim(), obligation: normalized(finding.obligation)});
       const blocking = current.disposition !== 'nonblocking';
       const existing = records.get(id);
       const record = {id, kind: 'technical', title: finding.title, path: finding.path, cause: finding.cause,

@@ -4,9 +4,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
-const {casePassed, protocolFingerprint, equivalentInputs, factualReplay} = require('../test/evaluate-acceptance.cjs');
+const {casePassed, defectPacket, matchKnownDefect, protocolFingerprint, equivalentInputs, factualReplay} = require('../test/evaluate-acceptance.cjs');
 const {fixture, finding} = require('../test/fixtures/acceptance.cjs');
-const {validateReport} = require('./acceptance.cjs');
+const {validateReport, digest} = require('./acceptance.cjs');
 
 test('the frozen corpus contains reasoned clean, defect, drift, excess, integrity, dismissed and missing-evidence cases', async () => {
   assert.equal(new Set(CASES.map(item => item.name)).size, CASES.length);
@@ -26,18 +26,45 @@ test('the frozen corpus contains reasoned clean, defect, drift, excess, integrit
   }
 });
 
-test('qualification requires the expected defect evidence, not just any blocking verdict', () => {
-  const f = fixture(); const report = f.report; const scenario = CASES.find(item => item.requiredFindingPath);
+test('qualification requires causal adjudication of the reference defect, not any blocker on the same file', () => {
+  const f = fixture(); const report = f.report; const scenario = CASES.find(item => item.requiredFinding);
   const result = {decision: 'repair_required', reviews: [{report, scores: validateReport(report, f.snapshot)}]};
   assert.equal(casePassed(scenario, result), false);
   report.findings = [finding()]; result.reviews[0].scores = validateReport(report, f.snapshot);
-  assert.equal(casePassed({...scenario, requiredFindingPath: 'src/upload.rs'}, result), true);
+  const actual = {...scenario, requiredFinding: {...scenario.requiredFinding, path: 'src/upload.rs'}};
+  const binding = digest(defectPacket(actual, result));
+  result.known_defect_match = {binding, answer: {choice: 'different', probabilities: {matched: 0, different: 1, uncertain: 0}}};
+  assert.equal(casePassed(actual, result), false, 'a same-file blocker with a different cause does not qualify');
+  result.known_defect_match.answer = {choice: 'matched', probabilities: {matched: 0.9, different: 0, uncertain: 0.1}};
+  assert.equal(casePassed(actual, result), true);
+  report.findings[0].cause = 'A different regression';
+  assert.equal(casePassed(actual, result), false, 'adjudication cannot be reused for a different finding');
   result.decision = 'auto_approve'; assert.equal(casePassed(scenario, result), false);
   const missing = CASES.find(item => item.unavailableSource);
   result.decision = 'review_incomplete'; report.coverage = {dependencies: []};
   assert.equal(casePassed(missing, result), false);
   report.coverage.dependencies.push({path: missing.unavailableSource, state: 'missing'});
   assert.equal(casePassed(missing, result), true);
+});
+
+test('known-defect matching sends the frozen reference and literal causal findings to a bounded separate adjudicator', async () => {
+  const f = fixture(); f.report.findings = [finding()];
+  const result = {snapshot: f.snapshot.digest, reviews: [{report: f.report, scores: validateReport(f.report, f.snapshot)}]};
+  const scenario = {...CASES.find(item => item.requiredFinding), requiredFinding: {path: 'src/upload.rs', trigger: 'zero bytes', cause: 'removed lower bound', consequence: 'empty upload persisted'}};
+  const old = process.env.TYPESAFE_API_KEY; process.env.TYPESAFE_API_KEY = 'qualification-test-only';
+  try {
+    const matched = await matchKnownDefect(scenario, result, {fetchImpl: async (url, request) => {
+      assert.equal(url, 'https://api.typesafe.ai/v1/systemone');
+      const body = JSON.parse(request.body), state = JSON.parse(body.state);
+      assert.deepEqual(state.reference, scenario.requiredFinding);
+      assert.equal(state.candidates[0].finding.cause, finding().cause);
+      assert.ok(state.candidates[0].evidence.length);
+      return {ok: true, json: async () => ({model: body.model, answers: {match: {type: 'choice', choice: 'matched', confidence: 0.95,
+        probabilities: {matched: 0.95, different: 0.03, uncertain: 0.02}}}})};
+    }});
+    assert.equal(matched.binding, digest(defectPacket(scenario, result)));
+    assert.equal(matched.answer.choice, 'matched');
+  } finally {if (old === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = old;}
 });
 
 test('recorded replay binds policy and evidence and cannot masquerade as live provider judgment', () => {

@@ -114,7 +114,7 @@ test('finding history survives repair, unrelated pushes, paraphrases, rename, an
   state = reconcile(result(f), f.snapshot, closed);
   assert.equal(state.findings[0].state, 'corrected');
   assert.equal(state.findings[0].events.length, 2);
-  f.report.findings = [{...finding(), id: 'another-model-id', title: 'A paraphrased accusation', cause: 'Different words for the same rejected claim.'}];
+  f.report.findings = [{...finding(), id, title: 'A paraphrased accusation', cause: 'Different words for the same rejected claim.'}];
   state = reconcile(result(f), f.snapshot, closed);
   assert.deepEqual(state.unresolved, [id]); assert.equal(state.findings[0].state, 'corrected');
   f.report.reopenings = [{id, reason: 'The validation allegedly disappeared.', evidence: ['source']}];
@@ -130,7 +130,7 @@ test('finding history survives repair, unrelated pushes, paraphrases, rename, an
   // Rename a still-open path: identity follows the base path, not its title.
   f.snapshot.files[0].base_source = 'old'; f.snapshot.sources.old = {...f.snapshot.sources.head, path: 'src/upload.rs'};
   f.snapshot.paths = ['src/renamed.rs']; f.snapshot.files[0].path = 'src/renamed.rs'; f.snapshot.sources.head.path = 'src/renamed.rs';
-  f.snapshot.prior_findings = state.findings; f.report.findings[0].id = 'renamed-model-id'; f.report.reopenings = [];
+  f.snapshot.prior_findings = state.findings; f.report.findings[0].id = id; f.report.reopenings = [];
   f.report.evidence.push({id: 'old-proof', source: 'old', start: 1, end: 1, quote: 'accept_durably(input)'});
   f.report.coverage.sources.push({source: 'old', state: 'inspected', reason: 'Checked the pre-rename source.', evidence: ['old-proof']});
   const raw = resultForRename(f); const renamed = reconcile(raw, f.snapshot, state.findings);
@@ -138,6 +138,40 @@ test('finding history survives repair, unrelated pushes, paraphrases, rename, an
   const body = render(raw, f.snapshot, renamed);
   assert.match(body, /History/);
   assert.equal(priorState([{id: 9, user: {login: 'github-actions[bot]'}, body}], f.snapshot.repository, f.snapshot.number).findings[0].events.length, 4);
+});
+
+test('distinct causes sharing one path and obligation cannot overwrite each other', () => {
+  const f = complete();
+  f.report.findings = [finding()];
+  const prior = reconcile(result(f), f.snapshot).findings;
+  f.snapshot.prior_findings = prior;
+  f.report.findings = [{...finding(), id: prior[0].id},
+    {...finding(), id: 'second-cause', cause: 'A separate storage exception is swallowed before acceptance.'}];
+  const active = reconcile(result(f), f.snapshot, prior);
+  assert.equal(active.findings.length, 2);
+  assert.equal(new Set(active.findings.map(item => item.id)).size, 2);
+  f.snapshot.prior_findings = active.findings;
+  f.report.findings = [f.report.findings[1]];
+  f.report.resolutions = [{id: prior[0].id, state: 'corrected', reason: 'Input validation was restored; storage still needs its own repair.', evidence: ['source']}];
+  const repaired = reconcile(result(f), f.snapshot, active.findings);
+  assert.equal(repaired.findings.find(item => item.id === prior[0].id).state, 'corrected');
+  assert.equal(repaired.findings.filter(item => item.blocking).length, 1);
+});
+
+test('case and string whitespace remain meaningful evidence when reopening a defect', () => {
+  for (const content of ["accept('ADMIN')", "accept('ad  min')"]) {
+    const f = complete(); advance(f, "accept('admin')\n"); f.report.findings = [finding()];
+    const prior = reconcile(result(f), f.snapshot).findings;
+    f.snapshot.prior_findings = prior; f.report.findings = [];
+    f.report.resolutions = [{id: prior[0].id, state: 'dismissed', reason: 'The literal is currently valid.', evidence: ['source']}];
+    const closed = reconcile(result(f), f.snapshot, prior).findings;
+    f.snapshot.prior_findings = closed; advance(f, content + '\n');
+    f.report.findings = [{...finding(), id: prior[0].id}]; f.report.resolutions = [];
+    f.report.reopenings = [{id: prior[0].id, reason: 'The accepted literal changed.', evidence: ['source']}];
+    const reopened = reconcile(result(f), f.snapshot, closed);
+    assert.deepEqual(reopened.unresolved, []);
+    assert.equal(reopened.findings[0].blocking, true);
+  }
 });
 function resultForRename(f) {
   f.report.findings[0].path = 'src/renamed.rs'; f.report.findings[0].repair_paths = ['src/renamed.rs'];

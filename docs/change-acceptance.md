@@ -258,11 +258,16 @@ grading always receives that causal anchor together with the factor's citations.
 These fields cannot be invented independently by a model.
 
 Use the `evaluate-acceptance` action operation with both provider keys for the
-read-only six-case qualification, including multi-file maintenance with executed
+read-only eight-case qualification, including multi-file maintenance with executed
 tests and corresponding documentation. Its complete artifact is written to
 `work/acceptance-evaluation.json` in the caller's workspace; upload it with an
 `always()` step. Passing synthetic cases is qualification evidence, not proof of
 a genuine unattended merge or automatic repair.
+The known-defect case requires a separate bounded Jev adjudication against its
+frozen trigger, causal regression and forbidden outcome. An unrelated blocking
+finding in the same file cannot qualify detection. The original findings,
+reference, adjudication and binding digest remain in the artifact. A transport
+fixture tests framing only and never substitutes for this live judgment.
 
 A purpose handoff must accompany a capability whose upper fit is below 80.
 An inspector's request to authorize an internal framework cannot itself make
@@ -295,6 +300,8 @@ identifier for the same causal obligation. Reopening requires an explicit reason
 and current-source evidence different from the closure evidence. Merely repeating
 a claim or changing its title cannot reverse a previously accepted repair. A real
 regression to the original defective bytes can reopen the existing finding.
+Evidence hashes preserve literal case and whitespace. Distinct causal defects
+remain separate even when they share a path and requirement.
 Conflicting interpretations remain unresolved until the cited evidence supports
 a resolution; they cannot silently authorize an undo. History limits stop review
 instead of dropping old decisions. Detailed transitions remain in the expandable
@@ -306,8 +313,11 @@ For protocol v2, automatic merge requires the PR's GitHub author to be a verifie
 code owner for every changed path, including both paths of a rename. Clouseau
 reads the first CODEOWNERS file in GitHub's precedence order from the exact
 protected base revision, applies the last matching rule, and checks current
-repository write access and team membership. Changes to CODEOWNERS are protected
-review controls. Missing files, uncovered paths, unsupported patterns, email-only
+repository write access and team membership. The documented `docs/*` pattern
+matches immediate files only; use `/docs/` for all descendants. Ambiguous
+terminal prefix patterns such as `/private*` require manual ownership verification
+instead of granting authority through an earlier broad rule. Changes to CODEOWNERS
+are protected review controls. Missing files, uncovered paths, unsupported patterns, email-only
 identities or unavailable membership evidence never grant automatic merge.
 
 A PR from another author can receive a passing AI review and bot approval, but

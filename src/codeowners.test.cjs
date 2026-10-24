@@ -32,7 +32,7 @@ test('GitHub path precedence, rooted paths, directories, globstars and empty own
     ['/root.json', 'root.json', 'deep/root.json'], ['a+b.js', 'deep/a+b.js', 'deep/ab.js'],
   ]) { assert.equal(pattern(glob).test(yes), true, glob); assert.equal(pattern(glob).test(no), false, glob); }
   assert.equal(parse('  # ignored\n*.js @alice @bob # comment\n')[0].owners.length, 2);
-  for (const glob of ['', '!src', '[ab].js', '\\#src', 'a\0b', '***.js']) assert.throws(() => pattern(glob));
+  for (const glob of ['', '!src', '[ab].js', '\\#src', 'a\0b', '***.js', '/private*', 'prefix?']) assert.throws(() => pattern(glob));
   for (const text of [null, 'x'.repeat(3000000), '* person@example.test', '* @bad/name/again']) assert.throws(() => parse(text));
 });
 
@@ -66,6 +66,10 @@ test('missing, inaccessible, invalid or incomplete ownership never grants automa
   assert.equal((await f.check()).automatic, false);
   assert.deepEqual(f.state.reads.map(read => read.path), ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']);
   f.state.missing = false;
+  f.state.text = '* @alice\n/private* @bob';
+  f.files[0].filename = 'private-data/key.txt';
+  assert.equal((await f.check()).automatic, false, 'ambiguous directory glob cannot fall through to the global owner');
+  f.state.text = '* @alice';
   f.files.length = 0; assert.equal((await f.check()).automatic, false);
   f.files.push({filename: 'a.js'}); f.pr.changed_files = 2; assert.equal((await f.check()).automatic, false);
   f.pr.changed_files = 1; f.state.text = ''; assert.equal((await f.check()).automatic, false);

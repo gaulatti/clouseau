@@ -74,7 +74,10 @@ test('all validation and persistence cases pass', () => { assert.ok(true); });
   {name: 'missing-persistence-context', category: 'incomplete-evidence', expected: ['review_incomplete'], unavailableSource: 'src/storage-policy.js',
     rationale: 'The accepted requirement depends on a missing repository policy; a request for that exact source must fail closed, never approve.',
     file: 'src/upload.test.js', base: TESTS, head: TESTS + GUARDS, title: 'test: cover upload rejection boundaries'},
-  {name: 'zero-body-regression', category: 'known-defect', expected: ['repair_required'], requiredFindingPath: 'src/upload.js',
+  {name: 'zero-body-regression', category: 'known-defect', expected: ['repair_required'],
+    requiredFinding: {path: 'src/upload.js', trigger: 'An authenticated upload with bytes equal to zero.',
+      cause: 'The lower size bound was removed from the validation guard.',
+      consequence: 'An empty body reaches persistence and returns accepted instead of being rejected.'},
     rationale: 'Removing the zero-body guard admits forbidden empty uploads; unchanged accepted behavior requires rejection.',
     file: 'src/upload.js', base: ORIGINAL, head: ORIGINAL.replace('bytes <= 0 || ', ''),
     headTests: TESTS + GUARDS.replace("['fixture-tenant', 0, /Invalid size/], ", ''), title: 'fix: simplify upload size validation'},
@@ -121,7 +124,7 @@ async function prepareCase(scenario) {
     title: 'Credential validation allegedly removed', path: 'src/upload.test.js', cause: 'The allegation claims tenant validation disappeared.',
     obligation: 'Reject a missing tenant before storage.', blocking: false, state: 'dismissed',
     resolution: 'The unchanged production path explicitly rejects a missing tenant and the guards exercise it.',
-    closed_basis: [require('../src/acceptance.cjs').digest({kind: 'source', content: ORIGINAL.trim().toLowerCase()})]}];
+    closed_basis: [require('../src/acceptance.cjs').digest({kind: 'source', content: ORIGINAL})]}];
   require('../src/acceptance-sources.cjs').refresh(snapshot);
   return {snapshot, github, repo};
 }
