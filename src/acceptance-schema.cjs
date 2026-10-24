@@ -11,9 +11,10 @@ const object = properties => ({type: 'object', properties, required: Object.keys
 function schemas(snapshot) {
   const catalog = proofCatalog(snapshot);
   const referenceRule = 'Select only the controller-supplied proof IDs. The controller owns the evidence register, exact source bytes and line ranges; never invent an alias.';
-  const citations = {...array(enumeration(catalog.map(entry => entry.id))), minItems: 1, description: referenceRule};
-  const missingCitations = {...array(enumeration(catalog.map(entry => entry.id))), maxItems: 0,
-    description: 'Missing source has no inspection evidence; leave this array empty and keep review completeness unresolved.'};
+  const proof = enumeration(catalog.map(entry => entry.id));
+  const citations = {...array(proof), description: referenceRule};
+  const inspectedCitations = {...object({primary: proof, additional: array(proof)}), description:
+    `${referenceRule} Select one primary proof and any distinct additional proofs. The controller preserves these citations without inventing evidence.`};
   const factor = object({evidence: citations, reason: string});
   const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
   const need = group('need');
@@ -21,15 +22,15 @@ function schemas(snapshot) {
   const paths = array(enumeration(snapshot.paths));
   const available = [...new Set(Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha).map(source => source.path))];
   const dependencies = {anyOf: [
-    object({path: string, state: enumeration(['excluded']), reason: string, evidence: citations}),
-    object({path: string, state: enumeration(['missing']), reason: string, evidence: missingCitations}),
-    ...(available.length ? [object({path: enumeration(available), state: enumeration(['inspected']), reason: string, evidence: citations})] : []),
+    object({path: string, state: enumeration(['excluded']), reason: string, evidence: inspectedCitations}),
+    object({path: string, state: enumeration(['missing']), reason: string}),
+    ...(available.length ? [object({path: enumeration(available), state: enumeration(['inspected']), reason: string, evidence: inspectedCitations})] : []),
   ], description: 'Inspected dependencies require their own supplied current-head source and direct proof. A call site is not dependency inspection. Call source_request for absent material source before reporting inspected; otherwise explicitly exclude it or mark it missing.'};
   const source = {type: 'integer', enum: Object.keys(snapshot.sources).map((_, index) => index),
     description: 'Select the exact source_index supplied in the source catalog; the controller restores its full immutable ID.'};
   const sources = {anyOf: [
-    object({source, state: enumeration(['inspected', 'excluded']), reason: string, evidence: citations}),
-    object({source, state: enumeration(['missing']), reason: string, evidence: missingCitations}),
+    object({source, state: enumeration(['inspected', 'excluded']), reason: string, evidence: inspectedCitations}),
+    object({source, state: enumeration(['missing']), reason: string}),
   ]};
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   return {

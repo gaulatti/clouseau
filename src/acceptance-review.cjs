@@ -52,7 +52,12 @@ function modelTemplate(snapshot) {
   const aliases = new Map(sample.evidence.map(entry => [entry.id,
     [catalog.find(proof => proof.source === entry.source && proof.start <= entry.start && proof.end >= entry.end).id]]));
   delete sample.evidence;
-  return canonicalReferences(sample, aliases);
+  const facts = canonicalReferences(sample, aliases);
+  for (const item of facts.coverage?.sources || []) {
+    const [primary, ...additional] = item.evidence;
+    item.evidence = {primary, additional};
+  }
+  return facts;
 }
 
 function canonicalReferences(value, spans = new Map()) {
@@ -72,6 +77,23 @@ function materialize(facts, snapshot) {
     if (Object.hasOwn(inventory, item.source)) item.source = inventory[item.source];
   }
   const catalog = new Map(proofCatalog(snapshot).map(entry => [entry.id, entry]));
+  for (const item of [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])]) {
+    if (item.state === 'missing' && !Object.hasOwn(item, 'evidence')) {
+      item.evidence = [];
+    } else if (item.evidence && !Array.isArray(item.evidence)) {
+      const value = item.evidence;
+      if (!['inspected', 'excluded'].includes(item.state) ||
+          Object.keys(value).sort().join(',') !== 'additional,primary' || typeof value.primary !== 'string' ||
+          !Array.isArray(value.additional) || !value.additional.every(id => typeof id === 'string')) {
+        throw new Error('Factual coverage requires a primary proof and an additional-proof array');
+      }
+      const ids = [value.primary, ...value.additional];
+      if (ids.some(id => !catalog.has(id)) || new Set(ids).size !== ids.length) {
+        throw new Error('Factual coverage requires distinct controller-supplied proof IDs');
+      }
+      item.evidence = ids;
+    }
+  }
   const spans = new Map();
   const suppliedProof = id => {
     if (catalog.has(id)) return catalog.get(id);

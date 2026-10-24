@@ -290,11 +290,15 @@ records without that marker remain readable; they do not acquire new claims.
 
 Each review inventories every supplied immutable source as inspected, excluded
 with a cited reason, or missing. Nonempty changed source cannot be excluded.
-The structured response schema requires at least one supplied proof ID for
-inspected and excluded dispositions; only missing dispositions permit an empty
-evidence array, and they require it to remain empty. Ordinary factor and gate
-citations also require at least one proof ID. These constraints match the existing
-evidence validator; the controller never invents a citation for an uncited claim.
+The structured response schema requires inspected and excluded coverage
+dispositions to select one `primary` proof ID and an `additional` array of distinct
+supplied proof IDs. Missing dispositions omit the citation field. The controller
+flattens only the model-selected proofs into the existing evidence array, and
+materializes an empty array for missing context. Factor and gate citation arrays
+retain their existing format. This uses supported object and enum constraints:
+[DeepSeek strict tools do not support array cardinality keywords](https://api-docs.deepseek.com/guides/tool_calls/#array).
+The existing evidence validator remains authoritative; no citation is invented
+for an uncited claim, and malformed or repeated proof selections fail closed.
 Inspected dependencies require direct evidence from the current head. A relevant
 missing dependency has empty inspection evidence and makes review completeness
 unresolved even when tests and exact coverage pass. Source requests expand the
