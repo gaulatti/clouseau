@@ -75,11 +75,17 @@ included. The fixed inventory conventions and multi-artifact configuration are
 documented in [local coverage plans](docs/local-review.md#multiple-native-coverage-artifacts).
 The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
-directives. A source entry with empty statement maps is rejected, so listing an
-unloaded executable file without measuring it cannot satisfy source completeness. It derives exact line and branch totals from native hit counters,
+directives. Empty statement maps require a parse-only source check: missing
+native statement-counter sites are rejected, while genuine statement-free
+declarations remain valid. Branch-only declarations still require native branch
+measurements. This check needs Node.js and uses the declared, bundled parser;
+it never executes application source or loads application Babel configuration.
+It derives exact line and branch totals from native hit counters,
 never from rounded summary percentages. Configure c8 `--all` over all compiled
 JavaScript with source maps to measure unloaded TypeScript sources. Run real
 runtime tests as well as unit tests; this format support does not replace them.
+See [native empty-map validation](docs/istanbul-source-validation.md) for its
+producer trust boundary, runtime dependency and parser provenance.
 
 For Python, select `coverage-format: coveragepy` and supply the unmodified JSON
 format 3 report from `coverage.py` with branch measurement enabled. See the

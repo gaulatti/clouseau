@@ -1,7 +1,9 @@
 """Read native Istanbul counters and require a complete JS/TS source inventory."""
 
 from pathlib import Path
+import json
 import re
+import subprocess
 
 
 def production_js(relative):
@@ -43,7 +45,11 @@ def counters(report, source_directory):
         statements = paired_maps(entry, "statementMap", "s")
         branches = paired_maps(entry, "branchMap", "b")
         if not statements:
-            raise ValueError(f"No statements measured for application source: {filename}")
+            required = counter_sites(file)
+            if required["statements"]:
+                raise ValueError(f"No statements measured for application source: {filename}")
+            if required["branches"] and not branches:
+                raise ValueError(f"No branches measured for application source: {filename}")
         lines = {}
         for key, location in statements.items():
             if not isinstance(location, dict) or location.get("skip"):
@@ -68,6 +74,21 @@ def counters(report, source_directory):
     if missing:
         raise ValueError("Missing application source coverage: " + ", ".join(str(file) for file in sorted(missing)))
     return counts
+
+
+def counter_sites(file):
+    """Distinguish native zero-statement sources without executing their code."""
+    try:
+        result = subprocess.run(
+            ["node", str(Path(__file__).with_name("istanbul-source.cjs")), file.suffix],
+            input=file.read_text(), text=True, capture_output=True, timeout=10, check=True)
+        value = json.loads(result.stdout)
+        if (not isinstance(value, dict) or set(value) != {"statements", "branches"}
+                or any(type(item) is not bool for item in value.values())):
+            raise ValueError("Invalid counter-site inspection result")
+        return value
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        raise ValueError(f"Cannot inspect statement-free application source: {file}") from error
 
 
 def paired_maps(entry, locations, hits):
