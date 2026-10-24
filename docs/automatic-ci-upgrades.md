@@ -86,8 +86,9 @@ workstation's evidence; it does not defend against a compromised workstation.
 
 ## Operations and boundaries
 
-Find `clouseau-engine-<run id>-<attempt>` and each engine step's workflow summary
-for the full central SHA, source and digest. Acceptance records carry the same
+In artifact mode, find `clouseau-engine-<run id>-<attempt>` for the full central
+SHA, source and digest. In summary mode, use the resolver's workflow summary;
+every engine step also records its identity there. Acceptance records carry the same
 engine identity. Keep review, receipt reuse, hosted tests, approval, merge and
 deployment as distinct evidence. Automatic merge remains restricted to authors
 who own every affected path under protected-base CODEOWNERS; other contributors
