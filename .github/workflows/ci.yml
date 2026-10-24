@@ -31,6 +31,20 @@ concurrency:
   group: clouseau-ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}
   cancel-in-progress: true
 jobs:
+  resolve-clouseau:
+    # Explicit controller installation already freezes its owner-authorized candidate.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/heads/policy-install/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.engine.outputs.sha }}
+      digest: ${{ steps.engine.outputs.digest }}
+    steps:
+      - id: engine
+        uses: gaulatti/clouseau/scripts/resolve@fd655851419980f833ff13a94b0d6ff41a901cb2
+
   evaluate-acceptance:
     if: github.event_name == 'workflow_dispatch' && inputs.evaluate_acceptance
     runs-on: ubuntu-latest
@@ -267,13 +281,25 @@ jobs:
       issues: read
     outputs:
       assessment: ${{ steps.assess.outputs.assessment }}
+    needs: resolve-clouseau
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '' }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '' }}
     steps:
       # Never load the controller or its configuration from the PR.
       - uses: actions/checkout@v4
         with:
           ref: main
           persist-credentials: false
-      - uses: ./
+      - name: Check out this run frozen Clouseau engine
+        if: github.event_name != 'push'
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
         id: assess
         with:
           operation: assess
@@ -290,7 +316,7 @@ jobs:
 
   approve-and-merge:
     name: ${{ ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) && 'approve-and-merge' || 'metadata-only-approval' }}
-    needs: [assess-intent, assess-installation, prepare-installation]
+    needs: [assess-intent, assess-installation, prepare-installation, resolve-clouseau]
     # Always resolve the job name; only trusted, ready PR events run its steps.
     # A failed assessment must still fail the required native approval check.
     if: always()
@@ -304,6 +330,9 @@ jobs:
     concurrency:
       group: pr-approval-${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '' }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '' }}
     steps:
       - name: Require a completed assessment
         if: >-
@@ -319,6 +348,14 @@ jobs:
         with:
           ref: ${{ github.event_name == 'push' && needs.prepare-installation.outputs.head || 'main' }}
           persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        if: github.event_name == 'pull_request_target' && !github.event.pull_request.draft
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
       - name: Load this run's acceptance record
         if: >-
           ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
@@ -329,7 +366,7 @@ jobs:
         with:
           name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           path: work
-      - if: *approve-code
+      - if: github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/')
         uses: ./
         with:
           operation: gate
@@ -337,8 +374,16 @@ jobs:
           assessment: ${{ needs.assess-intent.outputs.assessment || needs.assess-installation.outputs.assessment }}
           pull-request: ${{ needs.prepare-installation.outputs.number }}
 
+      - if: github.event_name == 'pull_request_target' && !github.event.pull_request.draft
+        uses: ./.clouseau-ci
+        with:
+          operation: gate
+          native-gate: 'true'
+          assessment: ${{ needs.assess-intent.outputs.assessment || needs.assess-installation.outputs.assessment }}
+          pull-request: ${{ needs.prepare-installation.outputs.number }}
+
   apply-repair:
-    needs: [assess-intent, approve-and-merge]
+    needs: [assess-intent, approve-and-merge, resolve-clouseau]
     if: >-
       always() && github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
@@ -354,23 +399,34 @@ jobs:
     concurrency:
       group: pr-approval-${{ github.event.pull_request.number }}
       cancel-in-progress: false
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '' }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        if: github.event_name != 'push'
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
           name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
           path: work
-      - uses: ./
+      - uses: ./.clouseau-ci
         with:
           operation: repair
           assessment: ${{ needs.assess-intent.outputs.assessment }}
           repair-token: ${{ secrets.DEPLOYMENT_TOKEN }}
 
   finalize-merge:
-    needs: [assess-intent, approve-and-merge]
+    needs: [assess-intent, approve-and-merge, resolve-clouseau]
     if: github.event_name == 'pull_request_target'
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -378,12 +434,23 @@ jobs:
       contents: read
       pull-requests: read
       actions: write
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '' }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           persist-credentials: false
-      - uses: ./
+      - name: Check out this run frozen Clouseau engine
+        if: github.event_name != 'push'
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
         with:
           operation: finalize
           assessment: ${{ needs.assess-intent.outputs.assessment }}
@@ -398,12 +465,24 @@ jobs:
       contents: read
       pull-requests: read
       actions: write
+    needs: resolve-clouseau
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '' }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '' }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: main
           persist-credentials: false
-      - uses: ./
+      - name: Check out this run frozen Clouseau engine
+        if: github.event_name != 'push'
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
         with:
           operation: request-reassessment
           pull-request: ${{ inputs.pull_request }}
