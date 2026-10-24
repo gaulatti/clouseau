@@ -18,6 +18,14 @@ controller. Native protected-main requirements, immutable revision identities,
 meaningful tests and exact 100% line and branch coverage are mandatory.
 Model text is data. It must never execute as a command or grant permissions.
 
+An explicitly accepted manual-only integration must enforce branch protection
+where GitHub makes it available and disable automatic merge for every author.
+GitHub's documented private-plan protection limitation may permit independent
+review and approval without host-enforced merge blocking, but never automatic
+merge, waived tests, lowered coverage or omitted current-head owner approval for
+external contributions. Missing credentials or generic API failures are not
+evidence of that plan limitation. Report the enforcement boundary truthfully.
+
 Useful defect repairs, meaningful tests, provider qualification and maintenance
 serve this purpose without a new product decision. Speculative frameworks,
 unrelated capabilities or additional authority require concrete justification.

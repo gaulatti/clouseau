@@ -60,3 +60,11 @@ test('receipt trust cannot be silently attached to the legacy reviewer', async (
   const fixture = await require('../test/local-review-fixture.cjs').fixture();
   assert.throws(() => validateConfig({...valid, version: 1, local_review: fixture.trust}), /protocol version two/);
 });
+
+test('manual merge policy must be explicitly selected in accepted protocol-two configuration', () => {
+  const config = {...valid, version: 2, acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro',
+    grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2}};
+  for (const merge_mode of ['manual', 'automatic']) assert.equal(validateConfig({...config, merge_mode}).merge_mode, merge_mode);
+  for (const merge_mode of [null, false, '', 'fallback', 'unprotected']) assert.throws(() => validateConfig({...config, merge_mode}), /merge mode/);
+  assert.throws(() => validateConfig({...valid, version: 1, merge_mode: 'manual'}), /merge mode/);
+});
