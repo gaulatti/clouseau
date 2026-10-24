@@ -10,6 +10,8 @@
       "Test distributable action without Git metadata",
       "Accept complete application coverage",
       "Verify rejection is enforced",
+      "Accept complete multi-artifact application coverage",
+      "Verify multi-artifact rejection is enforced",
       "Test workflow security"
     ]
   },

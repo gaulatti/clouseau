@@ -5,18 +5,20 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const {digest} = require('./acceptance.cjs');
 const {safePath, refresh} = require('./acceptance-sources.cjs');
+const {coverageParts} = require('./coverage-plan.cjs');
 
 function git(directory, args, input) {
   return cp.execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', input, maxBuffer: 2000000});
 }
 
 function readLocalConfig(value) {
-  if (!value || value.version !== 1 || !/^[a-zA-Z0-9._/-]+$/.test(value.base_branch) ||
+  if (!value || ![1, 2].includes(value.version) || !/^[a-zA-Z0-9._/-]+$/.test(value.base_branch) ||
     !safePath(value.readme) || !safePath(value.repository_policy) ||
     !Array.isArray(value.verification) || !value.verification.length || value.verification.some(command =>
-      !Array.isArray(command) || !command.length || command.some(arg => typeof arg !== 'string' || !arg.length)) ||
-    !['llvm', 'istanbul'].includes(value.coverage?.format) || !safePath(value.coverage.report) ||
-    !safePath(value.coverage.source_directory)) throw new Error('Invalid local-only Clouseau configuration');
+      !Array.isArray(command) || !command.length || command.some(arg => typeof arg !== 'string' || !arg.length))) {
+    throw new Error('Invalid local-only Clouseau configuration');
+  }
+  coverageParts(value);
   return value;
 }
 

@@ -54,6 +54,22 @@ class IstanbulGateTests(unittest.TestCase):
         (self.root / "README.md").write_text("Documentation\n")
         self.assertEqual(self.run_check()["lines"], [2, 2])
 
+    def test_only_concrete_test_and_dependency_conventions_leave_application_inventory(self):
+        for relative in ("service.test.ts", "service.spec.tsx", "test/fixture.js", "tests/fixture.cjs",
+                         "__tests__/fixture.mjs", "node_modules/dependency.js", "vendor/library.js", "types.d.ts"):
+            filename = self.root / relative
+            filename.parent.mkdir(parents=True, exist_ok=True)
+            filename.write_text("/* c8 ignore next */\nfixture();\n")
+            self.report[str(filename)] = {"non_application_fixture": True}
+        self.assertEqual(self.run_check(), {"lines": [2, 2], "branches": [2, 2]})
+        for relative in ("test-support.ts", "contest.js", "generated/client.ts", "config/settings.ts"):
+            filename = self.root / relative
+            filename.parent.mkdir(parents=True, exist_ok=True)
+            filename.write_text("export const application = 1;\n")
+            with self.subTest(relative=relative), self.assertRaisesRegex(ValueError, "Missing application source"):
+                self.run_check()
+            filename.unlink()
+
     def test_external_sources_do_not_replace_application_sources(self):
         external = str(self.root.parent / "dependency.js")
         self.report[external] = {"path": external}
@@ -95,8 +111,9 @@ class IstanbulGateTests(unittest.TestCase):
         Path(alias).symlink_to(self.file)
         value = copy.deepcopy(self.report)
         value[alias] = {**value[str(self.file)], "path": alias}
-        with self.assertRaisesRegex(ValueError, "Unexpected or duplicate"):
+        with self.assertRaisesRegex(ValueError, "Symbolic or escaped"):
             self.run_check(value)
+        Path(alias).unlink()
         for entry in (None, {"path": "wrong.ts"}):
             with self.subTest(entry=entry), self.assertRaisesRegex(ValueError, "Mismatched"):
                 self.run_check({str(self.file): entry})

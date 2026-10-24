@@ -14,6 +14,7 @@ const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {refresh, safePath} = require('./acceptance-sources.cjs');
+const {coverageParts} = require('./coverage-plan.cjs');
 
 const root = path.join(__dirname, '..');
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
@@ -44,21 +45,29 @@ function initializeIdentity(directory = stateDirectory(), githubActor) {
 }
 
 function executeVerification({directory, config, run = cp.spawnSync}) {
+  const parts = coverageParts(config);
   const commands = [];
   for (const argv of config.verification) {
     const result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000});
     if (result.error || result.status !== 0) throw new Error(`Local verification failed: ${argv[0]}`);
     commands.push({argv, exit_code: result.status, stdout_digest: digest(result.stdout), stderr_digest: digest(result.stderr)});
   }
-  const reportPath = path.join(directory, config.coverage.report);
-  const checkScript = 'import contextlib,io,json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import check\n' +
-    'with contextlib.redirect_stdout(io.StringIO()):\n result=check(json.load(open(sys.argv[2])),sys.argv[3],sys.argv[4])\nprint(json.dumps(result))\n';
-  const check = run('python3', ['-c', checkScript, path.join(root, 'src'), reportPath,
-    path.join(directory, config.coverage.source_directory), config.coverage.format],
+  const checkScript = config.version === 1 ?
+    'import contextlib,io,json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import check,load_report\n' +
+      'with contextlib.redirect_stdout(io.StringIO()):\n result=check(load_report(sys.argv[2]),sys.argv[3],sys.argv[4])\nprint(json.dumps(result))\n' :
+    'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom coverage_plan import check_plan\n' +
+      'print(json.dumps(check_plan(json.loads(sys.argv[2]),sys.argv[3])))\n';
+  const args = config.version === 1 ? [path.join(directory, parts[0].report),
+    path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
+  const check = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
   {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000});
   if (check.error || check.status !== 0) throw new Error('Local exact line and branch coverage failed');
-  return {commands, exact_coverage: JSON.parse(check.stdout), report_digest: digest(fs.readFileSync(reportPath, 'utf8')),
+  const result = JSON.parse(check.stdout);
+  const reports = parts.map(part => ({...part, report_digest: digest(fs.readFileSync(path.join(directory, part.report), 'utf8'))}));
+  if (config.version === 1) return {commands, exact_coverage: result, report_digest: reports[0].report_digest,
     local_config_digest: digest(config)};
+  return {commands, exact_coverage: result.totals, coverage_reports: reports.map((part, index) =>
+    ({...part, exact_coverage: result.parts[index].counts})), report_digest: digest(reports), local_config_digest: digest(config)};
 }
 
 function installation() {
