@@ -67,6 +67,8 @@ def main(argv):
     config = load_report(argv[0])
     if not isinstance(config, dict) or config.get("version") != 2:
         raise ValueError("A multi-artifact coverage recipe requires version 2")
+    if set(config) - {"version", "base_branch", "readme", "repository_policy", "verification", "coverage"}:
+        raise ValueError("Unknown version 2 coverage recipe field")
     result = check_plan(config.get("coverage"), argv[1] if len(argv) == 2 else ".")
     print(json.dumps(result))
     return result
