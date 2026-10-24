@@ -94,6 +94,15 @@ who own every affected path under protected-base CODEOWNERS; other contributors
 need code-owner involvement and manual merge. Write access alone grants no
 ownership.
 
+The resolver's `provenance` input defaults to `artifact`. Repositories without
+Actions artifact storage can explicitly select `summary`; this skips only the
+additional provenance artifact upload. Resolution, protected-source validation,
+immutable checkout, digest computation, SHA/digest outputs, the full workflow
+summary and the run-bound engine identity in review records remain mandatory.
+Unknown modes fail before resolution. This does not change review-record
+transport: use its separately supported `job-output` mode when needed. Neither
+mode turns a failed resolution, verification or review into success.
+
 Normal central releases reach the next consumer run without consumer pin or
 digest PRs. The stable bootstrap pin changes only when its selection protocol
 needs maintenance, through an ordinary reviewed installation change.
