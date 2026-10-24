@@ -3,7 +3,6 @@
 Clouseau's protected review workflow uses the shared protocol below. Palazzo
 and Colombo enable it through their own protected workflow installation PRs;
 the shared release alone does not install consumer CI.
-
 “Latest” means the commit returned for `gaulatti/clouseau`'s protected `main`
 when the workflow's isolated `resolve-clouseau` job starts. It does not mean a
 release tag, a contributor branch, or an unmerged candidate. Protection and the
