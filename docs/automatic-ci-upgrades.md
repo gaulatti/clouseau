@@ -4,6 +4,9 @@ Review source inventories use controller-assigned numeric indices over the model
 transport. The controller restores each full immutable source ID before the
 existing completeness validation. Unknown, duplicated or substituted sources
 remain errors; malformed evidence cannot authorize approval.
+The report schema permits an inspected dependency only when its current-head
+source is supplied. Call-site evidence cannot establish dependency inspection;
+missing material source must be requested or explicitly reported missing.
 
 The stable `scripts/resolve` composite bootstrap defines “latest” as the commit
 on `gaulatti/clouseau` protected `main` when its isolated resolution job executes.

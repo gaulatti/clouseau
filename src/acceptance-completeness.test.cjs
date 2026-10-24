@@ -87,6 +87,12 @@ test('the actual model template and materializer preserve the complete immutable
   const selection = schemas(f.snapshot).acceptance_report.properties.coverage.properties.sources.items.properties.source;
   assert.equal(selection.type, 'integer');
   assert.deepEqual(selection.enum, [0, 1, 2]);
+  const dependencies = schemas(f.snapshot).acceptance_report.properties.coverage.properties.dependencies.items;
+  assert.deepEqual(dependencies.anyOf[0].properties.state.enum, ['excluded', 'missing']);
+  assert.ok(!dependencies.anyOf[1].properties.path.enum.includes('unseen-dependency.cjs'));
+  assert.ok(dependencies.anyOf[1].properties.path.enum.includes(f.snapshot.sources.head.path));
+  const noHead = structuredClone(f.snapshot); Object.values(noHead.sources).forEach(source => {source.ref = 'base';});
+  assert.equal(schemas(noHead).acceptance_report.properties.coverage.properties.dependencies.items.anyOf.length, 1);
   const report = materialize(facts, f.snapshot);
   assert.equal(report.coverage.sources.length, 3);
   assert.equal(report.coverage.sources[0].source, 'contract');

@@ -17,6 +17,11 @@ function schemas(snapshot) {
   const need = group('need');
   need.properties.binding = object({evidence: {...citations, description: `${referenceRule} An established obligation requires a source marked authority=trusted and kind=contract. For an observed absence, cite the actual evidence without inventing contract authority; positive numeric grades require trusted proof after grading.`}, reason: string});
   const paths = array(enumeration(snapshot.paths));
+  const available = [...new Set(Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha).map(source => source.path))];
+  const dependencies = {anyOf: [
+    object({path: string, state: enumeration(['excluded', 'missing']), reason: string, evidence: citations}),
+    ...(available.length ? [object({path: enumeration(available), state: enumeration(['inspected']), reason: string, evidence: citations})] : []),
+  ], description: 'Inspected dependencies require their own supplied current-head source and direct proof. A call site is not dependency inspection. Call source_request for absent material source before reporting inspected; otherwise explicitly exclude it or mark it missing.'};
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   return {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
@@ -34,7 +39,7 @@ function schemas(snapshot) {
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
       ...(snapshot.review_manifest_version ? {
         coverage: object({sources: array(object({source: {type: 'integer', enum: Object.keys(snapshot.sources).map((_, index) => index), description: 'Select the exact source_index supplied in the source catalog; the controller restores its full immutable ID.'}, state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations})),
-          dependencies: array(object({path: string, state: enumeration(['inspected', 'excluded', 'missing']), reason: string, evidence: citations}))}),
+          dependencies: array(dependencies)}),
         reopenings: array(object({id: string, reason: string, evidence: citations})),
       } : {}),
     }),
