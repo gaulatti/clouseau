@@ -269,6 +269,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
     const codeowners = require('./codeowners.cjs');
     const ownership = codeownersRequired ? await codeowners.authority({github, repo, pr, files}) : {automatic: true};
+    if (ownership.configured === false) core.info(ownership.reason);
     const automatic = ownership.automatic && !manualMerge;
     if (!automatic && pr.auto_merge) {
       await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});

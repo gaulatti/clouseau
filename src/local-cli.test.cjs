@@ -164,6 +164,8 @@ test('a completed negative local review retains evidence and never produces a si
     fs.writeFileSync(request, 'A renamed request cannot erase a failed review.');
     await assert.rejects(runReview({directory: f.directory, base: f.base, 'request-file': request},
       {state, ask: async () => {throw new Error('Do not resample');}, installed: fixtureInstallation}), /non-passing local review/);
+    await assert.rejects(runReview({directory: f.directory, base: f.base, 'request-file': request},
+      {state, ask: async () => {throw new Error('Do not resample');}, installed: () => ({...fixtureInstallation(), sha: 'f'.repeat(40)})}), /non-passing local review/);
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
 
@@ -202,6 +204,16 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
       const reused = await runReview({...args, identity: undefined}, {...deps,
         ask: async () => {throw new Error('A verified cached review must not call AI');}});
       assert.equal(reused.reused, true); assert.equal(reused.harness_invocations, 0);
+      // A new central commit may retain identical engine bytes. Its old signed
+      // receipt must remain intact while a fresh review signs the new exact SHA.
+      const advancedDeps = {...deps, installed: () => ({sha: 'f'.repeat(40), digest: 'e'.repeat(64), clean: true})};
+      const advanced = await runReview(args, advancedDeps);
+      assert.equal(advanced.harness_invocations, 4); assert.equal(advanced.reviewer_sha, 'f'.repeat(40));
+      assert.notEqual(advanced.receipt, result.receipt);
+      assert.equal(JSON.parse(fs.readFileSync(result.receipt)).payload.reviewer_sha, reviewerSha);
+      assert.equal(JSON.parse(fs.readFileSync(advanced.receipt)).payload.reviewer_sha, 'f'.repeat(40));
+      const advancedReused = await runReview(args, {...advancedDeps, ask: async () => {throw new Error('Exact current review must reuse');}});
+      assert.equal(advancedReused.reused, true); assert.equal(advancedReused.harness_invocations, 0);
       const bare = path.join(state, 'artifacts.git'); git(state, ['init', '-q', '--bare', bare]);
       git(f.directory, ['config', `url.${bare}.insteadOf`, 'https://github.com/example/local-fixture.git']);
       const published = await main(['publish', '--directory', f.directory, '--receipt', result.receipt]);
@@ -239,6 +251,10 @@ test('local history is bounded and a missing concern cannot disappear on a chang
         await runReview(args, deps);
         const ledger = path.join(state, 'ledgers', `${digest({repository: 'example/local-fixture', branch: 'main'})}.json`);
         const previous = JSON.parse(fs.readFileSync(ledger));
+        const legacy = {...previous}; delete legacy.reviewer_sha;
+        fs.writeFileSync(ledger, JSON.stringify(legacy)); assert.equal(readHistory(ledger, previous.repository, previous.branch).reviewer_sha, undefined);
+        fs.writeFileSync(ledger, JSON.stringify({...previous, reviewer_sha: 'main'}));
+        assert.throws(() => readHistory(ledger, previous.repository, previous.branch), /Invalid/);
         previous.findings = [{id: 'a'.repeat(64), blocking: true, path: 'src/handler.js',
           title: 'Input guard', cause: 'Unvalidated input', obligation: 'Reject missing input'}];
         fs.writeFileSync(ledger, JSON.stringify(previous));

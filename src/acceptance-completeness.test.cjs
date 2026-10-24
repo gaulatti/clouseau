@@ -3,8 +3,8 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture, finding} = require('../test/fixtures/acceptance.cjs');
-const {validateReport, digest} = require('./acceptance.cjs');
-const {template, modelTemplate, modelEvidence, materialize} = require('./acceptance-review.cjs');
+const {validateFacts, validateReport, digest} = require('./acceptance.cjs');
+const {template, modelTemplate, modelEvidence, materialize, inspect} = require('./acceptance-review.cjs');
 const {schemas} = require('./acceptance-schema.cjs');
 const {refresh} = require('./acceptance-sources.cjs');
 const {reconcile, render, priorState} = require('./acceptance-ledger.cjs');
@@ -75,6 +75,116 @@ test('dependency exclusions are explicit and material paths cannot be invented o
   assert.throws(() => validateReport(f.report, f.snapshot), /dependency inventory/);
 });
 
+test('the native response schema requires a selected proof for inspected and excluded coverage, and none for missing', () => {
+  const f = complete();
+  const schema = schemas(f.snapshot).acceptance_report;
+  const ordinary = schema.properties.units.items.properties.fit.properties.outcome.properties.evidence;
+  assert.equal(ordinary.type, 'array', 'factor and gate citation formats remain unchanged');
+  for (const name of ['sources', 'dependencies']) {
+    const choices = schema.properties.coverage.properties[name].items.anyOf;
+    for (const state of ['inspected', 'excluded', 'missing']) {
+      const selected = choices.filter(choice => choice.properties.state.enum.includes(state));
+      assert.equal(selected.length, 1, `${name}/${state} has one evidence rule`);
+      const evidence = selected[0].properties.evidence;
+      if (state === 'missing') {
+        assert.equal(evidence, undefined, 'missing context cannot claim inspection proof');
+        assert.ok(!selected[0].required.includes('evidence'));
+      } else {
+        assert.equal(evidence.type, 'object', `${name}/${state} must select real supplied proof`);
+        assert.deepEqual(evidence.required, ['primary', 'additional']);
+        assert.equal(evidence.additionalProperties, false);
+        assert.deepEqual(evidence.properties.primary.enum, ordinary.items.enum);
+        assert.deepEqual(evidence.properties.additional.items.enum, ordinary.items.enum);
+      }
+    }
+  }
+  const facts = modelTemplate(f.snapshot);
+  const source = schema.properties.coverage.properties.sources.items.anyOf[0].properties.source;
+  assert.deepEqual(source.enum, facts.coverage.sources.map(item => item.source), 'numeric inventory IDs remain unchanged');
+  for (const name of ['sources', 'dependencies']) {
+    const excluded = structuredClone(facts);
+    const item = name === 'sources' ? excluded.coverage.sources[0] :
+      {path: 'src/acceptance.cjs', reason: 'This upload change does not depend on the acceptance engine.'};
+    Object.assign(item, {state: 'excluded', evidence: []});
+    if (name === 'dependencies') excluded.coverage.dependencies.push(item);
+    assert.throws(() => validateFacts(materialize(excluded, f.snapshot), f.snapshot), /missing or unknown citation/,
+      'the pre-existing semantic validator still rejects the failed PR40 disposition');
+    item.evidence = structuredClone(facts.coverage.sources[0].evidence);
+    assert.doesNotThrow(() => validateFacts(materialize(excluded, f.snapshot), f.snapshot));
+    item.state = 'missing'; delete item.evidence;
+    assert.doesNotThrow(() => validateFacts(materialize(excluded, f.snapshot), f.snapshot));
+    item.evidence = [facts.coverage.sources[0].evidence.primary];
+    assert.throws(() => validateFacts(materialize(excluded, f.snapshot), f.snapshot), /missing source cannot claim inspection evidence/);
+  }
+  const serialized = JSON.stringify(schema);
+  assert.ok(!serialized.includes('minItems') && !serialized.includes('maxItems'), 'strict provider does not support array cardinality keywords');
+});
+
+test('native inspection sends the cited-exclusion schema and preserves an invalid completed claim without resampling', async () => {
+  const f = complete(); const facts = modelTemplate(f.snapshot);
+  facts.coverage.dependencies.push({path: 'src/acceptance.cjs', state: 'excluded',
+    reason: 'The upload change does not depend on this engine.', evidence: []});
+  const original = structuredClone(facts); const observations = []; let calls = 0;
+  const previous = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
+  try {
+    await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', observe: value => observations.push(value),
+      fetchImpl: async (_, options) => {
+        calls++;
+        const request = JSON.parse(options.body);
+        assert.match(request.messages[0].content, /coverage evidence selects \{primary,additional\}/);
+        const tool = request.tools.find(item => item.function.name === 'acceptance_report').function;
+        assert.equal(tool.strict, true);
+        for (const name of ['sources', 'dependencies']) {
+          const excluded = tool.parameters.properties.coverage.properties[name].items.anyOf
+            .find(choice => choice.properties.state.enum.includes('excluded'));
+          assert.deepEqual(excluded.properties.evidence.required, ['primary', 'additional']);
+          assert.ok(excluded.properties.evidence.properties.primary.enum.length > 0);
+        }
+        return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
+          [{function: {name: 'acceptance_report', arguments: JSON.stringify(facts)}}]}}]})};
+      }}), /missing or unknown citation/);
+    assert.equal(calls, 1, 'a completed invalid review is never retried for a different judgment');
+    assert.deepEqual(facts, original);
+    assert.deepEqual(observations[0].report, original, 'negative diagnostic retains the uncited claim exactly');
+  } finally {
+    if (previous === undefined) delete process.env.DEEPSEEK_API_KEY;
+    else process.env.DEEPSEEK_API_KEY = previous;
+  }
+});
+
+test('coverage proof objects materialize exactly without changing captured facts or other citation formats', () => {
+  const f = complete(); const facts = modelTemplate(f.snapshot);
+  const first = facts.coverage.sources[0].evidence.primary;
+  const second = facts.coverage.sources[1].evidence.primary;
+  facts.coverage.sources[0].state = 'excluded';
+  facts.coverage.sources[0].evidence.additional.push(second);
+  facts.coverage.dependencies.push({path: f.snapshot.sources.head.path, state: 'inspected',
+    reason: 'Inspected the actual current-head implementation.', evidence: {primary: second, additional: [first]}});
+  const original = structuredClone(facts);
+  const report = materialize(facts, f.snapshot);
+  assert.deepEqual(facts, original);
+  assert.deepEqual(report.coverage.sources[0].evidence, [first, second]);
+  assert.deepEqual(report.coverage.dependencies[0].evidence, [second, first]);
+  assert.deepEqual(report.units[0].fit.outcome.evidence, facts.units[0].fit.outcome.evidence);
+  assert.deepEqual(report.gates[0].evidence, facts.gates[0].evidence);
+  assert.doesNotThrow(() => validateFacts(report, f.snapshot));
+  assert.deepEqual(report.coverage.sources.map(item => item.source), Object.keys(f.snapshot.sources));
+  for (const evidence of [null, [], {}, {primary: first}, {additional: []}, {primary: first, additional: null},
+    {primary: first, additional: [3]}, {primary: 3, additional: []},
+    {primary: first, additional: [], extra: true}, {primary: '', additional: []},
+    {primary: 'invented', additional: []}, {primary: first, additional: ['invented']},
+    {primary: first, additional: [first]}, {primary: first, additional: [second, second]}]) {
+    const invalid = structuredClone(facts); invalid.coverage.sources[0].evidence = evidence;
+    assert.throws(() => validateFacts(materialize(invalid, f.snapshot), f.snapshot), undefined, JSON.stringify(evidence));
+  }
+  const absent = structuredClone(facts); delete absent.coverage.sources[0].evidence;
+  assert.throws(() => validateFacts(materialize(absent, f.snapshot), f.snapshot));
+  const wrong = structuredClone(facts); wrong.coverage.sources[1].evidence.primary = first;
+  assert.throws(() => validateFacts(materialize(wrong, f.snapshot), f.snapshot), /direct immutable evidence/);
+  wrong.coverage.sources[0].state = 'missing';
+  assert.throws(() => materialize(wrong, f.snapshot), /primary proof/);
+});
+
 test('the actual model template and materializer preserve the complete immutable source inventory', () => {
   const f = complete();
   f.snapshot.sources.blank = {content: '\n', path: 'empty.txt'}; refresh(f.snapshot);
@@ -84,15 +194,16 @@ test('the actual model template and materializer preserve the complete immutable
   const facts = modelTemplate(f.snapshot);
   assert.deepEqual(facts.coverage.sources.map(item => item.source), [0, 1, 2]);
   assert.deepEqual(Object.values(modelEvidence(f.snapshot).sources).map(item => item.source_index), [0, 1, 2]);
-  const selection = schemas(f.snapshot).acceptance_report.properties.coverage.properties.sources.items.properties.source;
+  const selection = schemas(f.snapshot).acceptance_report.properties.coverage.properties.sources.items.anyOf[0].properties.source;
   assert.equal(selection.type, 'integer');
   assert.deepEqual(selection.enum, [0, 1, 2]);
   const dependencies = schemas(f.snapshot).acceptance_report.properties.coverage.properties.dependencies.items;
-  assert.deepEqual(dependencies.anyOf[0].properties.state.enum, ['excluded', 'missing']);
-  assert.ok(!dependencies.anyOf[1].properties.path.enum.includes('unseen-dependency.cjs'));
-  assert.ok(dependencies.anyOf[1].properties.path.enum.includes(f.snapshot.sources.head.path));
+  assert.deepEqual(dependencies.anyOf[0].properties.state.enum, ['excluded']);
+  assert.deepEqual(dependencies.anyOf[1].properties.state.enum, ['missing']);
+  assert.ok(!dependencies.anyOf[2].properties.path.enum.includes('unseen-dependency.cjs'));
+  assert.ok(dependencies.anyOf[2].properties.path.enum.includes(f.snapshot.sources.head.path));
   const noHead = structuredClone(f.snapshot); Object.values(noHead.sources).forEach(source => {source.ref = 'base';});
-  assert.equal(schemas(noHead).acceptance_report.properties.coverage.properties.dependencies.items.anyOf.length, 1);
+  assert.equal(schemas(noHead).acceptance_report.properties.coverage.properties.dependencies.items.anyOf.length, 2);
   const report = materialize(facts, f.snapshot);
   assert.equal(report.coverage.sources.length, 3);
   assert.equal(report.coverage.sources[0].source, 'contract');
