@@ -29,6 +29,7 @@ test('protected central main resolves once; a branch advance cannot change froze
   try {
     for (const folder of ['src', 'scripts', 'skills', 'policy', 'bin']) fs.mkdirSync(path.join(root, folder));
     fs.writeFileSync(path.join(root, 'action.yml'), 'fixture');
+    fs.writeFileSync(path.join(root, 'src/local-version.cjs'), `module.exports = require(${JSON.stringify(require.resolve('./local-version.cjs'))});`);
     const engine = identifyEngine(output, root);
     assert.equal(engine.sha, first);
     assert.equal(engine.digest, engineDigest(root));
@@ -123,4 +124,21 @@ test('a trusted frozen workflow can migrate legacy digest enrollment without acc
   assert.equal(verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine}).decision, 'auto_approve');
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, sha: second}}), /engine mismatch/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, repository: 'attacker/reviewer'}}), /engine mismatch/);
+});
+
+
+test('the bootstrap uses the frozen release digest implementation so algorithm releases need no consumer pin update', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'central-new-algorithm-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src'));
+    const filename = path.join(root, 'src/local-version.cjs');
+    fs.writeFileSync(filename, "module.exports = {engineDigest: () => 'd'.repeat(64)};");
+    assert.equal(identifyEngine(first, root).digest, 'd'.repeat(64));
+    delete require.cache[require.resolve(filename)];
+    fs.writeFileSync(filename, "module.exports = {engineDigest: () => 'invalid'};");
+    assert.throws(() => identifyEngine(second, root), /invalid source digest/);
+    const ownRoot = path.join(__dirname, '..');
+    const actual = fs.existsSync(path.join(ownRoot, '.git')) ? cp.execFileSync('git', ['-C', ownRoot, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim() : first;
+    assert.equal(identifyEngine(actual).digest, engineDigest());
+  } finally {fs.rmSync(root, {recursive: true, force: true});}
 });

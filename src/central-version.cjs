@@ -32,7 +32,10 @@ function verifyRevision(revision, root = path.join(__dirname, '..')) {
 function identifyEngine(revision, root) {
   if (!sha(revision)) throw new Error('An immutable central engine SHA is required');
   verifyRevision(revision, root);
-  return {...SOURCE, sha: revision, digest: engineDigest(root)};
+  const directory = path.resolve(root || path.join(__dirname, '..'));
+  const checksum = require(path.join(directory, 'src/local-version.cjs')).engineDigest(directory);
+  if (!hash(checksum)) throw new Error('Frozen engine returned an invalid source digest');
+  return {...SOURCE, sha: revision, digest: checksum};
 }
 
 function verifyEngine(engine, root) {

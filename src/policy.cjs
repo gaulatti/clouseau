@@ -378,7 +378,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
+return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 

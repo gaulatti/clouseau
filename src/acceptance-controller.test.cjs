@@ -172,6 +172,17 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
     f.state.comments = owner;
   }
+  if (central === true) {
+    const list = f.github.rest.pulls.listFiles;
+    f.github.rest.pulls.listFiles = async (...args) => {
+      const result = await list(...args);
+      return {data: result.data.map(({patch, ...file}) => file)};
+    };
+    f.state.comments = [{id: 88, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+    assert.equal((await assess()).decision, 'review_incomplete', 'owner intent cannot waive incomplete GitHub patch evidence');
+    f.state.comments = [];
+    f.github.rest.pulls.listFiles = list;
+  }
   const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
   const swapped = structuredClone(verifiedRecord); swapped.controls = true;
   assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted, engine), /substituted/);
