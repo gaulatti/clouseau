@@ -81,6 +81,7 @@ function readHistory(filename, repository, branch) {
   const value = JSON.parse(text);
   if (value.version !== 1 || value.repository !== repository || value.branch !== branch ||
     !/^[a-f0-9]{40}$/.test(value.head_sha) || !/^[a-f0-9]{40}$/.test(value.base_sha) ||
+    (value.reviewer_sha !== undefined && !/^[a-f0-9]{40}$/.test(value.reviewer_sha)) ||
     !/^[a-f0-9]{64}$/.test(value.reviewer_digest) || !/^[a-f0-9]{64}$/.test(value.request_digest) ||
     !/^[a-f0-9]{64}$/.test(value.cache_id) || typeof value.has_receipt !== 'boolean' ||
     !['auto_approve', 'repair_required', 'review_incomplete', 'owner_decision', 'blocked_integrity'].includes(value.decision) ||
@@ -128,9 +129,9 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (sameRevision && previous.decision !== 'auto_approve') {
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
-  let cacheId = digest({repository, head, base: baseSha, reviewerDigest: reviewer.digest,
+  let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
     request, config, ciConfig, harness: args.harness || 'codex', priorFindings});
-  if (sameRevision && previous.request_digest === digest(request)) cacheId = previous.cache_id;
+  if (sameRevision && previous.reviewer_sha === reviewerSha && previous.request_digest === digest(request)) cacheId = previous.cache_id;
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
   const cachedReceipt = path.join(cache, 'receipt.json');
@@ -192,7 +193,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   fs.mkdirSync(path.dirname(historyPath), {recursive: true, mode: 0o700});
   fs.writeFileSync(historyPath, JSON.stringify({version: 1, repository, branch, head_sha: head, base_sha: baseSha,
-    reviewer_digest: reviewer.digest, request_digest: digest(request), cache_id: cacheId,
+    reviewer_sha: reviewerSha, reviewer_digest: reviewer.digest, request_digest: digest(request), cache_id: cacheId,
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,

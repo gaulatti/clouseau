@@ -264,6 +264,13 @@ Tests, exact 100% coverage and branch protection remain mandatory. Review-contro
 changes retain their existing exact-revision owner installation requirements.
 Post-deployment wiki generation and factual review remain separate operations.
 
+Local caches include the exact installed central SHA, even when a newer commit
+has identical engine bytes. Refreshing and reviewing again creates evidence for
+that new SHA and preserves the old receipt. An exact matching cached receipt
+still avoids another local review. Negative evidence and causal findings remain
+retained; a different SHA with identical engine bytes cannot resample an unchanged
+negative judgment.
+
 Automatic central-source installations retain signer enrollment in protected base
 configuration and authorize protected Clouseau main instead of a recurring
 reviewer digest. An engine mismatch blocks without a paid fallback: refresh,

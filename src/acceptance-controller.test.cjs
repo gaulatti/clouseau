@@ -14,6 +14,33 @@ const config = {...require('../test/fixtures/config.json'), version: 2, reposito
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
 
+test('absent protected-base CODEOWNERS leaves ownership inactive without waiving CI or protection', () => fixture(async f => {
+  const original = f.github.rest.repos.getContent; const reads = [];
+  f.github.rest.repos.getContent = async args => {
+    if (['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].includes(args.path)) {
+      reads.push(args); throw Object.assign(new Error('Absent'), {status: 404});
+    }
+    return original(args);
+  };
+  const assessment = await f.assess();
+  f.state.failed = true; await assert.rejects(f.gate(assessment), /Verification changed/);
+  f.state.failed = false;
+  const branch = f.github.rest.repos.getBranch;
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  await assert.rejects(f.gate(assessment), /protection/);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  f.github.rest.repos.getBranch = branch; f.state.pr.auto_merge = null;
+  f.github.rest.repos.getCollaboratorPermissionLevel = async () => {throw new Error('Do not infer ownership from permission');};
+  const messages = [];
+  const core = {info(message) {messages.push(message);}, summary: {addRaw() {return this;}, async write() {}}};
+  await f.policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: true});
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(item => item.name === 'enable-auto').length, 1);
+  assert.ok(messages.some(message => message.includes('optional code-owner gate is inactive')));
+  assert.deepEqual(reads.slice(0, 3).map(read => read.path), ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']);
+  assert.ok(reads.every(read => read.ref === assessment.base_sha));
+}));
+
 test('explicit manual mode approves independently verified owner work without ever arming auto-merge or deployment', () => fixture(async f => {
   const policy = createPolicy({...config, merge_mode: 'manual'});
   f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
