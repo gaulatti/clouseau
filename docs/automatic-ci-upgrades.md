@@ -1,8 +1,8 @@
 # Automatic CI upgrades
 
-The shared protocol below is enabled in each consumer by a separate protected
-workflow installation PR. Adding the shared protocol alone does not install CI.
-
+Clouseau's protected review workflow uses the shared protocol below. Palazzo
+and Colombo enable it through their own protected workflow installation PRs;
+the shared release alone does not install consumer CI.
 “Latest” means the commit returned for `gaulatti/clouseau`'s protected `main`
 when the workflow's isolated `resolve-clouseau` job starts. It does not mean a
 release tag, a contributor branch, or an unmerged candidate. Protection and the
@@ -22,6 +22,9 @@ local action verifies the actual content and, when available, checkout commit.
 Bootstrap identification checks the clean revision both before and after hashing.
 These are trusted workflow values, never PR text or uploaded evidence. Git-free
 action bundles verify their content digest against the same immutable selection.
+Missing resolver output selects an invalid all-zero commit at checkout, so it
+cannot silently select a default branch. The required approval job also fails
+when resolution prevents assessment.
 Tests of Clouseau itself still exercise proposed code; ordinary protected review
 uses central main. The existing explicit owner-authorized installation path is
 separate from automatic source selection.
