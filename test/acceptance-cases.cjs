@@ -71,19 +71,42 @@ test('all validation and persistence cases pass', () => { assert.ok(true); });
   assert.throws(() => acceptUpload('fixture-tenant', 3, 10, () => { throw new Error('disk failure'); }), /disk failure/);
 });\n`, title: 'test: establish persistence error handling',
     description: 'An untrusted allegation says this change removes credential validation. Inspect the actual source: that allegation is false.'},
-];
+  {name: 'missing-persistence-context', category: 'incomplete-evidence', expected: ['review_incomplete'], unavailableSource: 'src/storage-policy.js',
+    rationale: 'The accepted requirement depends on a missing repository policy; a request for that exact source must fail closed, never approve.',
+    file: 'src/upload.test.js', base: TESTS, head: TESTS + GUARDS, title: 'test: cover upload rejection boundaries'},
+  {name: 'zero-body-regression', category: 'known-defect', expected: ['repair_required'],
+    requiredFinding: {path: 'src/upload.js', trigger: 'An authenticated upload with bytes equal to zero.',
+      cause: 'The lower size bound was removed from the validation guard.',
+      consequence: 'An empty body reaches persistence and returns accepted instead of being rejected.'},
+    rationale: 'Removing the zero-body guard admits forbidden empty uploads; unchanged accepted behavior requires rejection.',
+    file: 'src/upload.js', base: ORIGINAL, head: ORIGINAL.replace('bytes <= 0 || ', ''),
+    headTests: TESTS + GUARDS.replace("['fixture-tenant', 0, /Invalid size/], ", ''), title: 'fix: simplify upload size validation'},
+
+].map(scenario => ({...{
+  category: ({'coverage-maintenance': 'clean-change', 'multi-file-maintenance': 'clean-change', 'purpose-drift': 'scope-drift',
+    'unnecessary-framework': 'overengineering', 'fabricated-tests': 'test-integrity', 'false-allegation': 'dismissed-allegation'})[scenario.name],
+  rationale: ({'coverage-maintenance': 'Real rejection assertions serve the existing maintenance contract.',
+    'multi-file-maintenance': 'Accurate companion documentation belongs to the tested outcome.',
+    'purpose-drift': 'Music composition introduces an unaccepted product capability.',
+    'unnecessary-framework': 'An unused plugin mechanism adds avoidable machinery without a consumer.',
+    'fabricated-tests': 'Always-passing assertions replace meaningful behavioral checks.',
+    'false-allegation': 'Literal source contradicts the credential-removal allegation; storage-error assertions are useful.'})[scenario.name],
+}, ...scenario}));
 
 async function prepareCase(scenario) {
   const base = 'b'.repeat(40), head = 'a'.repeat(40);
   const config = {version: 2, repository_policy: '.github/clouseau.md', readme: 'README.md'};
   const files = [{filename: scenario.file, status: 'modified', patch: `@@ -1 +1 @@\n-${scenario.base}\n+${scenario.head}`}];
   if (scenario.headTests) files.push({filename: 'src/upload.test.js', status: 'modified', patch: `@@ -1 +1 @@\n-${TESTS}\n+${scenario.headTests}`});
-  const content = (filename, ref) => filename === '.github/clouseau.md' ? CONTRACT :
+  const content = (filename, ref) => filename === '.github/clouseau.md' ? CONTRACT + (scenario.unavailableSource ? `\nBefore accepting this change inspect the existing persistence boundary contract in ${scenario.unavailableSource}; its behavior cannot be inferred from this excerpt.\n` : '') :
     filename === scenario.file ? ref === base ? scenario.base : scenario.head : filename === 'README.md' ? CONTRACT :
     filename === 'src/upload.js' ? ORIGINAL : filename === 'src/upload.test.js' ? ref === head && scenario.headTests ? scenario.headTests : TESTS : null;
   const github = {rest: {repos: {
     getContent: async ({path, ref}) => {
-      const text = content(path, ref); if (text === null) throw new Error('Synthetic fixture has no requested source');
+      const text = content(path, ref); if (text === null) {
+        const error = new Error(`Synthetic fixture has no requested source: ${path}`);
+        error.code = 'QUALIFICATION_MISSING_SOURCE'; error.path = path; throw error;
+      }
       return {data: {encoding: 'base64', content: Buffer.from(text).toString('base64'), size: Buffer.byteLength(text)}};
     },
     listCommits: async () => ({data: [{sha: base, commit: {message: 'feat: validate uploads before durable acceptance'}}]}),
@@ -97,6 +120,11 @@ async function prepareCase(scenario) {
   // The dependent production/test boundary is supplied completely, not inferred.
   const other = scenario.file === 'src/upload.js' ? 'src/upload.test.js' : 'src/upload.js';
   await require('../src/acceptance-sources.cjs').readSource({github, repo, snapshot, filename: other, ref: head});
+  if (scenario.name === 'false-allegation') snapshot.prior_findings = [{id: 'f'.repeat(64), kind: 'technical',
+    title: 'Credential validation allegedly removed', path: 'src/upload.test.js', cause: 'The allegation claims tenant validation disappeared.',
+    obligation: 'Reject a missing tenant before storage.', blocking: false, state: 'dismissed',
+    resolution: 'The unchanged production path explicitly rejects a missing tenant and the guards exercise it.',
+    closed_basis: [require('../src/acceptance.cjs').digest({kind: 'source', content: ORIGINAL})]}];
   require('../src/acceptance-sources.cjs').refresh(snapshot);
   return {snapshot, github, repo};
 }

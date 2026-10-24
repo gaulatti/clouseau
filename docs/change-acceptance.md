@@ -120,14 +120,14 @@ again; they do not replace fresh verification or authorize a merge.
 Live qualification defaults to the single combined production route. An explicit
 `CLOUSEAU_EVALUATION_GRADERS` list enables comparisons when needed. Token usage includes the
 investigations, grading, uncertainty routing and transport truncation attempts.
-Each qualification is capped at 40 provider requests, including transport retries.
+Each qualification is capped at 48 provider requests, including transport retries.
 `CLOUSEAU_EVALUATION_REQUEST_LIMIT=0` verifies the guard without making a provider
 request. Exhausting the budget fails qualification and retains the case evidence.
 `resume_evaluation` reuses completed qualification work only when source, policy,
 routing, rubric and request meanings match. Completed scores and blockers are
 revalidated and retained. Failed transport framing can reuse its original factual
 response after lossless decoding; only missing judgments make new provider calls.
-Historical and new requests share the 40-request ceiling. The artifact separates
+Historical and new requests share the 48-request ceiling. The artifact separates
 new usage/cost from reused evidence. Ordinary PR assessment remains fresh.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
@@ -258,11 +258,16 @@ grading always receives that causal anchor together with the factor's citations.
 These fields cannot be invented independently by a model.
 
 Use the `evaluate-acceptance` action operation with both provider keys for the
-read-only six-case qualification, including multi-file maintenance with executed
+read-only eight-case qualification, including multi-file maintenance with executed
 tests and corresponding documentation. Its complete artifact is written to
 `work/acceptance-evaluation.json` in the caller's workspace; upload it with an
 `always()` step. Passing synthetic cases is qualification evidence, not proof of
 a genuine unattended merge or automatic repair.
+The known-defect case requires a separate bounded Jev adjudication against its
+frozen trigger, causal regression and forbidden outcome. An unrelated blocking
+finding in the same file cannot qualify detection. The original findings,
+reference, adjudication and binding digest remain in the artifact. A transport
+fixture tests framing only and never substitutes for this live judgment.
 
 A purpose handoff must accompany a capability whose upper fit is below 80.
 An inspector's request to authorize an internal framework cannot itself make
@@ -270,3 +275,56 @@ that framework a product direction; unnecessary machinery remains repair work.
 Technical necessity and severity are graded for distinct runtime, data, security,
 compatibility, or verification consequences. Product scope and proportionality
 are still enforced by the independent product scores and scope gate.
+
+
+## Review convergence and completeness
+
+New snapshots carry `review_manifest_version: 1`. Both the local harness and CI
+use the same source/dependency manifest and finding-reopening rules. Historical
+records without that marker remain readable; they do not acquire new claims.
+
+Each review inventories every supplied immutable source as inspected, excluded
+with a cited reason, or missing. Nonempty changed source cannot be excluded.
+Inspected dependencies require direct evidence from the current head. A relevant
+missing dependency has empty inspection evidence and makes review completeness
+unresolved even when tests and exact coverage pass. Source requests expand the
+same immutable snapshot; earlier investigations must then reconverge. Source and
+request limits fail closed; no truncated context can produce a partial approval.
+The manifest records evidence availability and the investigator's assessment; it
+does not prove the model's semantic attention or that every possible defect was found.
+
+Fixed and dismissed findings retain their dispositions, reasons and revision
+history across unrelated pushes. Titles, line offsets and rename paths do not
+independently create a new defect identity. An investigator must reuse the prior
+identifier for the same causal obligation. Reopening requires an explicit reason
+and current-source evidence different from the closure evidence. Merely repeating
+a claim or changing its title cannot reverse a previously accepted repair. A real
+regression to the original defective bytes can reopen the existing finding.
+Evidence hashes preserve literal case and whitespace. Distinct causal defects
+remain separate even when they share a path and requirement.
+Conflicting interpretations remain unresolved until the cited evidence supports
+a resolution; they cannot silently authorize an undo. History limits stop review
+instead of dropping old decisions. Detailed transitions remain in the expandable
+audit, keeping the initial report concise.
+
+## Code-owner merge authority
+
+For protocol v2, automatic merge requires the PR's GitHub author to be a verified
+code owner for every changed path, including both paths of a rename. Clouseau
+reads the first CODEOWNERS file in GitHub's precedence order from the exact
+protected base revision, applies the last matching rule, and checks current
+repository write access and team membership. The documented `docs/*` pattern
+matches immediate files only; use `/docs/` for all descendants. Ambiguous
+terminal prefix patterns such as `/private*` require manual ownership verification
+instead of granting authority through an earlier broad rule. Changes to CODEOWNERS
+are protected review controls. Missing files, uncovered paths, unsupported patterns, email-only
+identities or unavailable membership evidence never grant automatic merge.
+
+A PR from another author can receive a passing AI review and bot approval, but
+Clouseau disables an existing auto-merge request and never enables a new one.
+The required gate remains blocked until current-head human code-owner approvals
+cover all paths. Dismissed, stale and bot reviews do not satisfy that requirement.
+After the owner approval, the trusted metadata gate can be reassessed; passing it
+still leaves automatic merge disabled and requires a manual merge. Review and
+merge authority are independent. Native tests, coverage and protection remain
+mandatory. Legacy v1 consumers must upgrade to v2 to receive this restriction.

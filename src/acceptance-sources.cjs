@@ -51,7 +51,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
   }
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
   if (!pr.head.repo?.owner?.login || !pr.head.repo.name) throw new Error('The immutable head repository is unavailable');
-  const snapshot = {version: 2, repository: `${repo.owner}/${repo.repo}`, number: pr.number,
+  const snapshot = {version: 2, review_manifest_version: 1, repository: `${repo.owner}/${repo.repo}`, number: pr.number,
     base_sha: pr.base.sha, head_sha: pr.head.sha, paths: files.map(file => file.filename).sort(),
     head_repository: {owner: pr.head.repo.owner.login, repo: pr.head.repo.name},
     config_digest: digest(config), policy_digest: digest(policy), sources: {}, files: [], history: [], tickets: []};
