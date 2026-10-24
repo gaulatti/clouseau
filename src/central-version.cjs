@@ -32,6 +32,7 @@ function identifyEngine(revision, root) {
   verifyRevision(revision, root);
   const directory = path.resolve(root || path.join(__dirname, '..'));
   const checksum = require(path.join(directory, 'src/local-version.cjs')).engineDigest(directory);
+  verifyRevision(revision, directory);
   if (!hash(checksum)) throw new Error('Frozen engine returned an invalid source digest');
   return {...SOURCE, sha: revision, digest: checksum};
 }

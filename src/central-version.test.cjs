@@ -10,6 +10,22 @@ const {engineDigest} = require('./local-version.cjs');
 
 const first = 'a'.repeat(40);
 const second = 'b'.repeat(40);
+test('a source mutation during digest calculation cannot be published with the frozen commit', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'central-mutating-digest-'));
+  try {
+    fs.mkdirSync(path.join(root, 'src'));
+    fs.writeFileSync(path.join(root, 'src/local-version.cjs'), `module.exports = {engineDigest(root) {
+      require('node:fs').writeFileSync(require('node:path').join(root, 'src/injected.cjs'), 'changed during hashing');
+      return 'd'.repeat(64);
+    }};`);
+    cp.execFileSync('git', ['init', '-q', root]);
+    cp.execFileSync('git', ['-C', root, 'add', '.']);
+    cp.execFileSync('git', ['-C', root, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'fixture']);
+    const revision = cp.execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+    assert.throws(() => identifyEngine(revision, root), /Uncommitted or untracked/);
+  } finally {fs.rmSync(root, {recursive: true, force: true});}
+});
+
 test('protected central main resolves once; a branch advance cannot change frozen outputs and the next run advances', async () => {
   let branch = {name: 'main', protected: true, commit: {sha: first}};
   let calls = 0;
