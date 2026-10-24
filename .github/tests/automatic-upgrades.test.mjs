@@ -37,5 +37,5 @@ test('protected self review uses one frozen engine while candidate tests and exp
   assert.equal(workflow.jobs['assess-installation'].steps[0].with.ref, '${{ needs.prepare-installation.outputs.head }}');
   const repair = action.runs.steps.find(s => s.name === 'Apply bounded repair with an independent author');
   assert.match(repair.with.script, /verifyRecord\(record, assessment, config,.*environmentEngine/);
-  assert.ok(action.runs.steps[0].with.script.includes('environmentEngine'));
+  assert.ok(action.runs.steps.find(s => s.name === 'Verify and record this run frozen engine').with.script.includes('environmentEngine'));
 });
