@@ -46,6 +46,11 @@ test('protected central main resolves once; a branch advance cannot change froze
     assert.throws(() => identifyEngine(first, root), /source differs/);
     const actual = cp.execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
     assert.equal(verifyEngine(identifyEngine(actual, root), root).sha, actual);
+    fs.writeFileSync(path.join(root, 'src/substituted.cjs'), 'unexpected source');
+    assert.throws(() => identifyEngine(actual, root), /Uncommitted or untracked/);
+    fs.rmSync(path.join(root, 'src/substituted.cjs'));
+    fs.writeFileSync(path.join(root, 'src/local-version.cjs'), "module.exports = {engineDigest: () => 'f'.repeat(64)};");
+    assert.throws(() => identifyEngine(actual, root), /Uncommitted or untracked/);
   } finally {fs.rmSync(root, {recursive: true, force: true});}
   for (const data of [{name: 'other', protected: true, commit: {sha: first}}, {name: 'main', protected: false},
     {name: 'main', protected: true}, {name: 'main', protected: true, commit: {sha: 'main'}},

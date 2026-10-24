@@ -23,9 +23,13 @@ async function resolveCentral(github) {
 }
 
 function verifyRevision(revision, root = path.join(__dirname, '..')) {
-  if (fs.existsSync(path.join(root, '.git')) &&
-      cp.execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim() !== revision) {
-    throw new Error('Checked-out source differs from the frozen engine SHA');
+  if (fs.existsSync(path.join(root, '.git'))) {
+    if (cp.execFileSync('git', ['-C', root, 'rev-parse', 'HEAD'], {encoding: 'utf8'}).trim() !== revision) {
+      throw new Error('Checked-out source differs from the frozen engine SHA');
+    }
+    if (cp.execFileSync('git', ['-C', root, 'status', '--porcelain', '--untracked-files=all'], {encoding: 'utf8'}).trim()) {
+      throw new Error('Uncommitted or untracked source cannot identify a frozen engine');
+    }
   }
 }
 
