@@ -359,9 +359,15 @@ It sends verbatim source with indexed proof coordinates and replaces a duplicate
 draft quote only when the identical bytes remain in the referenced immutable
 source. Differing or unavailable earlier literals remain explicit. No source,
 concern, disposition or score is truncated to fit transport. Oversized Codex
-input fails before invocation. Failed harness exits retain bounded stderr in
-private `failure.json` beside the snapshot and journal; public errors show only
-the diagnostic digest and evidence path, never the private stderr or environment.
+input fails before invocation. Native stdout/stderr are decoded across UTF-8
+stream boundaries, preserving characters split between process writes. Failed
+harness exits retain the final 2,000 characters of stdout and stderr, complete
+stdout character/UTF-8 byte counts and digest, elapsed time, exit status/signal,
+configured bounds and controller timeout/output-limit kill reasons in private
+`failure.json` beside the snapshot and journal. The stdout tail is explicitly
+partial diagnostic data, never a completed review or replacement source evidence.
+Public errors show only the diagnostic digest and evidence path, never the
+private output or environment. Existing invocation limits remain unchanged.
 
 CI accepts complete receipt artifacts up to 3,000,000 UTF-8 bytes. This bounded
 allowance accommodates complete source and converged independent reviews without

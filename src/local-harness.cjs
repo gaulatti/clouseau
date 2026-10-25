@@ -25,16 +25,29 @@ function compactSchema(schema) {
 
 function invoke(program, args, options) {
   return new Promise((resolve, reject) => {
+    const started = Date.now();
     const child = cp.spawn(program, args, {...options, stdio: ['pipe', 'pipe', 'pipe']});
     let stdout = ''; let stderr = '';
-    const timer = setTimeout(() => child.kill('SIGKILL'), options.timeoutMs || 300000);
-    child.stdout.on('data', chunk => {stdout += chunk; if (stdout.length > (options.maxBytes || 3000000)) child.kill('SIGKILL');});
+    const timeoutMs = options.timeoutMs || 300000;
+    const maxCharacters = options.maxBytes || 3000000;
+    const killReasons = new Set();
+    const kill = reason => {killReasons.add(reason); child.kill('SIGKILL');};
+    const timer = setTimeout(() => kill('native_timeout'), timeoutMs);
+    // Decode across stream chunks: a chunk may end within a UTF-8 character.
+    child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
+    child.stdout.on('data', chunk => {stdout += chunk; if (stdout.length > maxCharacters) kill('native_output_limit');});
     child.stderr.on('data', chunk => {stderr = (stderr + chunk).slice(-2000);});
     child.on('error', error => {clearTimeout(timer); reject(error);});
     child.on('close', (code, signal) => {
       clearTimeout(timer);
-      if (code !== 0) reject(Object.assign(new Error(`Local harness failed (${code}); diagnostic digest ${digest(stderr)}`),
-        {harnessDiagnostic: {program, exit_code: code, signal, stderr}}));
+      if (code !== 0) {
+        const diagnostic = {program, exit_code: code, signal, stderr, stdout_tail: stdout.slice(-2000),
+          stdout_characters: stdout.length, stdout_bytes: Buffer.byteLength(stdout), stdout_digest: digest(stdout),
+          elapsed_ms: Date.now() - started, controller_kill_reasons: [...killReasons],
+          timeout_ms: timeoutMs, max_characters: maxCharacters};
+        reject(Object.assign(new Error(`Local harness failed (${code}); diagnostic digest ${digest(diagnostic)}`),
+          {harnessDiagnostic: diagnostic}));
+      }
       else resolve(stdout);
     });
     child.stdin.on('error', () => {});
