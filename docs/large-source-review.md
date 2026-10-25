@@ -96,6 +96,11 @@ rejected intact. Existing Jev packet limits and rubric/scoring rules remain.
 Central strict function transport uses separate report, page-request and
 source-request branches; inactive null/empty envelope fields are restored by the
 controller without changing submitted facts.
+Local prompts describe their full response envelope; central prompts describe
+only the selected typed function's active fields. A rejected typed response
+retains its original function, complete raw/canonical arguments, usage and
+request digest for diagnosis. It is not normalized into a passing response or
+retried. Qualification failures also retain any native harness diagnostic.
 
 The complete signed receipt remains limited to **3,000,000 UTF-8 bytes**. Paging
 does not remove source or history from the signed record, raise that limit or

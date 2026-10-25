@@ -83,7 +83,7 @@ function pageProofs(snapshot, view, pages) {
 }
 
 async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progress = [], sourceHistory = [], previousUsage = [],
-  sourceBatchLimit = MAX_SOURCE_BATCHES, instructions = '', context = {}}) {
+  sourceBatchLimit = MAX_SOURCE_BATCHES, instructions = '', context = {}, typedFunctions = false}) {
   const frozenIdentity = identity(snapshot);
   requirePage(Number.isSafeInteger(sourceBatchLimit) && sourceBatchLimit >= 0 && sourceBatchLimit <= MAX_SOURCE_BATCHES, 'remaining source-request budget');
   requirePage(Array.isArray(progress) && progress.every(item => item.role === role), 'independent progress history');
@@ -134,8 +134,9 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       'Source proof IDs come only from the supplied proofs catalog: proof-SOURCE_INDEX-LINE_START. An inventory entry number is a page selector, never a source index for a patch or context entry. Never manufacture a proof ID from a patch entry number or patch line. ' +
       'Raise a new provisional concern only with literal source proofs supplied in this frame. If a patch suggests a defect, retain the question in observations and request that path\'s base/head source pages before raising the causal concern. A patch/context-only frame requires concerns=[]. Previously recorded concerns remain in own_page_progress and need not be repeated. ' +
       'Do not silently drop a concern, change its cause/path/obligation, or borrow another role investigation. ' +
-      'Select kind=page_request with report=null, request_sources=[] and page_request; kind=source_request with report=null,page_request=null and paths; ' +
-      'or kind=report with a complete factual report,page_request=null,request_sources=[]. ' +
+      (typedFunctions ? 'Call exactly one supplied function: page_request with kind=page_request and page_request; source_request with kind=source_request and request_sources; or acceptance_report with kind=report and the complete factual report in report. Every function also has observations and concerns. Omit all inactive envelope fields; only the controller restores their fixed null/empty values. ' :
+        'Select kind=page_request with report=null, request_sources=[] and page_request; kind=source_request with report=null,page_request=null and paths; ' +
+        'or kind=report with a complete factual report,page_request=null,request_sources=[]. ') +
       'The template is syntax only. Facts use supplied proof IDs; the controller owns literal quotes and all grades. Earlier observations never grant source authority.\n' +
       JSON.stringify({review_context: {...context, role, page_deliveries_remaining: MAX_VIEW_ROUNDS - deliveries - (pages.length ? 1 : 0),
         source_batches_remaining: sourceBatchLimit - batches, completeness_claim_available: availability.completeness_ready}, source_bank: view.bank,

@@ -217,7 +217,7 @@ async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, lo
       const history = previous?.source_history ? [...previous.source_history,
         {bank: previous.source_bank, exposure: previous.source_view}] : [];
       const result = await inspectPaged({snapshot, role, drafts, progress: previous?.page_progress || [], sourceHistory: history,
-        previousUsage: [...previousUsage, ...usage], sourceBatchLimit: 8 - round,
+        previousUsage: [...previousUsage, ...usage], sourceBatchLimit: 8 - round, typedFunctions: true,
         ask: providerAsk({model, fetchImpl, wait, log, observe, snapshot}),
         addSources: paths => additionalSources({github, repo, snapshot, paths})});
       return {...result, usage: [...usage, ...result.usage]};

@@ -163,7 +163,8 @@ async function main() {
     assert.ok(qualification.protocol_completed, 'Incomplete source inspection/grading is not full large-source protocol qualification');
   } catch (error) {
     if (snapshot) save('snapshot.failed.json', snapshot);
-    save('failure.json', {message: error.message, details: error.details || null}); throw error;
+    save('failure.json', {message: error.message, details: error.details || null,
+      harness_diagnostic: error.harnessDiagnostic || null}); throw error;
   } finally {fs.rmSync(directory, {recursive: true, force: true});}
 }
 

@@ -41,6 +41,8 @@ test('central roles page independently and keep exposure in routed literal gradi
       if (body.tools) {
         assert.equal(body.tools.length, 3); assert.equal(body.parallel_tool_calls, false);
         const prompt = body.messages[1].content;
+        assert.match(prompt, /Call exactly one supplied function: page_request/);
+        assert.doesNotMatch(prompt, /Select kind=page_request with report=null/);
         const packet = JSON.parse(prompt.slice(prompt.lastIndexOf('\n') + 1));
         const response = await model.ask({role: packet.review_context.role, phase: 'investigation', schema: pageSchema(f.snapshot), prompt});
         return reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{function: {
@@ -81,7 +83,17 @@ test('typed transport restores only reserved fields and rejects conflicting subm
     const ask = providerAsk({snapshot: f.snapshot, model: 'deepseek-flash', fetchImpl: async () => reply({choices: [
       {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name, arguments: JSON.stringify(submitted)}}]}},
     ]})});
-    if (!valid) await assert.rejects(ask(task), /mismatched typed branch/);
+    if (!valid) await assert.rejects(ask(task), error => {
+      assert.match(error.message, /mismatched typed branch/);
+      assert.deepEqual(error.details.submitted, submitted);
+      assert.equal(error.details.function_name, name);
+      assert.equal(error.details.raw_response, JSON.stringify(submitted));
+      assert.equal(error.details.canonical_response, JSON.stringify(submitted));
+      assert.equal(error.details.usage.length, 1);
+      assert.match(error.details.request_digest, /^[a-f0-9]{64}$/);
+      assert.ok(!JSON.stringify(error.details).includes('fictional-only'), 'provider credential is not diagnostic evidence');
+      return true;
+    });
     else {
       const response = await ask(task);
       assert.deepEqual(response.value, {...submitted, report: null, page_request: null});

@@ -34,7 +34,11 @@ function providerAsk({model, fetchImpl, wait, log, observe = () => {}, snapshot}
     const submitted = result.value;
     if (!branch || !submitted || Object.keys(submitted).sort().join(',') !==
       ['kind', 'observations', 'concerns', branch[1]].sort().join(',') || submitted.kind !== branch[0]) {
-      throw new Error('Paged provider returned a mismatched typed branch');
+      const error = new Error('Paged provider returned a mismatched typed branch');
+      error.details = {role: task.role, phase: task.phase, function_name: result.function_name,
+        submitted, raw_response: result.raw, canonical_response: result.canonical, usage: result.usage,
+        request_digest: digest(request)};
+      throw error;
     }
     const value = {kind: submitted.kind, report: null, page_request: null, request_sources: [],
       ...submitted};
