@@ -56,6 +56,8 @@ test('read-only GitHub facade emits exact encoded source, PR, comment and workfl
   const prefix = 'repos/fixture%20owner/project%2Fname';
   assert.deepEqual(await github.rest.repos.getContent({...repo, path: '.github/a file.json', ref: 'branch/one'}), {data: {fixture: true, jobs: [{id: 9}]}});
   assert.equal(calls.at(-1)[1], `${prefix}/contents/.github/a%20file.json?ref=branch%2Fone`);
+  assert.deepEqual(await github.rest.git.getBlob({...repo, file_sha: 'a'.repeat(40)}), {data: {fixture: true, jobs: [{id: 9}]}});
+  assert.equal(calls.at(-1)[1], `${prefix}/git/blobs/${'a'.repeat(40)}`);
   await github.rest.pulls.get({...repo, pull_number: 4});
   assert.equal(calls.at(-1)[1], `${prefix}/pulls/4`);
   await github.rest.pulls.listFiles({...repo, pull_number: 4, per_page: 100, page: 2});

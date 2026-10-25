@@ -23,6 +23,7 @@ function githubFromApi(api) {
   };
   const github = {rest: {
     repos: {getContent: endpoint(args => `${repo(args)}/contents/${args.path.split('/').map(encodeURIComponent).join('/')}?${query({ref: args.ref})}`)},
+    git: {getBlob: endpoint(args => `${repo(args)}/git/blobs/${encodeURIComponent(args.file_sha)}`)},
     pulls: {
       get: endpoint(args => `${repo(args)}/pulls/${args.pull_number}`),
       listFiles: endpoint(args => `${repo(args)}/pulls/${args.pull_number}/files?${query({per_page: args.per_page, page: args.page})}`),
