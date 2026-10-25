@@ -23,6 +23,13 @@ test('the actual job expressions keep the original engine after main advances an
   const independent = structuredClone(workflow);
   independent.jobs['assess-intent'].needs = [];
   assert.throws(() => assertFrozenWorkflow(independent, evaluate), /directly consumes/);
+  const overwritten = structuredClone(workflow);
+  overwritten.jobs['assess-intent'].steps.push({uses: 'actions/checkout@v4', with: {
+    repository: 'gaulatti/clouseau', ref: 'c88bb23a03c35f703f86ad1c419b80e390a07f03', path: '.clouseau-ci'}});
+  assert.throws(() => assertFrozenWorkflow(overwritten, evaluate), /cannot overwrite/);
+  const redirected = structuredClone(workflow);
+  redirected.jobs['assess-intent'].steps.find(step => step.with?.repository === 'gaulatti/clouseau').with.repository = 'attacker/engine';
+  assert.throws(() => assertFrozenWorkflow(redirected, evaluate), /authorized repository/);
 });
 
 test('protected self review uses one frozen engine while candidate tests and explicit installation retain their own boundaries', () => {

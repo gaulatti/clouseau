@@ -20,12 +20,20 @@ test('native output schema shares repeated choices without weakening proof ID co
 test('native harness process transport captures results and bounds failures without exposing stderr', async () => {
   assert.equal(await invoke(process.execPath, ['-e', 'process.stdin.pipe(process.stdout)'], {input: 'fixture'}), 'fixture');
   await assert.rejects(invoke(process.execPath, ['-e', 'process.stderr.write("fictional-sensitive-diagnostic");process.exit(3)'],
-    {input: ''}), error => error.message.includes('(3)') && !error.message.includes('fictional-sensitive-diagnostic'));
+    {input: ''}), error => error.message.includes('(3)') && !error.message.includes('fictional-sensitive-diagnostic') &&
+      error.harnessDiagnostic.stderr === 'fictional-sensitive-diagnostic' && error.harnessDiagnostic.exit_code === 3);
   await assert.rejects(invoke('/nonexistent-clouseau-harness', [], {input: ''}), /ENOENT/);
   await assert.rejects(invoke(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {input: '', timeoutMs: 20}), /failed/);
   await assert.rejects(invoke(process.execPath, ['-e', 'process.stdout.write("x".repeat(1000));setTimeout(()=>{},10000)'],
     {input: '', maxBytes: 10}), /failed/);
   assert.equal(await invoke('/usr/bin/true', [], {input: 'x'.repeat(1000000)}), '');
+});
+
+test('an oversized Codex prompt stops before invoking the transport without truncating evidence', async () => {
+  let calls = 0;
+  await assert.rejects(askHarness({harness: 'codex', prompt: 'x'.repeat(1048577), schema: {},
+    execute: async () => {calls++;}}), /1048576-character transport limit/);
+  assert.equal(calls, 0);
 });
 
 test('Codex and Claude adapters use fresh sessions, structured outputs and no CI provider environment', async () => {
