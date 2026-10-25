@@ -82,8 +82,10 @@ The pinned bootstrap can be inspected separately as
 `.clouseau-ci/scripts/resolve/action.yml@FULL_COMMIT_SHA`. Historical source is
 read-only untrusted evidence from the fixed public Clouseau repository; it never
 selects or executes a different review engine. CI verifies its exact immutable
-bytes. Changed resolver workflows receive at most eight immediate shared source
-files up front, including their actual pinned bootstrap. Changed project files
+bytes. Changed resolver workflows receive at most 32 observed shared source/test
+dependencies up front, including their actual pinned bootstrap and the legacy
+action/configuration/policy/receipt files read during migration. Wiki dependencies
+are included only when the changed workflow invokes them. Changed project files
 and contracts are still complete; source size and investigation limits stay
 unchanged. Incomplete local reviews retain the delivered snapshot and journal,
 and the error identifies their private local evidence directory.
