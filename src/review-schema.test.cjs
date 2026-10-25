@@ -36,7 +36,13 @@ test('shared controller schema objects and enums expand to the exact original co
     assert.equal(plain.type, 'object'); assert.equal(plain.additionalProperties, false);
     assert.deepEqual(plain.required, Object.keys(plain.properties));
   }
-  assert.deepEqual(expand(functions.acceptance_report).properties.report, schema.properties.report.anyOf[0]);
+  for (const [name, active] of [['acceptance_report', 'report'], ['page_request', 'page_request']]) {
+    const {observations, concerns, ...payload} = expand(functions[name]).properties;
+    assert.deepEqual(payload, schema.properties[active].anyOf[0].properties);
+    assert.deepEqual(observations, schema.properties.observations);
+    assert.deepEqual(concerns, schema.properties.concerns);
+  }
+  assert.deepEqual(expand(functions.source_request).properties.request_sources, schema.properties.request_sources);
   assert.deepEqual(compactSchema(functions.acceptance_report, {definitionKey: '$def'}), functions.acceptance_report);
   assert.deepEqual(compactSchema({type: 'object', properties: {literal: null}}), {type: 'object', properties: {literal: null}});
   assert.throws(() => compactSchema(schema, {definitionKey: 'definitions'}), /Unsupported/);
