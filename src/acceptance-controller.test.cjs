@@ -820,3 +820,28 @@ test('private controller control changes retain exact-head purpose authority thr
     assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, withdraw ? 0 : 1);
   });
 });
+
+test('explicit automatic mode keeps verified owner work on the protected native path', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: true});
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+}));
+
+test('a private-plan transition to available native protection stops the old acceptance path before writing', async () => {
+  for (const transition of [2, 4]) await fixture(async f => {
+    const nativeRules = f.github.request;
+    const p = await privateOwnerFixture(f);
+    let reads = 0;
+    f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: ++reads >= transition, node_id: 'R_private'}});
+    f.github.rest.repos.getBranch = async () => ({data: {protected: reads >= transition, commit: {sha: p.assessment.base_sha}}});
+    f.github.request = async (...args) => {
+      if (reads >= transition) return nativeRules(...args);
+      throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});
+    };
+    await assert.rejects(p.run(true), /acceptance mode changed/);
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+  });
+});
