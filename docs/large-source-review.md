@@ -96,12 +96,19 @@ rejected intact. Existing Jev packet limits and rubric/scoring rules remain.
 Central strict function transport uses separate report, page-request and
 source-request branches; inactive null/empty envelope fields are restored by the
 controller without changing submitted facts. The validated native function name
-is the sole discriminator; typed arguments contain observations, concerns and
-that function's payload fields directly. A page function receives `bank_digest`
+is the sole discriminator; typed request arguments contain observations and that
+function's payload fields directly. A page function receives `bank_digest`
 and `pages`; a source function receives `request_sources`; an acceptance function
-receives the factual report fields. The controller supplies the internal
+receives only the factual report fields, including its full summary. It needs
+no separate progress observations after completing that report. The controller supplies the internal
 report/page wrapper without changing any submitted field. It derives the constant internal
 `kind` from the function name rather than requesting a second duplicate selector.
+New provisional concern events use explicit `page_request_with_concerns` or
+`source_request_with_concerns` variants with a required concern array. Plain
+requests have no new concern event and cannot submit that field. Those variants
+are unavailable on frames with no citable source proofs. Final acceptance uses
+its complete factual findings/resolutions. Every earlier concern still requires
+retention or explicit current-source resolution, regardless of the next function.
 Local prompts describe their full response envelope; central prompts describe
 only the selected typed function's active fields. A rejected typed response
 retains its original function, complete raw/canonical arguments, usage and

@@ -19,9 +19,10 @@ test('patch entry numbers cannot masquerade as provisional source proofs in the 
   const compact = compactSchema(restricted);
   assert.ok(JSON.stringify(compact).includes('proof-4-41'));
   for (const tool of Object.values(pageFunctions(initial))) {
-    assert.deepEqual(tool.properties.concerns.enum, [[]]);
+    assert.equal(Object.hasOwn(tool.properties, 'concerns'), false);
     assert.equal(/"(?:maxItems|minItems|maxLength|minLength)"/.test(JSON.stringify(tool)), false);
   }
+  assert.equal(Object.hasOwn(pageFunctions(initial), 'page_request_with_concerns'), false);
 });
 
 test('real driver frames allow concerns only from supplied source proof IDs while preserving earlier concerns as raw history', async () => {

@@ -3,10 +3,10 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {pagedFixture, responder} = require('../test/paged-review-fixture.cjs');
-const {pageSchema} = require('./paged-review.cjs');
+const {pageSchema, inspectPaged} = require('./paged-review.cjs');
 const {pageFunctions, providerAsk} = require('./paged-provider.cjs');
-const {reviewChange, investigateChange} = require('./acceptance-review.cjs');
-const {refresh} = require('./acceptance-sources.cjs');
+const {reviewChange, investigateChange, modelTemplate} = require('./acceptance-review.cjs');
+const {refresh, proofCatalog} = require('./acceptance-sources.cjs');
 const {JEV_MODEL} = require('./review-provider.cjs');
 
 function credentials(run) {return async () => {
@@ -20,7 +20,7 @@ test('the captured direct page arguments need no duplicate kind or page_request 
   const f = await pagedFixture();
   // Public qualification40184935399 returned exactly these argument fields.
   // The native function selected page_request; no semantic content was absent.
-  const submitted = {observations: 'Read the supplied head sources; request the actual base source next.', concerns: [],
+  const submitted = {observations: 'Read the supplied head sources; request the actual base source next.',
     bank_digest: '76a4e6ecdd7d547d728decea527e9e2ee95d0765501125e9025d855740c39268',
     pages: [{entry: 46, page: 0}, {entry: 52, page: 0}, {entry: 76, page: 0}, {entry: 85, page: 0}]};
   const raw = JSON.stringify(submitted);
@@ -28,20 +28,21 @@ test('the captured direct page arguments need no duplicate kind or page_request 
     {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: 'page_request', arguments: raw}}]}},
   ]})});
   const response = await ask({role: 'examiner', phase: 'investigation', schema: pageSchema(f.snapshot), prompt: 'Frozen native typed reply regression.'});
-  const {observations, concerns, ...payload} = submitted;
-  assert.deepEqual(response.value, {kind: 'page_request', report: null, request_sources: [], observations, concerns, page_request: payload});
+  const {observations, ...payload} = submitted;
+  assert.deepEqual(response.value, {kind: 'page_request', report: null, request_sources: [], observations, concerns: [], page_request: payload});
   assert.equal(response.provenance.transport_digest, require('./acceptance.cjs').digest({function_name: 'page_request', raw, canonical: raw}));
 }));
-const branchFor = value => value.kind === 'report' ? 'acceptance_report' : value.kind;
+const branchFor = value => value.kind === 'report' ? 'acceptance_report' : value.kind + (value.concerns.length ? '_with_concerns' : '');
 function encoded(value) {
   const active = value.kind === 'source_request' ? 'request_sources' : value.kind;
-  return {observations: value.observations, concerns: value.concerns,
+  return {...(value.kind === 'report' ? {} : {observations: value.observations}),
+    ...(value.kind !== 'report' && value.concerns.length ? {concerns: value.concerns} : {}),
     ...(active === 'request_sources' ? {[active]: value[active]} : value[active])};
 }
 
 test('paged strict tools preserve typed facts without null or unsupported schema limits', async () => {
   const f = await pagedFixture(); const tools = pageFunctions(pageSchema(f.snapshot));
-  assert.deepEqual(Object.keys(tools), ['acceptance_report', 'page_request', 'source_request']);
+  assert.deepEqual(Object.keys(tools), ['acceptance_report', 'page_request', 'page_request_with_concerns', 'source_request', 'source_request_with_concerns']);
   const check = value => {
     if (!value || typeof value !== 'object') return;
     assert.ok(!['minLength', 'maxLength', 'minItems', 'maxItems'].some(key => Object.hasOwn(value, key)));
@@ -50,9 +51,10 @@ test('paged strict tools preserve typed facts without null or unsupported schema
   Object.values(tools).forEach(check);
   for (const tool of Object.values(tools)) {
     assert.equal(Object.hasOwn(tool.properties, 'kind'), false);
-    assert.ok(tool.required.includes('observations') && tool.required.includes('concerns'));
+    assert.equal(tool.required.includes('observations'), tool !== tools.acceptance_report);
   }
-  assert.deepEqual(Object.keys(tools.page_request.properties).sort(), ['bank_digest', 'concerns', 'observations', 'pages']);
+  assert.deepEqual(Object.keys(tools.page_request.properties).sort(), ['bank_digest', 'observations', 'pages']);
+  assert.ok(tools.page_request_with_concerns.required.includes('concerns'));
   assert.equal(Object.hasOwn(tools.acceptance_report.properties, 'report'), false);
   assert.ok(tools.acceptance_report.properties.coverage);
 });
@@ -64,7 +66,7 @@ test('central roles page independently and keep exposure in routed literal gradi
     fetchImpl: async (url, options) => {
       const body = JSON.parse(options.body);
       if (body.tools) {
-        assert.equal(body.tools.length, 3); assert.equal(body.parallel_tool_calls, false);
+        assert.ok([3, 5].includes(body.tools.length)); assert.equal(body.parallel_tool_calls, false);
         const prompt = body.messages[1].content;
         assert.match(prompt, /Call exactly one supplied function: page_request/);
         assert.doesNotMatch(prompt, /Select kind=page_request with report=null/);
@@ -101,8 +103,12 @@ test('typed transport restores only reserved fields and rejects conflicting subm
   const f = await pagedFixture(); const schemas = pageFunctions(pageSchema(f.snapshot));
   const task = {role: 'examiner', phase: 'investigation', schema: pageSchema(f.snapshot), prompt: 'Frozen controller fixture.'};
   for (const [name, submitted, valid] of [
-    ['source_request', {request_sources: ['src/dependency.js'], observations: '', concerns: []}, true],
-    ['source_request', {page_request: {}, observations: '', concerns: []}, false],
+    ['source_request', {request_sources: ['src/dependency.js'], observations: ''}, true],
+    ['source_request_with_concerns', {request_sources: ['src/dependency.js'], observations: '', concerns: []}, true],
+    ['source_request_with_concerns', {request_sources: ['src/dependency.js'], observations: ''}, false],
+    ['source_request', {request_sources: ['src/dependency.js'], observations: '', concerns: [{id: 'must-not-be-dropped'}]}, false],
+    ['acceptance_report', {...modelTemplate(f.snapshot), observations: 'An extra disclosed note must not be silently dropped.'}, false],
+    ['source_request', {page_request: {}, observations: ''}, false],
     ['page_request', {page_request: {bank_digest: 'a'.repeat(64), pages: []}, observations: '', concerns: []}, false],
     ['source_request', {kind: 'report', request_sources: ['src/dependency.js'], observations: '', concerns: []}, false],
     ['source_request', {kind: 'source_request', request_sources: ['src/dependency.js'], observations: '', concerns: [], report: {}}, false],
@@ -123,11 +129,50 @@ test('typed transport restores only reserved fields and rejects conflicting subm
     });
     else {
       const response = await ask(task);
-      assert.deepEqual(response.value, {...submitted, kind: 'source_request', report: null, page_request: null});
+      assert.deepEqual(response.value, {concerns: [], ...submitted, kind: 'source_request', report: null, page_request: null});
       assert.equal(response.provenance.role, task.role);
       assert.equal(response.provider_usage[0].provider, 'deepseek');
       assert.ok(schemas.source_request.required.includes('request_sources'));
     }
+  }
+}));
+
+test('explicit native concern events preserve causal obligations across later plain requests and final reports', credentials(async () => {
+  for (const resolve of [false, true]) {
+    const f = await pagedFixture(); let raised = false; const functions = [];
+    const file = f.snapshot.files[0];
+    const proof = proofCatalog(f.snapshot).find(item => item.source === file.head_source);
+    const concern = {id: 'native-concern', title: 'Investigate the current source boundary', path: file.path,
+      cause: 'The current source requires a causal boundary check.', obligation: 'Preserve the accepted fixture behavior.', evidence: [proof.id]};
+    const model = responder(f, (value, {packet}) => {
+      if (!raised && packet.proofs.some(item => item.id === proof.id)) {
+        raised = true;
+        const entry = packet.source_bank.entries.find(entry => entry.source === proof.source);
+        return {...value, kind: 'page_request', report: null, concerns: [concern],
+          page_request: {bank_digest: packet.source_bank.bank_digest, pages: [{entry: entry.entry, page: 0}]}};
+      }
+      if (value.kind === 'report' && resolve) value.report.resolutions.push({id: concern.id, state: 'dismissed',
+        reason: 'Current source supplies the counterevidence for this fixture boundary.', evidence: [proof.id]});
+      return value;
+    });
+    const ask = providerAsk({snapshot: f.snapshot, model: 'deepseek-flash', fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body); const prompt = body.messages[1].content;
+      const response = await model.ask({role: 'examiner', phase: 'investigation', schema: pageSchema(f.snapshot), prompt});
+      const name = branchFor(response.value); functions.push(name);
+      assert.ok(body.tools.some(tool => tool.function.name === name));
+      return reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{function: {name,
+        arguments: JSON.stringify(encoded(response.value))}}]}}]});
+    }});
+    const attempt = inspectPaged({snapshot: f.snapshot, role: 'examiner', ask, typedFunctions: true});
+    if (!resolve) await assert.rejects(attempt, /prior investigation concern|prior-finding/);
+    else {
+      const inspection = await attempt;
+      assert.ok(inspection.page_progress.some(frame => frame.response.concerns.some(item => item.id === concern.id)));
+      assert.ok(inspection.drafts.some(draft => draft.findings.some(item => item.id === concern.id)));
+      assert.equal(inspection.report.resolutions[0].id, concern.id);
+    }
+    assert.ok(functions.includes('page_request_with_concerns'));
+    assert.equal(functions.at(-1), 'acceptance_report');
   }
 }));
 
