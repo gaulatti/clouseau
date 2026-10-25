@@ -3,6 +3,13 @@
 // Ordered semantic anchors, not model-generated numbers. The controller owns
 // their numeric positions; the provider only selects a described condition.
 const RUBRICS = Object.freeze({
+  completeness: {
+    material_sources: ['The claimed completeness contradicts an explicit trusted inspection requirement or excludes required context without establishing it',
+      'Material behavior depends on unavailable or uninspected source',
+      'The source and dependency inventory leaves a material uncertainty',
+      'Most context is established but a necessary dependency remains unverified',
+      'All explicitly required and materially necessary sources are supplied and inspected, or a source-backed exclusion proves they do not apply; an unchanged path or test-only change cannot waive an explicit inspection requirement'],
+  },
   fit: {
     outcome: ['Unrelated outcome', 'Weak indirect connection to the accepted purpose', 'Adjacent outcome needing an unaccepted product choice', 'Supports part of an accepted outcome', 'Directly delivers or repairs an accepted outcome'],
     workflow: ['Unrelated workflow', 'Hypothetical future workflow', 'Adjacent workflow not established by requirements', 'Supports an established workflow indirectly', 'Directly supports an established or explicitly accepted workflow'],

@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
-const {casePassed, defectPacket, matchKnownDefect, protocolFingerprint, equivalentInputs, factualReplay} = require('../test/evaluate-acceptance.cjs');
+const {casePassed, defectPacket, matchKnownDefect, recoverGraded, protocolFingerprint, equivalentInputs, factualReplay} = require('../test/evaluate-acceptance.cjs');
 const {fixture, finding} = require('../test/fixtures/acceptance.cjs');
 const {validateReport, digest} = require('./acceptance.cjs');
 
@@ -37,6 +37,7 @@ test('qualification requires causal adjudication of the reference defect, not an
   assert.equal(casePassed(actual, result), false, 'a same-file blocker with a different cause does not qualify');
   result.known_defect_match.answer = {choice: 'matched', probabilities: {matched: 0.9, different: 0, uncertain: 0.1}};
   assert.equal(casePassed(actual, result), true);
+  result.decision = 'blocked_integrity'; assert.equal(casePassed(actual, result), true, 'integrity takes priority without removing the required actual defect finding');
   report.findings[0].cause = 'A different regression';
   assert.equal(casePassed(actual, result), false, 'adjudication cannot be reused for a different finding');
   result.decision = 'auto_approve'; assert.equal(casePassed(scenario, result), false);
@@ -45,6 +46,12 @@ test('qualification requires causal adjudication of the reference defect, not an
   assert.equal(casePassed(missing, result), false);
   report.coverage.dependencies.push({path: missing.unavailableSource, state: 'missing'});
   assert.equal(casePassed(missing, result), true);
+  report.coverage.dependencies = [];
+  const gate = report.gates.find(item => item.name === 'review_completeness'); gate.state = 'unresolved';
+  result.reviews[0].grading = {decisions: [{id: 'review_completeness', range: {min: 0, max: 1}}]};
+  assert.equal(casePassed(missing, result), true, 'independent completeness grading can fail closed despite an inspector omitting or excluding the dependency');
+  result.reviews[0].grading.decisions[0].range = {min: 1, max: 1};
+  assert.equal(casePassed(missing, result), false, 'an unrelated incomplete verdict does not qualify the required completeness audit');
 });
 
 test('known-defect matching sends the frozen reference and literal causal findings to a bounded separate adjudicator', async () => {
@@ -55,7 +62,11 @@ test('known-defect matching sends the frozen reference and literal causal findin
   try {
     const matched = await matchKnownDefect(scenario, result, {fetchImpl: async (url, request) => {
       assert.equal(url, 'https://api.typesafe.ai/v1/systemone');
-      const body = JSON.parse(request.body), state = JSON.parse(body.state);
+      const body = JSON.parse(request.body), state = body.state;
+      assert.equal(typeof state, 'object');
+      assert.equal(body.questions.match.type, 'choice');
+      assert.equal(typeof body.questions.match.instructions, 'string');
+      assert.equal(Object.hasOwn(body.questions.match, 'question'), false);
       assert.deepEqual(state.reference, scenario.requiredFinding);
       assert.equal(state.candidates[0].finding.cause, finding().cause);
       assert.ok(state.candidates[0].evidence.length);
@@ -71,10 +82,14 @@ test('recorded replay binds policy and evidence and cannot masquerade as live pr
   const root = path.join(__dirname, '..');
   const read = file => fs.readFileSync(path.join(root, file), 'utf8');
   const fingerprint = protocolFingerprint(read);
+  assert.equal(protocolFingerprint(file => read(file) + (file === 'test/evaluate-acceptance.cjs' ? '\n// transport repair' : ''), true), protocolFingerprint(read, true));
+  assert.notEqual(protocolFingerprint(file => read(file) + (file === 'src/acceptance-grading.cjs' ? '\n// review changed' : ''), true), protocolFingerprint(read, true));
+  assert.notEqual(protocolFingerprint(file => read(file) + (file === 'test/evaluate-acceptance.cjs' ? '\n// transport repair' : '')), fingerprint);
   assert.notEqual(protocolFingerprint(file => read(file) + (file === 'src/acceptance-ledger.cjs' ? '\n// history changed' : '')), fingerprint);
   assert.throws(() => protocolFingerprint(file => file === 'src/review-provider.cjs' ? '' : read(file)), /Cannot bind/);
   assert.equal(equivalentInputs({digest: 'old', sources: {verification: 'old', source: 'same'}}, {digest: 'new', sources: {verification: 'new', source: 'same'}}), true);
   assert.equal(equivalentInputs({sources: {source: 'old'}}, {sources: {source: 'changed'}}), false);
   assert.deepEqual(factualReplay({observations: []}, {}), []);
   assert.throws(() => factualReplay({observations: [{round: 0, role: 'examiner', transport: {raw: '{}'}, usage: []}]}, {examiner: 'model'}), /untruncated/);
+  assert.throws(() => recoverGraded({observations: []}, {digest: 'missing'}, 'routed'), /unique recorded grade/);
 });
