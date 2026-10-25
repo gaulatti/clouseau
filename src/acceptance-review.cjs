@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {FACTORS, GATES, MAX_CITATION_LINES, digest, validateFacts, validateReport} = require('./acceptance.cjs');
-const {additionalSources, proofCatalog} = require('./acceptance-sources.cjs');
+const {additionalSources, proofCatalog, resolveProof} = require('./acceptance-sources.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 const {requestJSON} = require('./review-provider.cjs');
 const {schemas} = require('./acceptance-schema.cjs');
@@ -77,14 +77,7 @@ function materialize(facts, snapshot) {
     if (Object.hasOwn(inventory, item.source)) item.source = inventory[item.source];
   }
   const catalog = new Map(proofCatalog(snapshot).map(entry => [entry.id, entry]));
-  const suppliedProof = id => {
-    if (catalog.has(id)) return catalog.get(id);
-    const coordinate = /^proof-(0|[1-9][0-9]*)-([1-9][0-9]*)$/.exec(id);
-    if (!coordinate) return undefined;
-    const line = Number(coordinate[2]);
-    return [...catalog.values()].find(entry => entry.id.startsWith(`proof-${coordinate[1]}-`) &&
-      entry.start <= line && line <= entry.end);
-  };
+  const suppliedProof = id => resolveProof(catalog, id);
   for (const item of [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])]) {
     if (item.state === 'missing' && !Object.hasOwn(item, 'evidence')) {
       item.evidence = [];

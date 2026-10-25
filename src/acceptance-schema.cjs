@@ -8,10 +8,10 @@ const enumeration = values => ({type: 'string', enum: values});
 const array = items => ({type: 'array', items});
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
 
-function schemas(snapshot) {
+function schemas(snapshot, {paged = false} = {}) {
   const catalog = proofCatalog(snapshot);
   const referenceRule = 'Select only the controller-supplied proof IDs. The controller owns the evidence register, exact source bytes and line ranges; never invent an alias.';
-  const proof = enumeration(catalog.map(entry => entry.id));
+  const proof = paged ? {type: 'string', pattern: '^proof-(0|[1-9][0-9]*)-[1-9][0-9]*$'} : enumeration(catalog.map(entry => entry.id));
   const citations = {...array(proof), description: referenceRule};
   const inspectedCitations = {...object({primary: proof, additional: array(proof)}), description:
     `${referenceRule} Select one primary proof and any distinct additional proofs. The controller preserves these citations without inventing evidence.`};
@@ -38,7 +38,7 @@ function schemas(snapshot) {
       units: {...array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string,
         fit: group('fit'), need, excess: group('excess'), alternative: string})),
         description: 'Identify material outcomes and engineering choices. Account for accurate companion documentation of the same behavior within its accepted outcome, not as a separate feature needing a request for prose. Independently assess new promises, unrelated documentation and material mechanisms.'},
-      findings: array(object({id: string, title: string, anchor: enumeration(catalog.filter(entry => anchors.includes(entry.source)).map(entry => entry.id)),
+      findings: array(object({id: string, title: string, anchor: paged ? proof : enumeration(catalog.filter(entry => anchors.includes(entry.source)).map(entry => entry.id)),
         cause: string, trigger: string, consequence: string,
         obligation: string, evidence: citations, factors: group('defect'), blast_radius: {type: 'number', minimum: 1, maximum: 10},
         opportunity: object({mechanical: boolean, beneficial: boolean, within_scope: boolean, verified: boolean}), repair_paths: paths})),

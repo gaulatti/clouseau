@@ -15,6 +15,15 @@ function proofCatalog(snapshot) {
   });
 }
 
+function resolveProof(catalog, id) {
+  if (catalog.has(id)) return catalog.get(id);
+  const coordinate = /^proof-(0|[1-9][0-9]*)-([1-9][0-9]*)$/.exec(id);
+  if (!coordinate) return undefined;
+  const line = Number(coordinate[2]);
+  return [...catalog.values()].find(entry => entry.id.startsWith(`proof-${coordinate[1]}-`) &&
+    entry.start <= line && line <= entry.end);
+}
+
 function safePath(value) {
   return typeof value === 'string' && value.length > 0 && value.length < 500 &&
     !path.posix.isAbsolute(value) && !value.includes('\\') && !value.includes('\0') &&
@@ -102,4 +111,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {proofCatalog, resolveProof, safePath, refresh, readSource, collectSnapshot, additionalSources};
