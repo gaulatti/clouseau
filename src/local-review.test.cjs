@@ -79,7 +79,7 @@ test('incomplete or nonconverging local investigations stop without grading or i
   await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => {calls++; return {value:
     {kind: 'source_request', report: null, request_sources: ['README.md']}};},
   addSources: async () => {requests++;}}), /budget/);
-  assert.equal(requests, 3); assert.equal(calls, 4);
+  assert.equal(requests, 8); assert.equal(calls, 9);
   const g = await fixture();
   const requested = new Set(); let extra = 0;
   await assert.rejects(localReview({snapshot: g.snapshot, ask: async task => {
@@ -98,25 +98,39 @@ test('incomplete or nonconverging local investigations stop without grading or i
   }}), /did not converge/);
 });
 
-test('the final allowed source batch is inspected before a report, without granting a fourth batch', async () => {
+test('the eighth and final source batch is inspected before a report, without granting a ninth batch', async () => {
   const f = await fixture(); let reads = 0; let calls = 0;
   const result = await localReview({snapshot: f.snapshot, ask: async task => {
     if (task.phase === 'investigation') {
       calls++;
-      if (task.role === 'examiner' && reads < 3) return {value: {kind: 'source_request', report: null,
+      if (task.role === 'examiner' && reads < 8) return {value: {kind: 'source_request', report: null,
         request_sources: [`src/dependency-${reads}.js`]}, provenance: {fixture: true}};
       const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
-      assert.match(packet.evidence.sources['dependency-3'].numbered_lines, /last required dependency/);
+      assert.match(packet.evidence.sources['dependency-8'].numbered_lines, /last required dependency/);
     }
     return f.ask(task);
   }, addSources: async paths => {
     assert.deepEqual(paths, [`src/dependency-${reads}.js`]); reads++;
     f.snapshot.sources[`dependency-${reads}`] = {authority: 'untrusted', kind: 'source', path: paths[0],
-      ref: f.snapshot.head_sha, content: reads === 3 ? 'last required dependency' : 'earlier dependency'};
+      ref: f.snapshot.head_sha, content: reads === 8 ? 'last required dependency' : 'earlier dependency'};
     refresh(f.snapshot);
   }});
-  assert.equal(result.decision, 'auto_approve'); assert.equal(reads, 3); assert.equal(calls, 5);
+  assert.equal(result.decision, 'auto_approve'); assert.equal(reads, 8); assert.equal(calls, 10);
   assert.ok(result.reviews.every(review => review.report.snapshot === f.snapshot.digest));
+});
+
+test('the larger batch allowance still rejects cumulative oversized evidence before grading', async () => {
+  const f = await fixture(); let reads = 0; let grading = 0;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase === 'grading') grading++;
+    return {value: {kind: 'source_request', report: null, request_sources: [`src/context-${reads}.js`]}};
+  }, addSources: async paths => {
+    reads++;
+    f.snapshot.sources[`context-${reads}`] = {authority: 'untrusted', kind: 'source', path: paths[0],
+      ref: f.snapshot.head_sha, content: 'x'.repeat(230000)};
+    refresh(f.snapshot);
+  }}), /Complete review evidence exceeds the source budget/);
+  assert.equal(reads, 4); assert.equal(grading, 0);
 });
 
 test('missing atomic grades stop local acceptance and uncertainty preserves an incomplete verdict', async () => {
