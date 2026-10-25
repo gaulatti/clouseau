@@ -178,3 +178,18 @@ test('private signing material in process output never becomes review evidence',
   assert.throws(() => executeVerification({...f, config: {...f.config, verification}}), error =>
     /Private signing material/.test(error.message) && !error.message.includes('fictional non-key fixture'));
 }));
+
+
+test('opaque native artifact I/O errors remain unavailable observations rather than a fabricated report', t => fixture(f => {
+  fs.writeFileSync(f.filename, JSON.stringify(f.report()));
+  const read = fs.readFileSync;
+  t.mock.method(fs, 'readFileSync', (filename, ...args) => {
+    if (filename === f.filename) throw new Error('fixture opaque I/O failure');
+    return read(filename, ...args);
+  });
+  const result = executeVerification(f);
+  assert.equal(result.coverage.status, 'unavailable');
+  assert.equal(result.coverage.error, 'Coverage artifact is unavailable');
+  assert.equal(result.report_digest, null);
+  assert.equal(result.exact_coverage, null);
+}));

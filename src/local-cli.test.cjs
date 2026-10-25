@@ -116,6 +116,14 @@ test('v2 local verification binds every native artifact and allows only aggregat
   assert.equal(executeVerification({directory: f.directory, config}).coverage.status, 'below_threshold');
   assert.deepEqual(executeVerification({directory: f.directory,
     config: {...config, coverage: [config.coverage[1]]}}).exact_coverage, {lines: [1, 0], branches: [0, 0]});
+  fs.unlinkSync(second);
+  const incomplete = executeVerification({directory: f.directory, config});
+  assert.equal(incomplete.coverage.status, 'unavailable');
+  assert.equal(incomplete.exact_coverage, null);
+  assert.equal(incomplete.coverage_reports[0].report_digest, digest(fs.readFileSync(first, 'utf8')));
+  assert.equal(incomplete.coverage_reports[1].report_digest, null);
+  assert.deepEqual(incomplete.coverage_reports.map(part => part.exact_coverage), [null, null],
+    'a missing component cannot acquire invented counts or a passing aggregate');
   let calls = 0;
   assert.throws(() => executeVerification({directory: f.directory,
     config: {...config, coverage: []}, run: () => {calls++;}}), /Invalid local-only/);
