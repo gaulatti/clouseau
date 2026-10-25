@@ -130,7 +130,20 @@ function marker(body) {
 
 async function loadReceipt({github, repo, ref}) {
   requireReceipt(sha(ref), 'immutable receipt reference required');
-  const {data} = await github.rest.repos.getContent({...repo, ref, path: 'clouseau-review.json'});
+  let {data} = await github.rest.repos.getContent({...repo, ref, path: 'clouseau-review.json'});
+  if (data.encoding === 'none') {
+    requireReceipt(data.type === 'file' && sha(data.sha) && Number.isSafeInteger(data.size) &&
+      data.size >= 0 && data.size <= 2000000, 'complete receipt artifact unavailable');
+    const metadata = data;
+    ({data} = await github.rest.git.getBlob({...repo, file_sha: metadata.sha}));
+    requireReceipt(data.sha === metadata.sha && data.size === metadata.size,
+      'receipt blob differs from immutable artifact');
+    requireReceipt(data.encoding === 'base64' && typeof data.content === 'string', 'complete receipt blob unavailable');
+    const bytes = Buffer.from(data.content, 'base64');
+    requireReceipt(bytes.length === metadata.size && crypto.createHash('sha1')
+      .update(`blob ${bytes.length}\0`).update(bytes).digest('hex') === metadata.sha,
+    'receipt blob content differs from immutable artifact');
+  }
   requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 2000000,
     'complete receipt artifact unavailable');
   return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));

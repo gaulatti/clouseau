@@ -330,3 +330,11 @@ concern, disposition or score is truncated to fit transport. Oversized Codex
 input fails before invocation. Failed harness exits retain bounded stderr in
 private `failure.json` beside the snapshot and journal; public errors show only
 the diagnostic digest and evidence path, never the private stderr or environment.
+
+CI accepts complete receipt artifacts up to the existing 2,000,000-byte limit.
+When the [GitHub Contents API](https://docs.github.com/en/rest/repos/contents#get-repository-content)
+omits inline content above 1 MB, CI reads the Git blob named by that immutable
+artifact's metadata. It checks the exact blob identity, byte count and Git object
+hash before the normal signature, source, policy and engine verification.
+Unavailable, oversized or substituted content holds approval without AI fallback;
+this transport does not grant trust or change receipt compatibility.
