@@ -167,12 +167,13 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
   const result = await localReview({...collected, ask: async task => {
+    fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started',
       request_digest: digest(task)}) + '\n', {mode: 0o600});
     const response = await ask({...task, harness: args.harness || 'codex'});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
     return response;
-  }});
+  }}).catch(error => {error.message += `; preserved review evidence: ${cache}`; throw error;});
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';

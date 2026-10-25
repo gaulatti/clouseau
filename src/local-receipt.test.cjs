@@ -160,3 +160,29 @@ test('signed engine source requests are checked against accepted engine bytes an
   snapshot.sources.engine = source;
   await assert.rejects(verifySources({...options, reviewerSha: undefined}), /invalid frozen engine/);
 });
+
+test('historical bootstrap evidence is verified from the fixed public repository without changing the accepted engine', async () => {
+  const f = await fixture(); const snapshot = structuredClone(f.snapshot); const old = 'f'.repeat(40);
+  const content = 'Historical bootstrap text, not executable review logic.';
+  const source = {path: `.clouseau-ci/scripts/resolve/action.yml@${old}`, ref: old, authority: 'untrusted', kind: 'source', content};
+  snapshot.sources.bootstrap = source;
+  const original = f.github.rest.repos.getContent; let response = {encoding: 'base64', content: Buffer.from(content).toString('base64'), size: Buffer.byteLength(content)};
+  f.github.rest.repos.getContent = async args => {
+    if (args.owner !== 'gaulatti') return original(args);
+    assert.deepEqual(args, {owner: 'gaulatti', repo: 'clouseau', ref: old, path: 'scripts/resolve/action.yml'});
+    return {data: response};
+  };
+  const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
+    repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
+    files: [{filename: 'src/upload.test.js', status: 'modified'}], reviewerSha: f.issue.reviewerSha};
+  await verifySources(options);
+  assert.equal(options.reviewerSha, f.issue.reviewerSha);
+  snapshot.sources.bootstrap = {...source, ref: 'd'.repeat(40)};
+  await assert.rejects(verifySources(options), /invalid frozen engine/);
+  snapshot.sources.bootstrap = {...source, content: 'substituted'};
+  await assert.rejects(verifySources(options), /differs from the accepted engine/);
+  snapshot.sources.bootstrap = source;
+  response = {...response, size: 300001}; await assert.rejects(verifySources(options), /historical engine evidence unavailable/);
+  response = {encoding: 'base64', content: Buffer.from('binary\0').toString('base64'), size: 7};
+  await assert.rejects(verifySources(options), /binary historical engine/);
+});

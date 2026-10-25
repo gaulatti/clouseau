@@ -166,13 +166,23 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       continue;
     }
     if (source.path.startsWith('.clouseau-ci/')) {
-      const relative = source.path.slice('.clouseau-ci/'.length);
-      requireReceipt(sha(reviewerSha) && source.ref === reviewerSha && safePath(relative) &&
+      let reference;
+      try {reference = require('./central-version.cjs').engineEvidence(source.path, reviewerSha);}
+      catch {fail('invalid frozen engine evidence');}
+      const {relative, ref} = reference;
+      requireReceipt(source.ref === ref &&
         source.authority === 'untrusted' && source.kind === 'source', 'invalid frozen engine evidence');
       const root = require('node:path').join(__dirname, '..');
       // The action has already checked this source against the run digest.
       // Git-free distributions compare the same file bytes without invoking Git.
-      const content = require('node:fs').readFileSync(require('node:path').join(root, relative), 'utf8');
+      let content;
+      if (ref === reviewerSha) content = require('node:fs').readFileSync(require('node:path').join(root, relative), 'utf8');
+      else {
+        const {data} = await github.rest.repos.getContent({owner: 'gaulatti', repo: 'clouseau', ref, path: relative});
+        requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 300000, 'historical engine evidence unavailable');
+        content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
+        requireReceipt(!content.includes('\0'), 'binary historical engine evidence');
+      }
       requireReceipt(content === source.content, 'signed engine evidence differs from the accepted engine');
       continue;
     }

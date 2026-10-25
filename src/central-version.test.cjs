@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
-const {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine} = require('./central-version.cjs');
+const {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust} = require('./local-receipt.cjs');
@@ -166,3 +166,60 @@ test('a trusted frozen workflow can migrate legacy digest enrollment without acc
 });
 
 
+
+test('immutable historical engine evidence is text, never an executed or selected engine', () => {
+  assert.deepEqual(engineEvidence('.clouseau-ci/src/policy.cjs', second), {relative: 'src/policy.cjs', ref: second});
+  assert.deepEqual(engineEvidence(`.clouseau-ci/src/policy.cjs@${first}`, second), {relative: 'src/policy.cjs', ref: first});
+  for (const [filename, revision] of [['src/policy.cjs', second], ['.clouseau-ci/src/policy.cjs', null],
+    ['.clouseau-ci/../outside', second], ['.clouseau-ci/src/policy.cjs@main', second]]) assert.throws(() => engineEvidence(filename, revision));
+  assert.match(readEngineEvidence('.clouseau-ci/src/local-version.cjs', second), /function engineDigest/);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engine-history-'));
+  const git = args => cp.execFileSync('git', ['-C', root, ...args], {encoding: 'utf8'}).trim();
+  try {
+    fs.mkdirSync(path.join(root, 'scripts')); fs.writeFileSync(path.join(root, 'scripts/bootstrap.cjs'), 'throw Error("old text must never execute");');
+    git(['init', '-q']); git(['add', '.']); git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'old bootstrap']);
+    const old = git(['rev-parse', 'HEAD']);
+    fs.writeFileSync(path.join(root, 'scripts/bootstrap.cjs'), 'current source');
+    git(['add', '.']); git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'new engine']);
+    const current = git(['rev-parse', 'HEAD']);
+    assert.equal(readEngineEvidence('.clouseau-ci/scripts/bootstrap.cjs', current, root), 'current source');
+    assert.equal(readEngineEvidence(`.clouseau-ci/scripts/bootstrap.cjs@${old}`, current, root), 'throw Error("old text must never execute");');
+    assert.equal(git(['rev-parse', 'HEAD']), current);
+    assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts@${old}`, current, root), /must be a file/);
+    for (const bytes of [Buffer.from([255]), Buffer.from('binary\0source'), Buffer.alloc(300001, 'x')]) {
+      fs.writeFileSync(path.join(root, 'invalid'), bytes);
+      assert.throws(() => readEngineEvidence('.clouseau-ci/invalid', current, root), /encoded data|Binary or oversized/);
+    }
+  } finally {fs.rmSync(root, {recursive: true, force: true});}
+});
+
+test('uncached historical source fetch is bounded to the fixed public repository and never falls back to current bytes', t => {
+  const calls = []; let offline = false;
+  t.mock.method(cp, 'execFileSync', (program, args, options) => {
+    assert.equal(program, 'git'); calls.push(args);
+    if (args.includes('-e')) throw new Error('Object absent');
+    if (args.includes('fetch')) {
+      assert.deepEqual(args, ['-C', '/fixture', 'fetch', '--quiet', '--no-write-fetch-head', '--no-tags', '--depth=1', 'https://github.com/gaulatti/clouseau.git', first]);
+      assert.equal(options.timeout, 30000); if (offline) throw new Error('Public source unavailable'); return Buffer.alloc(0);
+    }
+    if (args.includes('-t')) return 'blob\n';
+    assert.equal(args.at(-1), `${first}:scripts/resolve/action.yml`); return Buffer.from('actual immutable bootstrap');
+  });
+  assert.equal(readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), 'actual immutable bootstrap');
+  assert.equal(calls.filter(args => args.includes('fetch')).length, 1);
+  offline = true;
+  assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), /Public source unavailable/);
+});
+
+test('changed resolver wiring gets at most eight immediate shared source files without removing any changed source', () => {
+  const workflow = '.github/workflows/ci.yml';
+  const snapshot = {files: [{path: 'README.md', head_source: 'readme'}, {path: '.github/workflows/removed.yml'}, {path: workflow, head_source: 'ci'}],
+    sources: {ci: {content: `      - uses: gaulatti/clouseau/scripts/resolve@${first}\n        uses: 'gaulatti/clouseau/scripts/resolve@${first}'\n        uses: gaulatti/clouseau/scripts/resolve@${second}\n`}}};
+  const before = structuredClone(snapshot); const paths = engineContext(snapshot);
+  assert.equal(paths.length, 8); assert.equal(new Set(paths).size, 8);
+  assert.ok(paths.includes(`.clouseau-ci/scripts/resolve/action.yml@${first}`));
+  assert.ok(paths.includes('.clouseau-ci/src/acceptance-controller.cjs'));
+  assert.deepEqual(snapshot, before);
+  snapshot.sources.ci.content = `# uses: gaulatti/clouseau/scripts/resolve@${first}\n  uses: other/repo/scripts/resolve@${first}`;
+  assert.deepEqual(engineContext(snapshot), []);
+});

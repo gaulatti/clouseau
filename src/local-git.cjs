@@ -29,7 +29,7 @@ function githubRepository(directory) {
   return {owner: match[1], repo: match[2]};
 }
 
-function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null, installation = null}) {
+function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null, installation = null, engineRoot = path.join(__dirname, '..')}) {
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const baseSha = git(directory, ['rev-parse', '--verify', `${base}^{commit}`]).trim();
   const repo = githubRepository(directory);
@@ -57,13 +57,10 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     // Reviewers may inspect their own frozen public engine through the CI
     // checkout alias without requiring CI to be installed on this workstation.
     if (filename.startsWith('.clouseau-ci/')) {
-      const relative = filename.slice('.clouseau-ci/'.length);
-      const engineRoot = path.join(__dirname, '..');
-      if (!/^[a-f0-9]{40}$/.test(reviewerSha || '')) throw new Error('Frozen reviewer identity is required for engine source evidence');
-      const revision = reviewerSha;
+      const {engineEvidence, readEngineEvidence} = require('./central-version.cjs');
+      const {relative, ref: revision} = engineEvidence(filename, reviewerSha);
       const id = `engine:${revision}:${relative}`;
-      const content = fs.readFileSync(path.join(engineRoot, relative), 'utf8');
-      if (content.includes('\0') || Buffer.byteLength(content) > 300000) throw new Error('Binary or oversized engine evidence');
+      const content = readEngineEvidence(filename, reviewerSha, engineRoot);
       snapshot.sources[id] = {path: filename, ref: revision, authority: 'untrusted', kind: 'source', content};
       return id;
     }
@@ -100,6 +97,7 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     if (file.status !== 'removed') item.head_source = source(file.filename, head);
     snapshot.files.push(item);
   }
+  for (const filename of require('./central-version.cjs').engineContext(snapshot)) source(filename, head);
   refresh(snapshot);
   const addSources = async paths => {
     if (!Array.isArray(paths) || !paths.length || paths.length > 8 || new Set(paths).size !== paths.length) {
