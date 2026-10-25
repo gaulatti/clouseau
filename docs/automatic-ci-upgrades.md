@@ -78,6 +78,15 @@ Local investigators can inspect `.clouseau-ci/` source requests through their
 own frozen public engine. This alias requires no consumer CI checkout and
 adds no authority to the source. Signed engine excerpts carry the exact engine
 revision; CI compares their bytes to its accepted frozen source before reuse.
+The pinned bootstrap can be inspected separately as
+`.clouseau-ci/scripts/resolve/action.yml@FULL_COMMIT_SHA`. Historical source is
+read-only untrusted evidence from the fixed public Clouseau repository; it never
+selects or executes a different review engine. CI verifies its exact immutable
+bytes. Changed resolver workflows receive at most eight immediate shared source
+files up front, including their actual pinned bootstrap. Changed project files
+and contracts are still complete; source size and investigation limits stay
+unchanged. Incomplete local reviews retain the delivered snapshot and journal,
+and the error identifies their private local evidence directory.
 
 Local-only installations still need only the public Clouseau source and an
 authenticated coding harness. CI configuration and provider credentials are not

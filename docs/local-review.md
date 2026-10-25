@@ -280,6 +280,15 @@ still avoids another local review. Negative evidence and causal findings remain
 retained; a different SHA with identical engine bytes cannot resample an unchanged
 negative judgment.
 
+When a resolver workflow changes, the runner supplies its immediate shared
+dependencies and its actual pinned bootstrap as additional untrusted context.
+Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
+immutable public bytes without switching the frozen review engine or granting
+contract authority. CI checks the same bytes before receipt reuse. The ordinary
+source budgets remain unchanged. Failed investigations retain `snapshot.json`
+and `observations.jsonl`; their error gives the evidence directory. These files
+contain review evidence, never the signing identity.
+
 Automatic central-source installations retain signer enrollment in protected base
 configuration and authorize protected Clouseau main instead of a recurring
 reviewer digest. An engine mismatch blocks without a paid fallback: refresh,

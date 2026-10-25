@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
 const {engineDigest} = require('./local-version.cjs');
+const {safePath} = require('./acceptance-sources.cjs');
 const SOURCE = Object.freeze({repository: 'gaulatti/clouseau', ref: 'refs/heads/main'});
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
@@ -69,4 +70,42 @@ function acceptsEngine(trust, engine) {
     frozen || Boolean(engine && trust.reviewer_digest === engine.digest);
 }
 
-module.exports = {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine};
+function engineEvidence(filename, reviewerSha) {
+  if (!sha(reviewerSha) || !filename.startsWith('.clouseau-ci/')) throw new Error('Frozen reviewer identity is required for engine source evidence');
+  const input = filename.slice('.clouseau-ci/'.length);
+  const at = input.lastIndexOf('@');
+  const relative = at < 0 ? input : input.slice(0, at);
+  const ref = at < 0 ? reviewerSha : input.slice(at + 1);
+  if (!safePath(relative) || !sha(ref)) throw new Error('Engine evidence requires a safe path and immutable commit');
+  return {relative, ref};
+}
+
+function readEngineEvidence(filename, reviewerSha, root = path.join(__dirname, '..')) {
+  const {relative, ref} = engineEvidence(filename, reviewerSha);
+  let bytes;
+  if (ref === reviewerSha) bytes = fs.readFileSync(path.join(root, relative));
+  else {
+    try {cp.execFileSync('git', ['-C', root, 'cat-file', '-e', `${ref}^{commit}`], {stdio: 'ignore'});}
+    catch {cp.execFileSync('git', ['-C', root, 'fetch', '--quiet', '--no-write-fetch-head', '--no-tags', '--depth=1', `https://github.com/${SOURCE.repository}.git`, ref], {stdio: 'pipe', timeout: 30000});}
+    if (cp.execFileSync('git', ['-C', root, 'cat-file', '-t', `${ref}:${relative}`], {encoding: 'utf8'}).trim() !== 'blob') throw new Error('Engine evidence must be a file');
+    bytes = cp.execFileSync('git', ['-C', root, 'show', `${ref}:${relative}`], {maxBuffer: 300000});
+  }
+  const content = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+  if (content.includes('\0') || bytes.length > 300000) throw new Error('Binary or oversized engine evidence');
+  return content;
+}
+
+function engineContext(snapshot) {
+  const pins = new Set();
+  for (const file of snapshot.files) {
+    if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(file.path) || !file.head_source) continue;
+    const content = snapshot.sources[file.head_source].content;
+    for (const match of content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau\/scripts\/resolve@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)) pins.add(match[1]);
+  }
+  if (!pins.size) return [];
+  const current = ['action.yml', 'src/central-version.cjs', 'src/config.cjs', 'src/policy.cjs', 'src/acceptance-controller.cjs', 'src/local-receipt.cjs'];
+  return [...current.map(filename => `.clouseau-ci/${filename}`), ...[...pins].flatMap(ref =>
+    ['scripts/resolve/action.yml', 'src/central-version.cjs'].map(filename => `.clouseau-ci/${filename}@${ref}`))].slice(0, 8);
+}
+
+module.exports = {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext};
