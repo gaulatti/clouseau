@@ -1,0 +1,12 @@
+{
+  "name": "@babel/parser",
+  "version": "7.29.0",
+  "upstream_tarball": "https://registry.npmjs.org/@babel/parser/-/parser-7.29.0.tgz",
+  "upstream_integrity": "sha512-IyDgFV5GeDUVX4YdF/3CPULtVGSXXMLh1xVIgdCgxApktqnQV0r7/8Nqthg+8YLGaAtdyIlo2qIdZrbCv4+7ww==",
+  "file": "index.cjs",
+  "upstream_file": "package/lib/index.js",
+  "sha256": "c09a452686d62e1b9b7d68f8e1606144cb2c422586e28fc533f5d1b56a51cbf5",
+  "license": "MIT",
+  "runtime_dependencies": [],
+  "source": "Unmodified dependency-free CommonJS parser bundle; no Babel configuration or plugins are executed."
+}
