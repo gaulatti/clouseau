@@ -121,6 +121,13 @@ provider qualification against the frozen large consumers is required by
 [#65](https://github.com/gaulatti/clouseau/issues/65); this implementation checkpoint
 has not completed that qualification. It is not a shipped acceptance claim.
 
+The existing owner-authorized replacement route freezes the guarded candidate's
+SHA/digest in both assessment and write jobs. Generated `work/` acceptance
+artifacts are ignored as runtime data, so downloading the native record does not
+make that engine's Git checkout dirty. The unchanged engine hash and clean-source
+checks still reject substituted, modified or unrelated untracked code; artifact
+authentication and all technical/approval gates remain mandatory.
+
 The read-only central qualification is an explicit `workflow_dispatch` input,
 `qualify_large_sources`, available only to the repository owner in this repository.
 It first requires native verification and then checks out the execution's exact

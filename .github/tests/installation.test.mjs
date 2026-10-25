@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
+import {readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, copyFileSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {execFileSync} from 'node:child_process';
+import {createRequire} from 'node:module';
 import {runInNewContext} from 'node:vm';
 import test from 'node:test';
 import {data, Evaluator, Lexer, Parser} from '@actions/expressions';
 import {parse} from 'yaml';
 import path from 'node:path';
+const require = createRequire(import.meta.url);
+const {identifyEngine, verifyEngine} = require('../../src/central-version.cjs');
 
 const workflow = parse(readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8'));
 const prepare = workflow.jobs['prepare-installation'];
@@ -139,4 +144,31 @@ test('authorized installation assessment and writer bind the same guarded candid
   selected.github.event_name = 'pull_request_target';
   assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_SHA, selected).coerceString(), 'c'.repeat(40));
   assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_DIGEST, selected).coerceString(), 'd'.repeat(64));
+});
+
+test('the actual installation artifact path stays outside source identity while dirty or substituted engine code still fails', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'clouseau-installation-artifact-'));
+  const git = (...args) => execFileSync('git', ['-C', root, ...args], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();
+  try {
+    for (const folder of ['src', 'scripts', 'skills', 'policy', 'bin']) mkdirSync(path.join(root, folder));
+    copyFileSync(new URL('../../.gitignore', import.meta.url), path.join(root, '.gitignore'));
+    writeFileSync(path.join(root, 'action.yml'), 'frozen native artifact fixture\n');
+    writeFileSync(path.join(root, 'src/local-version.cjs'), `module.exports = require(${JSON.stringify(require.resolve('../../src/local-version.cjs'))});\n`);
+    git('init', '-q'); git('add', '.');
+    git('-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'test: freeze native installation fixture');
+    const revision = git('rev-parse', 'HEAD'); const engine = identifyEngine(revision, root);
+    assert.equal(workflow.jobs['approve-and-merge'].steps.find(step => step.name === "Load this run's acceptance record").with.path, 'work');
+    mkdirSync(path.join(root, 'work'));
+    writeFileSync(path.join(root, 'work/clouseau-acceptance.json'), '{"fixture_only":true}\n');
+    assert.deepEqual(identifyEngine(revision, root), engine);
+    assert.deepEqual(verifyEngine(engine, root), engine);
+    assert.equal(git('status', '--porcelain'), '');
+    writeFileSync(path.join(root, 'unexpected.cjs'), 'unexpected source\n');
+    assert.throws(() => identifyEngine(revision, root), /Uncommitted or untracked/);
+    rmSync(path.join(root, 'unexpected.cjs'));
+    writeFileSync(path.join(root, 'action.yml'), 'substituted engine\n');
+    assert.throws(() => verifyEngine(engine, root), /differs/);
+    assert.throws(() => identifyEngine(revision, root), /Uncommitted or untracked/);
+    assert.throws(() => identifyEngine('f'.repeat(40), root), /source differs/);
+  } finally {rmSync(root, {recursive: true, force: true});}
 });
