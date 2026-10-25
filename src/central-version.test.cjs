@@ -211,15 +211,27 @@ test('uncached historical source fetch is bounded to the fixed public repository
   assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), /Public source unavailable/);
 });
 
-test('changed resolver wiring gets at most eight immediate shared source files without removing any changed source', () => {
+test('resolver review supplies observed shared dependencies and actual legacy source, bounded to 32 context files', () => {
   const workflow = '.github/workflows/ci.yml';
-  const snapshot = {files: [{path: 'README.md', head_source: 'readme'}, {path: '.github/workflows/removed.yml'}, {path: workflow, head_source: 'ci'}],
-    sources: {ci: {content: `      - uses: gaulatti/clouseau/scripts/resolve@${first}\n        uses: 'gaulatti/clouseau/scripts/resolve@${first}'\n        uses: gaulatti/clouseau/scripts/resolve@${second}\n`}}};
+  const snapshot = {files: [{path: 'README.md', head_source: 'readme'}, {path: '.github/workflows/removed.yml'},
+    {path: workflow, head_source: 'ci', base_source: 'old'}], sources: {
+    old: {content: `      - uses: gaulatti/clouseau@${second}\n`},
+    ci: {content: `      - uses: gaulatti/clouseau/scripts/resolve@${first}\n        uses: 'gaulatti/clouseau/scripts/resolve@${first}'\n`}}};
   const before = structuredClone(snapshot); const paths = engineContext(snapshot);
-  assert.equal(paths.length, 8); assert.equal(new Set(paths).size, 8);
+  assert.equal(paths.length, 28); assert.equal(new Set(paths).size, 28);
+  for (const filename of ['src/acceptance-controller.test.cjs', 'src/local-review.cjs', 'test/automatic-upgrade-contract.mjs']) {
+    assert.ok(paths.includes(`.clouseau-ci/${filename}`));
+  }
   assert.ok(paths.includes(`.clouseau-ci/scripts/resolve/action.yml@${first}`));
-  assert.ok(paths.includes('.clouseau-ci/src/acceptance-controller.cjs'));
+  assert.ok(paths.includes(`.clouseau-ci/src/local-receipt.cjs@${second}`));
+  assert.ok(!paths.includes(`.clouseau-ci/src/central-version.cjs@${second}`));
+  assert.ok(!paths.includes('.clouseau-ci/src/wiki.cjs'));
   assert.deepEqual(snapshot, before);
+  snapshot.sources.ci.content += "        run: require('./.clouseau-ci/src/wiki-git.cjs')\n";
+  assert.ok(engineContext(snapshot).includes('.clouseau-ci/src/wiki.cjs'));
+  assert.equal(engineContext(snapshot).length, 30);
+  snapshot.sources.ci.content += Array.from({length: 10}, (_, i) => `      - uses: gaulatti/clouseau/scripts/resolve@${i.toString().repeat(40)}\n`).join('');
+  assert.equal(engineContext(snapshot).length, 32);
   snapshot.sources.ci.content = `# uses: gaulatti/clouseau/scripts/resolve@${first}\n  uses: other/repo/scripts/resolve@${first}`;
   assert.deepEqual(engineContext(snapshot), []);
 });

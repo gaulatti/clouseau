@@ -96,16 +96,30 @@ function readEngineEvidence(filename, reviewerSha, root = path.join(__dirname, '
 }
 
 function engineContext(snapshot) {
-  const pins = new Set();
+  const pins = new Set(); const legacy = new Set(); let wiki = false;
   for (const file of snapshot.files) {
     if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(file.path) || !file.head_source) continue;
     const content = snapshot.sources[file.head_source].content;
+    if (content.includes('.clouseau-ci/src/wiki-git.cjs')) wiki = true;
     for (const match of content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau\/scripts\/resolve@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)) pins.add(match[1]);
+    for (const source of [file.base_source, file.head_source].filter(Boolean)) {
+      for (const match of snapshot.sources[source].content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)) legacy.add(match[1]);
+    }
   }
   if (!pins.size) return [];
-  const current = ['action.yml', 'src/central-version.cjs', 'src/config.cjs', 'src/policy.cjs', 'src/acceptance-controller.cjs', 'src/local-receipt.cjs'];
+  // These are the actual source/test dependencies requested by the bounded
+  // consumer installation investigations, not another executable engine.
+  const current = ['action.yml', 'src/central-version.cjs', 'src/config.cjs', 'src/policy.cjs',
+    'src/acceptance-controller.cjs', 'src/local-receipt.cjs', 'test/automatic-upgrade-contract.mjs',
+    'src/local-version.cjs', 'src/codeowners.cjs', 'src/merge-protection.cjs', 'src/central-version.test.cjs',
+    'src/local-receipt.test.cjs', 'src/codeowners.test.cjs', 'src/acceptance-controller.test.cjs',
+    'test/local-review-fixture.cjs', 'src/local-review.cjs', 'src/acceptance-sources.cjs', 'src/record-transport.cjs',
+    'src/provider.cjs', 'src/review-provider.cjs', 'src/acceptance.cjs', 'src/acceptance-review.cjs',
+    ...(wiki ? ['src/wiki-git.cjs', 'src/wiki.cjs'] : [])];
   return [...current.map(filename => `.clouseau-ci/${filename}`), ...[...pins].flatMap(ref =>
-    ['scripts/resolve/action.yml', 'src/central-version.cjs'].map(filename => `.clouseau-ci/${filename}@${ref}`))].slice(0, 8);
+    ['scripts/resolve/action.yml', 'src/central-version.cjs'].map(filename => `.clouseau-ci/${filename}@${ref}`)),
+    ...[...legacy].flatMap(ref => ['action.yml', 'src/config.cjs', 'src/policy.cjs', 'src/local-receipt.cjs']
+      .map(filename => `.clouseau-ci/${filename}@${ref}`))].slice(0, 32);
 }
 
 module.exports = {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext};

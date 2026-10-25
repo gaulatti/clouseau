@@ -280,8 +280,10 @@ still avoids another local review. Negative evidence and causal findings remain
 retained; a different SHA with identical engine bytes cannot resample an unchanged
 negative judgment.
 
-When a resolver workflow changes, the runner supplies its immediate shared
-dependencies and its actual pinned bootstrap as additional untrusted context.
+When a resolver workflow changes, the runner supplies at most 32 observed shared
+source/test dependencies, its actual pinned bootstrap and the legacy action
+boundary as additional untrusted context. Wiki source is included only when the
+changed workflow invokes it.
 Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
 immutable public bytes without switching the frozen review engine or granting
 contract authority. CI checks the same bytes before receipt reuse. The ordinary
