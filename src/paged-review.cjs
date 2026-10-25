@@ -13,10 +13,12 @@ const {createSourceView, prepareSourcePages, recordSourcePages, sourceExposure, 
 
 const MAX_SOURCE_BATCHES = 8;
 const MAX_PROMPT_BYTES = LIMITS.prompt_bytes;
+const MAX_OBSERVATION_BYTES = LIMITS.page_bytes;
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
 const array = items => ({type: 'array', items});
 const nullable = schema => ({anyOf: [schema, {type: 'null'}]});
-const shortText = {type: 'string', pattern: '^[\\s\\S]{0,2000}$'};
+const boundedText = maximum => ({type: 'string', pattern: `^[\\s\\S]{0,${maximum}}$`});
+const shortText = boundedText(2000);
 const requirePage = (condition, message) => {
   if (!condition) throw new Error(`Invalid paged review: ${message}`);
 };
@@ -40,7 +42,7 @@ function pageSchema(snapshot, availability = null, concernProofs = null, reportP
     page_request: nullable(object({bank_digest: {type: 'string', pattern: '^[a-f0-9]{64}$'},
       pages: array(object({entry: {type: 'integer', minimum: 0, description: 'Exact zero-based inventory entry number.'},
         page: {type: 'integer', minimum: 0, description: 'Zero-based page index, from 0 through this entry page_count minus 1. A one-page entry has only page 0.'}}))})),
-    request_sources: array({type: 'string'}), observations: shortText,
+    request_sources: array({type: 'string'}), observations: boundedText(MAX_OBSERVATION_BYTES),
     concerns});
 }
 
@@ -134,7 +136,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       'accounting is an object keyed by every exact changed path in the supplied template. Keep every slot, with its own units, reason and direct changed-source proof IDs; do not omit paths or duplicate a path field inside its slot. The controller restores path identity, never a missing judgment. ' +
       'Read every changed base/head source, patch, context and trusted contract/verification entry before a complete report. ' +
       'Optional exclusions still require cited justification and the independent completeness audit. Delivering pages does not prove semantic attention. ' +
-      'Keep concise cumulative observations; all prior observations remain available. Record every provisional causal concern in concerns, at most eight per response. ' +
+      'Record concise progress updates about newly inspected bytes; all prior updates remain available, so do not repeat the complete history. Each update is at most ' + MAX_OBSERVATION_BYTES + ' UTF-8 bytes; the whole prompt remains bounded independently. Record every provisional causal concern in concerns, at most eight per response. ' +
       'Use stable concern IDs and cite only actually read controller proof IDs. A later report must retain each causal concern or explicitly resolve its ID with current-source counterevidence. ' +
       'Source proof IDs come only from the supplied proofs catalog: proof-SOURCE_INDEX-LINE_START. An inventory entry number is a page selector, never a source index for a patch or context entry. Never manufacture a proof ID from a patch entry number or patch line. ' +
       'All final report citations select exact IDs from citable_proofs. This bounded catalog retains the first available proof of each read source, current literal proofs, every earlier structured citation and exact known proof IDs bookmarked in your observations. Bookmark the supplied proof IDs supporting important positive observations too, so their literal evidence remains selectable later. Its source_index joins the source inventory; patch entries never create source-proof IDs. If another line range is needed, re-request its source page to expose that exact proof before reporting. Source bytes and earlier observations remain unchanged. ' +
@@ -162,7 +164,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
     if (pages.length) {recordSourcePages(view, provenance); deliveries++;}
     pending = null;
     requirePage(exact(value, ['kind', 'report', 'page_request', 'request_sources', 'observations', 'concerns']) &&
-      typeof value.observations === 'string' && value.observations.length <= 2000 &&
+      typeof value.observations === 'string' && Buffer.byteLength(value.observations) <= MAX_OBSERVATION_BYTES &&
       Array.isArray(value.concerns) && value.concerns.length <= 8 && Array.isArray(value.request_sources), 'bounded response');
     const incoming = concernDraft(snapshot, value.concerns);
     verifySourceExposure(snapshot, {evidence: incoming.evidence, coverage: {sources: [], dependencies: []},
@@ -204,4 +206,4 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
   }
 }
 
-module.exports = {MAX_SOURCE_BATCHES, MAX_PROMPT_BYTES, pageSchema, concernDraft, pageProofs, inspectPaged};
+module.exports = {MAX_SOURCE_BATCHES, MAX_PROMPT_BYTES, MAX_OBSERVATION_BYTES, pageSchema, concernDraft, pageProofs, inspectPaged};

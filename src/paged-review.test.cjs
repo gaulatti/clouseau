@@ -6,7 +6,7 @@ const {pagedFixture, responder} = require('../test/paged-review-fixture.cjs');
 const {digest} = require('./acceptance.cjs');
 const {refresh, proofCatalog} = require('./acceptance-sources.cjs');
 const {modelTemplate} = require('./acceptance-review.cjs');
-const {inspectPaged, pageSchema, concernDraft, MAX_SOURCE_BATCHES, MAX_PROMPT_BYTES} = require('./paged-review.cjs');
+const {inspectPaged, pageSchema, concernDraft, MAX_SOURCE_BATCHES, MAX_PROMPT_BYTES, MAX_OBSERVATION_BYTES} = require('./paged-review.cjs');
 const {MAX_VIEW_ROUNDS} = require('./source-view.cjs');
 
 test('bounded role views inspect complete source, patches and context before accepting a factual report', async () => {
@@ -39,6 +39,25 @@ test('fresh literal pages follow all retained hypotheses so old progress cannot 
     return model.ask(task);
   }});
   assert.ok(model.packets.some(packet => packet.pages.length && packet.own_page_progress.length));
+});
+
+test('a complete progress update larger than 2000 characters is retained verbatim within the real context budget', async () => {
+  const f = await pagedFixture();
+  const notes = 'Observed current immutable source; earlier hypotheses were disproven. 🧭\n'.repeat(32);
+  assert.ok(notes.length > 2000);
+  let submitted = false;
+  const model = responder(f, (value, {packet}) => {
+    if (!submitted && packet.pages.length && value.kind === 'page_request') {
+      value.observations = notes; submitted = true;
+    }
+    return value;
+  });
+  const result = await inspectPaged({snapshot: f.snapshot, role: 'examiner', ask: model.ask});
+  assert.ok(submitted);
+  const retained = result.page_progress.find(frame => frame.response.observations === notes);
+  assert.ok(retained);
+  assert.equal(retained.invocation.response_digest, digest(retained.response));
+  assert.ok(model.packets.some(packet => packet.own_page_progress.some(frame => frame.response.observations === notes)));
 });
 
 test('the bounded schema uses proof patterns while controller citations remain authoritative', async () => {
@@ -145,7 +164,8 @@ test('an early complete claim and stale or invalid page requests cannot bypass a
 test('malformed phase responses and missing authenticated execution are failures rather than partial reports', async () => {
   const f = await pagedFixture();
   for (const mutate of [
-    value => ({...value, observations: 1}), value => ({...value, observations: 'x'.repeat(2001)}),
+    value => ({...value, observations: 1}), value => ({...value, observations: 'x'.repeat(MAX_OBSERVATION_BYTES + 1)}),
+    value => ({...value, observations: '🧭'.repeat(MAX_OBSERVATION_BYTES / 4 + 1)}),
     value => ({...value, concerns: Array(9).fill({})}), value => ({...value, concerns: null}),
     value => ({...value, request_sources: null}), value => ({...value, extra: true}),
     value => ({...value, kind: 'unknown', page_request: null}),

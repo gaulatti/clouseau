@@ -5,7 +5,7 @@ const {createSourceBank} = require('./source-bank.cjs');
 const {verifySourceExposure, MAX_VIEW_ROUNDS} = require('./source-view.cjs');
 const {materialize} = require('./acceptance-review.cjs');
 const {authorityBounds} = require('./acceptance-grading.cjs');
-const {concernDraft, MAX_SOURCE_BATCHES} = require('./paged-review.cjs');
+const {concernDraft, MAX_SOURCE_BATCHES, MAX_OBSERVATION_BYTES} = require('./paged-review.cjs');
 
 const requireInspection = (condition, message) => {
   if (!condition) throw new Error(`Invalid paged inspection: ${message}`);
@@ -116,7 +116,7 @@ function verifyPagedInspection({snapshot, report, role, usage, source_bank, sour
     pending = null;
     const response = frame.response;
     requireInspection(exact(response, ['kind', 'report', 'page_request', 'request_sources', 'observations', 'concerns']) &&
-      typeof response.observations === 'string' && response.observations.length <= 2000 &&
+      typeof response.observations === 'string' && Buffer.byteLength(response.observations) <= MAX_OBSERVATION_BYTES &&
       Array.isArray(response.concerns) && response.concerns.length <= 8 && Array.isArray(response.request_sources), 'bounded structured progress');
     const prefix = {...epoch.exposure, rounds: epoch.prefix};
     const draft = concernDraft(epoch.snapshot, response.concerns);

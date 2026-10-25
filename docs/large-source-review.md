@@ -116,12 +116,17 @@ cannot authenticate an invented citation.
 | Pages per response | 4 |
 | Serialized page view / inventory | 300,000 / 200,000 bytes |
 | Investigation prompt / local grading prompt | 900,000 bytes |
+| One progress update | 32,000 UTF-8 bytes |
 | Page deliveries per role inspection cycle | 128 |
 | Additional-source batches per cycle | 8, each at most 8 paths |
 | Complete inspection cycles | 2, only after new immutable evidence |
 
 Growing the bank does not replenish page or source-request allowances. A
-transition from an ordinary investigation retains its remaining source-request
+progress update records newly inspected facts without repeating the whole
+history. Each update is retained verbatim, and all accumulated observations
+remain subject to the same complete 900,000-byte prompt limit. An oversized
+update or complete context fails intact; no note or source byte is truncated.
+A transition from an ordinary investigation retains its remaining source-request
 allowance. Oversized grading batches split without dropping or grading a question
 twice. An individual atomic question that still exceeds its transport bound is
 rejected intact. Existing Jev packet limits and rubric/scoring rules remain.

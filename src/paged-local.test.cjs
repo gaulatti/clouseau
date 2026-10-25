@@ -11,7 +11,12 @@ const {digest} = require('./acceptance.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 
 test('both local roles inspect independently, grade literal bounded evidence and sign a replayable receipt', async () => {
-  const f = await pagedFixture(); const model = responder(f); const audits = [];
+  const f = await pagedFixture(); const notes = 'Bounded progress annotation retained independently. '.repeat(50);
+  assert.ok(notes.length > 2000);
+  const model = responder(f, value => {
+    if (value.kind === 'page_request') value.observations = notes;
+    return value;
+  }); const audits = [];
   const result = await localReview({snapshot: f.snapshot, ask: async task => {
     if (task.phase === 'investigation') return model.ask(task);
     const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
@@ -26,6 +31,7 @@ test('both local roles inspect independently, grade literal bounded evidence and
   }});
   assert.equal(result.decision, 'auto_approve');
   assert.deepEqual(audits, ['examiner', 'challenger']);
+  assert.ok(result.reviews.every(review => review.page_progress.some(frame => frame.response.observations === notes)));
   for (const packet of model.packets) assert.ok(packet.own_page_progress.every(frame => frame.role === packet.review_context.role));
   f.record.result = result;
   const signed = issueReceipt(f.issue);
