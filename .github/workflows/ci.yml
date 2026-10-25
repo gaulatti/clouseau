@@ -24,6 +24,10 @@ on:
         description: 'Prior qualification run whose unchanged completed work should be reused'
         type: string
         required: false
+      qualify_large_sources:
+        description: 'Qualify bounded review on fixed public Alcantara source, without consumer execution or approval'
+        type: boolean
+        default: false
 permissions:
   contents: read
 # Cancel superseded metadata reviews without cancelling code verification.
@@ -80,6 +84,35 @@ jobs:
         with:
           name: acceptance-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
           path: work/acceptance-evaluation.json
+          if-no-files-found: error
+  qualify-large-sources:
+    if: >-
+      github.event_name == 'workflow_dispatch' && inputs.qualify_large_sources &&
+      github.repository == 'gaulatti/clouseau' && github.actor == github.repository_owner
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Qualify the frozen large-source production provider route
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+        run: node test/evaluate-large-sources.cjs ci
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: large-source-qualification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .clouseau-work/large-qualification-ci/
+          include-hidden-files: true
           if-no-files-found: error
   verify:
     name: ${{ ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'verify' || 'metadata-only' }}
@@ -249,11 +282,25 @@ jobs:
       issues: read
     outputs:
       assessment: ${{ steps.assess.outputs.assessment }}
+      engine_digest: ${{ steps.engine.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.prepare-installation.outputs.head }}
           persist-credentials: false
+      - name: Freeze the owner-authorized installation engine
+        uses: actions/github-script@v7
+        id: engine
+        env:
+          AUTHORIZED_CLOUSEAU_INSTALLATION_SHA: ${{ needs.prepare-installation.outputs.head }}
+        with:
+          script: |
+            const path = require('node:path');
+            const version = require(path.join(process.env.GITHUB_WORKSPACE, 'src/central-version.cjs'));
+            const engine = version.identifyEngine(process.env.AUTHORIZED_CLOUSEAU_INSTALLATION_SHA);
+            core.exportVariable('CLOUSEAU_ENGINE_SHA', engine.sha);
+            core.exportVariable('CLOUSEAU_ENGINE_DIGEST', engine.digest);
+            core.setOutput('digest', engine.digest);
       - uses: ./
         id: assess
         with:
@@ -331,8 +378,8 @@ jobs:
       group: pr-approval-${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
     env:
-      CLOUSEAU_ENGINE_SHA: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '' }}
-      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '' }}
+      CLOUSEAU_ENGINE_SHA: ${{ github.event_name == 'push' && needs.prepare-installation.outputs.head || (github.event_name != 'push' && needs.resolve-clouseau.outputs.sha || '') }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ github.event_name == 'push' && needs.assess-installation.outputs.engine_digest || (github.event_name != 'push' && needs.resolve-clouseau.outputs.digest || '') }}
     steps:
       - name: Require a completed assessment
         if: >-

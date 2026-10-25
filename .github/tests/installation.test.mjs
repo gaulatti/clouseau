@@ -4,6 +4,7 @@ import {runInNewContext} from 'node:vm';
 import test from 'node:test';
 import {data, Evaluator, Lexer, Parser} from '@actions/expressions';
 import {parse} from 'yaml';
+import path from 'node:path';
 
 const workflow = parse(readFileSync(new URL('../workflows/ci.yml', import.meta.url), 'utf8'));
 const prepare = workflow.jobs['prepare-installation'];
@@ -18,7 +19,7 @@ function context(event = 'push', ref = 'refs/heads/policy-install/pr-19', result
   return {github: {event_name: event, ref, actor: 'gaulatti', repository_owner: 'gaulatti',
     event: {deleted: false, pull_request: {draft: false}}}, inputs: {pull_request: '', evaluate_acceptance: false},
   needs: {'prepare-installation': {result, outputs: {head: revision, number: '19'}},
-    'assess-installation': {result, outputs: {assessment: JSON.stringify({record_digest: 'b'.repeat(64)})}},
+    'assess-installation': {result, outputs: {assessment: JSON.stringify({record_digest: 'b'.repeat(64)}), engine_digest: 'b'.repeat(64)}},
     'assess-intent': {result: 'skipped', outputs: {assessment: ''}}}};
 }
 
@@ -101,4 +102,41 @@ test('failed installation cannot become a skipped green approval and deleting th
   assert.equal(evaluate(gate.name, deleted).coerceString(), 'metadata-only-approval');
   assert.equal(evaluate(workflow.jobs.verify.name, deleted).coerceString(), 'metadata-only');
   assert.equal(evaluate(workflow.jobs.verify.steps[0].if, deleted).value, false);
+});
+
+test('authorized installation assessment and writer bind the same guarded candidate engine instead of an empty identity', async () => {
+  const freeze = assess.steps.find(step => step.id === 'engine');
+  assert.equal(freeze.env.AUTHORIZED_CLOUSEAU_INSTALLATION_SHA, '${{ needs.prepare-installation.outputs.head }}');
+  assert.ok(assess.steps.indexOf(freeze) > 0);
+  assert.ok(assess.steps.indexOf(freeze) < assess.steps.findIndex(step => step.id === 'assess'));
+  const run = async fail => {
+    const state = {env: {}, output: {}, calls: []};
+    const root = '/fictional/authorized-installation';
+    await runInNewContext(`(async () => {${freeze.with.script}\n})()`, {
+      process: {env: {GITHUB_WORKSPACE: root, AUTHORIZED_CLOUSEAU_INSTALLATION_SHA: revision}},
+      require: name => {
+        if (name === 'node:path') return path;
+        assert.equal(name, path.join(root, 'src/central-version.cjs'));
+        return {identifyEngine: sha => {
+          state.calls.push(sha); if (fail) throw new Error('Frozen candidate differs');
+          return {sha, digest: 'b'.repeat(64)};
+        }};
+      }, core: {exportVariable: (key, value) => {state.env[key] = value;},
+        setOutput: (key, value) => {state.output[key] = value;}},
+    });
+    return state;
+  };
+  assert.deepEqual(await run(false), {env: {CLOUSEAU_ENGINE_SHA: revision, CLOUSEAU_ENGINE_DIGEST: 'b'.repeat(64)},
+    output: {digest: 'b'.repeat(64)}, calls: [revision]});
+  await assert.rejects(run(true), /Frozen candidate differs/);
+  assert.equal(assess.outputs.engine_digest, '${{ steps.engine.outputs.digest }}');
+  const selected = context();
+  selected.needs['resolve-clouseau'] = {result: 'skipped', outputs: {sha: 'c'.repeat(40), digest: 'd'.repeat(64)}};
+  assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_SHA, selected).coerceString(), revision);
+  assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_DIGEST, selected).coerceString(), 'b'.repeat(64));
+  delete selected.needs['assess-installation'].outputs.engine_digest;
+  assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_DIGEST, selected).coerceString(), '');
+  selected.github.event_name = 'pull_request_target';
+  assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_SHA, selected).coerceString(), 'c'.repeat(40));
+  assert.equal(evaluate(gate.env.CLOUSEAU_ENGINE_DIGEST, selected).coerceString(), 'd'.repeat(64));
 });

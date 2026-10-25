@@ -101,3 +101,30 @@ not model comprehension. Real authenticated Codex/Claude and selected central
 provider qualification against the frozen large consumers is required by
 [#65](https://github.com/gaulatti/clouseau/issues/65); this implementation checkpoint
 has not completed that qualification. It is not a shipped acceptance claim.
+
+The read-only central qualification is an explicit `workflow_dispatch` input,
+`qualify_large_sources`, available only to the repository owner in this repository.
+It first requires native verification and then checks out the execution's exact
+SHA. It uses the existing DeepSeek examiner/challenger and routed DeepSeek/Jev
+grading with the normal production controller. No consumer PR runs this corpus.
+The fixed public Alcantara revisions in `test/evaluate-large-sources.cjs` contain
+85 changed paths, 107 base/head source entries and 2,308,455 raw source bytes.
+Collection rejects changed counts or bytes, preserves native object identities,
+and supplies the exact head file inventory as untrusted context for dependency
+requests. Missing paths still fail closed; no substitute source is invented.
+
+The dedicated run allows at most 256 actual provider requests and 45 minutes;
+these bounds do not change the ordinary 64-request fixed-case qualification or
+the review controller's page/source limits. It retains complete public snapshots,
+responses, request metadata and failures in its run artifact. Provider headers
+and credentials are never recorded. Its temporary Git clone is removed on both
+success and failure. Local `node test/evaluate-large-sources.cjs collect`, `codex`
+and `claude` use the same fixed public cohort from a clean committed checkout and
+retain results under ignored `.clouseau-work/large-qualification-MODE/`.
+
+Protocol completion requires both independent reports, every required literal
+page, the complete source inventory, validated delivery history and completed
+independent grading. It does not require or manufacture a positive verdict.
+Consumer execution is explicitly unavailable; these diagnostic runs never sign
+a consumer receipt, approve a consumer, merge or deploy it. Material semantic
+completeness remains a separate, honestly recorded assessment.
