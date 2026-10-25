@@ -61,6 +61,14 @@ def counters(report, source_directory="src", coverage_format="llvm"):
     return counts
 
 
+def measure(report, source_directory="src", coverage_format="llvm"):
+    """Return validated native measurements without granting gate acceptance."""
+    measured = counters(report, source_directory, coverage_format)
+    if measured["lines"][0] == 0:
+        raise ValueError("No lines measured")
+    return measured
+
+
 def check(report, source_directory="src", coverage_format="llvm"):
     return enforce(counters(report, source_directory, coverage_format))
 

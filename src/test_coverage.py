@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from check_coverage import check
+from check_coverage import check, measure
 
 
 def report(lines=10, covered_lines=10, branches=4, covered_branches=4):
@@ -27,6 +27,21 @@ class CoverageGateTests(unittest.TestCase):
 
     def test_exact_full_coverage(self):
         self.assertEqual(self.run_check(report()), {"lines": [10, 10], "branches": [4, 4]})
+
+    def test_local_measurement_preserves_partial_native_counts_without_passing_the_gate(self):
+        value = report(covered_lines=7, covered_branches=1)
+        self.assertEqual(measure(value), {"lines": [10, 7], "branches": [4, 1]})
+        with self.assertRaisesRegex(ValueError, "3 uncovered"):
+            self.run_check(value)
+        branchless = report(branches=0, covered_branches=0)
+        self.assertEqual(measure(branchless), {"lines": [10, 10], "branches": [0, 0]})
+        with self.assertRaisesRegex(ValueError, "No branches measured"):
+            self.run_check(branchless)
+
+    def test_local_measurement_rejects_missing_empty_and_invalid_native_data(self):
+        for value in ({}, report(lines=0, covered_lines=0), report(covered_lines=11)):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                measure(value)
 
     def test_one_uncovered_line_cannot_round_to_one_hundred(self):
         with self.assertRaisesRegex(ValueError, "1 uncovered"):
