@@ -120,14 +120,17 @@ again; they do not replace fresh verification or authorize a merge.
 Live qualification defaults to the single combined production route. An explicit
 `CLOUSEAU_EVALUATION_GRADERS` list enables comparisons when needed. Token usage includes the
 investigations, grading, uncertainty routing and transport truncation attempts.
-Each qualification is capped at 48 provider requests, including transport retries.
+Each qualification is capped at 64 provider requests, including transport retries.
+The eight-case corpus needs at least 49 requests on its ordinary six-request
+per-case route plus reference adjudication; 64 allows bounded source discovery
+and transport recovery. The earlier 48-request run is retained as incomplete.
 `CLOUSEAU_EVALUATION_REQUEST_LIMIT=0` verifies the guard without making a provider
 request. Exhausting the budget fails qualification and retains the case evidence.
 `resume_evaluation` reuses completed qualification work only when source, policy,
 routing, rubric and request meanings match. Completed scores and blockers are
 revalidated and retained. Failed transport framing can reuse its original factual
 response after lossless decoding; only missing judgments make new provider calls.
-Historical and new requests share the 48-request ceiling. The artifact separates
+Historical and new requests share the 64-request ceiling. The artifact separates
 new usage/cost from reused evidence. Ordinary PR assessment remains fresh.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
@@ -292,6 +295,14 @@ same immutable snapshot; earlier investigations must then reconverge. Source and
 request limits fail closed; no truncated context can produce a partial approval.
 The manifest records evidence availability and the investigator's assessment; it
 does not prove the model's semantic attention or that every possible defect was found.
+The grading phase independently checks material-source completeness against the
+trusted contract and the entire claimed source/dependency inventory. An explicit
+inspection requirement cannot be waived merely because the change is test-only
+or its dependency is unchanged. CI delegates this atomic check to Jev with the
+existing uncertainty route; local review uses the authenticated harness. Only a
+fully established complete condition can retain a satisfied gate. Missing or
+uncertain evidence downgrades it to unresolved, and a grade can never upgrade an
+inspector's existing unresolved or violated gate. Product formulas stay unchanged.
 
 Fixed and dismissed findings retain their dispositions, reasons and revision
 history across unrelated pushes. Titles, line offsets and rename paths do not

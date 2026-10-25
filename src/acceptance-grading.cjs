@@ -6,7 +6,7 @@ const {FACTORS} = require('./acceptance.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 const {requestJSON, requestJev, JEV_PACKET_LIMIT} = require('./review-provider.cjs');
 
-const JEV_FACTORS = Object.freeze(['fit.domain', 'excess.abstraction', 'excess.authority']);
+const JEV_FACTORS = Object.freeze(['fit.domain', 'excess.abstraction', 'excess.authority', 'completeness.material_sources']);
 const delegated = entry => JEV_FACTORS.includes(`${entry.group}.${entry.name}`);
 
 function locations(report) {
@@ -22,17 +22,36 @@ function locations(report) {
       subject: finding.title, obligation: finding.obligation, causal_evidence: finding.evidence,
       context: {path: finding.path, cause: finding.cause, trigger: finding.trigger, consequence: finding.consequence}});
   }
+  if (report.coverage) {
+    const gate = report.gates.find(item => item.name === 'review_completeness');
+    result.push({id: 'review_completeness', group: 'completeness', name: 'material_sources',
+      target: {reason: gate.reason, evidence: gate.evidence}, subject: 'Independent material-source completeness audit',
+      obligation: 'Verify the claimed completeness against every explicit trusted inspection requirement and the supplied source/dependency inventory.',
+      context: {claimed_gate: gate.state, coverage: report.coverage}});
+  }
   return result;
 }
 
 function packetFor(location, report, snapshot) {
-  return {subject: location.subject, obligation: location.obligation, context: location.context, observations: location.target.reason,
+  return {subject: location.subject, obligation: location.obligation, context: {...location.context,
+    ...(location.group === 'completeness' ? {available_sources: Object.entries(snapshot.sources).map(([id, source]) =>
+      ({id, path: source.path, ref: source.ref, kind: source.kind}))} : {})}, observations: location.target.reason,
     evidence: [...new Set([...location.target.evidence, ...(location.causal_evidence || [])])].map(id => {
       const entry = report.evidence.find(item => item.id === id);
       const source = snapshot.sources[entry.source];
       return {path: source.path, ref: source.ref, authority: source.authority,
         start: entry.start, end: entry.end, text: source.content.split('\n').slice(entry.start - 1, entry.end).join('\n')};
     })};
+}
+
+function applyCompleteness(report, entries) {
+  const audit = entries.find(item => item.id === 'review_completeness');
+  if (!audit || audit.target.min === 1 && audit.target.max === 1) return;
+  const gate = report.gates.find(item => item.name === 'review_completeness');
+  if (gate.state === 'satisfied') {
+    gate.state = 'unresolved';
+    gate.reason = 'Independent grading did not establish complete material source evidence. Inspector observation: ' + gate.reason;
+  }
 }
 
 function bounds(answer) {
@@ -127,7 +146,8 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
   // with no Jev answer or desired verdict in its input.
   const reasoning = [...(provider === 'routed' ? entries.filter(entry => !delegated(entry)) : []), ...pending];
   if (reasoning.length) await evaluate(reasoning, 'deepseek');
+  applyCompleteness(graded, entries);
   return {report: graded, usage, grading: {provider, escalated: pending.map(item => item.id), decisions}};
 }
 
-module.exports = {JEV_FACTORS, locations, packetFor, bounds, authorityBounds, gradeReport};
+module.exports = {JEV_FACTORS, locations, packetFor, bounds, authorityBounds, applyCompleteness, gradeReport};

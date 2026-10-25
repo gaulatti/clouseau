@@ -55,8 +55,8 @@ async function main() {
   const graders = (process.env.CLOUSEAU_EVALUATION_GRADERS || 'routed').split(',');
   assert.ok(graders.length && new Set(graders).size === graders.length &&
     graders.every(grader => ['deepseek', 'typesafe', 'routed'].includes(grader)), 'Choose explicit distinct supported grading routes');
-  const requestLimit = Number(process.env.CLOUSEAU_EVALUATION_REQUEST_LIMIT || 48);
-  assert.ok(Number.isSafeInteger(requestLimit) && requestLimit >= 0 && requestLimit <= 48, 'Qualification permits at most forty-eight provider requests');
+  const requestLimit = Number(process.env.CLOUSEAU_EVALUATION_REQUEST_LIMIT || 64);
+  assert.ok(Number.isSafeInteger(requestLimit) && requestLimit >= 0 && requestLimit <= 64, 'Qualification permits at most sixty-four provider requests');
   const names = process.env.CLOUSEAU_EVALUATION_CASES?.split(',');
   assert.ok(!names || names.length && new Set(names).size === names.length && names.every(name => CASES.some(item => item.name === name)), 'Select distinct known qualification cases');
   const cases = names ? CASES.filter(item => names.includes(item.name)) : CASES;
@@ -84,17 +84,17 @@ async function main() {
     assert.equal(recorded, fingerprint, 'Source, policy, routing, rubric or request meaning changed; recorded judgments cannot be reused');
   }
   const historical = replay ? replay.request_budget.used + (replay.request_budget.historical_requests || 0) : 0;
-  assert.ok(Number.isSafeInteger(historical) && historical >= 0 && historical <= 48, 'Invalid recorded provider request count');
+  assert.ok(Number.isSafeInteger(historical) && historical >= 0 && historical <= 64, 'Invalid recorded provider request count');
   const evaluation = {version: 2, synthetic: true, qualification_only: true, mode: 'live_judgment_qualification', graders,
     corpus_digest: digest(CASES), selected_cases: cases.map(item => item.name), full_corpus: cases.length === CASES.length,
     protocol_fingerprint: fingerprint, replay_source: replay ? {digest: digest(replay), run_id: process.env.CLOUSEAU_EVALUATION_REPLAY_RUN_ID || null} : null,
-    request_budget: {limit: requestLimit, used: 0, historical_requests: historical, hard_total_limit: 48}, live_usage: [], pricing: PRICING, cases: []};
+    request_budget: {limit: requestLimit, used: 0, historical_requests: historical, hard_total_limit: 64}, live_usage: [], pricing: PRICING, cases: []};
   const save = () => {
     evaluation.incremental_cost = estimate(evaluation.live_usage);
     fs.writeFileSync(output, JSON.stringify(evaluation, null, 2) + '\n');
   };
   const budgetedFetch = async (...args) => {
-    assert.ok(evaluation.request_budget.used < requestLimit && historical + evaluation.request_budget.used < 48, 'Live provider request budget exhausted');
+    assert.ok(evaluation.request_budget.used < requestLimit && historical + evaluation.request_budget.used < 64, 'Live provider request budget exhausted');
     evaluation.request_budget.used++;
     const request = JSON.parse(args[1].body);
     const usage = {provider: args[0].includes('typesafe') ? 'typesafe' : 'deepseek', requested_model: request.model, model: request.model, tokens: null};
@@ -190,7 +190,9 @@ async function main() {
 
 function casePassed(scenario, result) {
   return scenario.expected.includes(result.decision) && (!scenario.unavailableSource ||
-    result.reviews.every(view => view.report.coverage.dependencies.some(item => item.path === scenario.unavailableSource && item.state === 'missing'))) && (!scenario.requiredFinding ||
+    result.reviews.every(view => view.report.coverage.dependencies.some(item => item.path === scenario.unavailableSource && item.state === 'missing')) ||
+    result.reviews.some(view => view.report.gates.some(gate => gate.name === 'review_completeness' && gate.state === 'unresolved') &&
+      view.grading?.decisions.some(item => item.id === 'review_completeness' && item.range.min < 1))) && (!scenario.requiredFinding ||
     result.known_defect_match?.binding === digest(defectPacket(scenario, result)) &&
     result.known_defect_match.answer.choice === 'matched' && result.known_defect_match.answer.probabilities.matched >= 0.8);
 }

@@ -80,7 +80,8 @@ test('all validation and persistence cases pass', () => { assert.ok(true); });
       consequence: 'An empty body reaches persistence and returns accepted instead of being rejected.'},
     rationale: 'Removing the zero-body guard admits forbidden empty uploads; unchanged accepted behavior requires rejection.',
     file: 'src/upload.js', base: ORIGINAL, head: ORIGINAL.replace('bytes <= 0 || ', ''),
-    headTests: TESTS + GUARDS.replace("['fixture-tenant', 0, /Invalid size/], ", ''), title: 'fix: simplify upload size validation'},
+    headTests: TESTS + GUARDS.replace("['fixture-tenant', 0, /Invalid size/], ", '').replace('zero, oversized and unauthenticated uploads', 'oversized and unauthenticated uploads'),
+    title: 'fix: simplify upload size validation'},
 
 ].map(scenario => ({...{
   category: ({'coverage-maintenance': 'clean-change', 'multi-file-maintenance': 'clean-change', 'purpose-drift': 'scope-drift',

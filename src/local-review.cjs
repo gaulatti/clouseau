@@ -5,7 +5,7 @@ const path = require('node:path');
 const {digest, validateReport} = require('./acceptance.cjs');
 const {schemas} = require('./acceptance-schema.cjs');
 const {modelEvidence, modelTemplate, materialize, validateInspection, combine} = require('./acceptance-review.cjs');
-const {locations, packetFor, bounds, authorityBounds} = require('./acceptance-grading.cjs');
+const {locations, packetFor, bounds, authorityBounds, applyCompleteness} = require('./acceptance-grading.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
@@ -91,6 +91,7 @@ async function localReview({snapshot, ask, addSources}) {
         decisions.push({id: entry.id, provider: 'local-harness', answer: answers[entry.id], range: {...range}});
       }
     }
+    applyCompleteness(report, entries);
     const scores = validateReport(report, validateInspection(report, snapshot, item.drafts));
     reviews.push({...item, report, scores, grading: {provider: 'local-harness', decisions}});
   }

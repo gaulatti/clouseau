@@ -362,7 +362,7 @@ existing provider credentials and routes. `CLOUSEAU_EVALUATION_GRADERS` selects
 `CLOUSEAU_EVALUATION_CASES` selects named diagnostic cases; such a partial run does
 not qualify a replacement. Output records the corpus and protocol fingerprints,
 selected cases, route, literal evidence, responses and bounded request usage.
-At most 48 provider requests, including historical replay usage, are permitted.
+At most 64 provider requests, including historical replay usage, are permitted.
 Completed negative decisions are retained, never retried to seek approval.
 
 Recorded-response tests exercise transport parsing, validation, history and
