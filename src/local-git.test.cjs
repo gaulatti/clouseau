@@ -105,8 +105,10 @@ test('local evidence can inspect the frozen public engine without a consumer CI 
 test('resolver installation preloads its actual pinned bootstrap and the current engine as separate untrusted source', () => repository(f => {
   const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bootstrap-context-'));
   try {
-    const names = ['action.yml', 'src/central-version.cjs', 'src/config.cjs', 'src/policy.cjs', 'src/acceptance-controller.cjs', 'src/local-receipt.cjs', 'scripts/resolve/action.yml'];
-    for (const filename of names) {fs.mkdirSync(path.dirname(path.join(root, filename)), {recursive: true}); fs.writeFileSync(path.join(root, filename), `old ${filename}`);}
+    for (const entry of ['src', 'test']) fs.cpSync(path.join(__dirname, '..', entry), path.join(root, entry), {recursive: true});
+    for (const filename of ['action.yml', 'src/central-version.cjs', 'scripts/resolve/action.yml']) {
+      fs.mkdirSync(path.dirname(path.join(root, filename)), {recursive: true}); fs.writeFileSync(path.join(root, filename), `old ${filename}`);
+    }
     git(root, ['init', '-q']); git(root, ['add', '.']);
     git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'old bootstrap']);
     const old = git(root, ['rev-parse', 'HEAD']).trim();
@@ -118,7 +120,9 @@ test('resolver installation preloads its actual pinned bootstrap and the current
     git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: install automatic resolver']);
     const collected = collectLocal({...f, request: 'Install the reviewed bootstrap.', technical: {fixture_only: true}, reviewerSha: current, engineRoot: root});
     const sources = Object.values(collected.snapshot.sources).filter(source => source.path.startsWith('.clouseau-ci/'));
-    assert.equal(sources.length, 8);
+    assert.equal(sources.length, 24);
+    assert.ok(sources.some(source => source.path === '.clouseau-ci/test/automatic-upgrade-contract.mjs'));
+    assert.ok(sources.some(source => source.path === '.clouseau-ci/src/acceptance-controller.test.cjs'));
     assert.equal(sources.find(source => source.path === '.clouseau-ci/src/central-version.cjs').content, 'new runtime engine');
     assert.equal(sources.find(source => source.path === `.clouseau-ci/src/central-version.cjs@${old}`).content, 'old src/central-version.cjs');
     assert.equal(sources.filter(source => source.ref === old).length, 2);

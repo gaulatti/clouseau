@@ -280,13 +280,16 @@ still avoids another local review. Negative evidence and causal findings remain
 retained; a different SHA with identical engine bytes cannot resample an unchanged
 negative judgment.
 
-When a resolver workflow changes, the runner supplies its immediate shared
-dependencies and its actual pinned bootstrap as additional untrusted context.
+When a resolver workflow changes, the runner supplies at most 32 observed shared
+source/test dependencies, its actual pinned bootstrap and the legacy action
+boundary as additional untrusted context. Wiki source is included only when the
+changed workflow invokes it.
 Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
 immutable public bytes without switching the frozen review engine or granting
 contract authority. CI checks the same bytes before receipt reuse. The ordinary
-source budgets remain unchanged: each investigation can read three batches of
-up to eight paths, then submit its report using the final batch. A fourth source
+serialized evidence size remains capped at 900,000 characters. Each local
+investigation can read eight batches of
+up to eight paths, then submit its report using the final batch. A ninth source
 batch still stops the review; missing evidence cannot produce a passing report.
 Failed investigations retain `snapshot.json`
 and `observations.jsonl`; their error gives the evidence directory. These files
