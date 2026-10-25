@@ -720,7 +720,13 @@ test('non-native checks also hold an external PR and finalization rechecks owner
   await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, pr: {...f.state.pr, merged: true}, files: []});
 }));
 
-async function privateOwnerFixture(f) {
+async function privateOwnerFixture(f, controls = false) {
+  if (controls) {
+    const filename = '.github/clouseau.json';
+    f.github.rest.pulls.listFiles = async () => ({data: [{filename, status: 'modified', patch: '+protected control'}]});
+    const content = f.github.rest.repos.getContent;
+    f.github.rest.repos.getContent = args => content({...args, path: args.path === filename ? 'src/upload.test.js' : args.path});
+  }
   const policy = createPolicy({...config, merge_mode: 'automatic'});
   const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
   f.state.pr.auto_merge = null;
@@ -799,3 +805,18 @@ test('explicit automatic mode requires configured ownership on the normal protec
   await policy.finalize({github: f.github, context: f.context, core, assessment});
   assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
 }));
+
+
+test('private controller control changes retain exact-head purpose authority through the final write', async () => {
+  for (const withdraw of [false, true]) await fixture(async f => {
+    const p = await privateOwnerFixture(f, true);
+    assert.equal(p.assessment.decision, 'owner_decision');
+    f.state.comments.push({id: 1, user: {login: 'owner', type: 'User'}, body: `/approve-intent ${p.assessment.head_sha}`});
+    if (withdraw) {
+      const approve = f.github.rest.pulls.createReview;
+      f.github.rest.pulls.createReview = async args => {const value = await approve(args); f.state.comments = []; return value;};
+      await assert.rejects(p.run(true), /confirmation was withdrawn/);
+    } else await p.run(true);
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, withdraw ? 0 : 1);
+  });
+});
