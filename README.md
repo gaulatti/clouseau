@@ -159,7 +159,7 @@ incomplete available rules fail closed. The summary states when GitHub cannot
 enforce the checks; trusted maintainers must honor them before manually merging.
 The controller never merges or dispatches deployment in manual mode.
 
-Explicit `"merge_mode": "automatic"` selects strict owner-only automation:
+This repository explicitly selects `"merge_mode": "automatic"` for strict owner-only automation:
 CODEOWNERS must exist on the accepted base and the author must own every affected
 path. The normal protected native flow is unchanged. On the exact unavailable
 private-plan condition above, native repository auto-merge stays disabled while
