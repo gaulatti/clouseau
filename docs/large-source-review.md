@@ -98,6 +98,13 @@ Repeated schema objects and choices share exact definitions without dropping
 constraints or source slots. Native harness schemas use `$defs`; central strict
 function schemas use the provider's documented
 [`$def` and `$ref` form](https://api-docs.deepseek.com/guides/tool_calls/#ref-and-def).
+Central function transport shares only complete object modules and leaves scalar
+enum constraints inline at their fields. A real completed report returned IDs
+outside a referenced scalar proof enum; keeping those choices inline avoids that
+native reference boundary without changing the expanded schema. Local harness
+schema compaction retains its existing shared scalar choices. Provider output
+still undergoes independent controller validation; a native strict-schema claim
+cannot authenticate an invented citation.
 
 | Bound | Limit |
 | --- | ---: |
@@ -148,7 +155,9 @@ bindings. CI duplication and large-record transport are tracked separately in
 record must hold approval rather than omit evidence or fall back to paid AI.
 
 Deterministic controller and native-collection tests establish protocol behavior,
-not model comprehension. Real authenticated Codex/Claude and selected central
+not model comprehension. Delivered-source attack fixtures verify that contributor
+instructions cannot promote immutable source authority or submit controller-owned
+numeric grades. Real authenticated Codex/Claude and selected central
 provider qualification against the frozen large consumers is required by
 [#65](https://github.com/gaulatti/clouseau/issues/65); this implementation checkpoint
 has not completed that qualification. It is not a shipped acceptance claim.

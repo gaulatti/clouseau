@@ -47,3 +47,18 @@ test('shared controller schema objects and enums expand to the exact original co
   assert.deepEqual(compactSchema({type: 'object', properties: {literal: null}}), {type: 'object', properties: {literal: null}});
   assert.throws(() => compactSchema(schema, {definitionKey: 'definitions'}), /Unsupported/);
 });
+
+test('central native tools keep scalar choices inline while sharing only complete object modules', async () => {
+  const f = await pagedFixture(); const proofs = ['proof-0-1', 'proof-1-1'];
+  const schema = pageSchema(f.snapshot, null, [], proofs);
+  const native = pageFunctions(schema).acceptance_report;
+  assert.ok(Object.keys(native.$def).length > 0);
+  assert.ok(Object.values(native.$def).every(module => module.type === 'object'),
+    'the actual provider returned patch-derived IDs outside a referenced scalar enum; keep native choices at their field');
+  const report = expand(native);
+  assert.deepEqual(report.properties.units.items.properties.fit.properties.outcome.properties.evidence.items.enum, proofs);
+  assert.equal(report.properties.units.items.properties.fit.properties.outcome.properties.evidence.items.enum.includes('proof-194-1'), false);
+  const inline = compactSchema(schema, {inlineEnums: true});
+  assert.deepEqual(expand(inline), schema, 'native transport retains every original enum and object constraint');
+  assert.ok(Object.values(inline.$defs).every(module => module.type === 'object'));
+});

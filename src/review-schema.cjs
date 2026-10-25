@@ -2,7 +2,7 @@
 
 const {digest} = require('./acceptance.cjs');
 
-function compactSchema(schema, {definitionKey = '$defs'} = {}) {
+function compactSchema(schema, {definitionKey = '$defs', inlineEnums = false} = {}) {
   if (!['$defs', '$def'].includes(definitionKey)) throw new Error('Unsupported schema definition keyword');
   if (schema?.[definitionKey]) return structuredClone(schema);
   const definitions = {};
@@ -18,7 +18,7 @@ function compactSchema(schema, {definitionKey = '$defs'} = {}) {
   function visit(value) {
     if (Array.isArray(value)) return value.map(visit);
     if (!value || typeof value !== 'object') return value;
-    if (Array.isArray(value.enum) && value.enum.length > 1) {
+    if (!inlineEnums && Array.isArray(value.enum) && value.enum.length > 1) {
       const id = `choice_${digest([value.type, value.enum])}`;
       definitions[id] = {type: value.type, enum: value.enum};
       return {...Object.fromEntries(Object.entries(value).filter(([key]) => !['type', 'enum'].includes(key))

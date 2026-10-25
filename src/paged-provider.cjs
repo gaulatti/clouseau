@@ -20,7 +20,7 @@ function pageFunctions(schema) {
     .map(([name, [, active, concerns]]) => [name, compactSchema(object({
     ...(active === 'report' ? {} : {observations: fields.observations}),
     ...(concerns ? {concerns: fields.concerns} : {}), ...payloadProperties(fields, active),
-  }), {definitionKey: '$def'})]));
+  }), {definitionKey: '$def', inlineEnums: true})]));
 }
 
 function providerAsk({model, fetchImpl, wait, log, observe = () => {}, snapshot}) {
