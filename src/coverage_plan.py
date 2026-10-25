@@ -9,7 +9,9 @@ import sys
 from check_coverage import counters, enforce, load_report
 
 
-def _path(directory, value):
+def _path(directory, value, *, source=False):
+    if source and value == ".":
+        return directory
     if (not isinstance(value, str) or not value or len(value) >= 500
             or "\\" in value or "\0" in value or Path(value).is_absolute()
             or any(part in ("", ".", "..", ".git") for part in value.split("/"))):
@@ -33,7 +35,7 @@ def measure_plan(parts, directory="."):
                 or part["format"] not in ("istanbul", "coveragepy")):
             raise ValueError("Each coverage part requires a supported native format, report and source_directory")
         report = _path(directory, part["report"])
-        source = _path(directory, part["source_directory"])
+        source = _path(directory, part["source_directory"], source=True)
         if not source.is_dir():
             raise ValueError("Every coverage part requires an existing application source directory")
         if report in reports or any(source.is_relative_to(root) or root.is_relative_to(source) for root in roots):

@@ -45,6 +45,33 @@ class CoveragePlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "backend.json has uncovered branches"):
             check_plan(self.parts, self.root)
 
+    def test_canonical_root_keeps_executable_configuration_and_nested_sources_in_inventory(self):
+        report = {}
+        for part in self.parts:
+            report.update(json.loads((self.root / part["report"]).read_text()))
+        config = str(self.root / "tool.config.js")
+        Path(config).write_text("module.exports = 1;\n")
+        report[config] = {"path": config, "statementMap": {"0": {"start": {"line": 1}}},
+                          "s": {"0": 1}, "branchMap": {}, "b": {}}
+        artifact = self.root / "whole.json"
+        artifact.write_text(json.dumps(report))
+        root = {"format": "istanbul", "report": "whole.json", "source_directory": "."}
+        self.assertEqual(check_plan([root], self.root)["totals"], {"lines": [3, 3], "branches": [2, 2]})
+        report[config]["s"]["0"] = 0
+        artifact.write_text(json.dumps(report))
+        self.assertEqual(measure_plan([root], self.root)["totals"]["lines"], [3, 2])
+        with self.assertRaisesRegex(ValueError, "uncovered lines"):
+            check_plan([root], self.root)
+        del report[config]
+        artifact.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ValueError, "Missing application source.*tool.config.js"):
+            measure_plan([root], self.root)
+        for parts in ([root, self.parts[0]], [self.parts[0], root], [root, {**root, "report": "backend.json"}]):
+            with self.subTest(parts=parts), self.assertRaisesRegex(ValueError, "overlapping"):
+                measure_plan(parts, self.root)
+        with self.assertRaisesRegex(ValueError, "repository-relative"):
+            measure_plan([{**root, "report": "."}], self.root)
+
     def test_local_measurement_keeps_zero_hit_native_sources_and_all_part_totals(self):
         self.mutate("backend", lambda entry: entry["b"]["0"].__setitem__(1, 0))
         self.mutate("frontend", lambda entry: entry["s"].__setitem__("0", 0))

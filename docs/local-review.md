@@ -89,6 +89,12 @@ compensate for another part's missing or uncovered data.
 
 Report and source paths must be repository-relative. Resolved source roots must
 exist and must not overlap, and report paths must be unique, including aliases.
+Both recipe versions accept `source_directory: "."` for the complete repository
+root, including executable root configuration and nested application sources.
+A version 2 root part cannot appear alongside another part because their source
+roots overlap. The canonical `.` spelling is allowed only for a source directory;
+report and other paths keep their existing restrictions. A root recipe still
+rejects missing native source measurements and uncovered counters.
 Paths that escape the checkout fail. There is no arbitrary exclusion option.
 Generated application code, executable configuration and entry points remain
 in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
