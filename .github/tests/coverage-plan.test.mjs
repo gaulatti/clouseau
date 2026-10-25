@@ -7,6 +7,54 @@ import {fileURLToPath} from 'node:url';
 import test from 'node:test';
 import {parse} from 'yaml';
 
+test('packaged canonical-root recipes retain legacy inventory and rejection boundaries', () => {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const action = parse(fs.readFileSync(path.join(root, 'action.yml'), 'utf8'));
+  const step = action.runs.steps.find(item => item.name === 'Enforce 100% line and branch coverage');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-action-root-'));
+  try {
+    fs.mkdirSync(path.join(directory, 'src'));
+    const configuration = path.join(directory, 'tool.config.js');
+    const nested = path.join(directory, 'src', 'main.js');
+    fs.writeFileSync(configuration, 'module.exports = value => value ? 1 : 0;\n');
+    fs.writeFileSync(nested, 'module.exports = 1;\n');
+    const entry = (source, branched) => ({path: source,
+      statementMap: {0: {start: {line: 1}}}, s: {0: 1},
+      branchMap: branched ? {0: {locations: [{}, {}]}} : {}, b: branched ? {0: [1, 1]} : {}});
+    const report = {[configuration]: entry(configuration, true), [nested]: entry(nested, false)};
+    const part = {format: 'istanbul', report: 'whole.json', source_directory: '.'};
+    const write = (value = report, parts = [part]) => {
+      fs.writeFileSync(path.join(directory, 'whole.json'), JSON.stringify(value));
+      fs.writeFileSync(path.join(directory, 'accepted.json'), JSON.stringify({version: 2, coverage: parts,
+        verification: [['must-never-execute-from-coverage']]}));
+    };
+    const run = override => spawnSync('bash', ['-e', '-o', 'pipefail', '-c', step.run], {
+      cwd: directory, encoding: 'utf8', env: {PATH: process.env.PATH, CLOUSEAU_ROOT: root,
+        GITHUB_WORKSPACE: directory, COVERAGE_CONFIG: 'accepted.json', COVERAGE_REPORT: '',
+        SOURCE_DIRECTORY: '', COVERAGE_FORMAT: 'istanbul', ...override},
+    });
+    write();
+    const passing = run();
+    assert.equal(passing.status, 0, passing.stderr);
+    assert.deepEqual(JSON.parse(passing.stdout).totals, {lines: [2, 2], branches: [2, 2]});
+    assert.equal(run({COVERAGE_CONFIG: '', COVERAGE_REPORT: 'whole.json', SOURCE_DIRECTORY: '.'}).status, 0);
+    write({[nested]: report[nested]});
+    assert.match(run().stderr, /Missing application source.*tool.config.js/);
+    const uncovered = structuredClone(report); uncovered[configuration].b[0][1] = 0;
+    write(uncovered);
+    assert.match(run().stderr, /uncovered branches/);
+    const child = {...part, report: 'nested.json', source_directory: 'src'};
+    for (const parts of [[part, child], [child, part]]) {
+      write(report, parts);
+      assert.match(run().stderr, /overlapping/);
+    }
+    for (const invalid of [{...part, report: '.'}, {...part, source_directory: './'}]) {
+      write(report, [invalid]);
+      assert.match(run().stderr, /repository-relative/);
+    }
+  } finally {fs.rmSync(directory, {recursive: true, force: true});}
+});
+
 test('the actual packaged coverage step verifies each native artifact without credentials or setup execution', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
   const action = parse(fs.readFileSync(path.join(root, 'action.yml'), 'utf8'));
