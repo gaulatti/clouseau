@@ -1,0 +1,1 @@
+Nondefault reference-only atomic acceptance qualification. No default branch or deployment changes.
