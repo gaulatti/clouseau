@@ -132,6 +132,15 @@ revalidated and retained. Failed transport framing can reuse its original factua
 response after lossless decoding; only missing judgments make new provider calls.
 Historical and new requests share the 64-request ceiling. The artifact separates
 new usage/cost from reused evidence. Ordinary PR assessment remains fresh.
+If only the qualification harness's reference transport changes, continuation
+can reuse input-identical recorded investigations and grades. It first verifies
+the original workflow source, unchanged production policy/rubrics/providers/roles,
+unchanged case source and causal references, immutable snapshots, reports and
+scores. Failed attempts and previous expected labels stay visible. This mode
+cannot request another investigation or grade; only the missing reference match
+may call a provider. A known defect may block as repair or integrity failure
+because integrity takes precedence, but its actual causal finding must still
+match the frozen defect reference. This is no permission to relax approval gates.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
 live evaluation must establish useful approvals, blocked drift and excess,
