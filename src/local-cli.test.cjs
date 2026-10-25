@@ -176,11 +176,18 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     const args = {directory: f.directory, base: f.base, 'request-file': request};
     let calls = 0;
     const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {calls++; throw new Error('Fixture transport unavailable');}};
-    await assert.rejects(runReview(args, deps), /transport unavailable/);
+    await assert.rejects(runReview(args, deps), error => {
+      assert.match(error.message, /transport unavailable.*preserved review evidence:/);
+      return true;
+    });
     await assert.rejects(runReview(args, deps), /already run/);
     assert.equal(calls, 1);
     const cache = path.join(state, 'reviews', fs.readdirSync(path.join(state, 'reviews'))[0]);
     assert.equal(JSON.parse(fs.readFileSync(path.join(cache, 'observations.jsonl'), 'utf8')).status, 'started');
+    const snapshot = JSON.parse(fs.readFileSync(path.join(cache, 'snapshot.json'), 'utf8'));
+    assert.equal(snapshot.repository, 'example/local-fixture');
+    assert.equal(snapshot.head_sha, git(f.directory, ['rev-parse', 'HEAD']).trim());
+    assert.equal(fs.statSync(path.join(cache, 'snapshot.json')).mode & 0o777, 0o600);
     assert.equal(fs.existsSync(path.join(cache, 'receipt.json')), false);
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
