@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+bundle="$(mktemp -d)"
+trap 'rm -rf "$bundle"' EXIT
+git archive HEAD | tar -x -C "$bundle"
+cd "$bundle"
+python3 -m unittest discover -s src -p 'test_*.py'
+node --test src/*.test.cjs

@@ -3,3 +3,4 @@ __pycache__/
 coverage.json
 .coverage
 .venv/
+.clouseau-work/
