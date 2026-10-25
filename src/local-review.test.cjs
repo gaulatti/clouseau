@@ -75,11 +75,11 @@ test('incomplete or nonconverging local investigations stop without grading or i
     const f = await fixture();
     await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => ({value}), addSources: async () => {}}), /Invalid local/);
   }
-  const f = await fixture(); let requests = 0;
-  await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => ({value:
-    {kind: 'source_request', report: null, request_sources: ['README.md']}}),
+  const f = await fixture(); let requests = 0; let calls = 0;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => {calls++; return {value:
+    {kind: 'source_request', report: null, request_sources: ['README.md']}};},
   addSources: async () => {requests++;}}), /budget/);
-  assert.equal(requests, 3);
+  assert.equal(requests, 3); assert.equal(calls, 4);
   const g = await fixture();
   const requested = new Set(); let extra = 0;
   await assert.rejects(localReview({snapshot: g.snapshot, ask: async task => {
@@ -96,6 +96,27 @@ test('incomplete or nonconverging local investigations stop without grading or i
     g.snapshot.sources[`extra-${++extra}`] = {authority: 'untrusted', kind: 'source', path: 'src/extra.js',
       ref: g.snapshot.head_sha, content: `fictional additional evidence ${extra}`}; refresh(g.snapshot);
   }}), /did not converge/);
+});
+
+test('the final allowed source batch is inspected before a report, without granting a fourth batch', async () => {
+  const f = await fixture(); let reads = 0; let calls = 0;
+  const result = await localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase === 'investigation') {
+      calls++;
+      if (task.role === 'examiner' && reads < 3) return {value: {kind: 'source_request', report: null,
+        request_sources: [`src/dependency-${reads}.js`]}, provenance: {fixture: true}};
+      const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
+      assert.match(packet.evidence.sources['dependency-3'].numbered_lines, /last required dependency/);
+    }
+    return f.ask(task);
+  }, addSources: async paths => {
+    assert.deepEqual(paths, [`src/dependency-${reads}.js`]); reads++;
+    f.snapshot.sources[`dependency-${reads}`] = {authority: 'untrusted', kind: 'source', path: paths[0],
+      ref: f.snapshot.head_sha, content: reads === 3 ? 'last required dependency' : 'earlier dependency'};
+    refresh(f.snapshot);
+  }});
+  assert.equal(result.decision, 'auto_approve'); assert.equal(reads, 3); assert.equal(calls, 5);
+  assert.ok(result.reviews.every(review => review.report.snapshot === f.snapshot.digest));
 });
 
 test('missing atomic grades stop local acceptance and uncertainty preserves an incomplete verdict', async () => {
