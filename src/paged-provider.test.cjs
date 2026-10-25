@@ -16,25 +16,27 @@ function credentials(run) {return async () => {
 };}
 const reply = body => ({ok: true, json: async () => body});
 
-test('the captured typed page reply needs no second kind discriminator when its native function already selects the branch', credentials(async () => {
+test('the captured direct page arguments need no duplicate kind or page_request wrapper', credentials(async () => {
   const f = await pagedFixture();
-  // Public qualification40184600392 returned exactly these argument fields.
+  // Public qualification40184935399 returned exactly these argument fields.
   // The native function selected page_request; no semantic content was absent.
-  const submitted = {observations: 'Read the supplied coverage tooling; request the actual production source next.', concerns: [],
-    page_request: {bank_digest: '76a4e6ecdd7d547d728decea527e9e2ee95d0765501125e9025d855740c39268',
-      pages: [{entry: 86, page: 0}, {entry: 77, page: 0}, {entry: 47, page: 0}, {entry: 53, page: 0}]}};
+  const submitted = {observations: 'Read the supplied head sources; request the actual base source next.', concerns: [],
+    bank_digest: '76a4e6ecdd7d547d728decea527e9e2ee95d0765501125e9025d855740c39268',
+    pages: [{entry: 46, page: 0}, {entry: 52, page: 0}, {entry: 76, page: 0}, {entry: 85, page: 0}]};
   const raw = JSON.stringify(submitted);
   const ask = providerAsk({snapshot: f.snapshot, model: 'deepseek-flash', fetchImpl: async () => reply({choices: [
     {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: 'page_request', arguments: raw}}]}},
   ]})});
   const response = await ask({role: 'examiner', phase: 'investigation', schema: pageSchema(f.snapshot), prompt: 'Frozen native typed reply regression.'});
-  assert.deepEqual(response.value, {kind: 'page_request', report: null, request_sources: [], ...submitted});
+  const {observations, concerns, ...payload} = submitted;
+  assert.deepEqual(response.value, {kind: 'page_request', report: null, request_sources: [], observations, concerns, page_request: payload});
   assert.equal(response.provenance.transport_digest, require('./acceptance.cjs').digest({function_name: 'page_request', raw, canonical: raw}));
 }));
 const branchFor = value => value.kind === 'report' ? 'acceptance_report' : value.kind;
 function encoded(value) {
   const active = value.kind === 'source_request' ? 'request_sources' : value.kind;
-  return {observations: value.observations, concerns: value.concerns, [active]: value[active]};
+  return {observations: value.observations, concerns: value.concerns,
+    ...(active === 'request_sources' ? {[active]: value[active]} : value[active])};
 }
 
 test('paged strict tools preserve typed facts without null or unsupported schema limits', async () => {
@@ -48,8 +50,11 @@ test('paged strict tools preserve typed facts without null or unsupported schema
   Object.values(tools).forEach(check);
   for (const tool of Object.values(tools)) {
     assert.equal(Object.hasOwn(tool.properties, 'kind'), false);
-    assert.equal(tool.required.length, 3);
+    assert.ok(tool.required.includes('observations') && tool.required.includes('concerns'));
   }
+  assert.deepEqual(Object.keys(tools.page_request.properties).sort(), ['bank_digest', 'concerns', 'observations', 'pages']);
+  assert.equal(Object.hasOwn(tools.acceptance_report.properties, 'report'), false);
+  assert.ok(tools.acceptance_report.properties.coverage);
 });
 
 test('central roles page independently and keep exposure in routed literal grading', credentials(async () => {
@@ -98,6 +103,7 @@ test('typed transport restores only reserved fields and rejects conflicting subm
   for (const [name, submitted, valid] of [
     ['source_request', {request_sources: ['src/dependency.js'], observations: '', concerns: []}, true],
     ['source_request', {page_request: {}, observations: '', concerns: []}, false],
+    ['page_request', {page_request: {bank_digest: 'a'.repeat(64), pages: []}, observations: '', concerns: []}, false],
     ['source_request', {kind: 'report', request_sources: ['src/dependency.js'], observations: '', concerns: []}, false],
     ['source_request', {kind: 'source_request', request_sources: ['src/dependency.js'], observations: '', concerns: [], report: {}}, false],
   ]) {

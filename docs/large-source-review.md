@@ -97,7 +97,10 @@ Central strict function transport uses separate report, page-request and
 source-request branches; inactive null/empty envelope fields are restored by the
 controller without changing submitted facts. The validated native function name
 is the sole discriminator; typed arguments contain observations, concerns and
-that function's active payload. The controller derives the constant internal
+that function's payload fields directly. A page function receives `bank_digest`
+and `pages`; a source function receives `request_sources`; an acceptance function
+receives the factual report fields. The controller supplies the internal
+report/page wrapper without changing any submitted field. It derives the constant internal
 `kind` from the function name rather than requesting a second duplicate selector.
 Local prompts describe their full response envelope; central prompts describe
 only the selected typed function's active fields. A rejected typed response
