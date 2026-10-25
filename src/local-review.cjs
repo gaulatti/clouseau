@@ -16,8 +16,29 @@ const stageInstructions = 'This is a pre-PR local change assessment, not the CI 
   'The trusted verification source proves only the accepted local recipe. Assess the changed behavior, test integrity and all supplied evidence. ' +
   'Independent CI tests, coverage, audits, workflow checks and container checks remain mandatory before GitHub approval and merge. ' +
   'Their pending execution alone is not missing local review evidence; do not claim they passed. ' +
+  'Exact-head owner confirmation for protected CI controls belongs to CI before approval. A local receipt cannot grant that confirmation. ' +
+  'Its pending execution alone does not block local reuse review when the implementation preserves that gate; actual unauthorized scope still blocks. ' +
   'Missing local execution, missing behavioral evidence, deceptive tests and unresolved source concerns still block. ' +
   'A passing local decision permits signed review reuse only and cannot authorize a merge.\n';
+
+function localEvidence(snapshot) {
+  const view = modelEvidence(snapshot);
+  for (const [id, source] of Object.entries(view.sources)) {
+    delete source.numbered_lines;
+    source.content = snapshot.sources[id].content;
+  }
+  view.proofs = view.proofs.map(({source, ...proof}) => ({...proof, source_index: view.sources[source].source_index}));
+  return view;
+}
+
+function localDrafts(snapshot, drafts) {
+  return drafts.map(draft => ({...draft, evidence: draft.evidence.map(proof => {
+    const source = snapshot.sources[proof.source];
+    if (!source || proof.quote !== source.content.split('\n').slice(proof.start - 1, proof.end).join('\n')) return proof;
+    const {quote, ...reference} = proof;
+    return reference;
+  })}));
+}
 
 async function localReview({snapshot, ask, addSources}) {
   const inspections = new Map();
@@ -39,10 +60,13 @@ async function localReview({snapshot, ask, addSources}) {
           'Account for every changed file; examine causal defects, scope drift, unnecessary mechanisms and fabricated tests. ' +
           'Do not invoke tools, skills or startup automation. Request missing source only through source_request. ' +
           'Select only supplied proof IDs. Factors contain observations and citations, never numbers. ' +
+          'Sources contain verbatim text; proof entries map source_index to exact line intervals. Earlier draft citations retain coordinates; their literal bytes remain in those immutable sources. ' +
+          'Group known missing dependencies in each source request; review_context states the remaining batch allowance. ' +
           'Each factor reason is at most 160 characters. The supplied template illustrates syntax only; replace every example. ' +
           'Closed corrected/dismissed findings keep their identity and disposition across revisions, even after renames or paraphrased titles. Reopen only through reopenings with the old id, a concrete reason describing what changed, and fresh current-source evidence; do not silently reverse an earlier accepted repair. Inventory every supplied source in coverage.sources. Record relevant dependencies as inspected with direct current-head proof, excluded with a cited justification, or missing with empty evidence. Missing material context requires review_completeness=unresolved, never a partial approval. Use source_request to obtain missing source before concluding. For every blocking prior_findings entry, retain its exact identifier and causal obligation or provide an explicit resolution citing current-head counterevidence. ' +
           'Return kind=source_request, report=null and up to eight relative paths if evidence is missing. Otherwise return kind=report with the complete report and an empty request_sources.\n' +
-          JSON.stringify({review_context: reviewContext, evidence: modelEvidence(snapshot), template: modelTemplate(snapshot), drafts})});
+          JSON.stringify({review_context: {...reviewContext, source_batches_remaining: 8 - round}, evidence: localEvidence(snapshot), template: modelTemplate(snapshot),
+            drafts: localDrafts(snapshot, drafts)})});
         usage.push(response.provenance);
         const value = response.value;
         if (value.kind === 'source_request') {
@@ -99,4 +123,4 @@ async function localReview({snapshot, ask, addSources}) {
     execution_digest: digest(usage)};
 }
 
-module.exports = {localReview};
+module.exports = {localReview, localEvidence, localDrafts};

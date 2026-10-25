@@ -31,9 +31,10 @@ function invoke(program, args, options) {
     child.stdout.on('data', chunk => {stdout += chunk; if (stdout.length > (options.maxBytes || 3000000)) child.kill('SIGKILL');});
     child.stderr.on('data', chunk => {stderr = (stderr + chunk).slice(-2000);});
     child.on('error', error => {clearTimeout(timer); reject(error);});
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
       clearTimeout(timer);
-      if (code !== 0) reject(new Error(`Local harness failed (${code}); diagnostic digest ${digest(stderr)}`));
+      if (code !== 0) reject(Object.assign(new Error(`Local harness failed (${code}); diagnostic digest ${digest(stderr)}`),
+        {harnessDiagnostic: {program, exit_code: code, signal, stderr}}));
       else resolve(stdout);
     });
     child.stdin.on('error', () => {});
@@ -43,6 +44,7 @@ function invoke(program, args, options) {
 
 async function askHarness({harness, role, phase, schema, prompt, execute = invoke}) {
   if (!['codex', 'claude'].includes(harness)) throw new Error('Supported authenticated harnesses: codex, claude');
+  if (harness === 'codex' && prompt.length > 1048576) throw new Error('Local Codex input exceeds its 1048576-character transport limit; preserve and inspect the complete evidence without truncation');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-harness-'));
   try {
     const schemaPath = path.join(directory, 'schema.json');

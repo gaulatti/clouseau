@@ -175,9 +175,11 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
     let calls = 0;
-    const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {calls++; throw new Error('Fixture transport unavailable');}};
+    const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {calls++; throw Object.assign(new Error('Fixture transport unavailable'),
+      {harnessDiagnostic: {exit_code: 1, stderr: 'fictional-private-diagnostic'}});}};
     await assert.rejects(runReview(args, deps), error => {
       assert.match(error.message, /transport unavailable.*preserved review evidence:/);
+      assert.ok(!error.message.includes('fictional-private-diagnostic'));
       return true;
     });
     await assert.rejects(runReview(args, deps), /already run/);
@@ -188,6 +190,9 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     assert.equal(snapshot.repository, 'example/local-fixture');
     assert.equal(snapshot.head_sha, git(f.directory, ['rev-parse', 'HEAD']).trim());
     assert.equal(fs.statSync(path.join(cache, 'snapshot.json')).mode & 0o777, 0o600);
+    const failure = path.join(cache, 'failure.json');
+    assert.equal(JSON.parse(fs.readFileSync(failure)).harness.stderr, 'fictional-private-diagnostic');
+    assert.equal(fs.statSync(failure).mode & 0o777, 0o600);
     assert.equal(fs.existsSync(path.join(cache, 'receipt.json')), false);
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
@@ -311,3 +316,43 @@ test('unregistered local signing and source changes stop before any receipt can 
     });
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 });
+
+
+test('operator additional checks execute after the accepted recipe, bind evidence and cache identity, and cannot waive coverage', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-additional-fixture-'));
+  try {
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const plan = path.join(state, 'checks.json');
+    const extra = [[process.execPath, '-e', "require('node:assert').throws(()=>require('./src/handler.js')(null), /Missing input/)"]];
+    fs.writeFileSync(plan, JSON.stringify(extra));
+    fs.writeFileSync(path.join(f.directory, 'coverage.json'), JSON.stringify(nativeFixture(f.directory)));
+    const args = {directory: f.directory, base: f.base, 'request-file': request, 'additional-checks': plan};
+    const deps = {state, ask: fakeHarness(), installed: fixtureInstallation};
+    const first = await runReview(args, deps);
+    const record = JSON.parse(fs.readFileSync(first.record));
+    const technical = JSON.parse(record.snapshot.sources.verification.content);
+    const accepted = JSON.parse(git(f.directory, ['show', `${f.base}:.clouseau-local.json`]));
+    assert.deepEqual(technical.commands.map(command => command.argv), [...accepted.verification, ...extra]);
+    assert.equal(technical.local_config_digest, digest(accepted));
+    assert.deepEqual(technical.exact_coverage, {lines: [2, 2], branches: [4, 4]});
+    extra.push([process.execPath, '-e', "require('node:assert').equal(require('./src/new.js'), 1)"]);
+    fs.writeFileSync(plan, JSON.stringify(extra));
+    const second = await runReview(args, deps);
+    assert.notEqual(first.record, second.record); assert.ok(fs.existsSync(first.record));
+    await assert.rejects(runReview(args, deps), /already run/);
+    const reportPath = path.join(f.directory, 'coverage.json');
+    const gap = JSON.stringify(nativeFixture(f.directory, true)); fs.writeFileSync(reportPath, gap);
+    const attemptedRepair = [[process.execPath, '-e', `require('node:fs').writeFileSync('coverage.json', ${JSON.stringify(JSON.stringify(nativeFixture(f.directory)))})`]];
+    assert.throws(() => executeVerification({directory: f.directory, config: accepted, additional: attemptedRepair}), /coverage failed/);
+    assert.equal(fs.readFileSync(reportPath, 'utf8'), gap, 'mandatory coverage fails before additional commands can run');
+    fs.writeFileSync(path.join(f.directory, 'coverage.json'), JSON.stringify(nativeFixture(f.directory)));
+    assert.throws(() => executeVerification({directory: f.directory, config: accepted,
+      additional: [[process.execPath, '-e', 'process.exit(7)']]}), /verification failed/);
+    assert.throws(() => executeVerification({directory: f.directory, config: accepted,
+      additional: [[process.execPath, '-e', 'require("node:fs").appendFileSync("coverage.json", " ")']]}), /changed accepted coverage artifacts/);
+    for (const value of ['x'.repeat(8001), '{}', JSON.stringify(Array(9).fill(['node'])), '[[]]']) {
+      fs.writeFileSync(plan, value);
+      await assert.rejects(runReview(args, deps), /Additional local checks|local-only Clouseau configuration/);
+    }
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+}));

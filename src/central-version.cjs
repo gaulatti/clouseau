@@ -111,9 +111,9 @@ function engineContext(snapshot) {
   // consumer installation investigations, not another executable engine.
   const current = ['action.yml', 'src/central-version.cjs', 'src/config.cjs', 'src/policy.cjs',
     'src/acceptance-controller.cjs', 'src/local-receipt.cjs', 'test/automatic-upgrade-contract.mjs',
-    'src/local-version.cjs', 'src/codeowners.cjs', 'src/merge-protection.cjs', 'src/central-version.test.cjs',
-    'src/local-receipt.test.cjs', 'src/codeowners.test.cjs', 'src/acceptance-controller.test.cjs',
-    'test/local-review-fixture.cjs', 'src/local-review.cjs', 'src/acceptance-sources.cjs', 'src/record-transport.cjs',
+    'src/local-version.cjs', 'src/codeowners.cjs', 'src/merge-protection.cjs', 'src/local-cli.cjs',
+    'src/local-git.cjs', 'src/local-harness.cjs', 'scripts/clouseau', 'scripts/install-agent',
+    'bin/clouseau.cjs', 'skills/clouseau/SKILL.md', 'src/local-review.cjs', 'src/acceptance-sources.cjs', 'src/record-transport.cjs',
     'src/provider.cjs', 'src/review-provider.cjs', 'src/acceptance.cjs', 'src/acceptance-review.cjs',
     ...(wiki ? ['src/wiki-git.cjs', 'src/wiki.cjs'] : [])];
   return [...current.map(filename => `.clouseau-ci/${filename}`), ...[...pins].flatMap(ref =>

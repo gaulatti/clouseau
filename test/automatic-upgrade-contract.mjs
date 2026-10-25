@@ -14,11 +14,14 @@ export function assertFrozenWorkflow(workflow, evaluate) {
   const next = {sha: 'b'.repeat(40), digest: 'd'.repeat(64)};
   let count = 0;
   for (const [name, job] of Object.entries(workflow.jobs)) {
-    const checkout = job.steps?.find(step => step.with?.repository === 'gaulatti/clouseau');
+    const checkouts = job.steps?.filter(step => step.with?.repository === 'gaulatti/clouseau' || step.with?.path === '.clouseau-ci') || [];
+    const checkout = checkouts[0];
     const actions = job.steps?.filter(step => step.uses === './.clouseau-ci') || [];
     if (!checkout && !actions.length) continue;
     count++;
     assert.ok(checkout, name);
+    assert.equal(checkouts.length, 1, `${name} cannot overwrite the frozen engine`);
+    assert.equal(checkout.with.repository, 'gaulatti/clouseau', `${name} uses the authorized repository`);
     const needs = Array.isArray(job.needs) ? job.needs : [job.needs];
     assert.ok(needs.includes('resolve-clouseau'), `${name} directly consumes the one selection`);
     assert.equal(checkout.with.ref, "${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}");
