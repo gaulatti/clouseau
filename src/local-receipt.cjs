@@ -9,6 +9,7 @@ const {reconcile} = require('./acceptance-ledger.cjs');
 const {centralSource, acceptsEngine} = require('./central-version.cjs');
 
 const DOMAIN = 'clouseau.local-review.v1';
+const MAX_RECEIPT_BYTES = 3000000;
 const MARKER = /<!-- clouseau-local-review:v1 ([a-f0-9]{40}) -->/g;
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const fail = message => {throw new Error(`Invalid local review receipt: ${message}`);};
@@ -78,7 +79,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   validateTrust(trust);
   requireReceipt(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
-    JSON.stringify(bundle).length <= 2000000, 'malformed signature envelope');
+    Buffer.byteLength(JSON.stringify(bundle)) <= MAX_RECEIPT_BYTES, 'malformed signature envelope');
   const p = bundle.payload;
   requireReceipt(p && Object.keys(p).sort().join(',') ===
     'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type' && p.type === DOMAIN,
@@ -133,7 +134,7 @@ async function loadReceipt({github, repo, ref}) {
   let {data} = await github.rest.repos.getContent({...repo, ref, path: 'clouseau-review.json'});
   if (data.encoding === 'none') {
     requireReceipt(data.type === 'file' && sha(data.sha) && Number.isSafeInteger(data.size) &&
-      data.size >= 0 && data.size <= 2000000, 'complete receipt artifact unavailable');
+      data.size >= 0 && data.size <= MAX_RECEIPT_BYTES, 'complete receipt artifact unavailable');
     const metadata = data;
     ({data} = await github.rest.git.getBlob({...repo, file_sha: metadata.sha}));
     requireReceipt(data.sha === metadata.sha && data.size === metadata.size,
@@ -144,7 +145,7 @@ async function loadReceipt({github, repo, ref}) {
       .update(`blob ${bytes.length}\0`).update(bytes).digest('hex') === metadata.sha,
     'receipt blob content differs from immutable artifact');
   }
-  requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 2000000,
+  requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= MAX_RECEIPT_BYTES,
     'complete receipt artifact unavailable');
   return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
 }
@@ -221,4 +222,4 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
   }
 }
 
-module.exports = {DOMAIN, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {DOMAIN, MAX_RECEIPT_BYTES, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};

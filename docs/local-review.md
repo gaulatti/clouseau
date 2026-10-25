@@ -331,7 +331,10 @@ input fails before invocation. Failed harness exits retain bounded stderr in
 private `failure.json` beside the snapshot and journal; public errors show only
 the diagnostic digest and evidence path, never the private stderr or environment.
 
-CI accepts complete receipt artifacts up to the existing 2,000,000-byte limit.
+CI accepts complete receipt artifacts up to 3,000,000 UTF-8 bytes. This bounded
+allowance accommodates complete source and converged independent reviews without
+discarding draft evidence; the prior 2 MB allowance rejected a passing 2.1 MB
+consumer record. Signature envelopes use the same byte limit.
 When the [GitHub Contents API](https://docs.github.com/en/rest/repos/contents#get-repository-content)
 omits inline content above 1 MB, CI reads the Git blob named by that immutable
 artifact's metadata. It checks the exact blob identity, byte count and Git object

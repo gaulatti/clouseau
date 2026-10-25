@@ -20,15 +20,15 @@ test('signed passing local receipt is verified and graded without a provider', a
 
 test('a complete signed receipt above the Contents inline limit loads from its exact immutable Git blob', async () => {
   const f = await fixture();
-  for (const name of ['a', 'b']) f.snapshot.sources[`fixture-${name}`] = {
+  for (const name of ['a', 'b', 'c']) f.snapshot.sources[`fixture-${name}`] = {
     path: `test/large-${name}.txt`, ref: f.snapshot.head_sha, authority: 'untrusted', kind: 'source',
-    content: `Fictional immutable transport fixture ${name}: ${name.repeat(200000)}`,
+    content: `Fictional immutable transport fixture ${name}: ${name.repeat(250000)}`,
   };
   require('./acceptance-sources.cjs').refresh(f.snapshot);
   f.record.result = await require('./local-review.cjs').localReview({...f, ask: f.ask});
   const bundle = issueReceipt(f.issue);
   const bytes = Buffer.from(JSON.stringify(bundle));
-  assert.ok(bytes.length > 1048576 && bytes.length <= 2000000);
+  assert.ok(bytes.length > 2000000 && bytes.length <= 3000000);
   const blobSha = crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
   const metadata = {type: 'file', encoding: 'none', size: bytes.length, sha: blobSha};
   const blob = {encoding: 'base64', content: bytes.toString('base64'), size: bytes.length, sha: blobSha};
@@ -41,11 +41,13 @@ test('a complete signed receipt above the Contents inline limit loads from its e
   const loaded = await loadReceipt({github, repo, ref});
   assert.deepEqual(loaded, bundle); assert.equal(reads, 1);
   assert.equal(verifyReceipt(loaded, f.expected).decision, 'auto_approve');
+  const oversized = structuredClone(bundle); oversized.payload.record.extra = 'é'.repeat(1500001);
+  assert.throws(() => verifyReceipt(oversized, f.expected), /malformed signature envelope/);
   loaded.signature = '!';
   assert.throws(() => verifyReceipt(loaded, f.expected), /envelope/);
 });
 
-test('unavailable, oversized, truncated and substituted receipt blobs fail closed within the unchanged size limit', async () => {
+test('unavailable, oversized, truncated and substituted receipt blobs fail closed within the bounded receipt limit', async () => {
   const bytes = Buffer.from('{"fixture_only":true}');
   const sha = crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
   const validMetadata = {type: 'file', encoding: 'none', size: bytes.length, sha};
@@ -54,7 +56,7 @@ test('unavailable, oversized, truncated and substituted receipt blobs fail close
   const github = {rest: {repos: {getContent: async () => ({data: metadata})},
     git: {getBlob: async () => {reads++; return {data: blob};}}}};
   const options = {github, repo: {owner: 'fixture', repo: 'consumer'}, ref: 'c'.repeat(40)};
-  for (const invalid of [{type: 'dir'}, {sha: 'main'}, {size: 0.5}, {size: -1}, {size: 2000001}]) {
+  for (const invalid of [{type: 'dir'}, {sha: 'main'}, {size: 0.5}, {size: -1}, {size: 3000001}]) {
     metadata = {...validMetadata, ...invalid}; reads = 0;
     await assert.rejects(loadReceipt(options), /artifact unavailable/); assert.equal(reads, 0);
   }

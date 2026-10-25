@@ -9,7 +9,8 @@ function cliApi(execute = cp.execFileSync) {
     }
     const args = ['api', '--hostname', 'github.com', '--method', method, endpoint];
     if (body !== undefined) args.push('--input', '-');
-    return JSON.parse(execute('gh', args, {encoding: 'utf8', maxBuffer: 3000000,
+    // Allow the bounded 3 MB receipt plus GitHub's base64/JSON representation.
+    return JSON.parse(execute('gh', args, {encoding: 'utf8', maxBuffer: 4500000,
       ...(body === undefined ? {} : {input: JSON.stringify(body)})}));
   };
 }

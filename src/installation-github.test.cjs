@@ -8,7 +8,7 @@ test('native gh adapter pins github.com and sends structured public enrollment t
   const calls = [];
   const api = cliApi((...args) => {calls.push(args); return JSON.stringify({id: 31});});
   assert.deepEqual(await api('GET', 'user'), {id: 31});
-  assert.deepEqual(calls[0], ['gh', ['api', '--hostname', 'github.com', '--method', 'GET', 'user'], {encoding: 'utf8', maxBuffer: 3000000}]);
+  assert.deepEqual(calls[0], ['gh', ['api', '--hostname', 'github.com', '--method', 'GET', 'user'], {encoding: 'utf8', maxBuffer: 4500000}]);
   const body = {body: '/authorize-clouseau-installation v1\n{"identity":{"public_key":"PUBLIC"}}'};
   assert.deepEqual(await api('POST', 'repos/fixture-owner/project/commits/' + 'a'.repeat(40) + '/comments', body), {id: 31});
   const [program, args, options] = calls[1];
