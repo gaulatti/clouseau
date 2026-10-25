@@ -28,7 +28,7 @@ async function localReview({snapshot, ask, addSources}) {
       if (previous?.report.snapshot === snapshot.digest) continue;
       const drafts = previous ? [...previous.drafts, previous.report] : [];
       let completed;
-      for (let round = 0; round < 3; round++) {
+      for (let round = 0; ; round++) {
         const alternatives = schemas(snapshot);
         const response = await ask({role, phase: 'investigation', schema: object({
           kind: {type: 'string', enum: ['report', 'source_request']},
@@ -47,6 +47,7 @@ async function localReview({snapshot, ask, addSources}) {
         const value = response.value;
         if (value.kind === 'source_request') {
           if (value.report !== null || !value.request_sources.length) throw new Error('Invalid local source request');
+          if (round === 3) throw new Error('Local investigation exhausted its source-request budget');
           await addSources(value.request_sources); continue;
         }
         if (value.kind !== 'report' || value.request_sources.length) throw new Error('Invalid local investigation response');
@@ -54,7 +55,6 @@ async function localReview({snapshot, ask, addSources}) {
         validateInspection(completed, snapshot, drafts);
         break;
       }
-      if (!completed) throw new Error('Local investigation exhausted its source-request budget');
       inspections.set(role, {role, report: completed, drafts});
     }
     if ([...inspections.values()].every(item => item.report.snapshot === snapshot.digest)) break;

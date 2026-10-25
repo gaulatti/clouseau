@@ -87,6 +87,9 @@ files up front, including their actual pinned bootstrap. Changed project files
 and contracts are still complete; source size and investigation limits stay
 unchanged. Incomplete local reviews retain the delivered snapshot and journal,
 and the error identifies their private local evidence directory.
+The final allowed local source batch is delivered before the report turn; it is
+not read and discarded at the investigation limit. Three batches of up to eight
+paths remain the maximum. Another source request still fails closed.
 
 Local-only installations still need only the public Clouseau source and an
 authenticated coding harness. CI configuration and provider credentials are not
