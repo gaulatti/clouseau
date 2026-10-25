@@ -305,3 +305,28 @@ Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
 engine. The collector records that engine revision as untrusted source evidence
 without requiring a consumer CI checkout. CI verifies the exact signed excerpt
 against its accepted engine; engine source cannot become a repository contract.
+
+
+The local reuse assessment does not grant protected-control owner confirmation.
+That exact-head confirmation remains mandatory in CI before approval. Its pending
+execution alone cannot block the pre-PR reuse assessment when the implementation
+preserves the gate. Actual unsupported scope or authority still blocks.
+
+For explicit additional behavioral checks, pass `--additional-checks FILE`, where
+FILE is an operator-supplied JSON array of at most eight argv arrays, for example
+`[["npm", "test", "--prefix", ".github/tests"]]`. Keep this file outside the source
+checkout. This only adds checks: the accepted-base recipe and exact coverage
+must pass first, and additional checks must leave those coverage artifacts
+unchanged. Every command result and the additional plan are bound to the review
+and cache identity. This can record consumer workflow-test execution without
+changing application scripts or triggering deployment. It requires no CI keys
+and creates no CI installation. Independent hosted checks remain mandatory.
+
+Local harness presentation preserves every source byte and prior observation.
+It sends verbatim source with indexed proof coordinates and replaces a duplicate
+draft quote only when the identical bytes remain in the referenced immutable
+source. Differing or unavailable earlier literals remain explicit. No source,
+concern, disposition or score is truncated to fit transport. Oversized Codex
+input fails before invocation. Failed harness exits retain bounded stderr in
+private `failure.json` beside the snapshot and journal; public errors show only
+the diagnostic digest and evidence path, never the private stderr or environment.

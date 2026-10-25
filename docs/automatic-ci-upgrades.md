@@ -146,3 +146,14 @@ The report schema permits an inspected dependency only when its current-head
 source is supplied. Call-site evidence cannot establish dependency inspection;
 missing material source must be requested or explicitly reported missing.
 
+
+
+Local qualification can add explicit operator checks with
+`--additional-checks FILE`; these run after accepted-base verification and exact
+coverage, cannot change its coverage artifacts, and never replace CI checks.
+This records the actual consumer workflow tests without application changes or
+deployment. Local evidence uses lossless transport presentation, retaining all
+source and prior observations while avoiding duplicate literal text. A transport
+limit still fails closed with private diagnostics, never a partial approval.
+The workflow contract checks every engine checkout and rejects a later checkout
+that could overwrite the frozen source before tests or coverage.
