@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {FACTORS} = require('./acceptance.cjs');
+const {FACTORS, digest} = require('./acceptance.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 const {requestJSON, requestJev, JEV_PACKET_LIMIT} = require('./review-provider.cjs');
 
@@ -33,13 +33,44 @@ function locations(report) {
 }
 
 function packetFor(location, report, snapshot, inspection) {
+  let completeness;
+  if (location.group === 'completeness') {
+    completeness = {available_sources: Object.entries(snapshot.sources).map(([id, source]) =>
+      ({id, path: source.path, ref: source.ref, kind: source.kind}))};
+    if (snapshot.source_bank_version === 1) {
+      const sources = Object.keys(snapshot.sources); const indexes = new Map(sources.map((id, index) => [id, index]));
+      const {pageAvailability} = require('./source-view.cjs');
+      const availability = pageAvailability(snapshot, inspection.source_bank, inspection.source_view);
+      const revisions = [...new Set([snapshot.base_sha, snapshot.head_sha, ...sources.map(id => snapshot.sources[id].ref)])];
+      const kinds = [...new Set(sources.map(id => snapshot.sources[id].kind))];
+      const dispositions = [...new Set(report.coverage.sources.map(item => item.state))];
+      // Opaque ref:path IDs are replaced only in this metadata view. The
+      // stable index joins exact paths/revisions and every observed disposition.
+      // Full banks, historical journals and literal citations stay in the record.
+      completeness = {revisions, source_kinds: kinds,
+        available_sources: {columns: ['source_index', 'path', 'revision_index', 'kind_index'], rows: sources.map((id, source_index) => {
+          const source = snapshot.sources[id];
+          return [source_index, source.path, revisions.indexOf(source.ref), kinds.indexOf(source.kind)];
+        })}, coverage: {dispositions, sources: {columns: ['source_index', 'disposition_index', 'reason', 'evidence'],
+          rows: report.coverage.sources.map(item => [indexes.get(item.source), dispositions.indexOf(item.state), item.reason, item.evidence])},
+          dependencies: report.coverage.dependencies},
+        source_exposure: {bank_digest: availability.bank_digest, snapshot_digest: availability.snapshot_digest, role: availability.role,
+          sources: {columns: ['source_index', 'required', 'page_count', 'received_pages'], rows: availability.entries.flatMap(item => {
+            const entry = inspection.source_bank.entries[item.entry];
+            return entry.kind === 'source' ? [[indexes.get(entry.source), item.required, item.page_count, item.received_pages]] : [];
+          })},
+          additional_entries: {required: true, columns: ['entry', 'kind', 'path', 'page_count', 'received_pages'],
+            rows: availability.entries.flatMap(item => {
+              const entry = inspection.source_bank.entries[item.entry];
+              return entry.kind === 'source' ? [] : [[item.entry, entry.kind, entry.path, item.page_count, item.received_pages]];
+            })},
+          historical_epochs: inspection.source_history.map(({bank, exposure}) => ({bank_digest: bank.bank_digest,
+            snapshot_digest: bank.snapshot_digest, exposure_digest: digest(exposure)})),
+          meaning: 'Controller byte-delivery history only; independently judge material context and semantic completeness.'}};
+    }
+  }
   return {subject: location.subject, obligation: location.obligation, context: {...location.context,
-    ...(location.group === 'completeness' ? {available_sources: Object.entries(snapshot.sources).map(([id, source]) =>
-      ({id, path: source.path, ref: source.ref, kind: source.kind})),
-      ...(snapshot.source_bank_version === 1 ? {source_exposure: {
-        source_bank: inspection.source_bank, source_view: inspection.source_view, source_history: inspection.source_history,
-        meaning: 'Controller byte-delivery history only; independently judge material context and semantic completeness.',
-      }} : {})} : {})}, observations: location.target.reason,
+    ...completeness}, observations: location.target.reason,
     evidence: [...new Set([...location.target.evidence, ...(location.causal_evidence || [])])].map(id => {
       const entry = report.evidence.find(item => item.id === id);
       const source = snapshot.sources[entry.source];

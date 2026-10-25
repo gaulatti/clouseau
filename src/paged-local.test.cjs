@@ -16,9 +16,11 @@ test('both local roles inspect independently, grade literal bounded evidence and
     if (task.phase === 'investigation') return model.ask(task);
     const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
     const audit = packet.questions.review_completeness.evidence.context.source_exposure;
-    assert.equal(audit.source_view.role, task.role);
-    assert.equal(audit.source_bank.snapshot_digest, f.snapshot.digest);
-    assert.ok(audit.source_view.rounds.length > 0);
+    assert.equal(audit.role, task.role);
+    assert.equal(audit.snapshot_digest, f.snapshot.digest);
+    assert.ok(audit.sources.rows.length > 0);
+    assert.ok(audit.sources.rows.every(row => row[2] === row[3].length));
+    assert.ok(audit.additional_entries.rows.every(row => row[3] === row[4].length));
     assert.match(audit.meaning, /independently judge/);
     audits.push(task.role); return f.ask(task);
   }});

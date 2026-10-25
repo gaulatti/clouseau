@@ -5,23 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const {digest} = require('./acceptance.cjs');
-
-function compactSchema(schema) {
-  const definitions = {};
-  function visit(value) {
-    if (Array.isArray(value)) return value.map(visit);
-    if (!value || typeof value !== 'object') return value;
-    if (Array.isArray(value.enum) && value.enum.length > 1) {
-      const id = `choice_${digest([value.type, value.enum])}`;
-      definitions[id] = {type: value.type, enum: value.enum};
-      return {...Object.fromEntries(Object.entries(value).filter(([key]) => !['type', 'enum'].includes(key))
-        .map(([key, item]) => [key, visit(item)])), $ref: `#/$defs/${id}`};
-    }
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visit(item)]));
-  }
-  const result = visit(schema);
-  return Object.keys(definitions).length ? {...result, $defs: definitions} : result;
-}
+const {compactSchema} = require('./review-schema.cjs');
 
 function invoke(program, args, options) {
   return new Promise((resolve, reject) => {

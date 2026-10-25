@@ -54,9 +54,11 @@ function modelTemplate(snapshot) {
     [catalog.find(proof => proof.source === entry.source && proof.start <= entry.start && proof.end >= entry.end).id]]));
   delete sample.evidence;
   const facts = canonicalReferences(sample, aliases);
-  for (const item of facts.coverage?.sources || []) {
-    const [primary, ...additional] = item.evidence;
-    item.evidence = {primary, additional};
+  if (snapshot.source_bank_version === 1) {
+    facts.coverage.sources = Object.fromEntries(facts.coverage.sources.map(({source, ...item}) => [String(source), item]));
+  } else for (const item of facts.coverage?.sources || []) {
+      const [primary, ...additional] = item.evidence;
+      item.evidence = {primary, additional};
   }
   return facts;
 }
@@ -71,6 +73,19 @@ function canonicalReferences(value, spans = new Map()) {
 
 function materialize(facts, snapshot) {
   const report = canonicalReferences(facts);
+  if (snapshot.source_bank_version === 1) {
+    const slots = report.coverage?.sources;
+    const expected = Object.keys(snapshot.sources).map((_, index) => String(index));
+    if (!slots || Array.isArray(slots) || typeof slots !== 'object' ||
+      Object.keys(slots).sort().join(',') !== expected.sort().join(',')) throw new Error('Factual paged inventory requires every exact source-index slot');
+    report.coverage.sources = Object.keys(snapshot.sources).map((_, index) => {
+      const item = slots[String(index)];
+      if (!item || Object.keys(item).sort().join(',') !== 'evidence,reason,state' || !Array.isArray(item.evidence)) {
+        throw new Error('Factual paged source slots require only state, reason and proof IDs');
+      }
+      return {source: index, ...item};
+    });
+  }
   // Transport indices select exact controller-owned IDs, including empty files.
   // Never repair a truncated SHA, invent a source or change a disposition.
   const inventory = Object.fromEntries(Object.keys(snapshot.sources).map((source, index) => [index, source]));

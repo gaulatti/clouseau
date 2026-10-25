@@ -2,6 +2,7 @@
 
 const {digest} = require('./acceptance.cjs');
 const {requestJSON} = require('./review-provider.cjs');
+const {compactSchema} = require('./review-schema.cjs');
 
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
 const branches = {acceptance_report: ['report', 'report'], page_request: ['page_request', 'page_request'],
@@ -11,10 +12,10 @@ const branches = {acceptance_report: ['report', 'report'], page_request: ['page_
 // reserved transport fields are restored; the submitted facts are unchanged.
 function pageFunctions(schema) {
   const fields = schema.properties;
-  return Object.fromEntries(Object.entries(branches).map(([name, [kind, active]]) => [name, object({
+  return Object.fromEntries(Object.entries(branches).map(([name, [kind, active]]) => [name, compactSchema(object({
     kind: {type: 'string', enum: [kind]}, observations: fields.observations, concerns: fields.concerns,
     [active]: active === 'request_sources' ? fields[active] : fields[active].anyOf[0],
-  })]));
+  }), {definitionKey: '$def'})]));
 }
 
 function providerAsk({model, fetchImpl, wait, log, observe = () => {}, snapshot}) {

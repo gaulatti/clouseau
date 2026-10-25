@@ -51,6 +51,34 @@ function sourceExposure(view) {
     rounds: JSON.parse(JSON.stringify(state.rounds))};
 }
 
+function requiredEntry(snapshot, entry) {
+  return entry.kind !== 'source' || snapshot.files.some(file => [file.base_source, file.head_source].includes(entry.source)) ||
+    entry.authority === 'trusted' && ['contract', 'verification'].includes(entry.source_kind);
+}
+
+// Current literal pages may constrain the response schema, but they never
+// enter the acknowledged journal until the actual invocation completes.
+function pageAvailability(snapshot, bank, exposure, currentPages = []) {
+  requireView(exposure.snapshot_digest === snapshot.digest && bank.snapshot_digest === snapshot.digest &&
+    exposure.bank_digest === bank.bank_digest && Array.isArray(currentPages), 'availability identity');
+  requireView(currentPages.every(page => page.bank_digest === bank.bank_digest), 'current availability page identity');
+  const received = new Map(bank.entries.map(entry => [entry.entry, new Set()]));
+  for (const selector of [...exposure.rounds.flatMap(round => round.request.pages), ...currentPages]) {
+    const entry = bank.entries[selector.entry];
+    requireView(entry && Number.isSafeInteger(selector.entry) && Number.isSafeInteger(selector.page) && selector.page >= 0 && selector.page < entry.page_count,
+      'availability selector');
+    received.get(entry.entry).add(selector.page);
+  }
+  const entries = bank.entries.map(entry => ({entry: entry.entry, required: requiredEntry(snapshot, entry),
+    page_count: entry.page_count, received_pages: [...received.get(entry.entry)].sort((a, b) => a - b)}));
+  const unread = entries.filter(entry => entry.required).flatMap(entry => Array.from({length: entry.page_count}, (_, page) =>
+    ({entry: entry.entry, page})).filter(selector => !received.get(entry.entry).has(selector.page)));
+  return {role: exposure.role, bank_digest: bank.bank_digest, snapshot_digest: snapshot.digest, entries,
+    required_unread_page_selectors: unread, completeness_ready: unread.length === 0,
+    inspected_sources: bank.entries.filter(entry => entry.kind === 'source' && received.get(entry.entry).size === entry.page_count)
+      .map(entry => entry.source)};
+}
+
 function verifySourceExposure(snapshot, report, exposure, usage) {
   requireView(exact(exposure, ['version', 'role', 'snapshot_digest', 'bank_digest', 'rounds']) && exposure.version === 1 &&
     roles.includes(exposure.role), 'exposure identity');
@@ -100,12 +128,10 @@ function verifySourceExposure(snapshot, report, exposure, usage) {
   }
   if (report.gates.find(gate => gate.name === 'review_completeness').state === 'satisfied') {
     for (const entry of entries) {
-      const required = entry.kind !== 'source' || snapshot.files.some(file => [file.base_source, file.head_source].includes(entry.source)) ||
-        entry.authority === 'trusted' && ['contract', 'verification'].includes(entry.source_kind);
-      requireView(!required || complete(entry), 'unseen required page cannot establish completeness');
+      requireView(!requiredEntry(snapshot, entry) || complete(entry), 'unseen required page cannot establish completeness');
     }
   }
   return true;
 }
 
-module.exports = {MAX_VIEW_ROUNDS, createSourceView, prepareSourcePages, recordSourcePages, sourceExposure, verifySourceExposure};
+module.exports = {MAX_VIEW_ROUNDS, createSourceView, prepareSourcePages, recordSourcePages, sourceExposure, requiredEntry, pageAvailability, verifySourceExposure};

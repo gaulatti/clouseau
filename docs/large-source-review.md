@@ -20,6 +20,16 @@ Entry numbers and page indices are zero-based: an entry with `page_count: 1`
 has only `page: 0`. Every prompt includes an exact valid selector example.
 Each role also receives its controller-recorded delivered selectors and current
 literal pages so a fresh continuation can identify unread material.
+The controller lists the remaining required selectors and restricts the response
+schema to sources whose full bytes are available, including the current literal
+pages. It withholds satisfied completeness until all required pages are available.
+Current pages enter the acknowledged journal only after the invocation completes.
+Honest missing-source and unresolved reports remain possible.
+
+The factual source inventory has one required object slot for every exact
+`source_index`, including verification, requirement and excluded material. Each
+slot contains its disposition, reason and proof IDs. The controller rejects an
+omitted, invented or substituted slot; it never fills missing judgments itself.
 The controller accepts only selectors for the frozen bank and acknowledges a
 delivery only after a completed authenticated invocation. A citation spanning
 pages requires all its literal bytes. An empty source also requires its actual
@@ -41,6 +51,20 @@ bind it to the owning role and actual invocations, and reject altered facts,
 missing deliveries, borrowed role history or erased concerns. Grading can set
 numeric bounds and apply the existing authority/completeness constraints; it
 cannot rewrite factual observations or make missing evidence complete.
+
+Grading uses reversible metadata tables with explicit columns and catalogs for
+source indexes, full revisions, kinds and dispositions. Paths, reasons and proof
+IDs are retained verbatim. Current delivery state is joined by source index;
+historical epochs carry their validated bank/exposure digests in that grading
+view. Full native banks, historical journals and model responses remain in the
+signed record and undergo the original replay. This avoids repeating opaque IDs
+and entire journals inside one atomic question while retaining literal cited
+evidence, complete trusted contracts and the independent completeness rubric.
+
+Repeated schema objects and choices share exact definitions without dropping
+constraints or source slots. Native harness schemas use `$defs`; central strict
+function schemas use the provider's documented
+[`$def` and `$ref` form](https://api-docs.deepseek.com/guides/tool_calls/#ref-and-def).
 
 | Bound | Limit |
 | --- | ---: |

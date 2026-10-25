@@ -52,7 +52,7 @@ test('central roles page independently and keep exposure in routed literal gradi
       const state = packet.state;
       if (questions.review_completeness) {
         const exposure = state.factors.review_completeness.context.source_exposure;
-        assert.ok(exposure.source_view.rounds.length > 0); audits.push(exposure.source_view.role);
+        assert.ok(exposure.sources.rows.length > 0); audits.push(exposure.role);
       }
       if (body.questions) return reply({model: JEV_MODEL, answers: Object.fromEntries(Object.keys(questions).map(id => {
         const choice = id.includes('_excess_') ? 'level0' : 'level4';
