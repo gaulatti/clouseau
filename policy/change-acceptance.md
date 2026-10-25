@@ -120,26 +120,38 @@ it never causes a model retry or changes a judgment.
 ## Required gates
 
 The controller identifies the review stage. A pre-PR local assessment evaluates
-the change, its behavioral evidence and every check in the accepted local recipe.
-It does not authorize GitHub approval or merge. Independent CI tests, coverage,
-audits, workflow and container checks remain mandatory downstream conditions;
-their pending execution alone does not make the local assessment incomplete.
-Never claim those checks ran locally. Missing local execution or behavioral
-evidence, deceptive tests and unresolved source concerns still hold the local
-review. CI must execute its own required checks before reusing a local receipt.
+the change, its behavioral evidence and the recorded outcomes of every check in
+the accepted local recipe. Run local AI assessment regardless of coverage
+percentage or availability. Partial coverage, a failed coverage command, or
+missing, malformed, unsupported or unverified coverage data must be recorded
+honestly; none alone suppresses the examiner/challenger assessment or forces a
+local quality failure. Never invent native counts, infer that a nonzero command
+failed only because of coverage, or claim that failed or unverified execution
+passed. Actual behavioral failures and missing material evidence still require
+investigation and may prevent a passing quality verdict.
 
-All tests and exact nonempty 100% line/branch coverage are mandatory. Check test
-integrity: actual production paths and meaningful assertions/failure cases,
-including whether the claimed regression would distinguish the prior behavior.
-Ordinary mocks at real external boundaries are legitimate; mocks replacing the
-behavior claimed, always-true assertions, fake coverage, swallowed failures,
-disabled checks and special test success paths are not. Integrity cannot be
-waived by owner intent. Percentage reports alone establish no behavioral proof.
-Missing tests, an incomplete receipt or an unexecuted behavior establish missing
-verification, not fabrication. Mark that evidence unresolved and request the
-missing verification. A violated integrity gate requires affirmative deceptive
-or non-discriminating test behavior, such as an always-true replacement assertion.
-Keep execution/coverage deficits in the required gates. Do not duplicate a
+A local quality verdict does not authorize GitHub approval or merge. Independent
+CI tests, coverage, audits, workflow and container checks remain mandatory
+downstream conditions; their pending execution alone does not make the local
+assessment incomplete. Never claim those checks ran locally. Signed evidence
+authenticates the local AI assessment for reuse; CI must independently satisfy
+its technical gates before approval or merge, even when it has verified and
+reused that assessment without another AI call.
+
+For CI approval and merge, all tests and exact nonempty 100% line/branch coverage
+are mandatory. Check test integrity in every review stage: actual production
+paths and meaningful assertions/failure cases, including whether the claimed
+regression would distinguish the prior behavior. Ordinary mocks at real external
+boundaries are legitimate; mocks replacing the behavior claimed, always-true
+assertions, fake coverage, swallowed failures, disabled checks and special test
+success paths are not. Integrity cannot be waived by owner intent. Percentage
+reports alone establish no behavioral proof. Missing tests, an incomplete receipt
+or an unexecuted behavior establish missing verification, not fabrication. When
+that evidence is material to the changed behavior, mark it unresolved and request
+the missing verification. A violated integrity gate requires affirmative
+deceptive or non-discriminating test behavior, such as an always-true replacement
+assertion. Keep execution/coverage deficits in the independent technical gates;
+do not treat percentage alone as a local quality defect. Do not duplicate a
 receipt-only verification failure as a source defect without its own changed-path
 causal evidence, or multiply findings for the same always-true test replacement.
 

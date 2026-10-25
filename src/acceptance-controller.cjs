@@ -66,8 +66,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const identity = {version: 2, number, head_sha: pr.head.sha, base_sha: pr.base.sha, ...(engine ? {engine} : {})};
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
     const technical = await legacy.technicalRun(github, repo, pr, {receipt: true});
-    if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
-    if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
+    const technicalBlock = technical.pending ? {decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'} :
+      technical.failure ? {decision: 'blocked_technical', reason: technical.failure} : null;
     const observations = [];
     const snapshots = {};
     let snapshot;
@@ -77,11 +77,15 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       fs.writeFileSync(`${recordPath}.diagnostic.json`, JSON.stringify({...value, snapshots}, null, 2) + '\n');
     };
     try {
+      const receipts = require('./local-receipt.cjs');
+      const receiptRef = receipts.marker(pr.body);
+      // A signed local quality review is reusable even when independent CI
+      // cannot yet authorize acceptance. Unstamped changes retain the existing
+      // technical precondition before any paid investigation.
+      if (!receiptRef && technicalBlock) return {...identity, ...technicalBlock};
       const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
-      const receipts = require('./local-receipt.cjs');
-      const receiptRef = receipts.marker(pr.body);
       if (receiptRef) {
         const bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
         const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
@@ -92,6 +96,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
           throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
+        }
+        if (technicalBlock) {
+          if (report) report('Authenticated local Clouseau quality review verified. Independent CI acceptance remains blocked. CI AI calls: 0.');
+          return {...identity, ...technicalBlock, review_source: 'authenticated_local', provider_api_calls: 0,
+            reason: `Authenticated local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
         const record = {...verified.record, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical, local_author: pr.user.login,
           local_artifact: receiptRef, local_receipt: bundle};

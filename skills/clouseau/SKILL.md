@@ -24,20 +24,29 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
 3. Store the requirement text outside the checkout and run
    `clouseau review --directory REPO --request-file FILE --harness codex`.
    Use `--harness claude` when working with that authenticated harness. No CI
-   provider keys are needed. Fresh examiner and challenger sessions receive the
-   frozen evidence without the implementer's conversation or each other's work.
+   provider keys are needed. Real verification outcomes are recorded first;
+   partial coverage, a failing coverage command or unavailable/invalid coverage
+   never suppresses local AI review or becomes fabricated passing counts. Fresh
+   examiner and challenger sessions receive the frozen evidence without the
+   implementer's conversation or each other's work.
 4. Read the recorded findings, factor grades, source citations and decision.
    Fix demonstrated blockers within the accepted requirement, verify the repair
    and review the new revision. Retain negative evidence; never repeat an
    unchanged review in search of approval. At most two repair cycles belong to
    one implementation attempt. Missing purpose or authority requires a concrete
    owner decision; source or verification gaps require investigation.
-   This pre-PR assessment requires the accepted local recipe and behavioral
-   evidence. CI's separate technical checks remain mandatory before approval
-   and merge; pending CI execution is not a claimed local result.
+   This pre-PR assessment requires the accepted local recipe, safe complete
+   immutable source and material behavioral evidence. Coverage percentage or
+   unavailable coverage alone does not force a failing AI quality verdict;
+   demonstrated defects, deceptive tests and missing material context still do.
+   Report the AI decision separately from local verification/coverage status.
+   CI's separate tests and exact-100% coverage gate remain mandatory before
+   approval and merge; a local quality verdict cannot claim those results.
 5. An enrolled runner selects its installed signing identity automatically.
    Pass `--identity FILE` when multiple enrolled identities require selection.
-   A passing final review produces a signed receipt automatically. Never read,
+   A passing final AI quality review produces a signed reuse receipt
+   automatically. The receipt cannot authorize technical approval or merge,
+   including when local coverage is below 100%. Never read,
    print, transmit or copy the identity's private material into a repository,
    prompt, tool environment or report. The identity file belongs to the trusted
    local runner, not to project source. Developer-owned workstations and their

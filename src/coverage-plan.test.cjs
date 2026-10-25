@@ -28,7 +28,7 @@ test('v2 explicit native parts preserve the v1 single-artifact contract', () => 
 test('coverage configuration rejects unsafe paths, unknown policy fields and ambiguous native parts', () => {
   const invalid = [null, {version: 3}, recipe(null), recipe([]), recipe('not a plan'),
     recipe(Array.from({length: 33}, (_, index) => part('src' + index, `report${index}.json`))),
-    recipe([null]), recipe([{...part(), format: 'go'}]), recipe([part('src', 'llvm.json', 'llvm')]),
+    recipe([null]), recipe([{...part(), format: ''}]), recipe([{...part(), format: '../unsafe'}]),
     recipe([{...part(), report: '../outside.json'}]), recipe([{...part(), report: null}]),
     recipe([{...part(), source_directory: '/outside'}]), recipe([{...part(), source_directory: null}]),
     recipe([{...part(), excludes: ['uncovered.ts']}]),
@@ -57,3 +57,13 @@ test('the complete v2 plan comes from accepted base rather than the proposed rec
 }, directory => {
   fs.writeFileSync(path.join(directory, '.clouseau-local.json'), JSON.stringify(recipe([part('src', 'accepted.json')])));
 }));
+
+
+test('local assessment retains a safe unsupported format as unavailable evidence while native CI configuration remains strict', () => {
+  for (const format of ['go', 'llvm']) {
+    const config = recipe([part('src', 'native.json', format)]);
+    assert.equal(readLocalConfig(config), config);
+    assert.deepEqual(coverageParts(config, {allowUnsupported: true}), config.coverage);
+    assert.throws(() => coverageParts(config), /Invalid local-only/);
+  }
+});

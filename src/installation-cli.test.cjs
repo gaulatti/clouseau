@@ -265,8 +265,27 @@ test('renewing owner-grant timestamps cannot resample an unchanged transport fai
   assert.equal(calls, 1);
 }));
 
-test('default verifier and harness references never bypass a failed real coverage artifact', () => fixture(async f => {
-  await assert.rejects(cli.runReview(f.reviewArgs, {...f.reviewRuntime, verify: undefined, ask: undefined}), /exact line and branch coverage failed/);
+test('default verifier and harness references still stop unsafe signing-material output before assessment', () => fixture(async f => {
+  f.local.verification = [[process.execPath, '-e', 'console.log("-----BEGIN PRIVATE KEY-----fixture-only")']];
+  fs.writeFileSync(path.join(f.directory, '.clouseau-local.json'), JSON.stringify(f.local));
+  git(f.directory, ['add', '.clouseau-local.json']); git(f.directory, ['commit', '-qm', 'test: preserve private output boundary']);
+  await f.refresh();
+  await assert.rejects(cli.runReview(f.reviewArgs, {...f.reviewRuntime, verify: undefined, ask: undefined}), /Private signing material/);
+}));
+
+test('installation local quality assessment runs with unavailable real coverage and retains manual-only trust authority', () => fixture(async f => {
+  const ask = harness();
+  const result = await cli.runReview(f.reviewArgs, {...f.reviewRuntime, verify: undefined, ask});
+  const record = JSON.parse(fs.readFileSync(result.record));
+  assert.equal(ask.calls(), 4);
+  assert.equal(record.technical.coverage.status, 'unavailable');
+  assert.equal(record.technical.exact_coverage, null);
+  assert.equal(result.decision_scope, 'review_reuse_only');
+  assert.equal(result.independent_ci_required, true);
+  assert.equal(result.merge_authority, false);
+  assert.equal(result.ordinary_pr_approval, false);
+  assert.equal(result.manual_owner_acceptance_required, true);
+  assert.ok(result.receipt, 'a signature authenticates fixture AI quality, not a passing technical gate');
 }));
 
 test('changing the installed shared engine after investigation never produces a signature', () => fixture(async f => {

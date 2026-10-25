@@ -3,8 +3,10 @@
 Clouseau also provides a centrally maintained local agent skill and signed review
 receipts. Agent-only installation is independent of CI: it uses authenticated
 coding harnesses and creates no Actions configuration or provider secrets.
-Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
-coverage, and approves/merges without repeating the AI review. See
+Local AI review runs regardless of coverage percentage or availability and keeps
+its quality verdict separate from real verification results. Opted-in CI verifies
+an enrolled runner's passing AI receipt without repeating the review, then still
+requires its own tests and exact coverage before approval/merge. See
 [local review, installation and trust boundaries](docs/local-review.md).
 Consumers without accepted recipe/enrollment/workflows use the separate
 [initial owner-authorized trust installation](docs/initial-installation.md).
@@ -48,7 +50,7 @@ for the version 2 policy configuration.
 | `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
 | `test` | none | Run Clouseau's Python and Node regression suites |
 | `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
-| `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
+| `assess` | `config`, optional `pull-request`, `provider-key` | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
@@ -101,9 +103,10 @@ modules, exclusions, partial coverage and inconsistent counters fail closed.
 
 Monorepos may use the accepted-base version 2 local recipe with separate native
 Istanbul and coverage.py parts. `operation: coverage` accepts that recipe through
-`coverage-config` and runs the same shared per-part and aggregate checks as the
-local runner. Each part must be complete and exact; there is no consumer-side
-report merging. Legacy single-report inputs remain supported.
+`coverage-config` and uses the shared per-part and aggregate measurement rules.
+The CI gate requires each part to be complete and exact; local AI can assess
+honest partial or unavailable measurements. There is no consumer-side report
+merging. Legacy single-report inputs remain supported.
 
 ## Trust and permissions
 

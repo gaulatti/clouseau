@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from coverage_plan import check_plan, main
+from coverage_plan import check_plan, main, measure_plan
 from test_coveragepy_coverage import native_report
 
 
@@ -45,6 +45,35 @@ class CoveragePlanTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "backend.json has uncovered branches"):
             check_plan(self.parts, self.root)
 
+    def test_local_measurement_keeps_zero_hit_native_sources_and_all_part_totals(self):
+        self.mutate("backend", lambda entry: entry["b"]["0"].__setitem__(1, 0))
+        self.mutate("frontend", lambda entry: entry["s"].__setitem__("0", 0))
+        measured = measure_plan(self.parts, self.root)
+        self.assertEqual(measured["totals"], {"lines": [2, 1], "branches": [2, 1]})
+        self.assertEqual(measured["parts"][1]["counts"], {"lines": [1, 0], "branches": [0, 0]})
+        with self.assertRaisesRegex(ValueError, "backend.json has uncovered branches"):
+            check_plan(self.parts, self.root)
+        self.mutate("backend", lambda entry: entry["b"]["0"].__setitem__(1, 1))
+        with self.assertRaisesRegex(ValueError, "frontend.json has uncovered lines"):
+            check_plan(self.parts, self.root)
+        branchless = measure_plan(self.parts[1:], self.root)
+        self.assertEqual(branchless["totals"], {"lines": [1, 0], "branches": [0, 0]})
+
+    def test_local_measurement_cannot_replace_missing_inventory_or_malformed_reports(self):
+        (self.root / "frontend" / "unloaded.js").write_text("module.exports = 2;\n")
+        with self.assertRaisesRegex(ValueError, "Missing application source.*unloaded.js"):
+            measure_plan(self.parts, self.root)
+        (self.root / "frontend" / "unloaded.js").unlink()
+        self.mutate("backend", lambda entry: entry["b"]["0"].__setitem__(1, -1))
+        with self.assertRaisesRegex(ValueError, "nonnegative integers"):
+            measure_plan(self.parts, self.root)
+        (self.root / "backend.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "nonempty Istanbul"):
+            measure_plan(self.parts, self.root)
+        (self.root / "backend.json").unlink()
+        with self.assertRaises(FileNotFoundError):
+            measure_plan(self.parts, self.root)
+
     def test_native_coveragepy_and_istanbul_use_the_same_plan_without_combined_artifacts(self):
         report = native_report(self.root / "python")
         (self.root / "python.json").write_text(json.dumps(report))
@@ -52,6 +81,16 @@ class CoveragePlanTests(unittest.TestCase):
         measured = check_plan([python, self.parts[1]], self.root)
         self.assertEqual(measured["totals"], {"lines": [5, 5], "branches": [2, 2]})
         self.assertEqual(measured["parts"][0]["counts"], {"lines": [4, 4], "branches": [2, 2]})
+
+    def test_real_partial_python_report_is_measured_but_not_accepted(self):
+        report = native_report(self.root / "python", "import service; service.choose(True)")
+        (self.root / "python.json").write_text(json.dumps(report))
+        python = {"format": "coveragepy", "report": "python.json", "source_directory": "python"}
+        measured = measure_plan([python, self.parts[1]], self.root)
+        self.assertEqual(measured["totals"], {"lines": [5, 4], "branches": [2, 1]})
+        self.assertEqual(measured["parts"][0]["counts"], {"lines": [4, 3], "branches": [2, 1]})
+        with self.assertRaisesRegex(ValueError, "python.json has uncovered lines"):
+            check_plan([python, self.parts[1]], self.root)
 
     def test_one_complete_part_cannot_mask_another_missing_or_uncovered_part(self):
         self.mutate("frontend", lambda entry: entry["s"].__setitem__("0", 0))

@@ -20,7 +20,8 @@ def _path(directory, value):
     return target
 
 
-def check_plan(parts, directory="."):
+def measure_plan(parts, directory="."):
+    """Measure every native part; incomplete percentages are valid evidence."""
     if not isinstance(parts, list) or not parts or len(parts) > 32:
         raise ValueError("A coverage plan requires one to 32 native artifact parts")
     directory = Path(directory).resolve()
@@ -50,15 +51,22 @@ def check_plan(parts, directory="."):
             raise ValueError("Every coverage part requires nonempty application line counters")
         for metric in totals:
             total, covered = measured[metric]
-            if total != covered:
-                raise ValueError(f"{part['report']} has uncovered {metric}; require exactly 100% for every part")
             totals[metric][0] += total
             totals[metric][1] += covered
         results.append({**part, "counts": measured})
+    return {"totals": totals, "parts": results}
+
+
+def check_plan(parts, directory="."):
+    result = measure_plan(parts, directory)
+    for part in result["parts"]:
+        for metric, (total, covered) in part["counts"].items():
+            if total != covered:
+                raise ValueError(f"{part['report']} has uncovered {metric}; require exactly 100% for every part")
     # A genuinely branchless component is valid only alongside measured branches.
     with contextlib.redirect_stdout(io.StringIO()):
-        enforce(totals)
-    return {"totals": totals, "parts": results}
+        enforce(result["totals"])
+    return result
 
 
 def main(argv):

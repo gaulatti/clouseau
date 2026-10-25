@@ -13,13 +13,16 @@ const policy = () => fs.readFileSync(path.join(__dirname, '../policy/change-acce
 const reviewContext = Object.freeze({stage: 'local_pre_pr', decision_scope: 'review_reuse_only',
   verification_source: 'verification', independent_ci_required: true, merge_authority: false});
 const stageInstructions = 'This is a pre-PR local change assessment, not the CI merge gate. ' +
-  'The trusted verification source proves only the recorded local commands and exact coverage. Assess the changed behavior, test integrity and all supplied evidence. ' +
-  'Independent CI tests, coverage, audits, workflow checks and container checks remain mandatory before GitHub approval and merge. ' +
+  'Run both local AI roles regardless of coverage percentage or availability. ' +
+  'The trusted verification source records actual local command outcomes and observed coverage, including failed commands, partial counters and unavailable, invalid or unverified coverage data. ' +
+  'Do not infer that a nonzero command failed only because of coverage, or claim unverified execution and counts passed. ' +
+  'Coverage percentage or unavailable coverage alone does not force a local quality failure; assess demonstrated behavioral defects, meaningful test evidence and every supplied source normally. ' +
+  'Independent CI tests, exact nonempty 100% coverage, audits, workflow checks and container checks remain mandatory before GitHub approval and merge. ' +
   'Their pending execution alone is not missing local review evidence; do not claim they passed. ' +
   'Exact-head owner confirmation for protected CI controls belongs to CI before approval. A local receipt cannot grant that confirmation. ' +
   'Its pending execution alone does not block local reuse review when the implementation preserves that gate; actual unauthorized scope still blocks. ' +
-  'Missing local execution, missing behavioral evidence, deceptive tests and unresolved source concerns still block. ' +
-  'A passing local decision permits signed review reuse only and cannot authorize a merge.\n';
+  'Missing material source or behavioral evidence, deceptive tests and unresolved code concerns still prevent a passing local quality verdict. ' +
+  'A passing local decision permits signed AI-quality review reuse only and cannot authorize technical approval or merge.\n';
 
 function localEvidence(snapshot) {
   const view = modelEvidence(snapshot);

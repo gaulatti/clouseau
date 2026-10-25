@@ -18,7 +18,7 @@ function readLocalConfig(value) {
       !Array.isArray(command) || !command.length || command.some(arg => typeof arg !== 'string' || !arg.length))) {
     throw new Error('Invalid local-only Clouseau configuration');
   }
-  coverageParts(value);
+  coverageParts(value, {allowUnsupported: true});
   return value;
 }
 

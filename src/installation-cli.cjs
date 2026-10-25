@@ -63,7 +63,7 @@ function positive(value) {
 function verification({directory, config}) {
   // Contributor setup never inherits CI provider or repository-write tokens.
   // The established same-account workstation trust boundary remains unchanged.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(name)));
+  const env = normal.verificationEnvironment();
   return normal.executeVerification({directory, config, run: (program, argv, settings) => cp.spawnSync(program, argv, {...settings, env})});
 }
 
@@ -137,7 +137,7 @@ async function runReview(args, {api, installed, state, clock, ask = askHarness, 
   }
   return {decision: result.decision, installation_only: true, manual_owner_acceptance_required: true,
     ordinary_pr_approval: false, record: output, receipt, head_sha: manifest.head_sha, base_sha: manifest.base_sha,
-    reviewer_sha: reviewer.sha, provider_api_calls: 0, harness_invocations: result.usage.length};
+    reviewer_sha: reviewer.sha, provider_api_calls: 0, harness_invocations: result.usage.length, ...normal.reviewStatus(technical)};
 }
 
 async function remoteConfiguration(api, manifest) {
