@@ -43,6 +43,18 @@ Questions suggested by a patch remain in the raw observations while the role
 requests the corresponding base/head source pages. Earlier causal concerns stay
 in that role's immutable history and need not be repeated on every frame.
 
+Final report citations select from an explicit bounded `citable_proofs` catalog:
+the first available proof of each read source, proofs in current literal pages,
+every earlier structured citation, and exact known proof IDs bookmarked in that
+role's observations. Text bookmarks select existing controller IDs only; they
+never create an alias, supply missing bytes or grant authority to an observation.
+Every selected proof's complete byte span
+must be available to that role, including any current pending pages. The schema
+offers those exact IDs, so patch entry numbers cannot become source citations.
+If a later cross-file question needs another line range, re-request its source
+page; the bank still retains every original byte and all earlier observations.
+The catalog is limited to 100,000 UTF-8 bytes and fails intact on exhaustion.
+
 Before claiming complete review, the role must have received every changed
 base/head source, patch, change-context entry and trusted contract/verification
 entry. Inspected optional sources and dependencies require complete delivery too.

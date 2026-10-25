@@ -8,10 +8,12 @@ const enumeration = values => ({type: 'string', enum: values});
 const array = items => ({type: 'array', items});
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
 
-function schemas(snapshot, {paged = false, inspectedSources = null, completenessReady = true} = {}) {
+function schemas(snapshot, {paged = false, inspectedSources = null, completenessReady = true, proofIds = null} = {}) {
   const catalog = proofCatalog(snapshot);
   const referenceRule = 'Select only the controller-supplied proof IDs. The controller owns the evidence register, exact source bytes and line ranges; never invent an alias.';
-  const proof = paged ? {type: 'string', pattern: '^proof-(0|[1-9][0-9]*)-[1-9][0-9]*$'} : enumeration(catalog.map(entry => entry.id));
+  const proof = paged ? proofIds === null ? {type: 'string', pattern: '^proof-(0|[1-9][0-9]*)-[1-9][0-9]*$'} :
+    proofIds.length ? enumeration(proofIds) : {type: 'string', pattern: '^$',
+      description: 'No citable source proof is available yet; request literal source pages before reporting facts.'} : enumeration(catalog.map(entry => entry.id));
   const citations = {...array(proof), description: referenceRule};
   const inspectedCitations = {...object({primary: proof, additional: array(proof)}), description:
     `${referenceRule} Select one primary proof and any distinct additional proofs. The controller preserves these citations without inventing evidence.`};
