@@ -95,7 +95,10 @@ twice. An individual atomic question that still exceeds its transport bound is
 rejected intact. Existing Jev packet limits and rubric/scoring rules remain.
 Central strict function transport uses separate report, page-request and
 source-request branches; inactive null/empty envelope fields are restored by the
-controller without changing submitted facts.
+controller without changing submitted facts. The validated native function name
+is the sole discriminator; typed arguments contain observations, concerns and
+that function's active payload. The controller derives the constant internal
+`kind` from the function name rather than requesting a second duplicate selector.
 Local prompts describe their full response envelope; central prompts describe
 only the selected typed function's active fields. A rejected typed response
 retains its original function, complete raw/canonical arguments, usage and
