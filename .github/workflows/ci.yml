@@ -87,7 +87,7 @@ jobs:
           if-no-files-found: error
   qualify-large-sources:
     if: >-
-      github.event_name == 'workflow_dispatch' && inputs.qualify_large_sources &&
+      github.event_name == 'workflow_dispatch' && inputs.qualify_large_sources && inputs.pull_request == '' &&
       github.repository == 'gaulatti/clouseau' && github.actor == github.repository_owner
     needs: verify
     runs-on: ubuntu-latest

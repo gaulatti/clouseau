@@ -93,10 +93,10 @@ test('actual manual qualification workflow is owner-only, read-only, exact-head 
   const typed = value => typeof value === 'string' ? new data.StringData(value) : typeof value === 'boolean' ? new data.BooleanData(value) :
     new data.Dictionary(...Object.entries(value).map(([key, value]) => ({key, value: typed(value)})));
   const condition = context => new Evaluator(new Parser(new Lexer(job.if).lex().tokens, ['github', 'inputs'], []).parse(), typed(context)).evaluate().value;
-  const context = {github: {event_name: 'workflow_dispatch', repository: 'gaulatti/clouseau', actor: 'gaulatti', repository_owner: 'gaulatti'}, inputs: {qualify_large_sources: true}};
+  const context = {github: {event_name: 'workflow_dispatch', repository: 'gaulatti/clouseau', actor: 'gaulatti', repository_owner: 'gaulatti'}, inputs: {qualify_large_sources: true, pull_request: ''}};
   assert.equal(condition(context), true);
   for (const mutate of [c => {c.github.event_name = 'pull_request';}, c => {c.github.repository = 'other/clouseau';},
-    c => {c.github.actor = 'contributor';}, c => {c.inputs.qualify_large_sources = false;}]) {
+    c => {c.github.actor = 'contributor';}, c => {c.inputs.qualify_large_sources = false;}, c => {c.inputs.pull_request = '19';}]) {
     const copy = structuredClone(context); mutate(copy); assert.equal(condition(copy), false);
   }
 });
