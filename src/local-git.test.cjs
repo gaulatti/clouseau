@@ -120,9 +120,10 @@ test('resolver installation preloads its actual pinned bootstrap and the current
     git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: install automatic resolver']);
     const collected = collectLocal({...f, request: 'Install the reviewed bootstrap.', technical: {fixture_only: true}, reviewerSha: current, engineRoot: root});
     const sources = Object.values(collected.snapshot.sources).filter(source => source.path.startsWith('.clouseau-ci/'));
-    assert.equal(sources.length, 26);
+    assert.equal(sources.length, 27);
     assert.ok(sources.some(source => source.path === '.clouseau-ci/test/automatic-upgrade-contract.mjs'));
     assert.ok(sources.some(source => source.path === '.clouseau-ci/src/local-harness.cjs'));
+    assert.ok(sources.some(source => source.path === '.clouseau-ci/src/private-owner-merge.cjs'));
     assert.equal(sources.find(source => source.path === '.clouseau-ci/src/central-version.cjs').content, 'new runtime engine');
     assert.equal(sources.find(source => source.path === `.clouseau-ci/src/central-version.cjs@${old}`).content, 'old src/central-version.cjs');
     assert.equal(sources.filter(source => source.ref === old).length, 2);

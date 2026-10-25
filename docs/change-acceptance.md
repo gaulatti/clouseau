@@ -396,7 +396,10 @@ The write occurs inside the validated acceptance gate, after deterministic
 record and score validation, all configured verification steps (including full
 tests and exact line/branch coverage), purpose authorization where required,
 current ownership of every old/new path and a freshly observed current-head
-GitHub Actions bot approval. Missing, dismissed or stale approval, outstanding
+GitHub Actions bot approval. Immediately before the atomic write it revalidates
+the recorded purpose and authorization, finding ledger, exact technical receipt
+and any local receipt signature, expiry, revocation, engine and immutable source
+bindings through the existing validators. These checks make no provider calls. Missing, dismissed or stale approval, outstanding
 human change requests, missing ownership and unavailable membership fail closed.
 External/non-owner contributions can receive bot approval but still need
 current-head human code-owner approval and manual merge. A proposed ownership

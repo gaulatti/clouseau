@@ -231,7 +231,7 @@ function needsDeployment(files) {
 }
 
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
-  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false}) {
+  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
   const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
@@ -255,6 +255,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
   const initialProtection = await protection();
   const controllerManaged = initialProtection.controllerManaged === true;
+  if (controllerManaged && typeof verifyAcceptance !== 'function') throw new Error('Private owner merge requires a validated protocol-two acceptance record');
   // The native job is the required check. Additional GITHUB_TOKEN API checks
   // can attach to another run's suite; publish detail in this job's summary.
   const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
@@ -370,10 +371,9 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       if (!currentProtection.controllerManaged) throw new Error('Private-plan acceptance mode changed before approval');
       pr = await require('./private-owner-merge.cjs').finalizePrivateOwner({github, repo, pr, assessment,
         baseBranch: config.base_branch, verify: async () => {
+          await verifyAcceptance();
           const current = await protection();
           if (!current.controllerManaged) throw new Error('Private-plan acceptance mode changed before merge');
-          const checked = await technicalRun(github, repo, pr);
-          if (checked.pending || checked.failure) throw new Error('Full verification changed before private owner merge');
           if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
         }});
       await finish('success', `Tests, exact coverage, validated acceptance and fresh approval passed. Controller-enforced owner merge completed: ${pr.merge_commit_sha}. Native branch protection is unavailable.`);

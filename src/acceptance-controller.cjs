@@ -196,6 +196,34 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     // technical checks. Only an explicit purpose/authority decision may use
     // the existing exact-revision owner confirmation path.
     return legacy.gate({github, context, core, ...options,
+      // The private-plan path cannot delegate freshness to unavailable native
+      // protection. Revalidate the exact record at its atomic write boundary.
+      verifyAcceptance: async () => {
+        const currentRecord = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+        const latest = verifyRecord(currentRecord, assessment, config, engine);
+        const {data: currentPr} = await github.rest.pulls.get({...context.repo, pull_number: pr.number});
+        if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
+            currentRecord.local_receipt && currentRecord.local_author !== currentPr.user.login) throw new Error('Acceptance author or revision changed before private merge');
+        if (currentRecord.local_receipt) {
+          const currentFiles = await github.paginate(github.rest.pulls.listFiles,
+            {...context.repo, pull_number: pr.number, per_page: 100});
+          await require('./local-receipt.cjs').verifySources({github, repo: context.repo, pr: currentPr,
+            snapshot: currentRecord.snapshot, config, files: currentFiles,
+            reviewerSha: currentRecord.local_receipt.payload.reviewer_sha});
+        }
+        const currentTechnical = await legacy.technicalRun(github, context.repo, currentPr, {receipt: true});
+        if (digest(currentTechnical) !== digest(currentRecord.technical)) throw new Error('Verification changed before private merge');
+        const currentComments = await github.paginate(github.rest.issues.listComments,
+          {...context.repo, issue_number: pr.number, per_page: 100});
+        for (const authorization of [currentRecord.snapshot.intent_confirmation, currentRecord.local_authorization].filter(Boolean)) {
+          if (digest(authorization) !== digest(await legacy.purposeConfirmation(github, context.repo, currentPr, currentComments))) {
+            throw new Error('Exact recorded purpose authorization changed before private merge');
+          }
+        }
+        if (digest(priorState(currentComments, currentRecord.snapshot.repository, pr.number).findings) !== digest(latest.state.findings)) {
+          throw new Error('Acceptance findings changed before private merge');
+        }
+      },
       assessment: {...assessment, decision: assessment.decision === 'owner_decision' ? 'second_opinion' : 'auto_approve'}});
   }
 

@@ -845,3 +845,131 @@ test('a private-plan transition to available native protection stops the old acc
     assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
   });
 });
+
+test('same-head purpose edits and removals invalidate private merge even when another maintainer approval remains', async () => {
+  for (const change of ['edit', 'remove']) await fixture(async f => {
+    const confirmation = {id: 71, user: {login: config.manual_reviewer, type: 'User'},
+      body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve the supported private owner acceptance boundary.`};
+    f.state.comments.push(confirmation);
+    const p = await privateOwnerFixture(f, true);
+    const approve = f.github.rest.pulls.createReview;
+    f.github.rest.pulls.createReview = async args => {
+      const value = await approve(args);
+      f.state.reviews.push({user: {login: 'other-maintainer', type: 'User'}, state: 'APPROVED', commit_id: args.commit_id});
+      if (change === 'edit') confirmation.body += ' New purpose after assessment.';
+      else f.state.comments = [];
+      return value;
+    };
+    await assert.rejects(p.run(true), /Exact recorded purpose authorization changed/);
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+  });
+});
+
+async function privateReceiptFixture(f, controls = false) {
+  const p = await privateOwnerFixture(f);
+  const crypto = require('node:crypto');
+  const receipts = require('./local-receipt.cjs');
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const trusted = {...config, merge_mode: 'automatic', local_review: {mode: 'required',
+    reviewer_sha: 'e'.repeat(40), central_source: {...require('./central-version.cjs').SOURCE}, max_age_seconds: 3600,
+    keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  if (controls) trusted.sensitive_paths = [...trusted.sensitive_paths, 'src/upload.test.js'];
+  const engine = {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha,
+    digest: require('./local-version.cjs').engineDigest()};
+  record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted);
+  require('./acceptance-sources.cjs').refresh(record.snapshot);
+  record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
+  record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
+    ({role, phase, harness: 'codex', session: `fictional-private-${role}-${phase}`, request_digest: digest(role),
+      response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
+  record.result.execution_digest = digest(record.result.usage);
+  for (const item of record.result.reviews) item.report.snapshot = record.snapshot.digest;
+  const bundle = receipts.issueReceipt({record, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+    keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
+  const content = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
+    encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
+  }} : content(args);
+  f.state.pr.body = `<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  if (controls) f.state.comments.push({id: 87, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+  const policy = createPolicy(trusted, {engine}); let providerCalls = 0;
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath,
+    fetchImpl: async () => {providerCalls++; throw new Error('No paid local receipt fallback');}});
+  assert.equal(assessment.decision, controls ? 'owner_decision' : 'auto_approve', assessment.reason);
+  assert.equal(providerCalls, 0);
+  return {...p, trusted, engine, assessment, policy, run: () => policy.gate({github: f.github,
+    context: f.context, core: p.core, assessment, recordPath: f.recordPath, nativeGate: true})};
+}
+
+test('private signed receipt reuse is revalidated immediately before merge with zero CI AI calls', async () => {
+  for (const controls of [false, true]) await fixture(async f => {
+    const p = await privateReceiptFixture(f, controls);
+    await p.run();
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 1);
+  });
+});
+
+test('expired, revoked, wrong-engine or changed immutable source receipts never release a private owner merge', async t => {
+  for (const failure of ['expired', 'revoked', 'engine', 'source']) await fixture(async f => {
+    const p = await privateReceiptFixture(f);
+    if (failure === 'revoked') {
+      const revoked = structuredClone(p.trusted); revoked.local_review.keys[0].revoked = true;
+      const policy = createPolicy(revoked, {engine: p.engine});
+      await assert.rejects(policy.gate({github: f.github, context: f.context, core: p.core,
+        assessment: p.assessment, recordPath: f.recordPath, nativeGate: true}), /signature/);
+    } else if (failure === 'engine') {
+      const policy = createPolicy(p.trusted, {engine: {...p.engine, sha: 'd'.repeat(40)}});
+      await assert.rejects(policy.gate({github: f.github, context: f.context, core: p.core,
+        assessment: p.assessment, recordPath: f.recordPath, nativeGate: true}), /frozen engine/);
+    } else {
+      const approve = f.github.rest.pulls.createReview;
+      f.github.rest.pulls.createReview = async args => {
+        const value = await approve(args);
+        if (failure === 'expired') {const expired = Date.now() + 3600001; t.mock.method(Date, 'now', () => expired);}
+        else {
+          const content = f.github.rest.repos.getContent;
+          f.github.rest.repos.getContent = async args => {
+            const value = await content(args);
+            if (args.path === 'src/upload.test.js') value.data.content = Buffer.from('changed immutable evidence').toString('base64');
+            return value;
+          };
+        }
+        return value;
+      };
+      await assert.rejects(p.run(), failure === 'expired' ? /expired/ : /signed evidence differs/);
+      t.mock.restoreAll();
+    }
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0, failure);
+  });
+});
+
+
+test('a receipt author, purpose, finding ledger or record changing after bot approval cannot reach the private merge write', async () => {
+  for (const failure of ['author', 'head', 'base', 'purpose', 'findings', 'record']) await fixture(async f => {
+    const p = await privateReceiptFixture(f, failure === 'purpose');
+    const approve = f.github.rest.pulls.createReview;
+    f.github.rest.pulls.createReview = async args => {
+      const value = await approve(args);
+      if (failure === 'author') f.state.pr.user.login = 'different-author';
+      if (failure === 'head') f.state.pr.head.sha = 'd'.repeat(40);
+      if (failure === 'base') f.state.pr.base.sha = 'd'.repeat(40);
+      if (failure === 'purpose') f.state.comments[0].body += '\nChanged purpose';
+      if (failure === 'record') {
+        const record = JSON.parse(fs.readFileSync(f.recordPath)); record.snapshot.head_sha = 'd'.repeat(40);
+        fs.writeFileSync(f.recordPath, JSON.stringify(record));
+      }
+      if (failure === 'findings') {
+        const state = {version: 2, repository: `${f.context.repo.owner}/${f.context.repo.repo}`, number: 3,
+          head_sha: p.assessment.head_sha, findings: [{id: 'f'.repeat(64), blocking: true, state: 'confirmed',
+            title: 'New acceptance blocker', path: 'src/upload.test.js', cause: 'Persistence missing', obligation: 'Durable acceptance'}]};
+        f.state.comments.push({id: 999, user: {login: 'github-actions[bot]', type: 'Bot'},
+          body: `<!-- clouseau-acceptance:v2 -->\n<!-- clouseau-state:${Buffer.from(JSON.stringify(state)).toString('base64')} -->`});
+      }
+      return value;
+    };
+    await assert.rejects(p.run());
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0, failure);
+  });
+});
