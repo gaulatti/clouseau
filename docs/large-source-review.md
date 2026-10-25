@@ -16,6 +16,10 @@ data, truncation and substituted blobs fail collection.
 
 Each independent examiner and challenger receives the inventory and asks for
 bounded pages through parsed responses. It receives no other role's findings.
+Entry numbers and page indices are zero-based: an entry with `page_count: 1`
+has only `page: 0`. Every prompt includes an exact valid selector example.
+Each role also receives its controller-recorded delivered selectors and current
+literal pages so a fresh continuation can identify unread material.
 The controller accepts only selectors for the frozen bank and acknowledges a
 delivery only after a completed authenticated invocation. A citation spanning
 pages requires all its literal bytes. An empty source also requires its actual
