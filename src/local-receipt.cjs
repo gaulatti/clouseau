@@ -50,7 +50,7 @@ function reviewDecision(record) {
   requireReceipt(Array.isArray(result.reviews) && result.reviews.length === 2 &&
     result.reviews.map(item => item.role).join(',') === 'examiner,challenger', 'two independent roles required');
   const reviews = result.reviews.map(item => ({...item,
-    scores: validateReport(item.report, validateInspection(item.report, snapshot, item.drafts))}));
+    scores: validateReport(item.report, validateInspection(item.report, snapshot, item.drafts, item, result.usage, item.role))}));
   const prior = record.local_previous?.findings || [];
   requireReceipt(digest(snapshot.prior_findings) === digest(prior), 'local finding history differs from the reviewed evidence');
   const state = reconcile({...result, reviews}, snapshot, prior);
@@ -190,12 +190,9 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       // The action has already checked this source against the run digest.
       // Git-free distributions compare the same file bytes without invoking Git.
       let content;
-      if (ref === reviewerSha) content = require('node:fs').readFileSync(require('node:path').join(root, relative), 'utf8');
+      if (ref === reviewerSha) content = require('./central-version.cjs').readEngineEvidence(source.path, reviewerSha, root);
       else {
-        const {data} = await github.rest.repos.getContent({owner: 'gaulatti', repo: 'clouseau', ref, path: relative});
-        requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 300000, 'historical engine evidence unavailable');
-        content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
-        requireReceipt(!content.includes('\0'), 'binary historical engine evidence');
+        content = await require('./source-blob.cjs').readTextBlob({github, repo: {owner: 'gaulatti', repo: 'clouseau'}, filename: relative, ref});
       }
       requireReceipt(content === source.content, 'signed engine evidence differs from the accepted engine');
       continue;
@@ -206,8 +203,8 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     requireReceipt(source.authority === (contract ? 'trusted' : 'untrusted') &&
       source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted');
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
-    const {data} = await github.rest.repos.getContent({...sourceRepo, path: source.path, ref: source.ref});
-    requireReceipt(data.encoding === 'base64' && Buffer.from(data.content, 'base64').toString('utf8') === source.content,
+    const content = await require('./source-blob.cjs').readTextBlob({github, repo: sourceRepo, filename: source.path, ref: source.ref});
+    requireReceipt(content === source.content,
       'signed evidence differs from repository source');
   }
   for (const file of snapshot.files) {

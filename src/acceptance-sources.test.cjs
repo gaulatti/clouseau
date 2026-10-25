@@ -18,7 +18,7 @@ test('controller proof IDs bind bounded immutable spans and remain stable when s
 function fixture() {
   const calls = [];
   const github = {rest: {repos: {
-    getContent: async args => {calls.push(args); return {data: {content: Buffer.from('A complete fictional source.\n').toString('base64'), encoding: 'base64', size: 30}};},
+    getContent: async args => {calls.push(args); return {data: {content: Buffer.from('A complete fictional source.\n').toString('base64'), encoding: 'base64', size: Buffer.byteLength('A complete fictional source.\n')}};},
     listCommits: async () => ({data: [{sha: 'b'.repeat(40), commit: {message: 'fix: preserve durable upload acceptance'}}]}),
   }}, graphql: async () => ({repository: {pullRequest: {closingIssuesReferences: {nodes: [{number: 1, title: 'Repair upload', body: 'Preserve acceptance.'}], pageInfo: {hasNextPage: false}}}}})};
   return {github, calls, repo: {owner: 'example', repo: 'upload-gateway'},

@@ -84,7 +84,8 @@ function verifySourceExposure(snapshot, report, exposure, usage) {
       if (page.start_byte > cursor) break;
       cursor = Math.max(cursor, page.end_byte);
     }
-    requireView(cursor >= end, 'unseen citation bytes');
+    requireView(cursor >= end && (end > start || delivered.some(page =>
+      page.start_byte <= start && page.end_byte >= end)), 'unseen citation bytes');
   }
   for (const item of report.coverage.sources) {
     if (item.state === 'inspected') requireView(complete(sourceEntry(item.source)), 'unseen source claimed inspected');

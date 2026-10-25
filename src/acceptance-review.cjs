@@ -14,15 +14,16 @@ function template(snapshot) {
   const changed = new Map(snapshot.files.map(file => [file.path, file.head_source || file.base_source]));
   const evidence = [trusted, ...snapshot.paths.map(filename => changed.get(filename))].map((id, index) => {
     const lines = snapshot.sources[id].content.split('\n');
-    const start = lines.findIndex(line => line.trim()) + 1;
+    const start = Math.max(1, lines.findIndex(line => line.trim()) + 1);
     return {id: index === 0 ? 'contract' : index === 1 ? 'source' : `source-${index}`, source: id, start, end: start};
   });
   const groups = (name, cited) => Object.fromEntries(FACTORS[name].map(key => [key,
     {evidence: [cited], reason: 'Describe the observable condition and any missing evidence; the separate grader selects its semantic level.'}]));
   const coverage = snapshot.review_manifest_version ? {coverage: {sources: Object.keys(snapshot.sources).map(source => {
     let citation = evidence.find(item => item.source === source);
-    if (!citation && snapshot.sources[source].content.trim()) {
-      const start = snapshot.sources[source].content.split('\n').findIndex(line => line.trim()) + 1;
+    if (!citation && (snapshot.sources[source].content.trim() ||
+        snapshot.source_bank_version === 1 && snapshot.sources[source].kind === 'source')) {
+      const start = Math.max(1, snapshot.sources[source].content.split('\n').findIndex(line => line.trim()) + 1);
       citation = {id: `inventory-${evidence.length}`, source, start, end: start}; evidence.push(citation);
     }
     return {source, state: citation ? 'inspected' : 'excluded', reason: 'Explain what was examined, or why this source has no material bearing.', evidence: [citation ? citation.id : 'contract']};
@@ -172,10 +173,16 @@ function validationSnapshot(snapshot, drafts = []) {
   return {...snapshot, prior_findings: [...(snapshot.prior_findings || []), ...drafts.flatMap(draft => draft.findings)]};
 }
 
-function validateInspection(report, snapshot, drafts = []) {
-  const view = validationSnapshot(snapshot, drafts);
+function validateInspection(report, snapshot, drafts = [], paged = null, usage, role) {
+  let history = drafts;
+  if (Object.hasOwn(snapshot, 'source_bank_version')) {
+    if (snapshot.source_bank_version !== 1) throw new Error('Unsupported immutable source bank version');
+    const derived = require('./paged-integrity.cjs').verifyPagedInspection({...paged, snapshot, report, role, usage});
+    history = [...drafts, ...derived];
+  }
+  const view = validationSnapshot(snapshot, history);
   validateFacts(report, view);
-  for (const finding of drafts.flatMap(draft => draft.findings)) {
+  for (const finding of history.flatMap(draft => draft.findings)) {
     const retained = report.findings.find(item => item.id === finding.id);
     if (retained && retained.path === finding.path && retained.cause === finding.cause && retained.obligation === finding.obligation) continue;
     const resolution = report.resolutions.find(item => item.id === finding.id);
@@ -184,11 +191,22 @@ function validateInspection(report, snapshot, drafts = []) {
   return view;
 }
 
-async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, log, drafts = [], observe = () => {}}) {
+async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, log, drafts = [], previous, previousUsage = [], observe = () => {}}) {
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
   const usage = [];
   let completed;
   for (let round = 0; ; round++) {
+    if (snapshot.source_bank_version === 1) {
+      const {inspectPaged} = require('./paged-review.cjs');
+      const {providerAsk} = require('./paged-provider.cjs');
+      const history = previous?.source_history ? [...previous.source_history,
+        {bank: previous.source_bank, exposure: previous.source_view}] : [];
+      const result = await inspectPaged({snapshot, role, drafts, progress: previous?.page_progress || [], sourceHistory: history,
+        previousUsage: [...previousUsage, ...usage], sourceBatchLimit: 8 - round,
+        ask: providerAsk({model, fetchImpl, wait, log, observe, snapshot}),
+        addSources: paths => additionalSources({github, repo, snapshot, paths})});
+      return {...result, usage: [...usage, ...result.usage]};
+    }
     const sample = modelTemplate(snapshot);
     const result = await requestJSON({model, schemas: schemas(snapshot), thinking: false, fetchImpl, wait, report: log, messages: [
       {role: 'system', content: `${policy}\n\nRole: ${role}. Independently map the actual change, investigate causal concerns, and collect cited facts for atomic grading. You cannot execute contributor code. The separate trusted verification receipt establishes only the named execution checks, not arbitrary behavior or live health.\n` +
@@ -236,8 +254,9 @@ async function investigateChange({snapshot, config, github, repo, fetchImpl, wai
       const previous = inspections.get(role);
       if (previous?.report.snapshot === snapshot.digest) continue;
       const drafts = previous ? [...previous.drafts, previous.report] : [];
-      const result = await inspect({snapshot, role, model, drafts, github, repo, fetchImpl, wait, log, observe});
-      usage.push(...result.usage); inspections.set(role, {role, report: result.report, drafts});
+      const result = await inspect({snapshot, role, model, drafts, previous, previousUsage: usage, github, repo, fetchImpl, wait, log, observe});
+      const {usage: calls, ...inspection} = result;
+      usage.push(...calls); inspections.set(role, {role, drafts, ...inspection});
     }
     if ([...inspections.values()].every(item => item.report.snapshot === snapshot.digest)) return {inspections: [...inspections.values()], usage};
   }
@@ -248,13 +267,13 @@ async function gradeInvestigations({snapshot, config, investigation, fetchImpl, 
   const usage = [...investigation.usage];
   const reviews = [];
   for (const item of investigation.inspections) {
-    const result = await gradeReport({report: item.report, snapshot, provider: config.grader, model: config.grading_model,
+    const result = await gradeReport({report: item.report, snapshot, inspection: item, provider: config.grader, model: config.grading_model,
       fetchImpl, wait, log, observe: observation => observe({role: item.role, snapshot: snapshot.digest, ...observation})});
     usage.push(...result.usage);
     observe({role: item.role, phase: 'graded_report', snapshot: snapshot.digest, report: result.report, grading: result.grading});
     const drafts = item.drafts;
-    const view = validateInspection(result.report, snapshot, drafts);
-    reviews.push({role: item.role, report: result.report, drafts, grading: result.grading, scores: validateReport(result.report, view)});
+    const view = validateInspection(result.report, snapshot, drafts, item, usage, item.role);
+    reviews.push({...item, report: result.report, drafts, grading: result.grading, scores: validateReport(result.report, view)});
   }
   const result = {version: 2, snapshot: snapshot.digest, policy_digest: snapshot.policy_digest,
     config_digest: snapshot.config_digest, decision: combine(reviews), reviews, usage};

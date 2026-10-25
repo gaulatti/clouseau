@@ -1,5 +1,8 @@
 # Clouseau
 
+Large source handling and its explicit qualification boundaries are documented in
+[complete large-source review](docs/large-source-review.md).
+
 Clouseau also provides a centrally maintained local agent skill and signed review
 receipts. Agent-only installation is independent of CI: it uses authenticated
 coding harnesses and creates no Actions configuration or provider secrets.

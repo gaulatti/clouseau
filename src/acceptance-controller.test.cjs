@@ -1007,7 +1007,10 @@ test('expired, revoked, wrong-engine or changed immutable source receipts never 
           const content = f.github.rest.repos.getContent;
           f.github.rest.repos.getContent = async args => {
             const value = await content(args);
-            if (args.path === 'src/upload.test.js') value.data.content = Buffer.from('changed immutable evidence').toString('base64');
+            if (args.path === 'src/upload.test.js') {
+              value.data.content = Buffer.from('changed immutable evidence').toString('base64');
+              value.data.size = Buffer.byteLength('changed immutable evidence');
+            }
             return value;
           };
         }

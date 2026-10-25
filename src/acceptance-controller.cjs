@@ -44,7 +44,7 @@ function verifyRecord(record, assessment, config, engine = null) {
   const reviews = record.result.reviews;
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
   for (const review of reviews) {
-    const view = validateInspection(review.report, record.snapshot, review.drafts);
+    const view = validateInspection(review.report, record.snapshot, review.drafts, review, record.result.usage, review.role);
     review.scores = validateReport(review.report, view);
   }
   record.result.decision = combine(reviews);

@@ -186,7 +186,7 @@ test('immutable historical engine evidence is text, never an executed or selecte
     assert.equal(readEngineEvidence(`.clouseau-ci/scripts/bootstrap.cjs@${old}`, current, root), 'throw Error("old text must never execute");');
     assert.equal(git(['rev-parse', 'HEAD']), current);
     assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts@${old}`, current, root), /must be a file/);
-    for (const bytes of [Buffer.from([255]), Buffer.from('binary\0source'), Buffer.alloc(300001, 'x')]) {
+    for (const bytes of [Buffer.from([255]), Buffer.from('binary\0source'), Buffer.alloc(2000001, 'x')]) {
       fs.writeFileSync(path.join(root, 'invalid'), bytes);
       assert.throws(() => readEngineEvidence('.clouseau-ci/invalid', current, root), /encoded data|Binary or oversized/);
     }

@@ -231,7 +231,10 @@ test('bootstrap local collection retains actual source and qualified authority w
   assert.equal(git(f.directory, ['status', '--porcelain']), before);
   const files = record.snapshot.files.map(file => ({filename: file.path, status: file.status}));
   const pr = {changed_files: files.length, base: {sha: f.base}, head: {sha: f.head, repo: {owner: {login: 'fixture-owner'}, name: 'bootstrap-fixture'}}};
-  const github = {rest: {repos: {getContent: async ({path: filename, ref}) => ({data: {encoding: 'base64', content: Buffer.from(git(f.directory, ['show', `${ref}:${filename}`])).toString('base64')}})}}};
+  const github = {rest: {repos: {getContent: async ({path: filename, ref}) => {
+    const bytes = Buffer.from(git(f.directory, ['show', `${ref}:${filename}`]));
+    return {data: {encoding: 'base64', content: bytes.toString('base64'), size: bytes.length}};
+  }}}};
   const options = {github, repo: {owner: 'fixture-owner', repo: 'bootstrap-fixture'}, pr, snapshot: record.snapshot, config: f.config, files, installation: f.grant};
   await verifySources(options);
   await assert.rejects(verifySources({...options, installation: null}), /purpose|authority/);

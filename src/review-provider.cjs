@@ -63,7 +63,7 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
   if (!MODELS.includes(model)) throw new Error('Unsupported acceptance model');
   if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
   const usage = [];
-  let completed;
+  let completed; let functionName;
   for (let attempt = 0; ; attempt++) {
     const started = Date.now();
     const response = await fetchImpl(schemas ? 'https://api.deepseek.com/beta/chat/completions' : 'https://api.deepseek.com/chat/completions', {
@@ -87,6 +87,7 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
       if (schemas) {
         const calls = choice.message.tool_calls;
         if (calls?.length !== 1 || !Object.hasOwn(schemas, calls[0].function.name)) throw new Error('Acceptance provider returned an invalid structured result');
+        functionName = calls[0].function.name;
         completed = calls[0].function.arguments;
       } else completed = choice.message.content;
       break;
@@ -94,7 +95,7 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
     if (choice?.finish_reason !== 'length' || attempt === 2) throw new Error('Acceptance provider did not complete the bounded review');
     await wait((attempt + 1) * 1000);
   }
-  try {return {...decodeJSON(completed), usage};} catch (error) {
+  try {return {...decodeJSON(completed), usage, ...(schemas ? {function_name: functionName} : {})};} catch (error) {
     error.details = {...error.details, model, usage}; throw error;
   }
 }

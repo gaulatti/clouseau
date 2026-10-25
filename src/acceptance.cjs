@@ -107,7 +107,12 @@ function validateEvidence(report, snapshot, graded) {
     const lines = source.content.split('\n');
     requireThat(item.end <= lines.length, 'citation extends beyond source');
     const selected = lines.slice(item.start - 1, item.end).join('\n');
-    requireThat(typeof item.quote === 'string' && item.quote.trim().length > 0 && selected.trim() && selected.includes(item.quote), 'citation does not match immutable source');
+    // In a paged inspection the exact empty/whitespace source is evidence of
+    // its absence of content. It is never an invented nonempty quote; the
+    // source-view verifier separately requires its complete byte exposure.
+    requireThat(typeof item.quote === 'string' && (item.quote.trim().length > 0 && selected.trim() && selected.includes(item.quote) ||
+      snapshot.source_bank_version === 1 && source.kind === 'source' && !source.content.trim() && item.quote === selected),
+    'citation does not match immutable source');
     evidence.set(item.id, item);
   }
   const citations = values => {

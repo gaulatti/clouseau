@@ -4,11 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
 const {digest} = require('./acceptance.cjs');
-const {safePath, refresh} = require('./acceptance-sources.cjs');
+const {safePath, refresh, selectSourceBank} = require('./acceptance-sources.cjs');
+const {LIMITS} = require('./source-bank.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
 
 function git(directory, args, input) {
-  return cp.execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', input, maxBuffer: 2000000});
+  return cp.execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', input, maxBuffer: LIMITS.bank_bytes});
 }
 
 function readLocalConfig(value) {
@@ -66,8 +67,9 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     }
     const id = `${ref}:${filename}`;
     if (snapshot.sources[id]) return id;
-    const content = git(directory, ['show', `${ref}:${filename}`]);
-    if (content.includes('\0') || Buffer.byteLength(content) > 300000) throw new Error('Binary or oversized local evidence');
+    const bytes = cp.execFileSync('git', ['-C', directory, 'show', `${ref}:${filename}`], {maxBuffer: LIMITS.source_bytes + 1});
+    const content = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes);
+    if (content.includes('\0') || bytes.length > LIMITS.source_bytes) throw new Error('Binary or oversized local evidence');
     const contract = (ref === baseSha || (installation && ref === head)) && [config.readme, config.repository_policy].includes(filename);
     snapshot.sources[id] = {path: filename, ref, authority: contract ? 'trusted' : 'untrusted',
       kind: contract ? 'contract' : 'source', content};
@@ -98,13 +100,13 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     snapshot.files.push(item);
   }
   for (const filename of require('./central-version.cjs').engineContext(snapshot)) source(filename, head);
-  refresh(snapshot);
+  refresh(selectSourceBank(snapshot));
   const addSources = async paths => {
     if (!Array.isArray(paths) || !paths.length || paths.length > 8 || new Set(paths).size !== paths.length) {
       throw new Error('Local source requests require one to eight distinct paths');
     }
     for (const filename of paths) source(filename, head);
-    refresh(snapshot);
+    refresh(selectSourceBank(snapshot));
   };
   return {snapshot, localConfig, addSources};
 }

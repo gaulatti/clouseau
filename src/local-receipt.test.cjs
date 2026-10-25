@@ -235,7 +235,7 @@ test('historical bootstrap evidence is verified from the fixed public repository
   snapshot.sources.bootstrap = {...source, content: 'substituted'};
   await assert.rejects(verifySources(options), /differs from the accepted engine/);
   snapshot.sources.bootstrap = source;
-  response = {...response, size: 300001}; await assert.rejects(verifySources(options), /historical engine evidence unavailable/);
+  response = {...response, size: 2000001}; await assert.rejects(verifySources(options), /textual source blob/);
   response = {encoding: 'base64', content: Buffer.from('binary\0').toString('base64'), size: 7};
-  await assert.rejects(verifySources(options), /binary historical engine/);
+  await assert.rejects(verifySources(options), /textual source blob/);
 });

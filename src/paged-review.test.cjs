@@ -2,44 +2,12 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {fixture} = require('../test/local-review-fixture.cjs');
+const {pagedFixture, responder} = require('../test/paged-review-fixture.cjs');
 const {digest} = require('./acceptance.cjs');
 const {refresh, proofCatalog} = require('./acceptance-sources.cjs');
 const {modelTemplate} = require('./acceptance-review.cjs');
-const {compactSchema} = require('./local-harness.cjs');
 const {inspectPaged, pageSchema, concernDraft, MAX_SOURCE_BATCHES, MAX_PROMPT_BYTES} = require('./paged-review.cjs');
 const {MAX_VIEW_ROUNDS} = require('./source-view.cjs');
-
-async function pagedFixture() {
-  const f = await fixture(); f.snapshot.source_bank_version = 1; refresh(f.snapshot); return f;
-}
-
-// This deterministic responder tests the controller protocol, not model
-// comprehension or authenticated acceptance of the real consumer applications.
-function responder(f, intercept = value => value) {
-  const delivered = new Map(); const packets = []; let calls = 0;
-  const ask = async task => {
-    calls++; const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1)); packets.push(packet);
-    assert.ok(Buffer.byteLength(task.prompt) <= MAX_PROMPT_BYTES);
-    assert.ok(Buffer.byteLength(JSON.stringify(compactSchema(task.schema))) < 60000);
-    const key = `${task.role}:${packet.source_bank.bank_digest}`;
-    if (!delivered.has(key)) delivered.set(key, new Set());
-    const seen = delivered.get(key);
-    for (const page of packet.pages) seen.add(`${page.entry}:${page.page}`);
-    const missing = packet.source_bank.entries.flatMap(entry => Array.from({length: entry.page_count}, (_, page) =>
-      ({entry: entry.entry, page}))).filter(item => !seen.has(`${item.entry}:${item.page}`));
-    let value = {kind: 'page_request', report: null, page_request: {bank_digest: packet.source_bank.bank_digest,
-      pages: missing.slice(0, 4)}, request_sources: [], observations: `Inspected delivered frame ${calls}.`, concerns: []};
-    if (!missing.length) {
-      const report = modelTemplate(f.snapshot); report.gates.forEach(gate => {gate.state = 'satisfied';});
-      value = {...value, kind: 'report', report, page_request: null};
-    }
-    value = await intercept(value, {task, packet, calls});
-    return {value, provenance: {harness: 'codex', role: task.role, phase: task.phase, session: `fixture-${task.role}-${calls}`,
-      request_digest: digest(task), response_digest: digest(value), transport_digest: digest({fixture_only: value})}};
-  };
-  return {ask, packets};
-}
 
 test('bounded role views inspect complete source, patches and context before accepting a factual report', async () => {
   const f = await pagedFixture(); const model = responder(f);

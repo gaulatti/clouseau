@@ -4,7 +4,7 @@ const {createHash} = require('node:crypto');
 const {digest} = require('./acceptance.cjs');
 
 const LIMITS = Object.freeze({source_bytes: 2000000, entry_bytes: 4000000, bank_bytes: 16000000,
-  entries: 1024, page_bytes: 32000, pages_per_view: 4, view_bytes: 300000, manifest_bytes: 200000});
+  entries: 1024, page_bytes: 32000, pages_per_view: 4, view_bytes: 300000, manifest_bytes: 200000, prompt_bytes: 900000});
 const contents = new WeakMap();
 const sha256 = value => createHash('sha256').update(value).digest('hex');
 const requireBank = (condition, message) => {

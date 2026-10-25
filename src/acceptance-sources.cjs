@@ -7,9 +7,10 @@ const {digest, MAX_CITATION_LINES} = require('./acceptance.cjs');
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
     const lines = value.content.split('\n'); const entries = [];
+    const emptySource = snapshot.source_bank_version === 1 && value.kind === 'source' && !value.content.trim();
     for (let start = 1; start <= lines.length; start += MAX_CITATION_LINES) {
       const end = Math.min(lines.length, start + MAX_CITATION_LINES - 1);
-      if (lines.slice(start - 1, end).join('\n').trim()) entries.push({id: `proof-${index}-${start}`, source, start, end});
+      if (emptySource || lines.slice(start - 1, end).join('\n').trim()) entries.push({id: `proof-${index}-${start}`, source, start, end});
     }
     return entries;
   });
@@ -32,8 +33,26 @@ function safePath(value) {
 
 function refresh(snapshot) {
   const value = {...snapshot}; delete value.digest;
+  if (Object.hasOwn(value, 'source_bank_version')) {
+    if (value.source_bank_version !== 1) throw new Error('Unsupported immutable source bank version');
+    const next = {...value, digest: digest(value)};
+    require('./source-bank.cjs').createSourceBank(next);
+    snapshot.digest = next.digest;
+    return snapshot;
+  }
   if (JSON.stringify(value).length > 900000) throw new Error('Complete review evidence exceeds the source budget');
   snapshot.digest = digest(value);
+  return snapshot;
+}
+
+// New collection explicitly opts into paging. Revalidating an old signed
+// snapshot through refresh must never add a flag or alter its identity.
+function selectSourceBank(snapshot) {
+  if (!Object.hasOwn(snapshot, 'source_bank_version') && (JSON.stringify(snapshot).length > 500000 ||
+    Object.values(snapshot.sources).some(source => Buffer.byteLength(source.content) > 300000) ||
+    snapshot.files.some(file => [file.base_source, file.head_source].some(id => snapshot.sources[id] && !snapshot.sources[id].content.trim())))) {
+    snapshot.source_bank_version = 1;
+  }
   return snapshot;
 }
 
@@ -43,12 +62,7 @@ async function readSource({github, repo, snapshot, filename, ref, authority = 'u
   if (snapshot.sources[id]) return id;
   const sourceRepo = ref === snapshot.head_sha ? snapshot.head_repository : repo;
   if (!sourceRepo) throw new Error('The immutable head repository is unavailable');
-  const {data} = await github.rest.repos.getContent({...sourceRepo, path: filename, ref});
-  if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > 300000) {
-    throw new Error('Complete textual source is unavailable within the evidence budget');
-  }
-  const content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
-  if (content.includes('\0') || content.length > 300000) throw new Error('Binary or oversized source is not reviewable');
+  const content = await require('./source-blob.cjs').readTextBlob({github, repo: sourceRepo, filename, ref});
   snapshot.sources[id] = {path: filename, ref, authority, kind, content};
   return id;
 }
@@ -100,7 +114,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
       authority: 'untrusted', kind: 'requirement', content: JSON.stringify(ticket, null, 2)};
   }
   snapshot.claims = {title: pr.title, description: pr.body};
-  return refresh(snapshot);
+  return refresh(selectSourceBank(snapshot));
 }
 
 async function additionalSources({github, repo, snapshot, paths}) {
@@ -108,7 +122,7 @@ async function additionalSources({github, repo, snapshot, paths}) {
     throw new Error('Additional evidence requires one to eight distinct repository paths');
   }
   for (const filename of paths) await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
-  return refresh(snapshot);
+  return refresh(selectSourceBank(snapshot));
 }
 
-module.exports = {proofCatalog, resolveProof, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {proofCatalog, resolveProof, safePath, refresh, selectSourceBank, readSource, collectSnapshot, additionalSources};

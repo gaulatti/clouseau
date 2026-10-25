@@ -4,13 +4,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {digest} = require('./acceptance.cjs');
 const {proofCatalog, resolveProof} = require('./acceptance-sources.cjs');
+const {LIMITS} = require('./source-bank.cjs');
 const {schemas} = require('./acceptance-schema.cjs');
 const {materialize, modelTemplate, validateInspection} = require('./acceptance-review.cjs');
 const {createSourceView, prepareSourcePages, recordSourcePages, sourceExposure, verifySourceExposure,
   MAX_VIEW_ROUNDS} = require('./source-view.cjs');
 
 const MAX_SOURCE_BATCHES = 8;
-const MAX_PROMPT_BYTES = 900000;
+const MAX_PROMPT_BYTES = LIMITS.prompt_bytes;
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
 const array = items => ({type: 'array', items});
 const nullable = schema => ({anyOf: [schema, {type: 'null'}]});
@@ -74,8 +75,10 @@ function pageProofs(snapshot, view, pages) {
     ({...proof, source_index: indexes.get(source)}));
 }
 
-async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progress = [], sourceHistory = [], previousUsage = [], instructions = '', context = {}}) {
+async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progress = [], sourceHistory = [], previousUsage = [],
+  sourceBatchLimit = MAX_SOURCE_BATCHES, instructions = '', context = {}}) {
   const frozenIdentity = identity(snapshot);
+  requirePage(Number.isSafeInteger(sourceBatchLimit) && sourceBatchLimit >= 0 && sourceBatchLimit <= MAX_SOURCE_BATCHES, 'remaining source-request budget');
   requirePage(Array.isArray(progress) && progress.every(item => item.role === role), 'independent progress history');
   const ownProgress = structuredClone(progress);
   requirePage(Array.isArray(sourceHistory), 'source epoch history');
@@ -112,7 +115,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       'or kind=report with a complete factual report,page_request=null,request_sources=[]. ' +
       'The template is syntax only. Facts use supplied proof IDs; the controller owns literal quotes and all grades. Earlier observations never grant source authority.\n' +
       JSON.stringify({review_context: {...context, role, page_deliveries_remaining: MAX_VIEW_ROUNDS - deliveries - (pages.length ? 1 : 0),
-        source_batches_remaining: MAX_SOURCE_BATCHES - batches}, source_bank: view.bank, pages,
+        source_batches_remaining: sourceBatchLimit - batches}, source_bank: view.bank, pages,
       proofs: pageProofs(snapshot, view, pages), template: modelTemplate(snapshot), earlier_reports_by_this_role: drafts,
       own_page_progress: ownProgress});
     requirePage(Buffer.byteLength(prompt) <= MAX_PROMPT_BYTES, 'complete context exceeds prompt budget');
@@ -137,7 +140,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       concerns.set(concern.id, {...concern, evidence: [...new Set([...(previous?.evidence || []), ...concern.evidence])]});
     }
     ownProgress.push(structuredClone({role, snapshot_digest: snapshot.digest, bank_digest: view.bank.bank_digest,
-      cycle_start: frame === 0, response: value, invocation: provenance}));
+      cycle_start: frame === 0, source_batch_limit: sourceBatchLimit, response: value, invocation: provenance}));
     if (value.kind === 'page_request') {
       requirePage(value.report === null && value.request_sources.length === 0 &&
         exact(value.page_request, ['bank_digest', 'pages']), 'page response');
@@ -147,7 +150,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
     if (value.kind === 'source_request') {
       requirePage(value.report === null && value.page_request === null && value.request_sources.length > 0 &&
         value.request_sources.length <= 8 && new Set(value.request_sources).size === value.request_sources.length &&
-        batches < MAX_SOURCE_BATCHES && typeof addSources === 'function', 'source investigation budget');
+        batches < sourceBatchLimit && typeof addSources === 'function', 'source investigation budget');
       const before = snapshot.digest;
       const existing = Object.entries(snapshot.sources).map(([id, source]) => [id, digest(source)]);
       history.push({bank: view.bank, exposure: sourceExposure(view)});
@@ -162,9 +165,9 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
     const allDrafts = currentConcerns.findings.length ? [...drafts, currentConcerns] : drafts;
     const report = materialize(value.report, snapshot);
     const exposure = sourceExposure(view);
-    validateInspection(report, snapshot, allDrafts);
-    verifySourceExposure(snapshot, report, exposure, [...previousUsage, ...usage]);
-    return {report, drafts: allDrafts, source_bank: view.bank, source_view: exposure, source_history: history, page_progress: ownProgress, usage};
+    const result = {report, drafts: allDrafts, source_bank: view.bank, source_view: exposure, source_history: history, page_progress: ownProgress};
+    validateInspection(report, snapshot, allDrafts, result, [...previousUsage, ...usage], role);
+    return {...result, usage};
   }
 }
 

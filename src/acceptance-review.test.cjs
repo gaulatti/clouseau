@@ -293,7 +293,7 @@ test('bounded source requests read only immutable repository evidence before com
   const f = fixture(); const requests = [];
   f.snapshot.head_sha = 'a'.repeat(40);
   const github = {rest: {repos: {getContent: async args => {
-    requests.push(args); return {data: {encoding: 'base64', content: Buffer.from('pub fn validate() {}').toString('base64')}};
+    requests.push(args); return {data: {encoding: 'base64', content: Buffer.from('pub fn validate() {}').toString('base64'), size: Buffer.byteLength('pub fn validate() {}')}};
   }}}};
   let calls = 0;
   const result = await inspect({...f, github, repo: {owner: 'example', repo: 'gateway'}, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => {
@@ -309,7 +309,7 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
   }
   const f = fixture(); f.snapshot.head_sha = 'head';
   f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head;
-  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('source').toString('base64')}})}}};
+  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('source').toString('base64'), size: 6}})}}};
   await assert.rejects(inspect({...f, github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: ['src/upload.rs']})}), /no new evidence/);
   let call = 0;
   await assert.rejects(inspect({...fixture(), github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: [`src/new-${++call}.rs`]})}), /exhausted/);
@@ -318,7 +318,7 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
 
 test('new challenger source triggers a bounded fresh examination while the final independent reviews share one complete snapshot', withKey(async () => {
   const f = fixture(); let calls = 0;
-  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
+  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64'), size: 10}})}}};
   const result = await investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
     calls++; return calls === 2 ? response({request_sources: ['src/new.rs']}) : response({...f.report, snapshot: f.snapshot.digest});
   }});
@@ -330,7 +330,7 @@ test('new challenger source triggers a bounded fresh examination while the final
 
 test('source investigation cannot run indefinitely or discard a causal concern while refreshing its evidence', withKey(async () => {
   const f = fixture(); let calls = 0;
-  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
+  const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64'), size: 10}})}}};
   await assert.rejects(investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
     calls++; return calls % 2 ? response({request_sources: [`src/new-${calls}.rs`]}) : response({...f.report, snapshot: f.snapshot.digest});
   }}), /two complete examination cycles/);

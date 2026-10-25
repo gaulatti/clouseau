@@ -78,7 +78,7 @@ test('config command, report and policy boundaries fail before execution', () =>
     {...valid, readme: '../README.md'}, {...valid, repository_policy: '/policy'}]) {
     assert.throws(() => readLocalConfig(value), /Invalid local-only/);
   }
-  fs.writeFileSync(path.join(f.directory, 'src/handler.js'), 'x'.repeat(300001));
+  fs.writeFileSync(path.join(f.directory, 'src/handler.js'), 'x'.repeat(2000001));
   git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'test: oversized fixture']);
   assert.throws(() => collectLocal({...f, request: 'a', technical: {}}), /oversized/);
 }));
@@ -95,7 +95,7 @@ test('local evidence can inspect the frozen public engine without a consumer CI 
   const missing = collectLocal({directory: f.directory, base: f.base, request: 'Inspect.', technical: {}});
   await assert.rejects(missing.addSources(['.clouseau-ci/src/config.cjs']), /Frozen reviewer identity/);
   const read = fs.readFileSync;
-  for (const content of ['binary\0source', 'x'.repeat(300001)]) {
+  for (const content of ['binary\0source', 'x'.repeat(2000001)]) {
     t.mock.method(fs, 'readFileSync', (filename, ...args) => filename === path.join(__dirname, 'config.cjs') ? Buffer.from(content) : read(filename, ...args));
     await assert.rejects(collected.addSources(['.clouseau-ci/src/config.cjs']), /Binary or oversized engine/);
     t.mock.restoreAll();

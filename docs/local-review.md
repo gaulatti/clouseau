@@ -318,7 +318,9 @@ changed workflow invokes it.
 Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
 immutable public bytes without switching the frozen review engine or granting
 contract authority. CI checks the same bytes before receipt reuse. The ordinary
-serialized evidence size remains capped at 900,000 characters. Each local
+small legacy snapshot remains capped at 900,000 characters. New large or empty
+changed-source collections select [complete bounded source review](large-source-review.md),
+with immutable pages and independent role exposure checks. Each local
 investigation can read eight batches of
 up to eight paths, then submit its report using the final batch. A ninth source
 batch still stops the review; missing evidence cannot produce a passing report.
