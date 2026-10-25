@@ -47,7 +47,7 @@ async function localReview({snapshot, ask, addSources}) {
         const value = response.value;
         if (value.kind === 'source_request') {
           if (value.report !== null || !value.request_sources.length) throw new Error('Invalid local source request');
-          if (round === 3) throw new Error('Local investigation exhausted its source-request budget');
+          if (round === 8) throw new Error('Local investigation exhausted its source-request budget');
           await addSources(value.request_sources); continue;
         }
         if (value.kind !== 'report' || value.request_sources.length) throw new Error('Invalid local investigation response');

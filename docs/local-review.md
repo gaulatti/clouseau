@@ -287,8 +287,9 @@ changed workflow invokes it.
 Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
 immutable public bytes without switching the frozen review engine or granting
 contract authority. CI checks the same bytes before receipt reuse. The ordinary
-source budgets remain unchanged: each investigation can read three batches of
-up to eight paths, then submit its report using the final batch. A fourth source
+serialized evidence size remains capped at 900,000 characters. Each local
+investigation can read eight batches of
+up to eight paths, then submit its report using the final batch. A ninth source
 batch still stops the review; missing evidence cannot produce a passing report.
 Failed investigations retain `snapshot.json`
 and `observations.jsonl`; their error gives the evidence directory. These files
