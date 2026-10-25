@@ -193,3 +193,31 @@ test('opaque native artifact I/O errors remain unavailable observations rather t
   assert.equal(result.report_digest, null);
   assert.equal(result.exact_coverage, null);
 }));
+
+
+test('normal verification and native measurement inherit only the existing safe local environment boundary', () => fixture(f => {
+  const previousKey = process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY;
+  const previousVisible = process.env.CLOUSEAU_FIXTURE_VISIBLE;
+  process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY = 'fixture-only-must-not-enter-model-evidence';
+  process.env.CLOUSEAU_FIXTURE_VISIBLE = 'preserved-nonsecret-fixture';
+  try {
+    fs.writeFileSync(f.filename, JSON.stringify(f.report()));
+    const verification = [[process.execPath, '-e', 'const a=require("node:assert/strict");a.equal(process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY,undefined);a.equal(process.env.CLOUSEAU_FIXTURE_VISIBLE,"preserved-nonsecret-fixture");a.ok(process.env.PATH);console.log("credential boundary preserved")']];
+    let parserChecks = 0;
+    const run = (program, argv, settings) => {
+      if (program === 'python3') {
+        const checked = cp.spawnSync(program, ['-c', 'import os; assert "CLOUSEAU_FIXTURE_PROVIDER_KEY" not in os.environ; assert os.environ["CLOUSEAU_FIXTURE_VISIBLE"] == "preserved-nonsecret-fixture"'], settings);
+        assert.equal(checked.status, 0); parserChecks++;
+      }
+      return cp.spawnSync(program, argv, settings);
+    };
+    const result = executeVerification({...f, config: {...f.config, verification}, run});
+    assert.equal(result.verification_status, 'passed');
+    assert.equal(parserChecks, 1);
+    assert.match(result.commands[0].stdout, /credential boundary preserved/);
+    assert.equal(JSON.stringify(result).includes('fixture-only-must-not-enter-model-evidence'), false);
+  } finally {
+    if (previousKey === undefined) delete process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY; else process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY = previousKey;
+    if (previousVisible === undefined) delete process.env.CLOUSEAU_FIXTURE_VISIBLE; else process.env.CLOUSEAU_FIXTURE_VISIBLE = previousVisible;
+  }
+}));

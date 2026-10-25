@@ -63,7 +63,7 @@ function positive(value) {
 function verification({directory, config}) {
   // Contributor setup never inherits CI provider or repository-write tokens.
   // The established same-account workstation trust boundary remains unchanged.
-  const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(name)));
+  const env = normal.verificationEnvironment();
   return normal.executeVerification({directory, config, run: (program, argv, settings) => cp.spawnSync(program, argv, {...settings, env})});
 }
 

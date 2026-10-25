@@ -146,6 +146,13 @@ clouseau review --directory /path/to/repository --base origin/main \
   --request-file /path/to/requirement.txt --harness codex
 ```
 
+Verification subprocesses and the native coverage parser receive the same
+credential-filtered environment as initial installation: inherited variable names
+matching `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` are removed.
+Nonsecret runtime and tooling variables remain available. Repository verification
+commands supply their own nonproduction fixture configuration. PEM private-key
+output is rejected before it can enter AI evidence.
+
 Use `--harness claude` for Claude Code. The controller runs real verification,
 records its actual outcomes, captures immutable base/head sources and accepted
 purpose, and starts separate examiner and challenger sessions. Coverage below

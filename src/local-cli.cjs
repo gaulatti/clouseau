@@ -44,7 +44,12 @@ function initializeIdentity(directory = stateDirectory(), githubActor) {
   return {identity_file: filename, public_identity: publicIdentity};
 }
 
+function verificationEnvironment(environment = process.env) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(name)));
+}
+
 function executeVerification({directory, config, additional = [], run = cp.spawnSync}) {
+  const env = verificationEnvironment();
   const parts = coverageParts(config, {allowUnsupported: true});
   const commands = [];
   const directoryRoot = fs.realpathSync(directory);
@@ -64,7 +69,7 @@ function executeVerification({directory, config, additional = [], run = cp.spawn
   const before = parts.map(observe);
   const execute = argv => {
     let result;
-    try {result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000}) || {status: null, error: new Error('Verification process returned no result')};}
+    try {result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000, env}) || {status: null, error: new Error('Verification process returned no result')};}
     catch (error) {result = {status: null, error};}
     const stdout = result.stdout || ''; const stderr = result.stderr || '';
     // Signing material must never become model evidence, including on failure.
@@ -90,7 +95,7 @@ function executeVerification({directory, config, additional = [], run = cp.spawn
       path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
     let checked;
     try {checked = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
-      {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000}) || {status: null, error: new Error('Native coverage measurement returned no result')};}
+      {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000, env}) || {status: null, error: new Error('Native coverage measurement returned no result')};}
     catch (error) {checked = {status: null, error};}
     if (checked.error || checked.status !== 0) coverageError = checked.stderr || checked.error?.message || 'Native coverage could not be measured';
     else {
@@ -289,4 +294,4 @@ async function main(argv, runtime = {}) {
   throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --harness codex|claude --identity FILE --additional-checks FILE] | publish --directory PATH --receipt FILE');
 }
 
-module.exports = {options, stateDirectory, initializeIdentity, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};
+module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};
