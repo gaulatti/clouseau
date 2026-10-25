@@ -33,3 +33,29 @@ test('every paged source has a required native index slot and normalization pres
     assert.throws(() => materialize(invalid, f.snapshot), /paged inventory|paged source slots/);
   }
 });
+
+test('every changed path has a required factual accounting slot without filling omitted judgments', async () => {
+  const f = await pagedFixture(); const facts = modelTemplate(f.snapshot);
+  const slots = pageSchema(f.snapshot).properties.report.anyOf[0].properties.accounting;
+  assert.equal(slots.type, 'object'); assert.equal(slots.additionalProperties, false);
+  assert.deepEqual(slots.required, f.snapshot.paths);
+  assert.deepEqual(Object.keys(facts.accounting), f.snapshot.paths);
+  const original = structuredClone(facts);
+  const report = materialize(facts, f.snapshot);
+  assert.deepEqual(facts, original);
+  assert.deepEqual(report.accounting, f.snapshot.paths.map(path => ({path, ...facts.accounting[path]})));
+  for (const mutate of [
+    value => {delete value.accounting[f.snapshot.paths[0]];},
+    value => {value.accounting['invented/path.js'] = value.accounting[f.snapshot.paths[0]];},
+    value => {value.accounting['invented/path.js'] = value.accounting[f.snapshot.paths[0]]; delete value.accounting[f.snapshot.paths[0]];},
+    value => {value.accounting = Object.values(value.accounting);},
+    value => {value.accounting = 'not a factual slot table';},
+    value => {value.accounting = null;},
+    value => {delete value.accounting;},
+    value => {value.accounting[f.snapshot.paths[0]] = null;},
+    value => {value.accounting[f.snapshot.paths[0]].path = 'invented/path.js';},
+  ]) {
+    const invalid = structuredClone(facts); mutate(invalid);
+    assert.throws(() => materialize(invalid, f.snapshot), /paged accounting/);
+  }
+});

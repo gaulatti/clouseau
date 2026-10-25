@@ -96,7 +96,7 @@ test('large local grading batches retain all literal questions and grade each ex
     if (value.kind === 'report') {
       value.report.units = Array.from({length: 12}, (_, index) => ({...structuredClone(value.report.units[0]), id: `unit-${index}`}));
       for (const unit of value.report.units) for (const group of ['fit', 'excess']) for (const factor of Object.values(unit[group])) factor.evidence = [proof];
-      for (const item of value.report.accounting) item.units = value.report.units.map(unit => unit.id);
+      for (const item of Object.values(value.report.accounting)) item.units = value.report.units.map(unit => unit.id);
     }
     return value;
   });

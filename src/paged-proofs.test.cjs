@@ -10,6 +10,7 @@ const {readSourcePages} = require('./source-bank.cjs');
 
 function fixture(content = Array.from({length: 240}, (_, i) => `// Actual source line ${i + 1}`).join('\n')) {
   const snapshot = {version: 2, source_bank_version: 1, repository: 'fixture/producer', base_sha: 'a'.repeat(40), head_sha: 'b'.repeat(40),
+    paths: ['src/producer.js'],
     sources: {head: {path: 'src/producer.js', ref: 'b'.repeat(40), authority: 'untrusted', kind: 'source', content}},
     files: [{path: 'src/producer.js', status: 'added', head_source: 'head', patch: '@@ actual fixture patch @@\n'}],
     history: [], tickets: [], claims: {title: 'Bounded native proof selection fixture'}};

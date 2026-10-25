@@ -131,6 +131,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       'Only delivered literal bytes count as inspected. A proof spanning pages requires every byte. Unseen required material cannot establish satisfied completeness. ' +
       'The controller lists every required_unread_page_selectors entry after accounting for current literal pages. Request them before claiming complete review. The response schema permits inspected sources and satisfied completeness only when their literal bytes are available. An honest incomplete report must retain missing sources and unresolved completeness. ' +
       'coverage.sources is an object keyed by every exact source_index in the supplied template. Keep every slot, including verification, requirements and excluded sources. Each slot has state, reason and a proof-ID evidence array; missing sources use an empty array. Do not omit, duplicate or invent an index. ' +
+      'accounting is an object keyed by every exact changed path in the supplied template. Keep every slot, with its own units, reason and direct changed-source proof IDs; do not omit paths or duplicate a path field inside its slot. The controller restores path identity, never a missing judgment. ' +
       'Read every changed base/head source, patch, context and trusted contract/verification entry before a complete report. ' +
       'Optional exclusions still require cited justification and the independent completeness audit. Delivering pages does not prove semantic attention. ' +
       'Keep concise cumulative observations; all prior observations remain available. Record every provisional causal concern in concerns, at most eight per response. ' +
@@ -142,14 +143,14 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       (typedFunctions ? 'Call exactly one supplied function: page_request with bank_digest and pages directly; source_request with request_sources; or acceptance_report with the complete factual report fields directly. Page/source requests require observations to retain progress. To record new provisional concerns alongside a page/source request, select its explicit _with_concerns variant and supply the complete concerns array. Plain requests have no new concern event and must omit concerns. A final acceptance_report records its full summary/findings/resolutions directly and must omit separate observations or provisional concerns fields. Earlier recorded concerns remain mandatory regardless of the next function selected. Do not emit kind, an extra report/page_request wrapper, or inactive envelope fields: the validated function name selects the controller-owned kind, and the controller wraps the exact payload and restores the fixed null/empty values. ' :
         'Select kind=page_request with report=null, request_sources=[] and page_request; kind=source_request with report=null,page_request=null and paths; ' +
         'or kind=report with a complete factual report,page_request=null,request_sources=[]. ') +
-      'The template is syntax only. Facts use supplied proof IDs; the controller owns literal quotes and all grades. Earlier observations never grant source authority.\n' +
+      'The template is syntax only. Facts use supplied proof IDs; the controller owns literal quotes and all grades. Earlier observations are hypotheses, never source authority: check them against current literal bytes and retain causal concerns or resolve them with actual counterevidence. ' +
+      'All earlier reports and progress are retained before the current frame. The final pages field contains the literal bytes supplied in THIS invocation, not another request. Its selectors need not be requested again just because acknowledgement follows your completed response. Use required_unread_page_selectors to advance inspection; deliberate reinspection consumes the same bounded delivery allowance.\n' +
       JSON.stringify({review_context: {...context, role, page_deliveries_remaining: MAX_VIEW_ROUNDS - deliveries - (pages.length ? 1 : 0),
         source_batches_remaining: sourceBatchLimit - batches, completeness_claim_available: availability.completeness_ready}, source_bank: view.bank,
-      page_request_example: {bank_digest: view.bank.bank_digest, pages: [{entry: view.bank.entries[0].entry, page: 0}]}, pages,
-      delivered_page_selectors: delivered,
-      required_unread_page_selectors: availability.required_unread_page_selectors,
-      proofs, citable_proofs: citable, template: sample, earlier_reports_by_this_role: drafts,
-      own_page_progress: ownProgress});
+      page_request_example: {bank_digest: view.bank.bank_digest, pages: [{entry: view.bank.entries[0].entry, page: 0}]},
+      earlier_reports_by_this_role: drafts, own_page_progress: ownProgress, template: sample,
+      proofs, citable_proofs: citable, delivered_page_selectors: delivered,
+      required_unread_page_selectors: availability.required_unread_page_selectors, pages});
     requirePage(Buffer.byteLength(prompt) <= MAX_PROMPT_BYTES, 'complete context exceeds prompt budget');
     const response = await ask({role, phase: 'investigation', schema, prompt});
     const value = response?.value;

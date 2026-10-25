@@ -49,6 +49,10 @@ function schemas(snapshot, {paged = false, inspectedSources = null, completeness
     object({name: enumeration(['review_completeness']), state: enumeration(['unresolved', 'violated']), ...gateFields}),
   ]};
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
+  const accountingFields = {units: array(string), evidence: {...citations,
+    description: `${referenceRule} Include an ID citing this path's own changed base_source or head_source, not only other files or verification.`}, reason: string};
+  const accounting = snapshot.source_bank_version === 1 ? object(Object.fromEntries(snapshot.paths.map(path =>
+    [path, object(accountingFields)]))) : array(object({path: enumeration(snapshot.paths), ...accountingFields}));
   return {
     acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
       units: {...array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string,
@@ -59,8 +63,7 @@ function schemas(snapshot, {paged = false, inspectedSources = null, completeness
         obligation: string, evidence: citations, factors: group('defect'), blast_radius: {type: 'number', minimum: 1, maximum: 10},
         opportunity: object({mechanical: boolean, beneficial: boolean, within_scope: boolean, verified: boolean}), repair_paths: paths})),
       gates: array(gates),
-      accounting: array(object({path: enumeration(snapshot.paths), units: array(string), evidence: {...citations,
-        description: `${referenceRule} Include an ID citing this path's own changed base_source or head_source, not only other files or verification.`}, reason: string})),
+      accounting,
       decisions: array(object({kind: enumeration(['purpose', 'authority', 'tradeoff']), question: string, options: array(string), evidence: citations})),
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
       ...(snapshot.review_manifest_version ? {

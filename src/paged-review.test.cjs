@@ -26,6 +26,21 @@ test('bounded role views inspect complete source, patches and context before acc
   assert.deepEqual(first.earlier_reports_by_this_role, []);
 });
 
+test('fresh literal pages follow all retained hypotheses so old progress cannot hide the current frame', async () => {
+  const f = await pagedFixture(); const model = responder(f);
+  await inspectPaged({snapshot: f.snapshot, role: 'examiner', ask: async task => {
+    const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
+    const keys = Object.keys(packet);
+    assert.ok(keys.indexOf('pages') > keys.indexOf('own_page_progress'));
+    assert.ok(keys.indexOf('pages') > keys.indexOf('earlier_reports_by_this_role'));
+    assert.ok(keys.indexOf('required_unread_page_selectors') > keys.indexOf('own_page_progress'));
+    assert.equal(keys.at(-1), 'pages');
+    assert.match(task.prompt, /Earlier observations are hypotheses/);
+    return model.ask(task);
+  }});
+  assert.ok(model.packets.some(packet => packet.pages.length && packet.own_page_progress.length));
+});
+
 test('the bounded schema uses proof patterns while controller citations remain authoritative', async () => {
   const f = await pagedFixture(); const schema = pageSchema(f.snapshot);
   const report = schema.properties.report.anyOf[0];

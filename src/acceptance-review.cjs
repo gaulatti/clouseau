@@ -56,6 +56,7 @@ function modelTemplate(snapshot) {
   const facts = canonicalReferences(sample, aliases);
   if (snapshot.source_bank_version === 1) {
     facts.coverage.sources = Object.fromEntries(facts.coverage.sources.map(({source, ...item}) => [String(source), item]));
+    facts.accounting = Object.fromEntries(facts.accounting.map(({path, ...item}) => [path, item]));
   } else for (const item of facts.coverage?.sources || []) {
       const [primary, ...additional] = item.evidence;
       item.evidence = {primary, additional};
@@ -74,6 +75,18 @@ function canonicalReferences(value, spans = new Map()) {
 function materialize(facts, snapshot) {
   const report = canonicalReferences(facts);
   if (snapshot.source_bank_version === 1) {
+    const accounting = report.accounting;
+    if (!accounting || Array.isArray(accounting) || typeof accounting !== 'object' ||
+      Object.keys(accounting).length !== snapshot.paths.length || !snapshot.paths.every(path => Object.hasOwn(accounting, path))) {
+      throw new Error('Factual paged accounting requires every exact changed-path slot');
+    }
+    report.accounting = snapshot.paths.map(path => {
+      const item = accounting[path];
+      if (!item || Object.keys(item).sort().join(',') !== 'evidence,reason,units') {
+        throw new Error('Factual paged accounting slots require only units, reason and proof IDs');
+      }
+      return {path, ...item};
+    });
     const slots = report.coverage?.sources;
     const expected = Object.keys(snapshot.sources).map((_, index) => String(index));
     if (!slots || Array.isArray(slots) || typeof slots !== 'object' ||

@@ -35,6 +35,19 @@ delivery only after a completed authenticated invocation. A citation spanning
 pages requires all its literal bytes. An empty source also requires its actual
 empty-page delivery. A manifest alone is not inspection.
 
+Factual file accounting likewise has one required object slot per exact changed
+path, containing its submitted unit IDs, reason and direct source proof IDs.
+The controller restores only the path selected by that key; omitted, invented or
+extra path fields fail rather than receiving a generated judgment. Ordinary
+small-snapshot reports keep their existing array representation.
+
+Each continuation places all retained own history before its current proof
+catalog, unread selectors and literal pages. The final `pages` field is the
+current invocation's actual source, not a request that must be repeated before
+it can be read. Earlier observations remain hypotheses to check against those
+bytes; neither their repetition nor a repeated page delivery establishes
+semantic completeness. Reinspection retains the existing delivery budget.
+
 Inventory entry numbers select pages; source-proof IDs select actual source
 intervals. Patch and context entries have no source-proof IDs of their own.
 Provisional concerns select only source proofs supplied in the current frame;
