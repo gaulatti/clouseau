@@ -87,8 +87,13 @@ test('repair data must exist exactly when the compact assessment binds its diges
 test('incomplete and pending assessments retain their run binding but carry no fabricated review record', () => {
   const f = fixture(); delete f.assessment.record_digest;
   f.assessment.decision = 'review_incomplete'; f.record = null;
-  const payload = transport.encode(f);
-  assert.deepEqual(transport.decode({...f, payload}), {record: null, repair: null});
+  for (const decision of ['review_incomplete', 'pending_technical', 'blocked_technical']) {
+    f.assessment.decision = decision;
+    f.assessment.review_source = 'authenticated_local'; f.assessment.provider_api_calls = 0;
+    const payload = transport.encode(f);
+    assert.deepEqual(transport.decode({...f, payload}), {record: null, repair: null},
+      'verified quality reuse with outstanding technical checks cannot transport an approval record');
+  }
   assert.throws(() => transport.encode({...f, record: {}}), /unexpected review data/);
   assert.throws(() => transport.encode({...f, repair: {}}), /unexpected review data/);
   f.assessment.repair_digest = 'a'.repeat(64);

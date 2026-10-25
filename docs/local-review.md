@@ -77,11 +77,15 @@ documented fields. Version 1 keeps its existing compatibility behavior.
 
 Adapt commands to the repository's real test suite. The runner passes argument
 arrays directly, runs every command, and checks each untouched native report.
-It does not generate a combined artifact or reinterpret counters. Every part
-requires a complete application inventory, nonempty measured lines, and exact
-100% lines and branches. A genuinely branchless part may have zero branches
-when another part supplies measured branches; an entirely branchless plan fails.
-Uncovered or missing data in one part cannot be compensated by another part.
+It does not generate a combined artifact or reinterpret counters. Native
+measurement requires a complete application inventory and nonempty measured
+lines. Local AI review records valid partial counts and unavailable, invalid or
+unverified coverage honestly, then runs regardless of the percentage. It does
+not label an old artifact as this run's verified coverage. CI's separate exact
+coverage gate still requires 100% lines and branches for every part. A genuinely
+branchless part may have zero branches when another part supplies measured
+branches; an entirely branchless plan fails that CI gate. One part cannot
+compensate for another part's missing or uncovered data.
 
 Report and source paths must be repository-relative. Resolved source roots must
 exist and must not overlap, and report paths must be unique, including aliases.
@@ -93,16 +97,19 @@ in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
 Python test/dependency conventions. Those non-application entries may appear in
 a native report but cannot contribute passing counters.
 
-Version 2 supports the complete-inventory `istanbul` and `coveragepy` adapters.
-Version 1's single-report interface, including LLVM, remains supported. LLVM
-multi-root plans require a complete compiled-source inventory capability and
-are not accepted by version 2; Go statement reports do not become line/branch
-coverage through this interface.
+Version 2 supports native measurement through the complete-inventory `istanbul`
+and `coveragepy` adapters. Version 1's single-report interface, including LLVM,
+remains supported. Unsupported native formats are reported as unavailable local
+coverage; they do not suppress AI review or acquire invented counters. CI still
+rejects unsupported formats. LLVM multi-root plans require a complete
+compiled-source inventory capability and are not measured by version 2; Go
+statement reports do not become line/branch coverage through this interface.
 
 The accepted base supplies the complete recipe in normal local review. Local
-evidence records exact counters and a content digest for every native artifact,
-aggregate counters, and the accepted configuration digest. One frozen engine
-checks every part throughout the review.
+evidence records actual command outcomes and output, native counters when valid,
+artifact digests and freshness, unavailable-coverage diagnostics, and the accepted
+configuration digest. A nonzero command is not assumed to have failed only
+because of coverage. One frozen engine checks every part throughout the review.
 
 CI invokes the same shared verifier through `operation: coverage` with
 `coverage-config`. Supply the recipe from the exact accepted base, separately
@@ -140,19 +147,28 @@ clouseau review --directory /path/to/repository --base origin/main \
 ```
 
 Use `--harness claude` for Claude Code. The controller runs real verification,
-captures immutable base/head sources and accepted purpose, and starts separate
-examiner and challenger sessions. Additional source requests are bounded. Fresh
+records its actual outcomes, captures immutable base/head sources and accepted
+purpose, and starts separate examiner and challenger sessions. Coverage below
+100%, a failing coverage command, or unavailable, malformed or unsupported
+coverage does not prevent those local AI sessions. Additional source requests are bounded. Fresh
 semantic grading sessions supply descriptive factor levels; the same Clouseau
 code owns citations, formulas, thresholds and final decisions. No investigator
 gets the implementer's conversation or the other investigator's conclusions.
 
 The controller identifies this as a pre-PR assessment in both investigation and
-grading. It requires the accepted local recipe and meaningful evidence for the
-changed behavior. CI audit, workflow and container execution remains pending
-until the independent protected workflow runs; a local receipt does not claim
-those results or authorize GitHub approval. Missing local evidence, deceptive
-tests and unresolved code concerns still prevent a passing receipt. CI must
-pass every mandatory technical gate before consuming the review for approval.
+grading. It requires the accepted local recipe, safe complete immutable source
+and meaningful evidence for the changed behavior. Coverage percentage or
+unavailable coverage alone does not force a failing AI quality verdict; actual
+behavioral defects, deceptive tests and missing material evidence still do. The
+review never rewrites failed or unavailable verification into a test pass.
+
+New and cached CLI results identify `decision_scope: review_reuse_only`,
+`independent_ci_required: true` and `merge_authority: false`, with local
+verification and coverage status separate from the AI decision. A local
+`auto_approve` verdict means passing AI quality evidence eligible for signed
+reuse, not technical approval. CI audit, workflow and container execution remains
+independent; a local receipt does not claim those results or authorize GitHub
+approval. CI must pass every mandatory technical gate before approval or merge.
 
 A source-line reference can be normalized only to an existing immutable catalog
 block containing that line. The controller preserves the observation and reads
@@ -261,16 +277,24 @@ the requirement text; those inputs must be appropriate for publication there.
 ## CI consumes evidence without repeating AI
 
 An opted-in protected workflow loads configuration and Clouseau from trusted
-source. It waits for actual CI tests and exact coverage, loads the referenced
-receipt as data, validates its signature/issuer/author/time/revisions/policy, and
-compares its complete signed source inventory to GitHub's immutable PR sources.
-It recalculates the review scores and revalidates the receipt at the write gate.
-It then uses the existing native bot approval, auto-merge and protection checks.
-The local path makes zero CI AI calls. Missing, stale, revoked, altered,
-non-passing or unauthorized receipts cannot approve.
+source. It loads a referenced receipt as data, validates its
+signature/issuer/author/time/revisions/policy, compares the complete signed source
+inventory to GitHub's immutable PR sources, and recalculates the AI scores.
+A valid local assessment can be authenticated and reused with zero CI AI calls
+even while independent CI is pending or failed. That result remains
+`pending_technical` or `blocked_technical`, with no approval-usable record digest
+or approval/merge write. Unstamped PRs retain the CI provider route after
+technical verification.
 
-Tests, exact 100% coverage and branch protection remain mandatory. Review-control
-changes retain their existing exact-revision owner installation requirements.
+Only after actual CI tests and exact coverage pass may the controller emit an
+approval assessment. It revalidates the receipt at the write gate and uses the
+existing native approval, merge-authority and protection checks. Missing, stale,
+revoked, altered, non-passing or unauthorized receipts cannot approve and never
+silently become a paid fallback.
+
+Tests, exact 100% coverage and the applicable shared protection/owner-merge
+rules remain mandatory before approval or merge. Review-control changes retain
+their existing exact-revision owner installation requirements.
 Post-deployment wiki generation and factual review remain separate operations.
 
 Local caches include the exact installed central SHA, even when a newer commit
@@ -315,10 +339,11 @@ preserves the gate. Actual unsupported scope or authority still blocks.
 For explicit additional behavioral checks, pass `--additional-checks FILE`, where
 FILE is an operator-supplied JSON array of at most eight argv arrays, for example
 `[["npm", "test", "--prefix", ".github/tests"]]`. Keep this file outside the source
-checkout. This only adds checks: the accepted-base recipe and exact coverage
-must pass first, and additional checks must leave those coverage artifacts
-unchanged. Every command result and the additional plan are bound to the review
-and cache identity. This can record consumer workflow-test execution without
+checkout. This only adds checks: additional commands run after the accepted-base
+recipe and native measurement, even when coverage is partial or unavailable.
+They must leave the observed coverage artifacts unchanged; rewriting an artifact
+is an integrity failure, not a route to better counters. Every actual command
+result and the additional plan are bound to the review and cache identity. This can record consumer workflow-test execution without
 changing application scripts or triggering deployment. It requires no CI keys
 and creates no CI installation. Independent hosted checks remain mandatory.
 

@@ -79,11 +79,15 @@ clouseau installation-review --directory /path/to/project \
   --grant-comment NATIVE_COMMENT_ID --harness codex
 ```
 
-This runs actual verification, native exact coverage, immutable source
-collection, independent examiner/challenger and deterministic scoring. Only the
-explicitly authorized frozen installation configuration acquires initial
-trust. Every changed mechanism still earns its scope, integrity and technical
-results. Setup subprocesses do not inherit provider/write-token environment
+This runs actual verification and native measurement, records their real
+outcomes, then performs immutable source collection, independent
+examiner/challenger review and deterministic scoring. Partial coverage, a failing
+coverage command or unavailable coverage does not suppress local AI review or
+become invented passing counts. A passing local AI-quality verdict may produce
+installation-only signed evidence; it does not establish successful technical
+verification or initial trust. The independent CI gate still requires all tests
+and exact coverage, and the owner must accept the installation manually. Every
+changed mechanism still earns its scope and integrity results. Setup subprocesses do not inherit provider/write-token environment
 variables; the existing workstation trust boundary remains unchanged.
 
 Incomplete transports and negative findings persist outside source. Renewing

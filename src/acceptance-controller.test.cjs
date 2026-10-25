@@ -300,9 +300,13 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   const bundle = issueReceipt({record, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
     keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
   const original = f.github.rest.repos.getContent;
-  f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
-    encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
-  }} : original(args);
+  const contentReads = [];
+  f.github.rest.repos.getContent = async args => {
+    contentReads.push(args);
+    return args.path === 'clouseau-review.json' ? {data: {
+      encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
+    }} : original(args);
+  };
   const policy = createPolicy(trusted, {engine});
   f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
   if (central === 'controls') f.state.comments = [{id: 87, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
@@ -316,10 +320,32 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
-  f.state.pending = true;
-  assert.equal((await assess()).decision, 'pending_technical', 'a valid local receipt cannot replace pending CI');
-  f.state.pending = false; f.state.failed = true;
-  assert.equal((await assess()).decision, 'blocked_technical', 'a valid local receipt cannot replace failed CI');
+  const approvedRecord = fs.readFileSync(f.recordPath);
+  fs.rmSync(f.recordPath);
+  for (const pending of [true, false]) {
+    f.state.pending = pending; f.state.failed = !pending; contentReads.length = 0;
+    const held = await assess();
+    assert.equal(held.decision, pending ? 'pending_technical' : 'blocked_technical', 'a valid local quality receipt cannot replace independent CI');
+    assert.equal(held.review_source, 'authenticated_local');
+    assert.equal(held.provider_api_calls, 0);
+    assert.equal(Object.hasOwn(held, 'record_digest'), false, 'blocked quality reuse cannot authorize the write-capable gate');
+    assert.equal(fs.existsSync(f.recordPath), false, 'blocked quality reuse does not publish an approval record');
+    assert.ok(contentReads.some(read => read.path === 'clouseau-review.json'));
+    assert.ok(contentReads.some(read => read.path === 'src/upload.test.js' && read.ref === assessment.head_sha), 'immutable reviewed source is independently checked even while CI is blocked');
+    await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
+      assessment: held, nativeGate: true}), /independent CI acceptance remains blocked/);
+    assert.equal(f.state.writes.filter(item => ['approve', 'atomic'].includes(item.name)).length, 0);
+    assert.equal(providerCalls, 0);
+  }
+  const validSignature = bundle.signature;
+  bundle.signature = `${validSignature[0] === 'a' ? 'b' : 'a'}${validSignature.slice(1)}`;
+  assert.equal((await assess()).decision, 'review_incomplete', 'failed CI cannot conceal a bad signed review or cause paid fallback');
+  bundle.signature = validSignature;
+  const author = f.state.pr.user.login;
+  f.state.pr.user.login = 'another-author';
+  assert.equal((await assess()).decision, 'review_incomplete', 'failed CI cannot conceal a receipt from another author');
+  f.state.pr.user.login = author;
+  fs.writeFileSync(f.recordPath, approvedRecord);
   await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
     assessment, nativeGate: true}), /Verification changed/);
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
@@ -865,7 +891,7 @@ test('same-head purpose edits and removals invalidate private merge even when an
   });
 });
 
-async function privateReceiptFixture(f, controls = false) {
+async function privateReceiptFixture(f, controls = false, localTechnical = null) {
   const p = await privateOwnerFixture(f);
   const crypto = require('node:crypto');
   const receipts = require('./local-receipt.cjs');
@@ -886,6 +912,14 @@ async function privateReceiptFixture(f, controls = false) {
       response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
   record.result.execution_digest = digest(record.result.usage);
   for (const item of record.result.reviews) item.report.snapshot = record.snapshot.digest;
+  if (localTechnical) {
+    record.technical = localTechnical;
+    record.snapshot.sources.verification.content = JSON.stringify(localTechnical);
+    require('./acceptance-sources.cjs').refresh(record.snapshot);
+    const local = await require('../test/local-review-fixture.cjs').fixture();
+    local.snapshot = record.snapshot;
+    record.result = await require('./local-review.cjs').localReview({snapshot: local.snapshot, ask: local.ask});
+  }
   const bundle = receipts.issueReceipt({record, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
     keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
   const content = f.github.rest.repos.getContent;
@@ -899,9 +933,50 @@ async function privateReceiptFixture(f, controls = false) {
     fetchImpl: async () => {providerCalls++; throw new Error('No paid local receipt fallback');}});
   assert.equal(assessment.decision, controls ? 'owner_decision' : 'auto_approve', assessment.reason);
   assert.equal(providerCalls, 0);
-  return {...p, trusted, engine, assessment, policy, run: () => policy.gate({github: f.github,
+  return {...p, trusted, engine, assessment, policy, bundle, run: () => policy.gate({github: f.github,
     context: f.context, core: p.core, assessment, recordPath: f.recordPath, nativeGate: true})};
 }
+
+test('signed local quality with incomplete coverage is reused on red CI without approving or hiding invalid evidence', async () => {
+  await fixture(async f => {
+    const localTechnical = {commands: [{argv: ['npm', 'run', 'test:coverage'], exit_code: 1,
+      stdout_digest: digest('fixture suite passed; exact coverage threshold failed'), stderr_digest: digest('')}],
+    exact_coverage: {lines: [20, 19], branches: [8, 6]}, coverage_status: 'incomplete'};
+    const p = await privateReceiptFixture(f, false, localTechnical);
+    assert.deepEqual(p.bundle.payload.record.technical, localTechnical);
+    const current = JSON.parse(fs.readFileSync(f.recordPath));
+    assert.deepEqual(current.local_receipt.payload.record.technical.exact_coverage, {lines: [20, 19], branches: [8, 6]});
+    assert.equal(current.technical.pending, undefined, 'green acceptance uses independent CI instead of claiming local coverage passed');
+    fs.rmSync(f.recordPath);
+    f.state.failed = true;
+    let providerCalls = 0;
+    const assess = (policy = p.policy) => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath,
+      fetchImpl: async () => {providerCalls++; throw new Error('No paid fallback from signed quality evidence');}});
+    const held = await assess();
+    assert.equal(held.decision, 'blocked_technical');
+    assert.equal(held.review_source, 'authenticated_local');
+    assert.equal(held.provider_api_calls, 0);
+    assert.equal(Object.hasOwn(held, 'record_digest'), false);
+    assert.equal(fs.existsSync(f.recordPath), false);
+    const signature = p.bundle.signature;
+    p.bundle.signature = `${signature[0] === 'a' ? 'b' : 'a'}${signature.slice(1)}`;
+    assert.equal((await assess()).decision, 'review_incomplete');
+    p.bundle.signature = signature;
+    const revoked = structuredClone(p.trusted); revoked.local_review.keys[0].revoked = true;
+    assert.equal((await assess(createPolicy(revoked, {engine: p.engine}))).decision, 'review_incomplete');
+    const head = f.state.pr.head.sha;
+    f.state.pr.head.sha = (head[0] === 'd' ? 'c' : 'd').repeat(40);
+    assert.equal((await assess()).decision, 'review_incomplete');
+    f.state.pr.head.sha = head;
+    const content = f.github.rest.repos.getContent;
+    f.github.rest.repos.getContent = args => args.path === 'src/upload.test.js' && args.ref === head ? Promise.resolve({data: {
+      encoding: 'base64', content: Buffer.from('substituted immutable source').toString('base64'), size: 29}}) : content(args);
+    assert.equal((await assess()).decision, 'review_incomplete');
+    f.github.rest.repos.getContent = content;
+    assert.equal(providerCalls, 0);
+    assert.equal(f.state.writes.filter(item => ['approve', 'atomic', 'enable-auto'].includes(item.name)).length, 0);
+  });
+});
 
 test('private signed receipt reuse is revalidated immediately before merge with zero CI AI calls', async () => {
   for (const controls of [false, true]) await fixture(async f => {

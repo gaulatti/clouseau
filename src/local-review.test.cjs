@@ -29,6 +29,39 @@ test('every independent local investigation and grade receives the pre-PR bounda
   assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation', 'examiner:grading', 'challenger:grading']);
 });
 
+test('both local roles and graders receive honest partial or unavailable coverage without technical approval authority', async () => {
+  for (const coverage of [
+    {status: 'below_threshold', passed: false, artifact_freshness: 'observed_current_run'},
+    {status: 'unavailable', passed: false, artifact_freshness: 'unverified', error: 'Native coverage format is unsupported'},
+  ]) {
+    const f = await fixture();
+    const technical = {verification_status: 'failed', commands: [{argv: ['npm', 'run', 'test:coverage'], exit_code: 1}],
+      coverage, exact_coverage: coverage.status === 'below_threshold' ? {lines: [10, 9], branches: [4, 3]} : null};
+    f.snapshot.sources.verification.content = JSON.stringify(technical);
+    refresh(f.snapshot);
+    const seen = [];
+    const result = await localReview({snapshot: f.snapshot, ask: async task => {
+      const split = task.prompt.lastIndexOf('\n');
+      const instructions = task.prompt.slice(0, split);
+      const packet = JSON.parse(task.prompt.slice(split + 1));
+      assert.ok(instructions.includes('Run both local AI roles regardless of coverage percentage or availability.'));
+      assert.ok(instructions.includes('Do not infer that a nonzero command failed only because of coverage'));
+      assert.ok(instructions.includes('Coverage percentage or unavailable coverage alone does not force a local quality failure'));
+      assert.ok(instructions.includes('exact nonempty 100% coverage'));
+      assert.ok(instructions.includes('cannot authorize technical approval or merge'));
+      assert.equal(packet.review_context.decision_scope, 'review_reuse_only');
+      assert.equal(packet.review_context.independent_ci_required, true);
+      assert.equal(packet.review_context.merge_authority, false);
+      if (task.phase === 'investigation') assert.deepEqual(JSON.parse(packet.evidence.sources.verification.content), technical);
+      seen.push(`${task.role}:${task.phase}`);
+      return f.ask(task);
+    }});
+    assert.equal(result.decision, 'auto_approve', 'quality scoring is independent of the recorded technical deficit');
+    assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation', 'examiner:grading', 'challenger:grading']);
+    assert.deepEqual(JSON.parse(f.snapshot.sources.verification.content), technical, 'review does not rewrite failed technical evidence');
+  }
+});
+
 test('a pre-PR context never rewrites an unresolved behavioral-evidence gate into a pass', async () => {
   const f = await fixture();
   const result = await localReview({snapshot: f.snapshot, ask: async task => {

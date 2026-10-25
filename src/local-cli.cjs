@@ -45,34 +45,85 @@ function initializeIdentity(directory = stateDirectory(), githubActor) {
 }
 
 function executeVerification({directory, config, additional = [], run = cp.spawnSync}) {
-  const parts = coverageParts(config);
+  const parts = coverageParts(config, {allowUnsupported: true});
   const commands = [];
+  const directoryRoot = fs.realpathSync(directory);
+  const observe = part => {
+    try {
+      const filename = path.join(directory, part.report);
+      const resolved = fs.realpathSync(filename);
+      if (!resolved.startsWith(directoryRoot + path.sep)) return {report_digest: null, error: 'Coverage artifact escapes the checkout'};
+      const stat = fs.statSync(filename, {bigint: true});
+      if (!stat.isFile()) return {report_digest: null, error: 'Coverage artifact is not a regular file'};
+      return {report_digest: digest(fs.readFileSync(filename, 'utf8')),
+        stamp: digest([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String))};
+    } catch (error) {
+      return {report_digest: null, error: error.code || 'Coverage artifact is unavailable'};
+    }
+  };
+  const before = parts.map(observe);
   const execute = argv => {
-    const result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000});
-    if (result.error || result.status !== 0) throw new Error(`Local verification failed: ${argv[0]}`);
-    commands.push({argv, exit_code: result.status, stdout_digest: digest(result.stdout), stderr_digest: digest(result.stderr)});
+    let result;
+    try {result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000}) || {status: null, error: new Error('Verification process returned no result')};}
+    catch (error) {result = {status: null, error};}
+    const stdout = result.stdout || ''; const stderr = result.stderr || '';
+    // Signing material must never become model evidence, including on failure.
+    if (/-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/.test(stdout + stderr)) throw new Error('Private signing material appeared in verification output; it cannot enter review evidence');
+    commands.push({argv, exit_code: Number.isInteger(result.status) ? result.status : null,
+      stdout_digest: digest(stdout), stderr_digest: digest(stderr), stdout, stderr,
+      ...(result.error ? {error: {code: result.error.code || null, message: result.error.message}} : {}),
+      ...(result.signal ? {signal: result.signal} : {})});
   };
   for (const argv of config.verification) execute(argv);
-  const checkScript = config.version === 1 ?
-    'import contextlib,io,json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import check,load_report\n' +
-      'with contextlib.redirect_stdout(io.StringIO()):\n result=check(load_report(sys.argv[2]),sys.argv[3],sys.argv[4])\nprint(json.dumps(result))\n' :
-    'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom coverage_plan import check_plan\n' +
-      'print(json.dumps(check_plan(json.loads(sys.argv[2]),sys.argv[3])))\n';
-  const args = config.version === 1 ? [path.join(directory, parts[0].report),
-    path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
-  const check = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
-  {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000});
-  if (check.error || check.status !== 0) throw new Error('Local exact line and branch coverage failed');
-  const result = JSON.parse(check.stdout);
-  const reports = parts.map(part => ({...part, report_digest: digest(fs.readFileSync(path.join(directory, part.report), 'utf8'))}));
+  const observed = parts.map(observe);
+  const reports = parts.map((part, index) => ({...part, report_digest: observed[index].report_digest}));
+  const fresh = observed.every((part, index) => !part.error && part.stamp !== before[index].stamp);
+  let measured = null;
+  let coverageError = observed.find(part => part.error)?.error;
+  if (!coverageError) {
+    const checkScript = config.version === 1 ?
+      'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import measure,load_report\n' +
+        'print(json.dumps(measure(load_report(sys.argv[2]),sys.argv[3],sys.argv[4])))\n' :
+      'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom coverage_plan import measure_plan\n' +
+        'print(json.dumps(measure_plan(json.loads(sys.argv[2]),sys.argv[3])))\n';
+    const args = config.version === 1 ? [path.join(directory, parts[0].report),
+      path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
+    let checked;
+    try {checked = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
+      {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000}) || {status: null, error: new Error('Native coverage measurement returned no result')};}
+    catch (error) {checked = {status: null, error};}
+    if (checked.error || checked.status !== 0) coverageError = checked.stderr || checked.error?.message || 'Native coverage could not be measured';
+    else {
+      try {
+        measured = JSON.parse(checked.stdout);
+        const valid = counts => counts && ['lines', 'branches'].every(metric => Array.isArray(counts[metric]) &&
+          counts[metric].length === 2 && counts[metric].every(Number.isSafeInteger) &&
+          counts[metric][0] >= 0 && counts[metric][1] >= 0 && counts[metric][1] <= counts[metric][0]) && counts.lines[0] > 0;
+        if (!(config.version === 1 ? valid(measured) : valid(measured.totals) &&
+            Array.isArray(measured.parts) && measured.parts.length === parts.length && measured.parts.every(part => valid(part.counts)))) {
+          throw new Error('Invalid native measurement');
+        }
+      } catch {measured = null; coverageError = 'Native coverage measurement returned malformed data';}
+    }
+  }
   for (const argv of additional) execute(argv);
-  if (additional.length && reports.some(part => part.report_digest !== digest(fs.readFileSync(path.join(directory, part.report), 'utf8')))) {
+  if (additional.length && observed.some((part, index) => digest(part) !== digest(observe(parts[index])))) {
     throw new Error('Additional checks changed accepted coverage artifacts');
   }
-  if (config.version === 1) return {commands, exact_coverage: result, report_digest: reports[0].report_digest,
-    local_config_digest: digest(config)};
-  return {commands, exact_coverage: result.totals, coverage_reports: reports.map((part, index) =>
-    ({...part, exact_coverage: result.parts[index].counts})), report_digest: digest(reports), local_config_digest: digest(config)};
+  const counts = measured && (config.version === 1 ? measured : measured.totals);
+  const exact = counts && counts.lines[0] > 0 && ['lines', 'branches'].every(metric => counts[metric][0] === counts[metric][1]);
+  const verification = {commands, verification_status: commands.every(command => command.exit_code === 0 && !command.error) ? 'passed' : 'failed',
+    exact_coverage: counts, coverage: {status: coverageError ? 'unavailable' : exact ? 'exact' : 'below_threshold',
+      passed: Boolean(exact && fresh), artifact_freshness: fresh ? 'observed_current_run' : 'unverified',
+      ...(coverageError ? {error: coverageError} : {})}, local_config_digest: digest(config)};
+  if (config.version === 1) return {...verification, report_digest: reports[0].report_digest};
+  return {...verification, coverage_reports: reports.map((part, index) => ({...part,
+    exact_coverage: measured ? measured.parts[index].counts : null})), report_digest: digest(reports)};
+}
+
+function reviewStatus(technical = {}) {
+  return {decision_scope: 'review_reuse_only', independent_ci_required: true, merge_authority: false,
+    local_verification: {commands: technical.verification_status || 'unavailable', coverage: technical.coverage || {status: 'unavailable', passed: false}}};
 }
 
 function installation() {
@@ -156,7 +207,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
-      provider_api_calls: 0, harness_invocations: 0, reused: true};
+      provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical)};
   }
   if (fs.existsSync(journal)) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
   const output = path.resolve(args.output || path.join(cache, 'record.json'));
@@ -213,7 +264,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,
-    harness_invocations: result.usage.length};
+    harness_invocations: result.usage.length, ...reviewStatus(technical)};
 }
 
 function publishReceipt({directory, receipt}) {
@@ -238,4 +289,4 @@ async function main(argv, runtime = {}) {
   throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --harness codex|claude --identity FILE --additional-checks FILE] | publish --directory PATH --receipt FILE');
 }
 
-module.exports = {options, stateDirectory, initializeIdentity, executeVerification, installation, readHistory, runReview, publishReceipt, main};
+module.exports = {options, stateDirectory, initializeIdentity, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};

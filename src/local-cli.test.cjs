@@ -74,7 +74,7 @@ test('CLI argument and identity setup are explicit and never return private mate
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 });
 
-test('local verifier executes commands and the real shared parser, rejecting native coverage gaps', () => repository(f => {
+test('local verifier records real command outcomes and native coverage gaps independently', () => repository(f => {
   const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
   const report = path.join(f.directory, 'coverage.json');
   fs.writeFileSync(report, JSON.stringify(nativeFixture(f.directory)));
@@ -83,11 +83,13 @@ test('local verifier executes commands and the real shared parser, rejecting nat
   assert.equal(receipt.commands[0].exit_code, 0);
   assert.equal(receipt.coverage_reports, undefined, 'version 1 keeps its existing evidence shape');
   fs.writeFileSync(report, JSON.stringify(nativeFixture(f.directory, true)));
-  assert.throws(() => executeVerification({directory: f.directory, config}), /coverage failed/);
-  assert.throws(() => executeVerification({directory: f.directory,
-    config: {...config, verification: [[process.execPath, '-e', 'process.exit(3)']]}}), /verification failed/);
-  assert.throws(() => executeVerification({directory: f.directory,
-    config: {...config, verification: [['/nonexistent-fixture-command']]}}), /verification failed/);
+  assert.equal(executeVerification({directory: f.directory, config}).coverage.status, 'below_threshold');
+  const failed = executeVerification({directory: f.directory,
+    config: {...config, verification: [[process.execPath, '-e', 'process.exit(3)']]}});
+  assert.equal(failed.verification_status, 'failed'); assert.equal(failed.commands[0].exit_code, 3);
+  const missing = executeVerification({directory: f.directory,
+    config: {...config, verification: [['/nonexistent-fixture-command']]}});
+  assert.equal(missing.verification_status, 'failed'); assert.equal(missing.commands[0].error.code, 'ENOENT');
 }));
 
 test('v2 local verification binds every native artifact and allows only aggregate-measured branches', () => repository(f => {
@@ -111,9 +113,9 @@ test('v2 local verification binds every native artifact and allows only aggregat
   assert.equal(result.local_config_digest, digest(config));
   assert.equal(result.report_digest, digest(result.coverage_reports.map(({exact_coverage, ...entry}) => entry)));
   linear[source].s[0] = 0; fs.writeFileSync(second, JSON.stringify(linear));
-  assert.throws(() => executeVerification({directory: f.directory, config}), /coverage failed/);
-  assert.throws(() => executeVerification({directory: f.directory,
-    config: {...config, coverage: [config.coverage[1]]}}), /coverage failed/);
+  assert.equal(executeVerification({directory: f.directory, config}).coverage.status, 'below_threshold');
+  assert.deepEqual(executeVerification({directory: f.directory,
+    config: {...config, coverage: [config.coverage[1]]}}).exact_coverage, {lines: [1, 0], branches: [0, 0]});
   let calls = 0;
   assert.throws(() => executeVerification({directory: f.directory,
     config: {...config, coverage: []}, run: () => {calls++;}}), /Invalid local-only/);
@@ -122,13 +124,16 @@ test('v2 local verification binds every native artifact and allows only aggregat
   assert.equal(calls, 0, 'invalid accepted recipe stops before executing any command');
 }));
 
-test('local native artifact loading rejects duplicate JSON keys before an approval record exists', () => repository(f => {
+test('local native artifact loading records duplicate-key data as unavailable rather than fabricating counters', () => repository(f => {
   const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
   const report = nativeFixture(f.directory);
   const name = Object.keys(report)[0];
   const duplicate = JSON.stringify(report).slice(0, -1) + ',' + JSON.stringify(name) + ':' + JSON.stringify(report[name]) + '}';
   fs.writeFileSync(path.join(f.directory, 'coverage.json'), duplicate);
-  assert.throws(() => executeVerification({directory: f.directory, config}), /coverage failed/);
+  const result = executeVerification({directory: f.directory, config});
+  assert.equal(result.coverage.status, 'unavailable');
+  assert.match(result.coverage.error, /Duplicate coverage JSON key/);
+  assert.equal(result.exact_coverage, null);
 }));
 
 test('agent-only local review needs no CI config or provider keys and does not resample unchanged findings', () => repository(async f => {
@@ -318,7 +323,7 @@ test('unregistered local signing and source changes stop before any receipt can 
 });
 
 
-test('operator additional checks execute after the accepted recipe, bind evidence and cache identity, and cannot waive coverage', () => repository(async f => {
+test('operator additional checks execute after the accepted recipe and cannot rewrite coverage evidence', () => repository(async f => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-additional-fixture-'));
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
@@ -343,11 +348,13 @@ test('operator additional checks execute after the accepted recipe, bind evidenc
     const reportPath = path.join(f.directory, 'coverage.json');
     const gap = JSON.stringify(nativeFixture(f.directory, true)); fs.writeFileSync(reportPath, gap);
     const attemptedRepair = [[process.execPath, '-e', `require('node:fs').writeFileSync('coverage.json', ${JSON.stringify(JSON.stringify(nativeFixture(f.directory)))})`]];
-    assert.throws(() => executeVerification({directory: f.directory, config: accepted, additional: attemptedRepair}), /coverage failed/);
-    assert.equal(fs.readFileSync(reportPath, 'utf8'), gap, 'mandatory coverage fails before additional commands can run');
+    assert.throws(() => executeVerification({directory: f.directory, config: accepted, additional: attemptedRepair}), /changed accepted coverage artifacts/);
+    assert.notEqual(fs.readFileSync(reportPath, 'utf8'), gap, 'a rewritten report is rejected even when its replacement claims full coverage');
     fs.writeFileSync(path.join(f.directory, 'coverage.json'), JSON.stringify(nativeFixture(f.directory)));
-    assert.throws(() => executeVerification({directory: f.directory, config: accepted,
-      additional: [[process.execPath, '-e', 'process.exit(7)']]}), /verification failed/);
+    const extraFailed = executeVerification({directory: f.directory, config: accepted,
+      additional: [[process.execPath, '-e', 'process.exit(7)']]});
+    assert.equal(extraFailed.verification_status, 'failed');
+    assert.equal(extraFailed.commands.at(-1).exit_code, 7);
     assert.throws(() => executeVerification({directory: f.directory, config: accepted,
       additional: [[process.execPath, '-e', 'require("node:fs").appendFileSync("coverage.json", " ")']]}), /changed accepted coverage artifacts/);
     for (const value of ['x'.repeat(8001), '{}', JSON.stringify(Array(9).fill(['node'])), '[[]]']) {
@@ -372,5 +379,43 @@ test('a malformed harness report retains a private validation failure and never 
     assert.equal(failure.harness, null);
     assert.match(failure.failure, /Invalid local investigation response/);
     assert.equal(calls, 1); assert.equal(fs.existsSync(path.join(cache, 'receipt.json')), false);
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+}));
+
+
+test('partial native coverage and a real failing exact gate still reach both local AI roles with honest evidence', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-partial-quality-fixture-'));
+  try {
+    fs.writeFileSync(path.join(f.directory, 'coverage.json'), JSON.stringify(nativeFixture(f.directory, true)));
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input while preserving accepted input.');
+    const extra = path.join(state, 'checks.json');
+    fs.writeFileSync(extra, JSON.stringify([['python3', path.join(__dirname, 'check_coverage.py'),
+      path.join(f.directory, 'coverage.json'), path.join(f.directory, 'src'), 'istanbul']]));
+    const ask = fakeHarness(); const roles = [];
+    const result = await runReview({directory: f.directory, base: f.base, 'request-file': request, 'additional-checks': extra}, {
+      state, installed: fixtureInstallation, ask: async task => {
+        if (task.phase === 'investigation') {
+          roles.push(task.role);
+          const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
+          const source = Object.values(packet.evidence.sources).find(item => item.path === 'verification');
+          const observed = JSON.parse(source.content);
+          assert.equal(observed.verification_status, 'failed');
+          assert.equal(observed.commands.at(-1).exit_code, 1);
+          assert.match(observed.commands.at(-1).stderr, /require exactly 100%/);
+          assert.deepEqual(observed.exact_coverage, {lines: [2, 2], branches: [4, 2]});
+          assert.equal(observed.coverage.status, 'below_threshold');
+        }
+        return ask(task);
+      },
+    });
+    assert.deepEqual(roles, ['examiner', 'challenger']);
+    assert.equal(result.decision, 'auto_approve');
+    assert.equal(result.harness_invocations, 4);
+    assert.equal(result.local_verification.commands, 'failed');
+    assert.equal(result.local_verification.coverage.status, 'below_threshold');
+    assert.equal(result.decision_scope, 'review_reuse_only');
+    assert.equal(result.independent_ci_required, true);
+    assert.equal(result.merge_authority, false);
+    assert.equal(result.receipt, null, 'unenrolled fixture cannot create an eligible approval signature');
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));

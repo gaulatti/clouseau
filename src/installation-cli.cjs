@@ -137,7 +137,7 @@ async function runReview(args, {api, installed, state, clock, ask = askHarness, 
   }
   return {decision: result.decision, installation_only: true, manual_owner_acceptance_required: true,
     ordinary_pr_approval: false, record: output, receipt, head_sha: manifest.head_sha, base_sha: manifest.base_sha,
-    reviewer_sha: reviewer.sha, provider_api_calls: 0, harness_invocations: result.usage.length};
+    reviewer_sha: reviewer.sha, provider_api_calls: 0, harness_invocations: result.usage.length, ...normal.reviewStatus(technical)};
 }
 
 async function remoteConfiguration(api, manifest) {
