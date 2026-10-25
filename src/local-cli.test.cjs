@@ -356,3 +356,21 @@ test('operator additional checks execute after the accepted recipe, bind evidenc
     }
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
+
+test('a malformed harness report retains a private validation failure and never reaches grading or signing', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-malformed-report-'));
+  try {
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const args = {directory: f.directory, base: f.base, 'request-file': request};
+    let calls = 0;
+    await assert.rejects(runReview(args, {state, installed: fixtureInstallation, verify: () => ({}), ask: async task => {
+      calls++; assert.equal(task.phase, 'investigation');
+      return {value: {kind: 'unexpected', report: null, request_sources: []}};
+    }}), /Invalid local investigation response.*preserved review evidence/);
+    const cache = path.join(state, 'reviews', fs.readdirSync(path.join(state, 'reviews'))[0]);
+    const failure = JSON.parse(fs.readFileSync(path.join(cache, 'failure.json')));
+    assert.equal(failure.harness, null);
+    assert.match(failure.failure, /Invalid local investigation response/);
+    assert.equal(calls, 1); assert.equal(fs.existsSync(path.join(cache, 'receipt.json')), false);
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+}));
