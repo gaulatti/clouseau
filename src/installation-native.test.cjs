@@ -38,8 +38,8 @@ test('initial review executes real Python tests and native coverage before signi
       reviewerSha: f.reviewer.sha, reviewerDigest: f.reviewer.digest,
       configDigest: f.manifest.config_digest, policyDigest: f.manifest.policy_digest, now: f.now}), /owner authority/);
 
-    // A genuine behavior regression fails the application tests before any new
-    // model request or passing receipt. No coverage artifact is hand-edited.
+    // A genuine behavior regression remains visible to both AI roles; a negative
+    // quality judgment stays unsigned. No native artifact is hand-edited.
     fs.writeFileSync(path.join(f.directory, 'app/handler.py'), 'def accept(value):\n    return value\n');
     git(f.directory, ['add', 'app/handler.py']); git(f.directory, ['commit', '-qm', 'test: reproduce missing-input regression']);
     const changed = bootstrap.prepareManifest({directory: f.directory, base: f.base, request: f.request,
@@ -47,9 +47,15 @@ test('initial review executes real Python tests and native coverage before signi
     f.live.comment.commit_id = changed.head_sha;
     f.live.comment.body = bootstrap.grantBody(changed);
     fs.writeFileSync(manifestFile, JSON.stringify(changed));
-    const untouched = harness();
-    await assert.rejects(cli.runReview(args, {...runtime, ask: untouched}), /Local verification failed/);
-    assert.equal(untouched.calls(), 0);
+    const observedFailure = harness(true);
+    const rejected = await cli.runReview(args, {...runtime, ask: observedFailure});
+    const failedRecord = JSON.parse(fs.readFileSync(rejected.record));
+    assert.equal(observedFailure.calls(), 4, 'failed behavior is assessed rather than suppressing AI');
+    assert.equal(failedRecord.technical.verification_status, 'failed');
+    assert.equal(failedRecord.technical.commands[0].exit_code, 1);
+    assert.match(failedRecord.technical.commands[0].stderr, /ValueError not raised/);
+    assert.notEqual(rejected.decision, 'auto_approve');
+    assert.equal(rejected.receipt, null);
   } finally {
     if (previous === undefined) delete process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY;
     else process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY = previous;

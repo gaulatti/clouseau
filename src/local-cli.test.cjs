@@ -7,7 +7,7 @@ const path = require('node:path');
 const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
-const {options, stateDirectory, initializeIdentity, executeVerification, installation, readHistory, runReview, publishReceipt, main} = require('./local-cli.cjs');
+const {options, stateDirectory, initializeIdentity, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main} = require('./local-cli.cjs');
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
 function nativeFixture(directory, gap = false) {
@@ -419,3 +419,13 @@ test('partial native coverage and a real failing exact gate still reach both loc
     assert.equal(result.receipt, null, 'unenrolled fixture cannot create an eligible approval signature');
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
+
+
+test('quality scope never presents absent historical local verification as a technical pass', () => {
+  const summary = reviewStatus();
+  assert.equal(summary.decision_scope, 'review_reuse_only');
+  assert.equal(summary.local_verification.commands, 'unavailable');
+  assert.deepEqual(summary.local_verification.coverage, {status: 'unavailable', passed: false});
+  assert.equal(summary.independent_ci_required, true);
+  assert.equal(summary.merge_authority, false);
+});
