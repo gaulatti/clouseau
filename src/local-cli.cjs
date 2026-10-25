@@ -11,8 +11,10 @@ const {localReview} = require('./local-review.cjs');
 const {askHarness} = require('./local-harness.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
+const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {refresh, safePath} = require('./acceptance-sources.cjs');
+const {coverageParts} = require('./coverage-plan.cjs');
 
 const root = path.join(__dirname, '..');
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
@@ -20,7 +22,7 @@ const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
 function options(argv) {
   const [command, ...args] = argv;
   const parsed = {command};
-  const allowed = ['directory', 'base', 'harness', 'request-file', 'output', 'identity', 'receipt'];
+  const allowed = ['directory', 'base', 'harness', 'request-file', 'output', 'identity', 'receipt', 'additional-checks'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
     if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) throw new Error('Invalid Clouseau local arguments');
@@ -42,22 +44,35 @@ function initializeIdentity(directory = stateDirectory(), githubActor) {
   return {identity_file: filename, public_identity: publicIdentity};
 }
 
-function executeVerification({directory, config, run = cp.spawnSync}) {
+function executeVerification({directory, config, additional = [], run = cp.spawnSync}) {
+  const parts = coverageParts(config);
   const commands = [];
-  for (const argv of config.verification) {
+  const execute = argv => {
     const result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000});
     if (result.error || result.status !== 0) throw new Error(`Local verification failed: ${argv[0]}`);
     commands.push({argv, exit_code: result.status, stdout_digest: digest(result.stdout), stderr_digest: digest(result.stderr)});
-  }
-  const reportPath = path.join(directory, config.coverage.report);
-  const checkScript = 'import contextlib,io,json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import check\n' +
-    'with contextlib.redirect_stdout(io.StringIO()):\n result=check(json.load(open(sys.argv[2])),sys.argv[3],sys.argv[4])\nprint(json.dumps(result))\n';
-  const check = run('python3', ['-c', checkScript, path.join(root, 'src'), reportPath,
-    path.join(directory, config.coverage.source_directory), config.coverage.format],
+  };
+  for (const argv of config.verification) execute(argv);
+  const checkScript = config.version === 1 ?
+    'import contextlib,io,json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import check,load_report\n' +
+      'with contextlib.redirect_stdout(io.StringIO()):\n result=check(load_report(sys.argv[2]),sys.argv[3],sys.argv[4])\nprint(json.dumps(result))\n' :
+    'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom coverage_plan import check_plan\n' +
+      'print(json.dumps(check_plan(json.loads(sys.argv[2]),sys.argv[3])))\n';
+  const args = config.version === 1 ? [path.join(directory, parts[0].report),
+    path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
+  const check = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
   {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000});
   if (check.error || check.status !== 0) throw new Error('Local exact line and branch coverage failed');
-  return {commands, exact_coverage: JSON.parse(check.stdout), report_digest: digest(fs.readFileSync(reportPath, 'utf8')),
+  const result = JSON.parse(check.stdout);
+  const reports = parts.map(part => ({...part, report_digest: digest(fs.readFileSync(path.join(directory, part.report), 'utf8'))}));
+  for (const argv of additional) execute(argv);
+  if (additional.length && reports.some(part => part.report_digest !== digest(fs.readFileSync(path.join(directory, part.report), 'utf8')))) {
+    throw new Error('Additional checks changed accepted coverage artifacts');
+  }
+  if (config.version === 1) return {commands, exact_coverage: result, report_digest: reports[0].report_digest,
     local_config_digest: digest(config)};
+  return {commands, exact_coverage: result.totals, coverage_reports: reports.map((part, index) =>
+    ({...part, exact_coverage: result.parts[index].counts})), report_digest: digest(reports), local_config_digest: digest(config)};
 }
 
 function installation() {
@@ -71,6 +86,7 @@ function readHistory(filename, repository, branch) {
   const value = JSON.parse(text);
   if (value.version !== 1 || value.repository !== repository || value.branch !== branch ||
     !/^[a-f0-9]{40}$/.test(value.head_sha) || !/^[a-f0-9]{40}$/.test(value.base_sha) ||
+    (value.reviewer_sha !== undefined && !/^[a-f0-9]{40}$/.test(value.reviewer_sha)) ||
     !/^[a-f0-9]{64}$/.test(value.reviewer_digest) || !/^[a-f0-9]{64}$/.test(value.request_digest) ||
     !/^[a-f0-9]{64}$/.test(value.cache_id) || typeof value.has_receipt !== 'boolean' ||
     !['auto_approve', 'repair_required', 'review_incomplete', 'owner_decision', 'blocked_integrity'].includes(value.decision) ||
@@ -93,8 +109,15 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (git(directory, ['status', '--porcelain']).trim()) throw new Error('Commit the complete change before local review');
   const reviewer = installed();
   const reviewerSha = reviewer.sha;
+  const engine = {...SOURCE, sha: reviewer.sha, digest: reviewer.digest};
   const request = fs.readFileSync(args['request-file'], 'utf8');
   if (!request.trim() || request.length > 20000) throw new Error('A bounded, nonempty requirement is required');
+  const additionalText = args['additional-checks'] ? fs.readFileSync(args['additional-checks'], 'utf8') : '[]';
+  if (additionalText.length > 8000) throw new Error('Additional local checks exceed the input budget');
+  const additional = JSON.parse(additionalText);
+  if (!Array.isArray(additional) || additional.length > 8) throw new Error('Additional local checks require at most eight argument arrays');
+  if (additional.length) readLocalConfig({...config, verification: additional});
+  const requestDigest = additional.length ? digest({request, additional}) : digest(request);
   let ciConfig = null;
   if (git(directory, ['ls-tree', base, '--', '.github/clouseau.json']).trim()) {
     const parsed = JSON.parse(git(directory, ['show', `${base}:.github/clouseau.json`]));
@@ -117,16 +140,16 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (sameRevision && previous.decision !== 'auto_approve') {
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
-  let cacheId = digest({repository, head, base: baseSha, reviewerDigest: reviewer.digest,
-    request, config, ciConfig, harness: args.harness || 'codex', priorFindings});
-  if (sameRevision && previous.request_digest === digest(request)) cacheId = previous.cache_id;
+  let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
+    request, config, ciConfig, harness: args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {})});
+  if (sameRevision && previous.reviewer_sha === reviewerSha && previous.request_digest === requestDigest) cacheId = previous.cache_id;
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
   const cachedReceipt = path.join(cache, 'receipt.json');
   if (ciConfig?.local_review && fs.existsSync(cachedReceipt)) {
     const bundle = JSON.parse(fs.readFileSync(cachedReceipt, 'utf8'));
     const key = ciConfig.local_review.keys.find(item => item.id === bundle.payload.key_id);
-    const verified = verifyReceipt(bundle, {trust: ciConfig.local_review, repository,
+    const verified = verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
       author: key?.github_actor, headSha: head, baseSha: git(directory, ['rev-parse', base]).trim(),
       reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
       policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))});
@@ -142,25 +165,30 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (identityPath) {
     if (fs.statSync(identityPath).mode & 0o077) throw new Error('Signing identity permissions must be private');
     identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-    if (!ciConfig?.local_review || ciConfig.local_review.reviewer_digest !== reviewer.digest ||
+    if (!ciConfig?.local_review || !acceptsEngine(ciConfig.local_review, engine) ||
       !ciConfig.local_review.keys.some(key => !key.revoked && key.id === identity.id &&
         key.issuer === identity.issuer && key.github_actor === identity.github_actor && key.public_key === identity.public_key)) {
       throw new Error('The signer and reviewer revision must already be enrolled in the protected CI configuration');
     }
   }
-  const technical = verify({directory, config});
+  const technical = verify({directory, config, additional});
   if (git(directory, ['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed during local verification');
-  const collected = collectLocal({directory, base, request, technical, ciConfig});
+  const collected = collectLocal({directory, base, request, technical, ciConfig, reviewerSha});
   collected.snapshot.prior_findings = priorFindings;
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
   const result = await localReview({...collected, ask: async task => {
+    fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started',
       request_digest: digest(task)}) + '\n', {mode: 0o600});
     const response = await ask({...task, harness: args.harness || 'codex'});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
     return response;
-  }});
+  }}).catch(error => {
+    fs.writeFileSync(path.join(cache, 'failure.json'), JSON.stringify({failure: error.message,
+      harness: error.harnessDiagnostic || null}, null, 2) + '\n', {mode: 0o600});
+    error.message += `; preserved review evidence: ${cache}`; throw error;
+  });
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
@@ -173,7 +201,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest});
-    verifyReceipt(bundle, {trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
+    verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
     receipt = path.join(cache, 'receipt.json');
@@ -181,7 +209,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   fs.mkdirSync(path.dirname(historyPath), {recursive: true, mode: 0o700});
   fs.writeFileSync(historyPath, JSON.stringify({version: 1, repository, branch, head_sha: head, base_sha: baseSha,
-    reviewer_digest: reviewer.digest, request_digest: digest(request), cache_id: cacheId,
+    reviewer_sha: reviewerSha, reviewer_digest: reviewer.digest, request_digest: requestDigest, cache_id: cacheId,
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,
@@ -201,12 +229,13 @@ function publishReceipt({directory, receipt}) {
 }
 
 async function main(argv, runtime = {}) {
+  if (argv[0] === 'public-identity' || argv[0]?.startsWith('installation-')) return require('./installation-cli.cjs').main(argv, runtime);
   const args = options(argv);
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
   if (args.command === 'review') return runReview(args, runtime);
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
-  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --harness codex|claude --identity FILE] | publish --directory PATH --receipt FILE');
+  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --harness codex|claude --identity FILE --additional-checks FILE] | publish --directory PATH --receipt FILE');
 }
 
 module.exports = {options, stateDirectory, initializeIdentity, executeVerification, installation, readHistory, runReview, publishReceipt, main};

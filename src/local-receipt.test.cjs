@@ -18,6 +18,19 @@ test('signed passing local receipt is verified and graded without a provider', a
   assert.throws(() => marker(`<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->\n<!-- clouseau-local-review:v1 ${'b'.repeat(40)} -->`), /multiple/);
 });
 
+test('any local receipt claim must be one complete supported immutable marker', () => {
+  const valid = `<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`;
+  const unknown = `<!-- clouseau-local-review:v2 ${'b'.repeat(40)} -->`;
+  for (const body of ['clouseau-local-review:', `<!-- clouseau-local-review:v1 invalid -->`, unknown,
+    `<!-- clouseau-local-review:v1 ${'a'.repeat(39)} -->`, valid.slice(0, -3), `${valid}\n${unknown}`]) {
+    assert.throws(() => marker(body), /receipt|marker|claim/i);
+  }
+  assert.throws(() => marker(`${valid}\n${valid}`), /multiple receipt/);
+  assert.throws(() => marker(`<!-- clouseau-installation-review:v2 invalid -->\n${valid}`), /installation-only/);
+  assert.equal(marker('Ordinary PR with no receipt claim.'), null);
+  assert.equal(marker(`Ready application change.\n${valid}`), 'a'.repeat(40));
+});
+
 test('tampered report, signature, key, repository, revision and policy never authorize reuse', async () => {
   const f = await fixture();
   const bundle = issueReceipt(f.issue);
@@ -125,4 +138,51 @@ test('even a trusted signer cannot submit incomplete execution, altered review b
   assert.throws(() => verifyReceipt(reSign(p => {p.expires_at = p.issued_at + 3601;}), f.expected), /expired/);
   assert.throws(() => verifyReceipt(reSign(p => {p.nonce = 'weak';}), f.expected), /challenge/);
   assert.throws(() => verifyReceipt(reSign(p => {p.record.result.decision = 'owner_decision'; p.record_digest = digest(p.record);}), f.expected), /calculated/);
+});
+
+test('signed engine source requests are checked against accepted engine bytes and never promoted into repository authority', async () => {
+  const f = await fixture();
+  const snapshot = structuredClone(f.snapshot);
+  const source = {path: '.clouseau-ci/src/config.cjs', ref: f.issue.reviewerSha, authority: 'untrusted', kind: 'source',
+    content: require('node:fs').readFileSync(require('node:path').join(__dirname, 'config.cjs'), 'utf8')};
+  snapshot.sources.engine = source;
+  const files = [{filename: 'src/upload.test.js', status: 'modified'}];
+  const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
+    repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
+    files, reviewerSha: f.issue.reviewerSha};
+  await verifySources(options);
+  for (const changed of [{ref: 'f'.repeat(40)}, {path: '.clouseau-ci/../outside'}, {authority: 'trusted'}, {kind: 'contract'}]) {
+    snapshot.sources.engine = {...source, ...changed};
+    await assert.rejects(verifySources(options), /invalid frozen engine/);
+  }
+  snapshot.sources.engine = {...source, content: 'substituted'};
+  await assert.rejects(verifySources(options), /differs from the accepted engine/);
+  snapshot.sources.engine = source;
+  await assert.rejects(verifySources({...options, reviewerSha: undefined}), /invalid frozen engine/);
+});
+
+test('historical bootstrap evidence is verified from the fixed public repository without changing the accepted engine', async () => {
+  const f = await fixture(); const snapshot = structuredClone(f.snapshot); const old = 'f'.repeat(40);
+  const content = 'Historical bootstrap text, not executable review logic.';
+  const source = {path: `.clouseau-ci/scripts/resolve/action.yml@${old}`, ref: old, authority: 'untrusted', kind: 'source', content};
+  snapshot.sources.bootstrap = source;
+  const original = f.github.rest.repos.getContent; let response = {encoding: 'base64', content: Buffer.from(content).toString('base64'), size: Buffer.byteLength(content)};
+  f.github.rest.repos.getContent = async args => {
+    if (args.owner !== 'gaulatti') return original(args);
+    assert.deepEqual(args, {owner: 'gaulatti', repo: 'clouseau', ref: old, path: 'scripts/resolve/action.yml'});
+    return {data: response};
+  };
+  const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
+    repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
+    files: [{filename: 'src/upload.test.js', status: 'modified'}], reviewerSha: f.issue.reviewerSha};
+  await verifySources(options);
+  assert.equal(options.reviewerSha, f.issue.reviewerSha);
+  snapshot.sources.bootstrap = {...source, ref: 'd'.repeat(40)};
+  await assert.rejects(verifySources(options), /invalid frozen engine/);
+  snapshot.sources.bootstrap = {...source, content: 'substituted'};
+  await assert.rejects(verifySources(options), /differs from the accepted engine/);
+  snapshot.sources.bootstrap = source;
+  response = {...response, size: 300001}; await assert.rejects(verifySources(options), /historical engine evidence unavailable/);
+  response = {encoding: 'base64', content: Buffer.from('binary\0').toString('base64'), size: 7};
+  await assert.rejects(verifySources(options), /binary historical engine/);
 });

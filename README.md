@@ -6,6 +6,9 @@ coding harnesses and creates no Actions configuration or provider secrets.
 Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
 coverage, and approves/merges without repeating the AI review. See
 [local review, installation and trust boundaries](docs/local-review.md).
+Consumers without accepted recipe/enrollment/workflows use the separate
+[initial owner-authorized trust installation](docs/initial-installation.md).
+Its signed evidence cannot approve ordinary changes or automatically merge.
 
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,
@@ -30,15 +33,23 @@ There is no application-specific deployment infrastructure in Clouseau.
 
 ## Operations
 
-Use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`. Pin the full commit, and update
-that reference through a reviewed PR. Do not track `main` or a movable tag in a
-consumer's privileged approval job. See `examples/colombo.json` for version 2 configuration.
+Automatic CI integrations pin the small `gaulatti/clouseau/scripts/resolve`
+bootstrap once at a reviewed full commit. It selects protected Clouseau main,
+freezes its SHA and computes its digest. Every engine job checks out that SHA
+and invokes the local action with the same trusted outputs. Normal central
+releases need no consumer pin or digest update. See [automatic CI upgrades](docs/automatic-ci-upgrades.md)
+for source authorization, failure behavior and exact local-receipt compatibility.
+Legacy fixed installations may still use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`;
+upgrading those installations requires a reviewed PR. See `examples/colombo.json`
+for the version 2 policy configuration.
 
 | Operation | Inputs | Result |
 | --- | --- | --- |
+| `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
 | `test` | none | Run Clouseau's Python and Node regression suites |
-| `coverage` | `coverage-report`, `source-directory`, optional `coverage-format` | Require exact, nonempty 100% application line and branch coverage in native LLVM or Istanbul JSON |
+| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
+| `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
 | `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
@@ -68,13 +79,31 @@ instrumentation with normal application cfgs, followed by docs and Docker tests.
 For JavaScript/TypeScript, select `coverage-format: istanbul` and pass the native
 `coverage-final.json` produced by c8/Istanbul. Set `source-directory` to the
 original application source tree, not compiled output. Every `.ts`, `.tsx`,
-`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules;
-declaration-only `.d.ts` files are not executable. The checker rejects omitted,
+`.js`, `.jsx`, `.cjs`, and `.mjs` source must appear, including unloaded modules.
+Declaration-only `.d.ts` files, concrete test conventions and dependency
+directories are not application sources; generated application code remains
+included. The fixed inventory conventions and multi-artifact configuration are
+documented in [local coverage plans](docs/local-review.md#multiple-native-coverage-artifacts).
+The checker rejects omitted,
 duplicate, mismatched, skipped or malformed measurements and coverage-ignore
 directives. It derives exact line and branch totals from native hit counters,
 never from rounded summary percentages. Configure c8 `--all` over all compiled
 JavaScript with source maps to measure unloaded TypeScript sources. Run real
 runtime tests as well as unit tests; this format support does not replace them.
+
+For Python, select `coverage-format: coveragepy` and supply the unmodified JSON
+format 3 report from `coverage.py` with branch measurement enabled. See the
+[native Python coverage contract](docs/python-coverage.md) for source inventory,
+report generation, path binding and exact native counter validation. This reads
+coverage.py's executable lines and branch decision exits, not statement
+percentages or every traced transition. Empty global totals, omitted application
+modules, exclusions, partial coverage and inconsistent counters fail closed.
+
+Monorepos may use the accepted-base version 2 local recipe with separate native
+Istanbul and coverage.py parts. `operation: coverage` accepts that recipe through
+`coverage-config` and runs the same shared per-part and aggregate checks as the
+local runner. Each part must be complete and exact; there is no consumer-side
+report merging. Legacy single-report inputs remain supported.
 
 ## Trust and permissions
 
@@ -112,11 +141,37 @@ The configured verification workflow, review controls, and repository-purpose
 contract remain protected. Their changes still receive an AI integrity assessment
 and require explicit owner confirmation.
 
-The controller requires active effective base-branch rules: strict required
+The native protected merge path requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
 administrator must also verify no bypass actors. Repository auto-merge and Actions
-approving reviews must be enabled. Runtime tokens do not get administration access.
+approving reviews must be enabled for automatic merge. Runtime tokens do not get administration access.
+
+Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
+configuration. Repository auto-merge must be disabled in this mode, including
+for owner-authored PRs. Tests, exact coverage, review, source binding and
+current-head code-owner approval for external contributors when CODEOWNERS is configured remain mandatory.
+Available branch protection is still enforced. Only GitHub's specific HTTP 403
+private-plan upgrade response, together with verified private visibility and an
+unprotected branch, permits approval without host-enforced protection. Generic
+permission failures, unavailable APIs, public unprotected repositories and
+incomplete available rules fail closed. The summary states when GitHub cannot
+enforce the checks; trusted maintainers must honor them before manually merging.
+The controller never merges or dispatches deployment in manual mode.
+
+Explicit `"merge_mode": "automatic"` selects strict owner-only automation:
+CODEOWNERS must exist on the accepted base and the author must own every affected
+path. The normal protected native flow is unchanged. On the exact unavailable
+private-plan condition above, native repository auto-merge stays disabled while
+the validated acceptance controller can atomically fast-forward the exact base
+to the reviewed head, with paired source/base compare-and-swap and no force.
+This supports same-repository branches with an up-to-date head only; other
+contributions remain manual. Missing/stale reviews, failed full verification or
+coverage, changed revisions and API errors cannot authorize that write. This is
+controller-enforced delivery, not unavailable native branch protection. See
+[the complete private-plan contract](docs/change-acceptance.md#controller-enforced-owner-merge-on-an-unavailable-private-plan),
+including deployment-trigger limitations. Omitting `merge_mode` preserves the
+existing native flow and optional CODEOWNERS behavior.
 
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
@@ -346,8 +401,10 @@ claim external service health, running image bytes, or terminal upload delivery.
 
 Reviews retain fixed/dismissed findings across pushes and explicitly inventory
 inspected, excluded and missing evidence. Missing material context prevents
-approval. Protocol v2 enables automatic merge only for code-owner-authored PRs;
+approval. When protected-base CODEOWNERS exists, protocol v2 enables automatic merge only for code-owner-authored PRs;
 other contributions require current-head code-owner approval and manual merge.
+Confirmed absence leaves that ownership gate inactive; existing invalid files or
+unavailable ownership evidence still block. Other acceptance gates are unchanged.
 See [the review contract](docs/change-acceptance.md#review-convergence-and-completeness).
 
 The frozen qualification corpus in `test/acceptance-cases.cjs` includes clean

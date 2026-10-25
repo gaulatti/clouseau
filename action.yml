@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: test, coverage, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: verify-engine, test, coverage, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -14,10 +14,13 @@ inputs:
     description: Trusted repository configuration path (assess and gate)
     default: .github/clouseau.json
   coverage-report:
-    description: Native LLVM or Istanbul JSON coverage report path (coverage)
+    description: Native LLVM, Istanbul or coverage.py JSON report path (coverage)
+    default: ''
+  coverage-config:
+    description: Accepted-base version 2 local recipe with separate native coverage parts (coverage); read as data only
     default: ''
   coverage-format:
-    description: llvm or istanbul; Istanbul requires every application JS/TS source
+    description: llvm, istanbul or coveragepy; require the complete application source inventory
     default: llvm
   source-directory:
     description: Application source directory to measure (coverage)
@@ -27,6 +30,12 @@ inputs:
     default: ''
   assessment:
     description: Exact assessment JSON from the read-only assessment job (gate)
+    default: ''
+  record-transport:
+    description: artifact (default) or bounded job-output record transport for v2 assess, verify-local, gate, and repair
+    default: artifact
+  review-record:
+    description: Exact opaque review-record output from the same assessment run and attempt (canonical JSON array of four bounded base64url chunks); data only
     default: ''
   provider-key:
     description: DeepSeek API key; supply only to assess, check-provider, evaluate-review, evaluate-acceptance, plan-wiki, or evaluate-wiki
@@ -59,6 +68,9 @@ outputs:
   assessment:
     description: Commit-bound intent decision from assess
     value: ${{ steps.assess.outputs.assessment }}
+  review-record:
+    description: Opaque JSON array of four bounded base64url-gzip chunks bound to repository, run, attempt, head, base, and assessment digests
+    value: ${{ steps.assess.outputs.review-record }}
   wiki-commit:
     description: Published or already-documented wiki commit
     value: ${{ steps.publish-wiki.outputs.commit }}
@@ -72,11 +84,37 @@ runs:
       shell: bash
       env:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
+        CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
+        CLOUSEAU_HAS_REVIEW_RECORD: ${{ inputs.review-record != '' }}
       run: |
         case "$CLOUSEAU_OPERATION" in
-          test|coverage|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          verify-engine|test|coverage|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
+        case "$CLOUSEAU_RECORD_TRANSPORT" in
+          artifact) test "$CLOUSEAU_HAS_REVIEW_RECORD" = false ;;
+          job-output)
+            case "$CLOUSEAU_OPERATION" in
+              assess|verify-local) test "$CLOUSEAU_HAS_REVIEW_RECORD" = false ;;
+              gate|repair) test "$CLOUSEAU_HAS_REVIEW_RECORD" = true ;;
+              *) echo 'Job-output transport requires assess, verify-local, gate, or repair' >&2; exit 1 ;;
+            esac ;;
+          *) echo 'Unknown Clouseau record transport' >&2; exit 1 ;;
+        esac
+    - name: Verify and record this run frozen engine
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+      with:
+        script: |
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const engine = require(path.join(process.env.CLOUSEAU_ROOT, 'src/central-version.cjs')).environmentEngine();
+          if (engine) {
+            fs.mkdirSync('work', {recursive: true});
+            fs.writeFileSync('work/clouseau-engine.json', JSON.stringify(engine, null, 2) + '\n');
+            await core.summary.addRaw(`Clouseau frozen commit: ${engine.sha}\n\nEngine digest: ${engine.digest}\n`).write();
+          }
     - name: Test approval policy
       if: inputs.operation == 'test'
       shell: bash
@@ -92,9 +130,16 @@ runs:
         COVERAGE_REPORT: ${{ inputs.coverage-report }}
         SOURCE_DIRECTORY: ${{ inputs.source-directory }}
         COVERAGE_FORMAT: ${{ inputs.coverage-format }}
+        COVERAGE_CONFIG: ${{ inputs.coverage-config }}
       run: |
-        test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-        python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+        if [[ -n "$COVERAGE_CONFIG" ]]; then
+          test -z "$COVERAGE_REPORT"
+          test -z "$SOURCE_DIRECTORY"
+          python3 "$CLOUSEAU_ROOT/src/coverage_plan.py" "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+        else
+          test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+          python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+        fi
     - name: Verify local review or assess repository intent
       id: assess
       if: inputs.operation == 'assess' || inputs.operation == 'verify-local'
@@ -107,16 +152,24 @@ runs:
         CLOUSEAU_RECEIPT_ONLY: ${{ inputs.operation == 'verify-local' }}
         PR_NUMBER: ${{ inputs.pull-request }}
         CLOUSEAU_WAIT_FOR_VERIFICATION: ${{ inputs.wait-for-verification }}
+        CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()});
           const assess = process.env.CLOUSEAU_WAIT_FOR_VERIFICATION === 'true' ? policy.assessWhenReady : policy.assess;
-          core.setOutput('assessment', JSON.stringify(await assess({github, context, report: core.info,
-            receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true'})));
+          const transport = require(path.join(root, 'src/record-transport.cjs'));
+          const mode = process.env.CLOUSEAU_RECORD_TRANSPORT;
+          let assessment;
+          try {
+            assessment = await assess({github, context, report: core.info,
+              receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true'});
+          } finally {transport.preserveDiagnostic({mode, core, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});}
+          core.setOutput('assessment', JSON.stringify(assessment));
+          transport.publish({mode, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT, core});
     - name: Approve and ensure auto-merge
       if: inputs.operation == 'gate'
       uses: actions/github-script@v7
@@ -126,13 +179,32 @@ runs:
         PR_NUMBER: ${{ inputs.pull-request }}
         ASSESSMENT: ${{ inputs.assessment }}
         CLOUSEAU_NATIVE_GATE: ${{ inputs.native-gate }}
+        CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
+        CLOUSEAU_RECORD_PART_0: ${{ fromJSON(inputs.review-record || '["","","",""]')[0] || '' }}
+        CLOUSEAU_RECORD_PART_1: ${{ fromJSON(inputs.review-record || '["","","",""]')[1] || '' }}
+        CLOUSEAU_RECORD_PART_2: ${{ fromJSON(inputs.review-record || '["","","",""]')[2] || '' }}
+        CLOUSEAU_RECORD_PART_3: ${{ fromJSON(inputs.review-record || '["","","",""]')[3] || '' }}
+        CLOUSEAU_RECORD_CANONICAL: >-
+          ${{ inputs.review-record == format('[{0},{1},{2},{3}]',
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[0] || ''),
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[1] || ''),
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[2] || ''),
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[3] || '')) }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()});
+          const transport = require(path.join(root, 'src/record-transport.cjs'));
+          const mode = process.env.CLOUSEAU_RECORD_TRANSPORT;
+          const payload = mode === 'job-output' ? transport.joinParts([process.env.CLOUSEAU_RECORD_PART_0,
+            process.env.CLOUSEAU_RECORD_PART_1, process.env.CLOUSEAU_RECORD_PART_2, process.env.CLOUSEAU_RECORD_PART_3],
+            process.env.CLOUSEAU_RECORD_CANONICAL === 'true') : '';
+          transport.receive({mode, payload, assessment: JSON.parse(process.env.ASSESSMENT),
+            context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});
+
           await policy.gate({github, context, core, nativeGate: process.env.CLOUSEAU_NATIVE_GATE === 'true'});
     - name: Apply bounded repair with an independent author
       if: inputs.operation == 'repair'
@@ -142,6 +214,17 @@ runs:
         CLOUSEAU_CONFIG: ${{ inputs.config }}
         CLOUSEAU_REPAIR_TOKEN: ${{ inputs.repair-token }}
         ASSESSMENT: ${{ inputs.assessment }}
+        CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
+        CLOUSEAU_RECORD_PART_0: ${{ fromJSON(inputs.review-record || '["","","",""]')[0] || '' }}
+        CLOUSEAU_RECORD_PART_1: ${{ fromJSON(inputs.review-record || '["","","",""]')[1] || '' }}
+        CLOUSEAU_RECORD_PART_2: ${{ fromJSON(inputs.review-record || '["","","",""]')[2] || '' }}
+        CLOUSEAU_RECORD_PART_3: ${{ fromJSON(inputs.review-record || '["","","",""]')[3] || '' }}
+        CLOUSEAU_RECORD_CANONICAL: >-
+          ${{ inputs.review-record == format('[{0},{1},{2},{3}]',
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[0] || ''),
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[1] || ''),
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[2] || ''),
+            toJSON(fromJSON(inputs.review-record || '["","","",""]')[3] || '')) }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
@@ -151,8 +234,14 @@ runs:
           const controller = require(path.join(root, 'src/acceptance-controller.cjs'));
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const assessment = JSON.parse(process.env.ASSESSMENT);
+          const transport = require(path.join(root, 'src/record-transport.cjs'));
+          const mode = process.env.CLOUSEAU_RECORD_TRANSPORT;
+          const payload = mode === 'job-output' ? transport.joinParts([process.env.CLOUSEAU_RECORD_PART_0,
+            process.env.CLOUSEAU_RECORD_PART_1, process.env.CLOUSEAU_RECORD_PART_2, process.env.CLOUSEAU_RECORD_PART_3],
+            process.env.CLOUSEAU_RECORD_CANONICAL === 'true') : '';
+          transport.receive({mode, payload, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});
           const record = JSON.parse(fs.readFileSync(controller.RECORD, 'utf8'));
-          controller.verifyRecord(record, assessment, config);
+          controller.verifyRecord(record, assessment, config, require(path.join(root, 'src/central-version.cjs')).environmentEngine());
           const bundle = JSON.parse(fs.readFileSync(`${controller.RECORD}.repair.json`, 'utf8'));
           if (require(path.join(root, 'src/acceptance.cjs')).digest(bundle) !== assessment.repair_digest) throw new Error('Altered repair artifact');
           if (!process.env.CLOUSEAU_REPAIR_TOKEN) throw new Error('Provide an independent GitHub author credential through repair-token; approval remains blocked');
@@ -203,7 +292,7 @@ runs:
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          await require(path.join(root, 'src/policy.cjs')).createPolicy(config).requestReassessment({github, context, core});
+          await require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()}).requestReassessment({github, context, core});
     - name: Finalize merged revision and preserve deployment handoff
       if: inputs.operation == 'finalize'
       uses: actions/github-script@v7
@@ -218,7 +307,7 @@ runs:
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
-          await require(path.join(root, 'src/policy.cjs')).createPolicy(config).finalize({github, context, core});
+          await require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()}).finalize({github, context, core});
 
     - name: Prepare coordinated wiki documentation
       id: plan-wiki

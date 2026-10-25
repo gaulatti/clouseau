@@ -61,9 +61,12 @@ test('team authority needs same-organization explicit repository write access an
   assert.equal((await f.check()).automatic, false);
 });
 
-test('missing, inaccessible, invalid or incomplete ownership never grants automatic merge', async () => {
+test('confirmed absence leaves ownership unenrolled; inaccessible, invalid or incomplete configured ownership still blocks', async () => {
   const f = fixture(); f.state.missing = true;
-  assert.equal((await f.check()).automatic, false);
+  const absent = await f.check();
+  assert.equal(absent.automatic, true); assert.equal(absent.configured, false);
+  assert.match(absent.reason, /optional code-owner gate is inactive/);
+  assert.equal(absent.base_sha, f.pr.base.sha);
   assert.deepEqual(f.state.reads.map(read => read.path), ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']);
   f.state.missing = false;
   f.state.text = '* @alice\n/private* @bob';

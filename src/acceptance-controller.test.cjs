@@ -14,6 +14,115 @@ const config = {...require('../test/fixtures/config.json'), version: 2, reposito
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
 
+test('absent protected-base CODEOWNERS leaves ownership inactive without waiving CI or protection', () => fixture(async f => {
+  const original = f.github.rest.repos.getContent; const reads = [];
+  f.github.rest.repos.getContent = async args => {
+    if (['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].includes(args.path)) {
+      reads.push(args); throw Object.assign(new Error('Absent'), {status: 404});
+    }
+    return original(args);
+  };
+  const assessment = await f.assess();
+  f.state.failed = true; await assert.rejects(f.gate(assessment), /Verification changed/);
+  f.state.failed = false;
+  const branch = f.github.rest.repos.getBranch;
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  await assert.rejects(f.gate(assessment), /protection/);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  f.github.rest.repos.getBranch = branch; f.state.pr.auto_merge = null;
+  f.github.rest.repos.getCollaboratorPermissionLevel = async () => {throw new Error('Do not infer ownership from permission');};
+  const messages = [];
+  const core = {info(message) {messages.push(message);}, summary: {addRaw() {return this;}, async write() {}}};
+  await f.policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: true});
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(item => item.name === 'enable-auto').length, 1);
+  assert.ok(messages.some(message => message.includes('optional code-owner gate is inactive')));
+  assert.deepEqual(reads.slice(0, 3).map(read => read.path), ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']);
+  assert.ok(reads.every(read => read.ref === assessment.base_sha));
+}));
+
+test('explicit manual mode approves independently verified owner work without ever arming auto-merge or deployment', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  assert.equal(assessment.decision, 'auto_approve');
+  const messages = [];
+  const core = {info(message) {messages.push(message);}, summary: {addRaw(message) {messages.push(message); return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'disable-auto').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  assert.equal(f.state.pr.auto_merge, null);
+  assert.ok(messages.some(message => message.includes('GitHub cannot enforce protection')));
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.ok(messages.some(message => message.includes('never arms auto-merge or dispatches deployment')));
+  f.state.pr.auto_merge = {};
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
+test('manual mode still refuses failed tests, stale revisions and an unsuccessful auto-merge disable', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  f.state.pr.auto_merge = null;
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  f.state.failed = true;
+  await assert.rejects(gate(), /Verification changed/);
+  f.state.failed = false;
+  f.state.pr.head.sha = 'd'.repeat(40);
+  await assert.rejects(gate(), /PR changed/);
+  f.state.pr.head.sha = assessment.head_sha;
+  f.state.pr.auto_merge = {};
+  f.github.graphql = async () => ({});
+  await assert.rejects(gate(), /Automatic merge remains enabled/);
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 0);
+}));
+
+test('manual mode preserves available protection and denies newly enabled auto-merge or revoked ownership before approval', async () => {
+  for (const failure of [null, 'settings', 'owner']) await fixture(async f => {
+    const policy = createPolicy({...config, merge_mode: 'manual'});
+    f.state.pr.auto_merge = null;
+    const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+    let settingsReads = 0; let ownerReads = 0;
+    f.github.rest.repos.get = async () => ({data: {private: false, allow_auto_merge: failure === 'settings' && ++settingsReads > 1}});
+    f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: failure === 'owner' && ++ownerReads > 1 ? 'read' : 'write'}});
+    const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+    const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+    if (failure) {
+      await assert.rejects(gate(), failure === 'settings' ? /auto-merge to be disabled/ : /ownership changed/);
+      assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 0);
+    } else {
+      await gate();
+      assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+    }
+    assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  });
+});
+
+test('manual-only external work retains the exact-head code-owner approval requirement even on an unsupported private plan', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'manual'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const original = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = args => args.path === '.github/CODEOWNERS' ? Promise.resolve({data: {
+    encoding: 'base64', content: Buffer.from('* @maintainer').toString('base64')}}) : original(args);
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  const messages = [];
+  const core = {info() {}, summary: {addRaw(value) {messages.push(value); return this;}, async write() {}}};
+  const gate = () => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true});
+  await assert.rejects(gate(), /current-head code-owner approval/);
+  f.state.reviews = [{user: {login: 'maintainer', type: 'User'}, state: 'APPROVED', commit_id: f.state.pr.head.sha}];
+  await gate();
+  assert.ok(messages.some(value => value.includes('GitHub cannot enforce protection')));
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+  assert.equal(f.state.pr.auto_merge, null);
+}));
+
 async function fixture(run) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-acceptance-'));
   const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
@@ -114,7 +223,60 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
-test('authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts', () => fixture(async f => {
+test('optional local review rejects every malformed receipt claim without paid fallback while unstamped changes receive CI review', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const trusted = {...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
+    max_age_seconds: 3600, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  const policy = createPolicy(trusted);
+  const local = `<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`;
+  const unknown = `<!-- clouseau-local-review:v2 ${'b'.repeat(40)} -->`;
+  const installation = `<!-- clouseau-installation-review:v1 ${'c'.repeat(40)} -->`;
+  const readContent = f.github.rest.repos.getContent;
+  let artifactReads = 0;
+  f.github.rest.repos.getContent = async args => {
+    if (args.path === 'clouseau-review.json') artifactReads++;
+    return readContent(args);
+  };
+  for (const body of [`<!-- clouseau-local-review:v1 malformed-sha -->`, unknown,
+    `${local}\n${unknown}`, `${local}\n${local}`, installation, `${local}\n${installation}`]) {
+    f.state.pr.body = body;
+    const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+    assert.equal(result.decision, 'review_incomplete', body);
+    assert.equal(f.state.calls, 0, 'a claimed but invalid local review cannot become a paid CI fallback');
+    assert.equal(artifactReads, 0, 'ambiguous or unsupported claims are rejected before fetching an artifact');
+    assert.equal(f.state.writes.length, 0, 'invalid claims cannot write an approval or acceptance ledger');
+  }
+  f.state.pr.body = 'Useful application regression fix with no local receipt.';
+  const ordinary = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  assert.equal(ordinary.decision, 'auto_approve', ordinary.reason);
+  assert.ok(f.state.calls > 0, 'a genuinely unstamped change receives the configured independent CI AI review');
+  assert.equal(artifactReads, 0);
+  assert.equal(f.state.writes.length, 0, 'assessment itself does not grant a GitHub approval');
+}));
+
+test('job-output data still requires the complete scored record and fresh head/base and CI before approval', () => fixture(async f => {
+  const transport = require('./record-transport.cjs');
+  const assessment = await f.assess();
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const payload = transport.encode({assessment, record, repair: null, context: f.context, runAttempt: '1'});
+  fs.rmSync(f.recordPath);
+  transport.receive({mode: 'job-output', payload, assessment, context: f.context, runAttempt: '1', recordPath: f.recordPath});
+  assert.equal(verifyRecord(JSON.parse(fs.readFileSync(f.recordPath)), assessment, config).state.unresolved.length, 0);
+  for (const field of ['head', 'base']) {
+    const previous = f.state.pr[field].sha; f.state.pr[field].sha = 'e'.repeat(40);
+    await assert.rejects(f.gate(assessment), /PR changed/);
+    f.state.pr[field].sha = previous;
+  }
+  f.state.failed = true;
+  await assert.rejects(f.gate(assessment), /Verification changed/);
+  assert.equal(f.state.writes.length, 0);
+  f.state.failed = false;
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+}));
+
+for (const central of [false, true, 'controls']) test(`central=${central}: authenticated local receipt reaches native approval with zero CI AI calls and rejects altered or absent receipts`, () => fixture(async f => {
   const crypto = require('node:crypto');
   const {issueReceipt} = require('./local-receipt.cjs');
   const {refresh} = require('./acceptance-sources.cjs');
@@ -125,6 +287,9 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
     reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 3600,
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  const engine = central ? {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha, digest: trusted.local_review.reviewer_digest} : null;
+  if (central) {delete trusted.local_review.reviewer_digest; trusted.local_review.central_source = {...require('./central-version.cjs').SOURCE};}
+  if (central === 'controls') trusted.sensitive_paths = [...trusted.sensitive_paths, 'src/upload.test.js'];
   record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted); refresh(record.snapshot);
   record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
   record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
@@ -138,15 +303,16 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
   f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
     encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
   }} : original(args);
-  const policy = createPolicy(trusted);
+  const policy = createPolicy(trusted, {engine});
   f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  if (central === 'controls') f.state.comments = [{id: 87, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
   let providerCalls = 0;
   const reports = [];
   const assess = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, report: line => reports.push(line),
     fetchImpl: async () => {providerCalls++; throw new Error('CI AI must not be called');}});
   const assessment = await assess();
   assert.equal(seed.decision, 'auto_approve');
-  assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+  assert.equal(assessment.decision, central === 'controls' ? 'owner_decision' : 'auto_approve', assessment.reason);
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
@@ -163,11 +329,39 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
     wait: async () => {}});
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
   assert.equal(providerCalls, 0);
+  if (central === 'controls') {
+    const owner = f.state.comments;
+    f.state.comments = [];
+    await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /owner authorization changed/);
+    const held = await assess();
+    assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
+    f.state.comments = owner;
+  }
+  if (central === true) {
+    const list = f.github.rest.pulls.listFiles;
+    f.github.rest.pulls.listFiles = async (...args) => {
+      const result = await list(...args);
+      return {data: result.data.map(({patch, ...file}) => file)};
+    };
+    f.state.comments = [{id: 88, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+    assert.equal((await assess()).decision, 'review_incomplete', 'owner intent cannot waive incomplete GitHub patch evidence');
+    f.state.comments = [];
+    f.github.rest.pulls.listFiles = list;
+  }
+  if (central === true) {
+    const newer = createPolicy(trusted, {engine: {...engine, sha: 'd'.repeat(40)}});
+    const mismatch = await newer.assess({github: f.github, context: f.context, recordPath: f.recordPath,
+      fetchImpl: async () => {providerCalls++; throw new Error('No paid mismatch fallback');}});
+    assert.equal(mismatch.decision, 'review_incomplete');
+    assert.equal(mismatch.provider_api_calls, 0);
+    assert.equal(mismatch.review_source, 'authenticated_local_rejected');
+    assert.match(mismatch.reason, /engine mismatch.*refresh.*fresh CI run.*No paid fallback/);
+  }
   const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
   const swapped = structuredClone(verifiedRecord); swapped.controls = true;
-  assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted), /substituted/);
+  assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted, engine), /substituted/);
   const history = structuredClone(verifiedRecord); history.previous.findings.push({id: 'fake'});
-  assert.throws(() => verifyRecord(history, {...assessment, record_digest: digest(history)}, trusted), /history was substituted/);
+  assert.throws(() => verifyRecord(history, {...assessment, record_digest: digest(history)}, trusted, engine), /history was substituted/);
   f.state.pr.user.login = 'another-author';
   await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /author changed/);
   f.state.pr.user.login = 'contributor';
@@ -183,10 +377,14 @@ test('authenticated local receipt reaches native approval with zero CI AI calls 
   assert.equal(providerCalls, 0);
   f.state.pr.body = 'No receipt';
   assert.equal((await assess()).decision, 'review_incomplete');
-  const optional = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'optional'}});
+  const optional = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'optional'}}, {engine});
   assert.equal((await optional.assess({github: f.github, context: f.context, recordPath: f.recordPath, receiptOnly: true})).decision,
     'review_incomplete');
   assert.equal(providerCalls, 0);
+  await policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0});
+  const saved = process.env.ASSESSMENT; process.env.ASSESSMENT = JSON.stringify(assessment);
+  try {await policy.finalize({github: f.github, context: f.context, core, mergePolls: 0});}
+  finally {if (saved === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = saved;}
 }));
 
 test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
@@ -457,6 +655,20 @@ test('failed repair generation retains the blocking review and an inspectable ca
   assert.equal(f.state.writes.length, 0);
 }));
 
+test('ordinary CI AI assessment and approval bind the frozen engine without a local receipt', () => fixture(async f => {
+  const engine = {...require('./central-version.cjs').SOURCE, sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest()};
+  const policy = createPolicy(config, {engine});
+  const assessment = await policy.assess({github: f.github, context: f.context, fetchImpl: f.fetchImpl, recordPath: f.recordPath});
+  assert.equal(assessment.decision, 'auto_approve');
+  assert.deepEqual(assessment.engine, engine);
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  assert.deepEqual(record.engine, engine);
+  assert.ok(f.state.calls > 0);
+  verifyRecord(record, assessment, config, engine);
+  const substituted = {...engine, sha: 'f'.repeat(40)};
+  await assert.rejects(createPolicy(config, {engine: substituted}).gate({github: f.github, context: f.context,
+    recordPath: f.recordPath, assessment, core: {info() {}}}), /different frozen engine/);
+}));
 
 test('a green AI-approved external PR is approved but never armed for merge and waits for a current code owner', () => fixture(async f => {
   f.state.pr.user = {login: 'external', type: 'User'};
@@ -507,3 +719,257 @@ test('non-native checks also hold an external PR and finalization rechecks owner
   await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, files: [{filename: 'src/upload.test.js'}]});
   await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, pr: {...f.state.pr, merged: true}, files: []});
 }));
+
+async function privateOwnerFixture(f, controls = false) {
+  if (controls) {
+    const filename = '.github/clouseau.json';
+    f.github.rest.pulls.listFiles = async () => ({data: [{filename, status: 'modified', patch: '+protected control'}]});
+    const content = f.github.rest.repos.getContent;
+    f.github.rest.repos.getContent = args => content({...args, path: args.path === filename ? 'src/upload.test.js' : args.path});
+  }
+  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  f.state.pr.auto_merge = null;
+  f.state.pr.head.repo.node_id = 'R_private'; f.state.pr.base.repo = {node_id: 'R_private'};
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false, node_id: 'R_private'}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false,
+    commit: {sha: f.state.pr.merged ? assessment.head_sha : assessment.base_sha}}});
+  f.github.rest.repos.compareCommits = async () => ({data: {status: 'ahead', merge_base_commit: {sha: assessment.base_sha}}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  f.github.rest.pulls.createReview = async args => {f.state.writes.push({name: 'approve', args});
+    f.state.reviews.push({user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: args.commit_id}); return {data: {}};};
+  f.github.rest.checks = {create: async () => ({data: {id: 71}}), update: async () => ({data: {}})};
+  f.github.rest.actions.createWorkflowDispatch = async args => {f.state.writes.push({name: 'dispatch', args}); return {data: {}};};
+  const graphql = f.github.graphql;
+  f.github.graphql = async (query, args) => {
+    if (!query.includes('updateRefs')) return graphql(query, args);
+    f.state.writes.push({name: 'atomic', args});
+    f.state.pr.merged = true; f.state.pr.state = 'closed'; f.state.pr.merge_commit_sha = assessment.head_sha;
+    return {updateRefs: {clientMutationId: null}};
+  };
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  return {policy, assessment, core, run: nativeGate => policy.gate({github: f.github, context: f.context,
+    core, recordPath: f.recordPath, assessment, nativeGate, wait: async () => {}})};
+}
+
+test('explicit private owner automation merges only after recomputed acceptance, all technical steps and fresh bot approval', async () => {
+  for (const native of [true, false]) await fixture(async f => {
+    const p = await privateOwnerFixture(f);
+    await p.run(native);
+    assert.deepEqual(f.state.writes.filter(w => ['approve', 'atomic', 'enable-auto'].includes(w.name)).map(w => w.name), ['approve', 'atomic']);
+    assert.equal(f.state.pr.merge_commit_sha, p.assessment.head_sha);
+    await p.policy.finalize({github: f.github, context: f.context, core: p.core, assessment: p.assessment});
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 1);
+  });
+});
+
+test('failed complete verification, coverage, altered acceptance, missing owners and outsiders cannot use private owner automation', async () => {
+  for (const failure of ['tests', 'coverage', 'acceptance', 'missing-owner', 'outsider', 'withdrawn-tests', 'changed-mode']) await fixture(async f => {
+    const p = await privateOwnerFixture(f);
+    if (failure === 'tests') f.state.failed = true;
+    if (failure === 'coverage') {
+      const jobs = f.github.rest.actions.listJobsForWorkflowRun;
+      f.github.rest.actions.listJobsForWorkflowRun = async args => {const value = await jobs(args);
+        value.data[0].steps.find(step => step.name === 'Enforce 100% line and branch coverage').conclusion = 'failure'; return value;};
+    }
+    if (failure === 'acceptance') {const value = JSON.parse(fs.readFileSync(f.recordPath)); value.result.decision = 'repair_required'; fs.writeFileSync(f.recordPath, JSON.stringify(value));}
+    if (failure === 'missing-owner') {
+      const content = f.github.rest.repos.getContent;
+      f.github.rest.repos.getContent = async args => {if (['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].includes(args.path)) throw Object.assign(new Error('Absent'), {status: 404}); return content(args);};
+    }
+    if (failure === 'outsider') f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: 'read'}});
+    if (failure === 'withdrawn-tests') {
+      const approval = f.github.rest.pulls.createReview;
+      f.github.rest.pulls.createReview = async args => {const result = await approval(args); f.state.failed = true; return result;};
+    }
+    if (failure === 'changed-mode') {let calls = 0; f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: ++calls > 1, node_id: 'R_private'}});}
+    await assert.rejects(p.run(true));
+    assert.equal(f.state.writes.filter(w => ['atomic', 'enable-auto'].includes(w.name)).length, 0, failure);
+    assert.equal(f.state.pr.merged, undefined, failure);
+  });
+});
+
+test('private automatic finalization cannot authorize an unmerged candidate outside the validated acceptance gate', () => fixture(async f => {
+  const p = await privateOwnerFixture(f);
+  await assert.rejects(p.policy.finalize({github: f.github, context: f.context, core: p.core, assessment: p.assessment}), /validated acceptance gate/);
+  assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+}));
+
+test('explicit automatic mode requires configured ownership on the normal protected native path too', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const content = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => {if (['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].includes(args.path)) throw Object.assign(new Error('Absent'), {status: 404}); return content(args);};
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await assert.rejects(policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: true}), /code-owner approval/);
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+}));
+
+
+test('private controller control changes retain exact-head purpose authority through the final write', async () => {
+  for (const withdraw of [false, true]) await fixture(async f => {
+    const p = await privateOwnerFixture(f, true);
+    assert.equal(p.assessment.decision, 'owner_decision');
+    f.state.comments.push({id: 1, user: {login: 'owner', type: 'User'}, body: `/approve-intent ${p.assessment.head_sha}`});
+    if (withdraw) {
+      const approve = f.github.rest.pulls.createReview;
+      f.github.rest.pulls.createReview = async args => {const value = await approve(args); f.state.comments = []; return value;};
+      await assert.rejects(p.run(true), /confirmation was withdrawn/);
+    } else await p.run(true);
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, withdraw ? 0 : 1);
+  });
+});
+
+test('explicit automatic mode keeps verified owner work on the protected native path', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: true});
+  assert.equal(f.state.writes.filter(w => w.name === 'approve').length, 1);
+  assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+}));
+
+test('a private-plan transition to available native protection stops the old acceptance path before writing', async () => {
+  for (const transition of [2, 4]) await fixture(async f => {
+    const nativeRules = f.github.request;
+    const p = await privateOwnerFixture(f);
+    let reads = 0;
+    f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: ++reads >= transition, node_id: 'R_private'}});
+    f.github.rest.repos.getBranch = async () => ({data: {protected: reads >= transition, commit: {sha: p.assessment.base_sha}}});
+    f.github.request = async (...args) => {
+      if (reads >= transition) return nativeRules(...args);
+      throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});
+    };
+    await assert.rejects(p.run(true), /acceptance mode changed/);
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+  });
+});
+
+test('same-head purpose edits and removals invalidate private merge even when another maintainer approval remains', async () => {
+  for (const change of ['edit', 'remove']) await fixture(async f => {
+    const confirmation = {id: 71, user: {login: config.manual_reviewer, type: 'User'},
+      body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve the supported private owner acceptance boundary.`};
+    f.state.comments.push(confirmation);
+    const p = await privateOwnerFixture(f, true);
+    const approve = f.github.rest.pulls.createReview;
+    f.github.rest.pulls.createReview = async args => {
+      const value = await approve(args);
+      f.state.reviews.push({user: {login: 'other-maintainer', type: 'User'}, state: 'APPROVED', commit_id: args.commit_id});
+      if (change === 'edit') confirmation.body += ' New purpose after assessment.';
+      else f.state.comments = [];
+      return value;
+    };
+    await assert.rejects(p.run(true), /Exact recorded purpose authorization changed/);
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+  });
+});
+
+async function privateReceiptFixture(f, controls = false) {
+  const p = await privateOwnerFixture(f);
+  const crypto = require('node:crypto');
+  const receipts = require('./local-receipt.cjs');
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const trusted = {...config, merge_mode: 'automatic', local_review: {mode: 'required',
+    reviewer_sha: 'e'.repeat(40), central_source: {...require('./central-version.cjs').SOURCE}, max_age_seconds: 3600,
+    keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  if (controls) trusted.sensitive_paths = [...trusted.sensitive_paths, 'src/upload.test.js'];
+  const engine = {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha,
+    digest: require('./local-version.cjs').engineDigest()};
+  record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted);
+  require('./acceptance-sources.cjs').refresh(record.snapshot);
+  record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
+  record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
+    ({role, phase, harness: 'codex', session: `fictional-private-${role}-${phase}`, request_digest: digest(role),
+      response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
+  record.result.execution_digest = digest(record.result.usage);
+  for (const item of record.result.reviews) item.report.snapshot = record.snapshot.digest;
+  const bundle = receipts.issueReceipt({record, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+    keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
+  const content = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
+    encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
+  }} : content(args);
+  f.state.pr.body = `<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  if (controls) f.state.comments.push({id: 87, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+  const policy = createPolicy(trusted, {engine}); let providerCalls = 0;
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath,
+    fetchImpl: async () => {providerCalls++; throw new Error('No paid local receipt fallback');}});
+  assert.equal(assessment.decision, controls ? 'owner_decision' : 'auto_approve', assessment.reason);
+  assert.equal(providerCalls, 0);
+  return {...p, trusted, engine, assessment, policy, run: () => policy.gate({github: f.github,
+    context: f.context, core: p.core, assessment, recordPath: f.recordPath, nativeGate: true})};
+}
+
+test('private signed receipt reuse is revalidated immediately before merge with zero CI AI calls', async () => {
+  for (const controls of [false, true]) await fixture(async f => {
+    const p = await privateReceiptFixture(f, controls);
+    await p.run();
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 1);
+  });
+});
+
+test('expired, revoked, wrong-engine or changed immutable source receipts never release a private owner merge', async t => {
+  for (const failure of ['expired', 'revoked', 'engine', 'source']) await fixture(async f => {
+    const p = await privateReceiptFixture(f);
+    if (failure === 'revoked') {
+      const revoked = structuredClone(p.trusted); revoked.local_review.keys[0].revoked = true;
+      const policy = createPolicy(revoked, {engine: p.engine});
+      await assert.rejects(policy.gate({github: f.github, context: f.context, core: p.core,
+        assessment: p.assessment, recordPath: f.recordPath, nativeGate: true}), /signature/);
+    } else if (failure === 'engine') {
+      const policy = createPolicy(p.trusted, {engine: {...p.engine, sha: 'd'.repeat(40)}});
+      await assert.rejects(policy.gate({github: f.github, context: f.context, core: p.core,
+        assessment: p.assessment, recordPath: f.recordPath, nativeGate: true}), /frozen engine/);
+    } else {
+      const approve = f.github.rest.pulls.createReview;
+      f.github.rest.pulls.createReview = async args => {
+        const value = await approve(args);
+        if (failure === 'expired') {const expired = Date.now() + 3600001; t.mock.method(Date, 'now', () => expired);}
+        else {
+          const content = f.github.rest.repos.getContent;
+          f.github.rest.repos.getContent = async args => {
+            const value = await content(args);
+            if (args.path === 'src/upload.test.js') value.data.content = Buffer.from('changed immutable evidence').toString('base64');
+            return value;
+          };
+        }
+        return value;
+      };
+      await assert.rejects(p.run(), failure === 'expired' ? /expired/ : /signed evidence differs/);
+      t.mock.restoreAll();
+    }
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0, failure);
+  });
+});
+
+
+test('a receipt author, purpose, finding ledger or record changing after bot approval cannot reach the private merge write', async () => {
+  for (const failure of ['author', 'head', 'base', 'purpose', 'findings', 'record']) await fixture(async f => {
+    const p = await privateReceiptFixture(f, failure === 'purpose');
+    const approve = f.github.rest.pulls.createReview;
+    f.github.rest.pulls.createReview = async args => {
+      const value = await approve(args);
+      if (failure === 'author') f.state.pr.user.login = 'different-author';
+      if (failure === 'head') f.state.pr.head.sha = 'd'.repeat(40);
+      if (failure === 'base') f.state.pr.base.sha = 'd'.repeat(40);
+      if (failure === 'purpose') f.state.comments[0].body += '\nChanged purpose';
+      if (failure === 'record') {
+        const record = JSON.parse(fs.readFileSync(f.recordPath)); record.snapshot.head_sha = 'd'.repeat(40);
+        fs.writeFileSync(f.recordPath, JSON.stringify(record));
+      }
+      if (failure === 'findings') {
+        const state = {version: 2, repository: `${f.context.repo.owner}/${f.context.repo.repo}`, number: 3,
+          head_sha: p.assessment.head_sha, findings: [{id: 'f'.repeat(64), blocking: true, state: 'confirmed',
+            title: 'New acceptance blocker', path: 'src/upload.test.js', cause: 'Persistence missing', obligation: 'Durable acceptance'}]};
+        f.state.comments.push({id: 999, user: {login: 'github-actions[bot]', type: 'Bot'},
+          body: `<!-- clouseau-acceptance:v2 -->\n<!-- clouseau-state:${Buffer.from(JSON.stringify(state)).toString('base64')} -->`});
+      }
+      return value;
+    };
+    await assert.rejects(p.run());
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0, failure);
+  });
+});

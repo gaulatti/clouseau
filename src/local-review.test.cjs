@@ -2,9 +2,10 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture} = require('../test/local-review-fixture.cjs');
-const {localReview} = require('./local-review.cjs');
+const {localReview, localEvidence, localDrafts} = require('./local-review.cjs');
 const {refresh, readSource} = require('./acceptance-sources.cjs');
 const {FACTORS} = require('./acceptance.cjs');
+const {materialize} = require('./acceptance-review.cjs');
 
 test('every independent local investigation and grade receives the pre-PR boundary outside contributor evidence', async () => {
   const f = await fixture();
@@ -47,21 +48,39 @@ test('a pre-PR context never rewrites an unresolved behavioral-evidence gate int
 
 test('bounded source requests invalidate earlier local inspections and require a fresh independent view', async () => {
   const f = await fixture();
-  let requested = false; let reads = 0; let examiner = 0;
+  let requested = false; let reads = 0; let examiner = 0; let original; let restored = false;
   const result = await localReview({snapshot: f.snapshot,
     ask: async task => {
-      if (task.phase === 'investigation' && task.role === 'examiner') examiner++;
+      if (task.phase === 'investigation' && task.role === 'examiner') {
+        examiner++;
+        const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
+        assert.equal(packet.review_context.source_batches_remaining, 8);
+        for (const [id, source] of Object.entries(packet.evidence.sources)) {
+          assert.equal(source.content, f.snapshot.sources[id].content);
+          assert.equal(source.numbered_lines, undefined);
+        }
+        for (const proof of packet.evidence.proofs) assert.ok(Object.values(packet.evidence.sources).some(source => source.source_index === proof.source_index));
+        if (packet.drafts.length) {
+          const draft = packet.drafts[0];
+          assert.ok(draft.evidence.every(proof => !Object.hasOwn(proof, 'quote')));
+          const expanded = {...draft, evidence: draft.evidence.map(proof => ({...proof,
+            quote: f.snapshot.sources[proof.source].content.split('\n').slice(proof.start - 1, proof.end).join('\n')}))};
+          assert.deepEqual(expanded, original); restored = true;
+        }
+      }
       if (task.phase === 'investigation' && task.role === 'challenger' && !requested) {
         requested = true;
         return {value: {kind: 'source_request', report: null, request_sources: ['README.md']}, provenance: {fixture: true}};
       }
-      return f.ask(task);
+      const response = await f.ask(task);
+      if (task.phase === 'investigation' && task.role === 'examiner' && !original) original = materialize(response.value.report, f.snapshot);
+      return response;
     }, addSources: async paths => {
       reads++; assert.deepEqual(paths, ['README.md']);
       await readSource({github: f.github, repo: f.repo, snapshot: f.snapshot, filename: 'README.md', ref: f.snapshot.head_sha});
       refresh(f.snapshot);
     }});
-  assert.equal(result.decision, 'auto_approve'); assert.equal(reads, 1); assert.equal(examiner, 2);
+  assert.equal(result.decision, 'auto_approve'); assert.equal(reads, 1); assert.equal(examiner, 2); assert.equal(restored, true);
   assert.equal(result.reviews.every(item => item.report.snapshot === f.snapshot.digest), true);
 });
 
@@ -75,11 +94,11 @@ test('incomplete or nonconverging local investigations stop without grading or i
     const f = await fixture();
     await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => ({value}), addSources: async () => {}}), /Invalid local/);
   }
-  const f = await fixture(); let requests = 0;
-  await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => ({value:
-    {kind: 'source_request', report: null, request_sources: ['README.md']}}),
+  const f = await fixture(); let requests = 0; let calls = 0;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async () => {calls++; return {value:
+    {kind: 'source_request', report: null, request_sources: ['README.md']}};},
   addSources: async () => {requests++;}}), /budget/);
-  assert.equal(requests, 3);
+  assert.equal(requests, 8); assert.equal(calls, 9);
   const g = await fixture();
   const requested = new Set(); let extra = 0;
   await assert.rejects(localReview({snapshot: g.snapshot, ask: async task => {
@@ -96,6 +115,42 @@ test('incomplete or nonconverging local investigations stop without grading or i
     g.snapshot.sources[`extra-${++extra}`] = {authority: 'untrusted', kind: 'source', path: 'src/extra.js',
       ref: g.snapshot.head_sha, content: `fictional additional evidence ${extra}`}; refresh(g.snapshot);
   }}), /did not converge/);
+});
+
+test('the eighth and final source batch is inspected before a report, without granting a ninth batch', async () => {
+  const f = await fixture(); let reads = 0; let calls = 0;
+  const result = await localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase === 'investigation') {
+      calls++;
+      if (task.role === 'examiner' && reads < 8) return {value: {kind: 'source_request', report: null,
+        request_sources: [`src/dependency-${reads}.js`]}, provenance: {fixture: true}};
+      const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
+      assert.equal(packet.review_context.source_batches_remaining, task.role === 'examiner' ? 0 : 8);
+      assert.match(packet.evidence.sources['dependency-8'].content, /last required dependency/);
+    }
+    return f.ask(task);
+  }, addSources: async paths => {
+    assert.deepEqual(paths, [`src/dependency-${reads}.js`]); reads++;
+    f.snapshot.sources[`dependency-${reads}`] = {authority: 'untrusted', kind: 'source', path: paths[0],
+      ref: f.snapshot.head_sha, content: reads === 8 ? 'last required dependency' : 'earlier dependency'};
+    refresh(f.snapshot);
+  }});
+  assert.equal(result.decision, 'auto_approve'); assert.equal(reads, 8); assert.equal(calls, 10);
+  assert.ok(result.reviews.every(review => review.report.snapshot === f.snapshot.digest));
+});
+
+test('the larger batch allowance still rejects cumulative oversized evidence before grading', async () => {
+  const f = await fixture(); let reads = 0; let grading = 0;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase === 'grading') grading++;
+    return {value: {kind: 'source_request', report: null, request_sources: [`src/context-${reads}.js`]}};
+  }, addSources: async paths => {
+    reads++;
+    f.snapshot.sources[`context-${reads}`] = {authority: 'untrusted', kind: 'source', path: paths[0],
+      ref: f.snapshot.head_sha, content: 'x'.repeat(230000)};
+    refresh(f.snapshot);
+  }}), /Complete review evidence exceeds the source budget/);
+  assert.equal(reads, 4); assert.equal(grading, 0);
 });
 
 test('missing atomic grades stop local acceptance and uncertainty preserves an incomplete verdict', async () => {
@@ -147,4 +202,44 @@ test('local causal findings retain conservative confidence and literal changed-s
     assert.equal(result.decision, confidence === 'level4' ? 'repair_required' : 'auto_approve');
     assert.equal(result.reviews[0].report.findings[0].path, f.snapshot.paths[0]);
   }
+});
+
+
+test('local presentation preserves all source bytes, proof identities and prior observations without duplicate quotes', async () => {
+  const f = await fixture();
+  const original = require('./acceptance-review.cjs').modelEvidence(f.snapshot);
+  const packed = localEvidence(f.snapshot);
+  const restored = structuredClone(packed);
+  restored.proofs = restored.proofs.map(({source_index, ...proof}) => ({...proof,
+    source: Object.keys(restored.sources).find(id => restored.sources[id].source_index === source_index)}));
+  for (const source of Object.values(restored.sources)) {
+    source.numbered_lines = source.content.split('\n').map((line, i) => `L${i + 1}: ${line}`).join('\n'); delete source.content;
+  }
+  assert.deepEqual(restored, original);
+  const source = Object.keys(f.snapshot.sources)[0];
+  const quote = f.snapshot.sources[source].content.split('\n')[0];
+  const draft = {units: [{observation: 'retain every prior product observation'}], findings: [{cause: 'retain concern'}],
+    evidence: [{id: 'same', source, start: 1, end: 1, quote},
+      {id: 'changed', source, start: 1, end: 1, quote: 'different earlier literal'},
+      {id: 'unknown', source: 'missing', start: 1, end: 1, quote: 'retain unavailable earlier literal'}]};
+  const view = localDrafts(f.snapshot, [draft])[0];
+  assert.equal(view.evidence[0].quote, undefined);
+  assert.equal(view.evidence[1].quote, 'different earlier literal');
+  assert.equal(view.evidence[2].quote, 'retain unavailable earlier literal');
+  assert.deepEqual(view.units, draft.units); assert.deepEqual(view.findings, draft.findings);
+  assert.equal(draft.evidence[0].quote, quote);
+});
+
+
+test('a bounded seed cannot approve when a requested immutable engine dependency remains unavailable', async () => {
+  const f = await fixture(); let grades = 0; let requests = 0;
+  const deferred = `.clouseau-ci/src/local-receipt.cjs@${'b'.repeat(40)}`;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase !== 'investigation') {grades++; return f.ask(task);}
+    return {value: {kind: 'source_request', report: null, request_sources: [deferred]}, provenance: {fixture: true}};
+  }, addSources: async paths => {
+    requests++; assert.deepEqual(paths, [deferred]);
+    throw new Error('Frozen engine dependency unavailable; material context is incomplete');
+  }}), /material context is incomplete/);
+  assert.equal(requests, 1); assert.equal(grades, 0);
 });

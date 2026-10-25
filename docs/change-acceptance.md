@@ -244,7 +244,12 @@ auto-merge. No provider key enters the approval or repair writer. The author
 token enters only the repair writer. Same-revision intent comments reassess
 metadata without rebuilding the application container.
 
-Consumers pin a reviewed full Clouseau commit. Both required native checks must
+Automatic integrations pin a reviewed stable bootstrap, resolve protected
+Clouseau main once and use its frozen SHA and computed digest throughout the
+workflow. [Automatic CI upgrades](automatic-ci-upgrades.md) bind receipts,
+assessment, scoring, approval and merge to that selection; normal central
+releases need no consumer pin or digest PR. Legacy fixed installations retain
+their explicit full-commit pin. Both required native checks must
 come from GitHub Actions; main requires strict up-to-date checks, stale-review
 dismissal, last-push approval, no deletion, no force pushes and no bypass actors.
 The installing administrator verifies those settings; routine tokens do not
@@ -288,6 +293,21 @@ records without that marker remain readable; they do not acquire new claims.
 
 Each review inventories every supplied immutable source as inspected, excluded
 with a cited reason, or missing. Nonempty changed source cannot be excluded.
+The structured response schema requires inspected and excluded coverage
+dispositions to select one `primary` proof ID and an `additional` array of distinct
+supplied proof IDs. Missing dispositions omit the citation field. The controller
+flattens only the model-selected proofs into the existing evidence array, and
+materializes an empty array for missing context. Factor and gate citation arrays
+retain their existing format. This uses supported object and enum constraints:
+[DeepSeek strict tools do not support array cardinality keywords](https://api-docs.deepseek.com/guides/tool_calls/#array).
+The existing evidence validator remains authoritative; no citation is invented
+for an uncited claim. Coverage proof objects reject malformed selections and
+repeated raw proof IDs.
+Coverage proof objects use the same bounded coordinate resolver as legacy
+arrays: a coordinate inside a supplied proof chunk selects that exact chunk.
+Distinct coordinates selecting one chunk retain the existing canonical set
+semantics. Unknown sources, unsupplied chunks and out-of-range coordinates remain
+invalid; no source or citation is invented.
 Inspected dependencies require direct evidence from the current head. A relevant
 missing dependency has empty inspection evidence and makes review completeness
 unresolved even when tests and exact coverage pass. Source requests expand the
@@ -320,7 +340,7 @@ audit, keeping the initial report concise.
 
 ## Code-owner merge authority
 
-For protocol v2, automatic merge requires the PR's GitHub author to be a verified
+When CODEOWNERS exists on the protected base, protocol v2 automatic merge requires the PR's GitHub author to be a verified
 code owner for every changed path, including both paths of a rename. Clouseau
 reads the first CODEOWNERS file in GitHub's precedence order from the exact
 protected base revision, applies the last matching rule, and checks current
@@ -328,8 +348,18 @@ repository write access and team membership. The documented `docs/*` pattern
 matches immediate files only; use `/docs/` for all descendants. Ambiguous
 terminal prefix patterns such as `/private*` require manual ownership verification
 instead of granting authority through an earlier broad rule. Changes to CODEOWNERS
-are protected review controls. Missing files, uncovered paths, unsupported patterns, email-only
+are protected review controls. Uncovered paths, unsupported patterns, email-only
 identities or unavailable membership evidence never grant automatic merge.
+
+When `merge_mode` is omitted and all three supported CODEOWNERS locations return
+confirmed absence on the protected base, the optional ownership gate is inactive.
+An explicit `"merge_mode": "automatic"` instead requires configured CODEOWNERS:
+absence never authorizes automatic merge. This strict choice applies both to
+native protected merges and the private-plan path below. Other review, coverage,
+test and branch-protection gates remain mandatory. Permission or API errors are
+not absence; an existing empty or malformed file still blocks. This does not
+infer code ownership from general write access. A proposed CODEOWNERS file
+cannot supply its own protected-base authority.
 
 A PR from another author can receive a passing AI review and bot approval, but
 Clouseau disables an existing auto-merge request and never enables a new one.
@@ -339,3 +369,76 @@ After the owner approval, the trusted metadata gate can be reassessed; passing i
 still leaves automatic merge disabled and requires a manual merge. Review and
 merge authority are independent. Native tests, coverage and protection remain
 mandatory. Legacy v1 consumers must upgrade to v2 to receive this restriction.
+
+An accepted protocol-v2 configuration can set `"merge_mode": "manual"` when all
+merges must remain with a code owner. This mode requires repository auto-merge
+to be disabled, disables any surviving PR auto-merge request and never dispatches
+deployment. Owner-authored PRs can receive automated approval after the same
+verification and acceptance checks, but are never automatically merged. External
+contributors still need fresh human code-owner approval for every affected path when CODEOWNERS is configured,
+and a manual merge. Proposed configuration cannot select its own merge authority.
+
+The controller enforces available protection in manual mode. It permits the
+absence of host enforcement only after GitHub returns the specific HTTP 403
+request to upgrade the private-repository plan, the repository is verified
+private, and the branch is verified unprotected. It does not interpret arbitrary
+403/404 errors or missing rules as that limitation. Settings and protection are
+read again before approval; enabling auto-merge or revoking ownership stops the
+write. Public repositories and private repositories with available protection
+must satisfy the full protection contract. The report distinguishes independently
+passed review and tests from unavailable host enforcement. On an unsupported
+private plan, GitHub cannot prevent a trusted maintainer from ignoring a failed
+check. Manual mode continues to require manual merge.
+
+
+### Controller-enforced owner merge on an unavailable private plan
+
+An accepted protocol-v2 `"merge_mode": "automatic"` explicitly selects strict
+code-owner-only automation. On protected repositories it preserves the normal
+native protected auto-merge path. On a private repository whose branch is
+positively unprotected and whose rules endpoint returns the exact documented
+HTTP 403 upgrade-plan error, Clouseau can instead finalize owner work through
+its acceptance controller. Repository native `allow_auto_merge` must remain
+`false`; no native merge request is armed. Arbitrary authorization errors,
+missing rules, public repositories and available-but-disabled protection fail.
+This exception never bypasses or weakens available protection.
+
+The write occurs inside the validated acceptance gate, after deterministic
+record and score validation, all configured verification steps (including full
+tests and exact line/branch coverage), purpose authorization where required,
+current ownership of every old/new path and a freshly observed current-head
+GitHub Actions bot approval. Immediately before the atomic write it revalidates
+the recorded purpose and authorization, finding ledger, exact technical receipt
+and any local receipt signature, expiry, revocation, engine and immutable source
+bindings through the existing validators. These checks make no provider calls. Missing, dismissed or stale approval, outstanding
+human change requests, missing ownership and unavailable membership fail closed.
+External/non-owner contributions can receive bot approval but still need
+current-head human code-owner approval and manual merge. A proposed ownership
+file or merge policy never authorizes its own change.
+
+This route supports distinct source/base branches in the **same repository**,
+with the exact accepted base already an ancestor of the reviewed head. It uses
+GitHub's [atomic `updateRefs` transaction](https://docs.github.com/en/graphql/reference/git#updaterefs):
+a base before/after compare-and-swap and a source-ref no-op compare-and-swap,
+both with `force: false`. A changed source or base rejects the whole transaction;
+there is no weaker REST merge fallback. The resulting history fast-forwards to
+the exact reviewed commit rather than generating a squash commit. Fork sources,
+missing refs and a stale base require repair/review or manual merge.
+
+GitHub records this as an [indirect PR merge](https://docs.github.com/en/pull-requests/reference/pull-request-merges#indirect-merges).
+The controller verifies the merged PR and resulting base both identify the exact
+reviewed head. Native `merged_at`, `merged_by` and merge event audit are observed
+separately from the controller's acceptance evidence. A nondefault reference
+qualification proved paired no-op source CAS, atomic rejection and the native
+merged audit; it does not establish an application's hosted acceptance proof.
+If the write succeeded but the audit is not observable yet, stop and inspect;
+do not retry blindly or report an unobserved success.
+
+This is **controller-enforced delivery**, not native protected delivery. GitHub
+cannot prevent another trusted writer from manually ignoring failed checks on
+that plan. Writes using `GITHUB_TOKEN` may suppress follow-up push workflows;
+keep the supported separate `finalize` deployment handoff where configured.
+An ancestry merge is not deployment, live health or documentation publication
+proof, and a deployment contract remains separately authorized. Standalone
+`finalize` cannot authorize an unmerged private candidate: only the validated
+acceptance gate can perform this transaction.

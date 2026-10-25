@@ -10,12 +10,12 @@ function intentText(body, sha) {
   return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
 }
 
-function createPolicy(input, {codeownersRequired = false} = {}) {
+function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const {local_review, ...legacyConfig} = config;
-  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true});
-  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy);
+  const {local_review, merge_mode, ...legacyConfig} = config;
+  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic'});
+  return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
 const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
@@ -231,7 +231,7 @@ function needsDeployment(files) {
 }
 
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
-  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false}) {
+  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
   const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
@@ -250,10 +250,12 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       throw new Error('Only a maintainer can confirm repository intent');
     }
   }
-  const {data: settings} = await github.rest.repos.get(repo);
-  const {data: branch} = await github.rest.repos.getBranch({...repo, branch: config.base_branch});
-  if (!settings.allow_auto_merge || !branch.protected) throw new Error('Repository auto-merge and main protection must be enabled');
-  await assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK);
+  const protection = () => require('./merge-protection.cjs').assertMergeProtection({github, repo,
+    baseBranch: config.base_branch, manual: manualMerge, privateOwnerAutomatic,
+    assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
+  const initialProtection = await protection();
+  const controllerManaged = initialProtection.controllerManaged === true;
+  if (controllerManaged && typeof verifyAcceptance !== 'function') throw new Error('Private owner merge requires a validated protocol-two acceptance record');
   // The native job is the required check. Additional GITHUB_TOKEN API checks
   // can attach to another run's suite; publish detail in this job's summary.
   const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
@@ -268,17 +270,24 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   try {
     const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
     const codeowners = require('./codeowners.cjs');
-    const ownership = codeownersRequired ? await codeowners.authority({github, repo, pr, files}) : {automatic: true};
-    if (!ownership.automatic && pr.auto_merge) {
+    let ownership = codeownersRequired ? await codeowners.authority({github, repo, pr, files}) : {automatic: true};
+    if (ownership.configured === false) {
+      core.info(ownership.reason);
+      if (privateOwnerAutomatic) ownership = {...ownership, automatic: false, reason: 'Explicit automatic mode requires configured CODEOWNERS on the accepted base; automatic merge is denied.'};
+    }
+    const automatic = ownership.automatic && !manualMerge;
+    const nativeAutomatic = automatic && !controllerManaged;
+    if (!nativeAutomatic && pr.auto_merge) {
       await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
     }
-    if (ownership.automatic && !pr.auto_merge) {
+    if (nativeAutomatic && !pr.auto_merge) {
       await github.graphql(`mutation($id:ID!) { enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH}) {
         pullRequest { autoMergeRequest { enabledAt } }
       } }`, {id: pr.node_id});
     }
     pr = await getPr();
-    if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha || ownership.automatic && !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
+    if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha || nativeAutomatic && !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
+    if (!nativeAutomatic && pr.auto_merge) throw new Error('Automatic merge remains enabled for a PR that requires manual merge');
     const selfAuthored = pr.user?.login === 'github-actions[bot]';
     if (assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity') throw new Error(assessment.reason);
     const intentPending = assessment.decision === 'pending_technical';
@@ -304,7 +313,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       if (!comments.some(comment => comment.user.type === 'Bot' && comment.body.includes(marker))) {
         await github.rest.issues.createComment({...repo, issue_number: pull_number, body: `${marker}\n${summary}`});
       }
-      core.info('Auto-merge is armed; waiting for a maintainer intent confirmation.');
+      core.info(automatic ? 'Auto-merge is armed; waiting for a maintainer intent confirmation.' : 'Automatic merge is disabled; waiting for a maintainer intent confirmation.');
       if (nativeGate) throw new Error('A maintainer intent confirmation is required');
       return;
     }
@@ -334,6 +343,9 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       return;
     }
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
+    const currentProtection = manualMerge || controllerManaged ? await protection() : null;
+    if (manualMerge && ownership.automatic && codeownersRequired &&
+        !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before manual-mode approval');
     if (!selfAuthored) {
       await github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
         body: `All tests and exact 100% line and branch coverage passed: ${technical.url}\n\n` +
@@ -346,11 +358,30 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
         if (nativeGate) throw new Error('A current-head code-owner approval is required; automatic merge is disabled');
         return;
       }
-      await finish('success', 'Tests, exact coverage and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.');
+      await finish('success', 'Tests, exact coverage and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.' +
+        (currentProtection && !currentProtection.enforced ? `\n\n${currentProtection.reason}` : ''));
+      return;
+    }
+    if (manualMerge) {
+      await finish('success', 'Tests, exact coverage and review passed. Automatic merge is disabled; the code owner must merge manually.' +
+        (currentProtection.enforced ? '' : `\n\n${currentProtection.reason}`));
+      return;
+    }
+    if (controllerManaged) {
+      if (!currentProtection.controllerManaged) throw new Error('Private-plan acceptance mode changed before approval');
+      pr = await require('./private-owner-merge.cjs').finalizePrivateOwner({github, repo, pr, assessment,
+        baseBranch: config.base_branch, verify: async () => {
+          await verifyAcceptance();
+          const current = await protection();
+          if (!current.controllerManaged) throw new Error('Private-plan acceptance mode changed before merge');
+          if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
+        }});
+      await finish('success', `Tests, exact coverage, validated acceptance and fresh approval passed. Controller-enforced owner merge completed: ${pr.merge_commit_sha}. Native branch protection is unavailable.`);
+      if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
       return;
     }
     // Ownership is read again at the write boundary, including current team membership.
-    if (codeownersRequired && !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before automatic approval');
+    if (codeownersRequired && !((value) => value.automatic && (!privateOwnerAutomatic || value.configured !== false))(await codeowners.authority({github, repo, pr, files}))) throw new Error('Code ownership changed before automatic approval');
     await finish('success', `All required tests and coverage passed. Intent ${humanRequired ? 'confirmed by a maintainer' : 'supported by repository fit and evidence'}.\n\n${technical.url}`);
 
     if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
@@ -369,9 +400,21 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   if (assessment.number !== pull_number || pr.head.sha !== assessment.head_sha || pr.base.ref !== config.base_branch) {
     throw new Error('PR changed before merge finalization');
   }
+  if (manualMerge) {
+    if (pr.auto_merge) await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+    core.info('Manual merge mode never arms auto-merge or dispatches deployment. A code owner must merge manually.');
+    return;
+  }
+  if (privateOwnerAutomatic && !pr.merged) {
+    const checked = await require('./merge-protection.cjs').assertMergeProtection({github, repo,
+      baseBranch: config.base_branch, manual: false, privateOwnerAutomatic,
+      assertProtection: () => assertProtection(github, repo, 'approve-and-merge')});
+    if (checked.controllerManaged) throw new Error('Private owner merge must complete through the validated acceptance gate before finalization');
+  }
   if (codeownersRequired && !pr.merged) {
     if (!files) files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
-    if (!(await require('./codeowners.cjs').authority({github, repo, pr, files})).automatic) {
+    const ownership = await require('./codeowners.cjs').authority({github, repo, pr, files});
+    if (!ownership.automatic || privateOwnerAutomatic && ownership.configured === false) {
       core.info('Code-owner-authored PRs alone qualify for automatic merge; this PR requires manual code-owner merge.');
       return;
     }
@@ -402,7 +445,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS};
+return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 

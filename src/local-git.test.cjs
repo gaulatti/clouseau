@@ -84,3 +84,53 @@ test('config command, report and policy boundaries fail before execution', () =>
 }));
 
 module.exports = {repository};
+
+test('local evidence can inspect the frozen public engine without a consumer CI checkout', t => repository(async f => {
+  const collected = collectLocal({directory: f.directory, base: f.base, request: 'Inspect the shared action.', technical: {fixture_only: true}, reviewerSha: 'e'.repeat(40)});
+  await collected.addSources(['.clouseau-ci/src/config.cjs']);
+  const source = Object.values(collected.snapshot.sources).find(item => item.path === '.clouseau-ci/src/config.cjs');
+  assert.equal(source.authority, 'untrusted'); assert.equal(source.kind, 'source');
+  assert.equal(source.content, fs.readFileSync(path.join(__dirname, 'config.cjs'), 'utf8'));
+  assert.equal(source.ref, 'e'.repeat(40));
+  const missing = collectLocal({directory: f.directory, base: f.base, request: 'Inspect.', technical: {}});
+  await assert.rejects(missing.addSources(['.clouseau-ci/src/config.cjs']), /Frozen reviewer identity/);
+  const read = fs.readFileSync;
+  for (const content of ['binary\0source', 'x'.repeat(300001)]) {
+    t.mock.method(fs, 'readFileSync', (filename, ...args) => filename === path.join(__dirname, 'config.cjs') ? Buffer.from(content) : read(filename, ...args));
+    await assert.rejects(collected.addSources(['.clouseau-ci/src/config.cjs']), /Binary or oversized engine/);
+    t.mock.restoreAll();
+  }
+}));
+
+test('resolver installation preloads its actual pinned bootstrap and the current engine as separate untrusted source', () => repository(f => {
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'bootstrap-context-'));
+  try {
+    for (const entry of ['src', 'test', 'bin', 'skills', 'scripts']) fs.cpSync(path.join(__dirname, '..', entry), path.join(root, entry), {recursive: true});
+    for (const filename of ['action.yml', 'src/central-version.cjs', 'scripts/resolve/action.yml']) {
+      fs.mkdirSync(path.dirname(path.join(root, filename)), {recursive: true}); fs.writeFileSync(path.join(root, filename), `old ${filename}`);
+    }
+    git(root, ['init', '-q']); git(root, ['add', '.']);
+    git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'old bootstrap']);
+    const old = git(root, ['rev-parse', 'HEAD']).trim();
+    fs.writeFileSync(path.join(root, 'src/central-version.cjs'), 'new runtime engine'); git(root, ['add', '.']);
+    git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'new engine']);
+    const current = git(root, ['rev-parse', 'HEAD']).trim();
+    fs.mkdirSync(path.join(f.directory, '.github/workflows'), {recursive: true});
+    fs.writeFileSync(path.join(f.directory, '.github/workflows/ci.yml'), `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${old}\n`);
+    git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: install automatic resolver']);
+    const collected = collectLocal({...f, request: 'Install the reviewed bootstrap.', technical: {fixture_only: true}, reviewerSha: current, engineRoot: root});
+    const sources = Object.values(collected.snapshot.sources).filter(source => source.path.startsWith('.clouseau-ci/'));
+    assert.equal(sources.length, 27);
+    assert.ok(sources.some(source => source.path === '.clouseau-ci/test/automatic-upgrade-contract.mjs'));
+    assert.ok(sources.some(source => source.path === '.clouseau-ci/src/local-harness.cjs'));
+    assert.ok(sources.some(source => source.path === '.clouseau-ci/src/private-owner-merge.cjs'));
+    assert.equal(sources.find(source => source.path === '.clouseau-ci/src/central-version.cjs').content, 'new runtime engine');
+    assert.equal(sources.find(source => source.path === `.clouseau-ci/src/central-version.cjs@${old}`).content, 'old src/central-version.cjs');
+    assert.equal(sources.filter(source => source.ref === old).length, 2);
+    assert.ok(sources.every(source => source.kind === 'source' && source.authority === 'untrusted'));
+    assert.ok(collected.snapshot.paths.includes('.github/workflows/ci.yml'));
+    assert.ok(!collected.snapshot.paths.some(filename => filename.startsWith('.clouseau-ci/')));
+    assert.equal(git(root, ['rev-parse', 'HEAD']).trim(), current);
+    assertUnchanged(f.directory, collected.snapshot);
+  } finally {fs.rmSync(root, {recursive: true, force: true});}
+}));

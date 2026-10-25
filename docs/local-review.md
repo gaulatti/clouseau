@@ -46,6 +46,92 @@ The accepted base supplies the recipe; a change cannot weaken its own checks.
 The source checkout must be committed and clean before review. Verification
 artifacts should use the repository's established ignored output locations.
 
+### Multiple native coverage artifacts
+
+Version 2 keeps separate native reports for applications with multiple source
+roots. Its `coverage` field is a nonempty array with at most 32 explicit parts:
+
+```json
+{
+  "version": 2,
+  "base_branch": "main",
+  "readme": "README.md",
+  "repository_policy": "AGENTS.md",
+  "verification": [
+    ["python3", "-m", "coverage", "run", "--branch", "--source", "backend", "-m", "unittest", "discover", "-s", "backend/tests"],
+    ["python3", "-m", "coverage", "json", "-o", "coverage/backend.json"],
+    ["npm", "--prefix", "frontend", "run", "test:coverage"]
+  ],
+  "coverage": [
+    {"format": "coveragepy", "report": "coverage/backend.json", "source_directory": "backend"},
+    {"format": "istanbul", "report": "frontend/coverage/coverage-final.json", "source_directory": "frontend/app"}
+  ]
+}
+```
+
+Only the six documented top-level fields are accepted in version 2: `version`,
+`base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
+Misspelled or additional policy fields fail before local command execution and
+at the CI data entrypoint. Each coverage part likewise accepts only its three
+documented fields. Version 1 keeps its existing compatibility behavior.
+
+Adapt commands to the repository's real test suite. The runner passes argument
+arrays directly, runs every command, and checks each untouched native report.
+It does not generate a combined artifact or reinterpret counters. Every part
+requires a complete application inventory, nonempty measured lines, and exact
+100% lines and branches. A genuinely branchless part may have zero branches
+when another part supplies measured branches; an entirely branchless plan fails.
+Uncovered or missing data in one part cannot be compensated by another part.
+
+Report and source paths must be repository-relative. Resolved source roots must
+exist and must not overlap, and report paths must be unique, including aliases.
+Paths that escape the checkout fail. There is no arbitrary exclusion option.
+Generated application code, executable configuration and entry points remain
+in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
+`*.test.*`/`*.spec.*` files and the fixed `test`, `tests`, `__tests__`, `.git`,
+`node_modules` and `vendor` directories. Native coverage.py uses its documented
+Python test/dependency conventions. Those non-application entries may appear in
+a native report but cannot contribute passing counters.
+
+Version 2 supports the complete-inventory `istanbul` and `coveragepy` adapters.
+Version 1's single-report interface, including LLVM, remains supported. LLVM
+multi-root plans require a complete compiled-source inventory capability and
+are not accepted by version 2; Go statement reports do not become line/branch
+coverage through this interface.
+
+The accepted base supplies the complete recipe in normal local review. Local
+evidence records exact counters and a content digest for every native artifact,
+aggregate counters, and the accepted configuration digest. One frozen engine
+checks every part throughout the review.
+
+CI invokes the same shared verifier through `operation: coverage` with
+`coverage-config`. Supply the recipe from the exact accepted base, separately
+from the candidate checkout. For example, in an unprivileged PR verification
+job with no provider credentials:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    ref: ${{ github.event.pull_request.head.sha }}
+    fetch-depth: 0
+- name: Read accepted coverage recipe
+  env:
+    BASE_SHA: ${{ github.event.pull_request.base.sha }}
+  run: git show "$BASE_SHA:.clouseau-local.json" > "$RUNNER_TEMP/accepted-coverage.json"
+# Run the repository's actual tests and native instrumentation here.
+- uses: gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA
+  with:
+    operation: coverage
+    coverage-config: ${{ runner.temp }}/accepted-coverage.json
+```
+
+The coverage action reads that JSON as data and never executes its verification
+commands. Do not supply proposed PR policy as the accepted recipe. Configuration
+selection belongs to trusted workflow wiring; source execution, credentialed
+assessment and the write-capable controller remain separate. `coverage-config`
+cannot be combined with legacy `coverage-report` or `source-directory` inputs.
+The legacy single-report inputs are unchanged.
+
 Store the requirement outside the checkout, then run:
 
 ```bash
@@ -82,6 +168,11 @@ ledger rather than dropping its findings.
 
 ## Enrolling a trusted runner
 
+Consumers with neither accepted recipe nor CI policy use the separate
+[explicit initial trust installation](initial-installation.md). Its frozen
+owner/admin commit-comment grant and installation-only evidence cannot replace
+ordinary approval or authorize automatic merge.
+
 `clouseau init-identity` creates an Ed25519 identity outside the repository with
 private file permissions. Its output contains only the public enrollment entry
 and local identity-file path. Identity creation is explicit and is never part of
@@ -94,7 +185,7 @@ An owner must install the public enrollment entry in protected CI configuration:
 {
   "local_review": {
     "mode": "required",
-    "reviewer_digest": "APPROVED_64_CHARACTER_ENGINE_SHA256",
+    "central_source": {"repository": "gaulatti/clouseau", "ref": "refs/heads/main"},
     "max_age_seconds": 3600,
     "keys": [{
       "id": "PUBLIC_KEY_IDENTIFIER",
@@ -107,12 +198,22 @@ An owner must install the public enrollment entry in protected CI configuration:
 }
 ```
 
+This source authorization requires the [automatic CI resolver wiring](automatic-ci-upgrades.md)
+and its frozen SHA/digest; configuration alone cannot select an engine. Legacy
+fixed installations instead enroll `reviewer_digest` and omit `central_source`.
+The modes are exclusive, and only the central-source integration avoids recurring
+release enrollment PRs.
+
 Only existing protected configuration can enroll or revoke a key. A contributor
 cannot authorize their own key through the proposed PR. Keys are restricted to
 their enrolled native GitHub PR author. Set `revoked` or remove a key to reject
 its future receipts. `optional` mode permits the separately installed CI AI
 reviewer for PRs without a receipt. An invalid receipt never falls back to a paid
 AI review. `required` mode needs no CI AI provider credentials.
+
+Malformed, unknown-version, duplicate or mixed receipt marker claims block
+before any provider call; only genuinely unstamped optional-mode PRs can enter
+the ordinary CI AI route. Do not normalize or discard an invalid stamp.
 
 The initial trust boundary is an enrolled maintainer workstation, including its
 operator and privileged processes. The identity is not remote or hardware
@@ -127,15 +228,20 @@ an independently isolated execution/signing service and is not claimed here.
 
 An enrolled runner selects its matching installed identity automatically. Use
 `--identity /path/to/identity.json` to select explicitly when needed. The runner
-requires unmodified Clouseau engine content already enrolled in accepted CI
-policy. It records the exact Clouseau commit and binds the executable engine,
-skill, scripts and policy by a SHA-256 content digest. Identical reviewed engine
-content remains compatible across squash-merge commit identities. It verifies
+requires an unmodified public Clouseau engine and the enrolled signer. CI
+authorizes the exact engine separately from the signature. Legacy CI without a
+trusted frozen-source selection still requires its configured digest. It records the exact Clouseau commit and binds the executable engine,
+skill, scripts and policy by a SHA-256 content digest. Legacy fixed-digest installations permit identical engine content across squash
+identities. [Automatic CI upgrades](automatic-ci-upgrades.md) require both the
+exact selected central commit and its computed digest; no cross-version
+compatibility is inferred. It verifies
 the same source and installation remain unchanged before
 issuing a passing receipt. Signing material is never placed in model packets,
 child-process environments, project source, reports or the published artifact.
 Protected review-control changes still require the separate owner-authorized
-installation path; an ordinary local receipt cannot grant that authority.
+installation path; a local receipt cannot grant that authority. A current-head owner confirmation
+is independently recorded and revalidated by CI when a signed review accompanies
+a review-control change.
 
 The receipt signs a domain-separated SHA-256 payload with Ed25519. It includes
 the complete review record, exact repository/head/base, Clouseau and policy/config
@@ -166,3 +272,61 @@ non-passing or unauthorized receipts cannot approve.
 Tests, exact 100% coverage and branch protection remain mandatory. Review-control
 changes retain their existing exact-revision owner installation requirements.
 Post-deployment wiki generation and factual review remain separate operations.
+
+Local caches include the exact installed central SHA, even when a newer commit
+has identical engine bytes. Refreshing and reviewing again creates evidence for
+that new SHA and preserves the old receipt. An exact matching cached receipt
+still avoids another local review. Negative evidence and causal findings remain
+retained; a different SHA with identical engine bytes cannot resample an unchanged
+negative judgment.
+
+When a resolver workflow changes, the runner supplies at most 32 observed shared
+source/test dependencies, its actual pinned bootstrap and the legacy action
+boundary as additional untrusted context. Wiki source is included only when the
+changed workflow invokes it.
+Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
+immutable public bytes without switching the frozen review engine or granting
+contract authority. CI checks the same bytes before receipt reuse. The ordinary
+serialized evidence size remains capped at 900,000 characters. Each local
+investigation can read eight batches of
+up to eight paths, then submit its report using the final batch. A ninth source
+batch still stops the review; missing evidence cannot produce a passing report.
+Failed investigations retain `snapshot.json`
+and `observations.jsonl`; their error gives the evidence directory. These files
+contain review evidence, never the signing identity.
+
+Automatic central-source installations retain signer enrollment in protected base
+configuration and authorize protected Clouseau main instead of a recurring
+reviewer digest. An engine mismatch blocks without a paid fallback: refresh,
+review again and start a fresh workflow. The selected commit and digest are in
+the run summary and engine artifact.
+
+Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
+engine. The collector records that engine revision as untrusted source evidence
+without requiring a consumer CI checkout. CI verifies the exact signed excerpt
+against its accepted engine; engine source cannot become a repository contract.
+
+
+The local reuse assessment does not grant protected-control owner confirmation.
+That exact-head confirmation remains mandatory in CI before approval. Its pending
+execution alone cannot block the pre-PR reuse assessment when the implementation
+preserves the gate. Actual unsupported scope or authority still blocks.
+
+For explicit additional behavioral checks, pass `--additional-checks FILE`, where
+FILE is an operator-supplied JSON array of at most eight argv arrays, for example
+`[["npm", "test", "--prefix", ".github/tests"]]`. Keep this file outside the source
+checkout. This only adds checks: the accepted-base recipe and exact coverage
+must pass first, and additional checks must leave those coverage artifacts
+unchanged. Every command result and the additional plan are bound to the review
+and cache identity. This can record consumer workflow-test execution without
+changing application scripts or triggering deployment. It requires no CI keys
+and creates no CI installation. Independent hosted checks remain mandatory.
+
+Local harness presentation preserves every source byte and prior observation.
+It sends verbatim source with indexed proof coordinates and replaces a duplicate
+draft quote only when the identical bytes remain in the referenced immutable
+source. Differing or unavailable earlier literals remain explicit. No source,
+concern, disposition or score is truncated to fit transport. Oversized Codex
+input fails before invocation. Failed harness exits retain bounded stderr in
+private `failure.json` beside the snapshot and journal; public errors show only
+the diagnostic digest and evidence path, never the private stderr or environment.

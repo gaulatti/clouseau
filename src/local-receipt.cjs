@@ -6,6 +6,7 @@ const {refresh, safePath} = require('./acceptance-sources.cjs');
 const {validateInspection, combine} = require('./acceptance-review.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
+const {centralSource, acceptsEngine} = require('./central-version.cjs');
 
 const DOMAIN = 'clouseau.local-review.v1';
 const MARKER = /<!-- clouseau-local-review:v1 ([a-f0-9]{40}) -->/g;
@@ -14,7 +15,8 @@ const fail = message => {throw new Error(`Invalid local review receipt: ${messag
 const requireReceipt = (value, message) => {if (!value) fail(message);};
 
 function validateTrust(trust) {
-  requireReceipt(trust && /^[a-f0-9]{64}$/.test(trust.reviewer_digest) && ['required', 'optional'].includes(trust.mode) &&
+  requireReceipt(trust && (centralSource(trust.central_source) && trust.reviewer_digest === undefined ||
+    trust.central_source === undefined && /^[a-f0-9]{64}$/.test(trust.reviewer_digest)) && ['required', 'optional'].includes(trust.mode) &&
     Array.isArray(trust.keys) && trust.keys.length > 0 &&
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
     trust.max_age_seconds <= 86400, 'explicit trust policy and maximum age required');
@@ -71,8 +73,8 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   return {payload, signature};
 }
 
-function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now()}) {
+function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
+  now = Date.now(), engine = null}) {
   validateTrust(trust);
   requireReceipt(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
@@ -90,23 +92,39 @@ function verifyReceipt(bundle, {trust, repository, author, headSha, baseSha, rev
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
     typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge');
+  if (trust.central_source || engine) {
+    requireReceipt(acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
+      p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha,
+    'engine mismatch; refresh public Clouseau and review again, then start a fresh CI run. No paid fallback is allowed');
+  }
   const record = p.record;
   const snapshot = record.snapshot;
   requireReceipt(p.record_digest === digest(record) && snapshot.repository === repository &&
     sha(headSha) && snapshot.head_sha === headSha && sha(baseSha) && snapshot.base_sha === baseSha &&
     sha(p.reviewer_sha) && (!reviewerSha || p.reviewer_sha === reviewerSha) &&
-    p.reviewer_digest === reviewerDigest && trust.reviewer_digest === reviewerDigest && snapshot.config_digest === configDigest &&
+    p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
     snapshot.policy_digest === policyDigest, 'repository, revisions, policy, configuration or record changed');
-  requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
-    Array.isArray(snapshot.prior_findings) && record.controls === false, 'receipt cannot grant owner authority');
   const result = reviewDecision(record);
   requireReceipt(result.decision === 'auto_approve', 'review did not pass');
   return {record, ...result};
 }
 
+function verifyReceipt(bundle, options) {
+  const result = verifySignedRecord(bundle, options);
+  const {snapshot} = result.record;
+  requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
+    Array.isArray(snapshot.prior_findings) && result.record.controls === false &&
+    !Object.hasOwn(result.record, 'installation'), 'receipt cannot grant owner authority');
+  return result;
+}
+
 function marker(body) {
-  const matches = [...(body || '').matchAll(MARKER)];
+  const text = body || '';
+  requireReceipt(!text.includes('clouseau-installation-review:'), 'installation-only evidence cannot approve an ordinary PR');
+  const matches = [...text.matchAll(MARKER)];
   requireReceipt(matches.length <= 1, 'multiple receipt references');
+  requireReceipt([...text.matchAll(/clouseau-local-review:/g)].length === matches.length,
+    'malformed or unsupported receipt reference; no paid fallback is allowed');
   return matches[0]?.[1] || null;
 }
 
@@ -118,7 +136,7 @@ async function loadReceipt({github, repo, ref}) {
   return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
 }
 
-async function verifySources({github, repo, pr, snapshot, config, files}) {
+async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha, installation = null}) {
   requireReceipt(files.length === pr.changed_files && files.length > 0 &&
     digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs');
   requireReceipt(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
@@ -127,10 +145,16 @@ async function verifySources({github, repo, pr, snapshot, config, files}) {
     snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements');
   for (const filename of [config.readme, config.repository_policy]) {
     requireReceipt(Object.values(snapshot.sources).some(source => source.path === filename &&
-      source.ref === pr.base.sha && source.authority === 'trusted' && source.kind === 'contract'),
+      source.ref === (installation ? pr.head.sha : pr.base.sha) && source.authority === 'trusted' && source.kind === 'contract'),
     'protected purpose evidence omitted');
   }
   for (const [id, source] of Object.entries(snapshot.sources)) {
+    if (id === 'installation-authorization') {
+      requireReceipt(installation && source.authority === 'trusted' && source.kind === 'contract' &&
+        source.path === `commits/${pr.head.sha}/comments/${installation.comment_id}` && source.ref === digest(installation) &&
+        source.content === JSON.stringify(installation), 'installation authority was substituted');
+      continue;
+    }
     if (id === 'verification') {
       requireReceipt(source.authority === 'trusted' && source.kind === 'verification' && source.ref === pr.head.sha,
         'invalid local execution receipt');
@@ -141,9 +165,30 @@ async function verifySources({github, repo, pr, snapshot, config, files}) {
         source.ref === digest(source.content), 'local request is not sealed untrusted evidence');
       continue;
     }
+    if (source.path.startsWith('.clouseau-ci/')) {
+      let reference;
+      try {reference = require('./central-version.cjs').engineEvidence(source.path, reviewerSha);}
+      catch {fail('invalid frozen engine evidence');}
+      const {relative, ref} = reference;
+      requireReceipt(source.ref === ref &&
+        source.authority === 'untrusted' && source.kind === 'source', 'invalid frozen engine evidence');
+      const root = require('node:path').join(__dirname, '..');
+      // The action has already checked this source against the run digest.
+      // Git-free distributions compare the same file bytes without invoking Git.
+      let content;
+      if (ref === reviewerSha) content = require('node:fs').readFileSync(require('node:path').join(root, relative), 'utf8');
+      else {
+        const {data} = await github.rest.repos.getContent({owner: 'gaulatti', repo: 'clouseau', ref, path: relative});
+        requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 300000, 'historical engine evidence unavailable');
+        content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
+        requireReceipt(!content.includes('\0'), 'binary historical engine evidence');
+      }
+      requireReceipt(content === source.content, 'signed engine evidence differs from the accepted engine');
+      continue;
+    }
     requireReceipt(safePath(source.path) && [pr.base.sha, pr.head.sha].includes(source.ref) &&
       ['source', 'contract'].includes(source.kind), 'source outside exact repository revisions');
-    const contract = source.ref === pr.base.sha && [config.readme, config.repository_policy].includes(source.path);
+    const contract = (source.ref === pr.base.sha || (installation && source.ref === pr.head.sha)) && [config.readme, config.repository_policy].includes(source.path);
     requireReceipt(source.authority === (contract ? 'trusted' : 'untrusted') &&
       source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted');
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
@@ -163,4 +208,4 @@ async function verifySources({github, repo, pr, snapshot, config, files}) {
   }
 }
 
-module.exports = {DOMAIN, validateTrust, reviewDecision, issueReceipt, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {DOMAIN, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
