@@ -229,3 +229,17 @@ test('local presentation preserves all source bytes, proof identities and prior 
   assert.deepEqual(view.units, draft.units); assert.deepEqual(view.findings, draft.findings);
   assert.equal(draft.evidence[0].quote, quote);
 });
+
+
+test('a bounded seed cannot approve when a requested immutable engine dependency remains unavailable', async () => {
+  const f = await fixture(); let grades = 0; let requests = 0;
+  const deferred = `.clouseau-ci/src/local-receipt.cjs@${'b'.repeat(40)}`;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase !== 'investigation') {grades++; return f.ask(task);}
+    return {value: {kind: 'source_request', report: null, request_sources: [deferred]}, provenance: {fixture: true}};
+  }, addSources: async paths => {
+    requests++; assert.deepEqual(paths, [deferred]);
+    throw new Error('Frozen engine dependency unavailable; material context is incomplete');
+  }}), /material context is incomplete/);
+  assert.equal(requests, 1); assert.equal(grades, 0);
+});
