@@ -13,7 +13,7 @@ const policy = () => fs.readFileSync(path.join(__dirname, '../policy/change-acce
 const reviewContext = Object.freeze({stage: 'local_pre_pr', decision_scope: 'review_reuse_only',
   verification_source: 'verification', independent_ci_required: true, merge_authority: false});
 const stageInstructions = 'This is a pre-PR local change assessment, not the CI merge gate. ' +
-  'The trusted verification source proves only the accepted local recipe. Assess the changed behavior, test integrity and all supplied evidence. ' +
+  'The trusted verification source proves only the recorded local commands and exact coverage. Assess the changed behavior, test integrity and all supplied evidence. ' +
   'Independent CI tests, coverage, audits, workflow checks and container checks remain mandatory before GitHub approval and merge. ' +
   'Their pending execution alone is not missing local review evidence; do not claim they passed. ' +
   'Exact-head owner confirmation for protected CI controls belongs to CI before approval. A local receipt cannot grant that confirmation. ' +
