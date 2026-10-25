@@ -253,7 +253,7 @@ async function main(argv, runtime = {}) {
     manifest: bootstrap.validateManifest(readJson(args.manifest, 60000), context.clock()), now: context.clock()});
   if (args.command === 'installation-review') return runReview(args, context);
   if (args.command === 'installation-publish') {
-    const bundle = readJson(args.receipt, 2000000);
+    const bundle = readJson(args.receipt, require('./local-receipt.cjs').MAX_RECEIPT_BYTES);
     const grant = bundle?.payload?.record?.installation;
     requireInput(grant, 'a signed installation receipt is required');
     const reviewer = context.installed();

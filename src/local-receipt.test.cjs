@@ -18,6 +18,59 @@ test('signed passing local receipt is verified and graded without a provider', a
   assert.throws(() => marker(`<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->\n<!-- clouseau-local-review:v1 ${'b'.repeat(40)} -->`), /multiple/);
 });
 
+test('a complete signed receipt above the Contents inline limit loads from its exact immutable Git blob', async () => {
+  const f = await fixture();
+  for (const name of ['a', 'b', 'c']) f.snapshot.sources[`fixture-${name}`] = {
+    path: `test/large-${name}.txt`, ref: f.snapshot.head_sha, authority: 'untrusted', kind: 'source',
+    content: `Fictional immutable transport fixture ${name}: ${name.repeat(250000)}`,
+  };
+  require('./acceptance-sources.cjs').refresh(f.snapshot);
+  f.record.result = await require('./local-review.cjs').localReview({...f, ask: f.ask});
+  const bundle = issueReceipt(f.issue);
+  const bytes = Buffer.from(JSON.stringify(bundle));
+  assert.ok(bytes.length > 2000000 && bytes.length <= 3000000);
+  const blobSha = crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  const metadata = {type: 'file', encoding: 'none', size: bytes.length, sha: blobSha};
+  const blob = {encoding: 'base64', content: bytes.toString('base64'), size: bytes.length, sha: blobSha};
+  const repo = {owner: 'fixture', repo: 'consumer'}; const ref = 'c'.repeat(40); let reads = 0;
+  const github = {rest: {repos: {getContent: async args => {
+    assert.deepEqual(args, {...repo, ref, path: 'clouseau-review.json'}); return {data: metadata};
+  }}, git: {getBlob: async args => {
+    reads++; assert.deepEqual(args, {...repo, file_sha: blobSha}); return {data: blob};
+  }}}};
+  const loaded = await loadReceipt({github, repo, ref});
+  assert.deepEqual(loaded, bundle); assert.equal(reads, 1);
+  assert.equal(verifyReceipt(loaded, f.expected).decision, 'auto_approve');
+  const oversized = structuredClone(bundle); oversized.payload.record.extra = 'é'.repeat(1500001);
+  assert.throws(() => verifyReceipt(oversized, f.expected), /malformed signature envelope/);
+  loaded.signature = '!';
+  assert.throws(() => verifyReceipt(loaded, f.expected), /envelope/);
+});
+
+test('unavailable, oversized, truncated and substituted receipt blobs fail closed within the bounded receipt limit', async () => {
+  const bytes = Buffer.from('{"fixture_only":true}');
+  const sha = crypto.createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex');
+  const validMetadata = {type: 'file', encoding: 'none', size: bytes.length, sha};
+  const validBlob = {encoding: 'base64', content: bytes.toString('base64'), size: bytes.length, sha};
+  let metadata; let blob; let reads = 0;
+  const github = {rest: {repos: {getContent: async () => ({data: metadata})},
+    git: {getBlob: async () => {reads++; return {data: blob};}}}};
+  const options = {github, repo: {owner: 'fixture', repo: 'consumer'}, ref: 'c'.repeat(40)};
+  for (const invalid of [{type: 'dir'}, {sha: 'main'}, {size: 0.5}, {size: -1}, {size: 3000001}]) {
+    metadata = {...validMetadata, ...invalid}; reads = 0;
+    await assert.rejects(loadReceipt(options), /artifact unavailable/); assert.equal(reads, 0);
+  }
+  metadata = validMetadata;
+  for (const invalid of [{sha: 'd'.repeat(40)}, {size: bytes.length + 1}, {encoding: 'none'},
+    {content: null}, {content: Buffer.from('short').toString('base64')},
+    {content: Buffer.from('{"fixture_only":null}').toString('base64')}]) {
+    blob = {...validBlob, ...invalid};
+    await assert.rejects(loadReceipt(options), /receipt blob/);
+  }
+  github.rest.git.getBlob = async () => {throw new Error('GitHub blob unavailable');};
+  await assert.rejects(loadReceipt(options), /GitHub blob unavailable/);
+});
+
 test('any local receipt claim must be one complete supported immutable marker', () => {
   const valid = `<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`;
   const unknown = `<!-- clouseau-local-review:v2 ${'b'.repeat(40)} -->`;
