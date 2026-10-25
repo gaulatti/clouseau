@@ -35,6 +35,14 @@ delivery only after a completed authenticated invocation. A citation spanning
 pages requires all its literal bytes. An empty source also requires its actual
 empty-page delivery. A manifest alone is not inspection.
 
+Inventory entry numbers select pages; source-proof IDs select actual source
+intervals. Patch and context entries have no source-proof IDs of their own.
+Provisional concerns select only source proofs supplied in the current frame;
+a frame containing only patches/context requires an empty concern array.
+Questions suggested by a patch remain in the raw observations while the role
+requests the corresponding base/head source pages. Earlier causal concerns stay
+in that role's immutable history and need not be repeated on every frame.
+
 Before claiming complete review, the role must have received every changed
 base/head source, patch, change-context entry and trusted contract/verification
 entry. Inspected optional sources and dependencies require complete delivery too.

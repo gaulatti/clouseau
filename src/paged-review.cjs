@@ -24,8 +24,15 @@ const exact = (value, names) => value && !Array.isArray(value) &&
 const identity = snapshot => digest(Object.fromEntries(Object.entries(snapshot).filter(([key]) =>
   !['digest', 'sources'].includes(key))));
 
-function pageSchema(snapshot, availability = null) {
+function pageSchema(snapshot, availability = null, concernProofs = null) {
   const proof = {type: 'string', pattern: '^proof-(0|[1-9][0-9]*)-[1-9][0-9]*$'};
+  const concernEvidence = concernProofs?.length ? {type: 'string', enum: concernProofs} : proof;
+  const concerns = array(object({id: {type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$'},
+    title: shortText, path: {type: 'string', enum: snapshot.paths}, cause: shortText,
+    obligation: shortText, evidence: array(concernEvidence)}));
+  // A patch/context-only frame has no citable source. The empty array is the
+  // sole valid concern value until literal source proofs have been supplied.
+  if (concernProofs && !concernProofs.length) concerns.enum = [[]];
   return object({kind: {type: 'string', enum: ['report', 'page_request', 'source_request']},
     report: nullable(schemas(snapshot, {paged: true, inspectedSources: availability ? availability.inspected_sources : null,
       completenessReady: availability ? availability.completeness_ready : true}).acceptance_report),
@@ -33,9 +40,7 @@ function pageSchema(snapshot, availability = null) {
       pages: array(object({entry: {type: 'integer', minimum: 0, description: 'Exact zero-based inventory entry number.'},
         page: {type: 'integer', minimum: 0, description: 'Zero-based page index, from 0 through this entry page_count minus 1. A one-page entry has only page 0.'}}))})),
     request_sources: array({type: 'string'}), observations: shortText,
-    concerns: array(object({id: {type: 'string', pattern: '^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$'},
-      title: shortText, path: {type: 'string', enum: snapshot.paths}, cause: shortText,
-      obligation: shortText, evidence: array(proof)}))});
+    concerns});
 }
 
 function concernDraft(snapshot, concerns) {
@@ -106,7 +111,8 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       .map(selector => [`${selector.entry}:${selector.page}`, selector])).values()];
     const pages = pending ? prepareSourcePages(view, pending) : [];
     const availability = pageAvailability(snapshot, view.bank, exposureBefore, pages);
-    const schema = pageSchema(snapshot, availability);
+    const proofs = pageProofs(snapshot, view, pages);
+    const schema = pageSchema(snapshot, availability, proofs.map(proof => proof.id));
     const sample = modelTemplate(snapshot);
     for (const [index, item] of Object.entries(sample.coverage.sources)) if (!availability.inspected_sources.includes(Object.keys(snapshot.sources)[Number(index)])) {
       item.state = 'missing'; item.evidence = [];
@@ -125,6 +131,8 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       'Optional exclusions still require cited justification and the independent completeness audit. Delivering pages does not prove semantic attention. ' +
       'Keep concise cumulative observations; all prior observations remain available. Record every provisional causal concern in concerns, at most eight per response. ' +
       'Use stable concern IDs and cite only actually read controller proof IDs. A later report must retain each causal concern or explicitly resolve its ID with current-source counterevidence. ' +
+      'Source proof IDs come only from the supplied proofs catalog: proof-SOURCE_INDEX-LINE_START. An inventory entry number is a page selector, never a source index for a patch or context entry. Never manufacture a proof ID from a patch entry number or patch line. ' +
+      'Raise a new provisional concern only with literal source proofs supplied in this frame. If a patch suggests a defect, retain the question in observations and request that path\'s base/head source pages before raising the causal concern. A patch/context-only frame requires concerns=[]. Previously recorded concerns remain in own_page_progress and need not be repeated. ' +
       'Do not silently drop a concern, change its cause/path/obligation, or borrow another role investigation. ' +
       'Select kind=page_request with report=null, request_sources=[] and page_request; kind=source_request with report=null,page_request=null and paths; ' +
       'or kind=report with a complete factual report,page_request=null,request_sources=[]. ' +
@@ -134,7 +142,7 @@ async function inspectPaged({snapshot, role, ask, addSources, drafts = [], progr
       page_request_example: {bank_digest: view.bank.bank_digest, pages: [{entry: view.bank.entries[0].entry, page: 0}]}, pages,
       delivered_page_selectors: delivered,
       required_unread_page_selectors: availability.required_unread_page_selectors,
-      proofs: pageProofs(snapshot, view, pages), template: sample, earlier_reports_by_this_role: drafts,
+      proofs, template: sample, earlier_reports_by_this_role: drafts,
       own_page_progress: ownProgress});
     requirePage(Buffer.byteLength(prompt) <= MAX_PROMPT_BYTES, 'complete context exceeds prompt budget');
     const response = await ask({role, phase: 'investigation', schema, prompt});
