@@ -340,8 +340,11 @@ instead of granting authority through an earlier broad rule. Changes to CODEOWNE
 are protected review controls. Uncovered paths, unsupported patterns, email-only
 identities or unavailable membership evidence never grant automatic merge.
 
-If all three supported CODEOWNERS locations return confirmed absence on the
-protected base, the optional ownership gate is inactive. Other review, coverage,
+When `merge_mode` is omitted and all three supported CODEOWNERS locations return
+confirmed absence on the protected base, the optional ownership gate is inactive.
+An explicit `"merge_mode": "automatic"` instead requires configured CODEOWNERS:
+absence never authorizes automatic merge. This strict choice applies both to
+native protected merges and the private-plan path below. Other review, coverage,
 test and branch-protection gates remain mandatory. Permission or API errors are
 not absence; an existing empty or malformed file still blocks. This does not
 infer code ownership from general write access. A proposed CODEOWNERS file
@@ -374,4 +377,54 @@ write. Public repositories and private repositories with available protection
 must satisfy the full protection contract. The report distinguishes independently
 passed review and tests from unavailable host enforcement. On an unsupported
 private plan, GitHub cannot prevent a trusted maintainer from ignoring a failed
-check; no automatic merge is available as an alternate release path.
+check. Manual mode continues to require manual merge.
+
+
+### Controller-enforced owner merge on an unavailable private plan
+
+An accepted protocol-v2 `"merge_mode": "automatic"` explicitly selects strict
+code-owner-only automation. On protected repositories it preserves the normal
+native protected auto-merge path. On a private repository whose branch is
+positively unprotected and whose rules endpoint returns the exact documented
+HTTP 403 upgrade-plan error, Clouseau can instead finalize owner work through
+its acceptance controller. Repository native `allow_auto_merge` must remain
+`false`; no native merge request is armed. Arbitrary authorization errors,
+missing rules, public repositories and available-but-disabled protection fail.
+This exception never bypasses or weakens available protection.
+
+The write occurs inside the validated acceptance gate, after deterministic
+record and score validation, all configured verification steps (including full
+tests and exact line/branch coverage), purpose authorization where required,
+current ownership of every old/new path and a freshly observed current-head
+GitHub Actions bot approval. Missing, dismissed or stale approval, outstanding
+human change requests, missing ownership and unavailable membership fail closed.
+External/non-owner contributions can receive bot approval but still need
+current-head human code-owner approval and manual merge. A proposed ownership
+file or merge policy never authorizes its own change.
+
+This route supports distinct source/base branches in the **same repository**,
+with the exact accepted base already an ancestor of the reviewed head. It uses
+GitHub's [atomic `updateRefs` transaction](https://docs.github.com/en/graphql/reference/git#updaterefs):
+a base before/after compare-and-swap and a source-ref no-op compare-and-swap,
+both with `force: false`. A changed source or base rejects the whole transaction;
+there is no weaker REST merge fallback. The resulting history fast-forwards to
+the exact reviewed commit rather than generating a squash commit. Fork sources,
+missing refs and a stale base require repair/review or manual merge.
+
+GitHub records this as an [indirect PR merge](https://docs.github.com/en/pull-requests/reference/pull-request-merges#indirect-merges).
+The controller verifies the merged PR and resulting base both identify the exact
+reviewed head. Native `merged_at`, `merged_by` and merge event audit are observed
+separately from the controller's acceptance evidence. A nondefault reference
+qualification proved paired no-op source CAS, atomic rejection and the native
+merged audit; it does not establish an application's hosted acceptance proof.
+If the write succeeded but the audit is not observable yet, stop and inspect;
+do not retry blindly or report an unobserved success.
+
+This is **controller-enforced delivery**, not native protected delivery. GitHub
+cannot prevent another trusted writer from manually ignoring failed checks on
+that plan. Writes using `GITHUB_TOKEN` may suppress follow-up push workflows;
+keep the supported separate `finalize` deployment handoff where configured.
+An ancestry merge is not deployment, live health or documentation publication
+proof, and a deployment contract remains separately authorized. Standalone
+`finalize` cannot authorize an unmerged private candidate: only the validated
+acceptance gate can perform this transaction.

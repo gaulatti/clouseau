@@ -141,7 +141,7 @@ The configured verification workflow, review controls, and repository-purpose
 contract remain protected. Their changes still receive an AI integrity assessment
 and require explicit owner confirmation.
 
-The controller requires active effective base-branch rules: strict required
+The native protected merge path requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
 administrator must also verify no bypass actors. Repository auto-merge and Actions
@@ -157,8 +157,21 @@ unprotected branch, permits approval without host-enforced protection. Generic
 permission failures, unavailable APIs, public unprotected repositories and
 incomplete available rules fail closed. The summary states when GitHub cannot
 enforce the checks; trusted maintainers must honor them before manually merging.
-The controller never merges or dispatches deployment in manual mode. Omitting
-`merge_mode`, or choosing `"automatic"`, retains the protected owner-only flow.
+The controller never merges or dispatches deployment in manual mode.
+
+Explicit `"merge_mode": "automatic"` selects strict owner-only automation:
+CODEOWNERS must exist on the accepted base and the author must own every affected
+path. The normal protected native flow is unchanged. On the exact unavailable
+private-plan condition above, native repository auto-merge stays disabled while
+the validated acceptance controller can atomically fast-forward the exact base
+to the reviewed head, with paired source/base compare-and-swap and no force.
+This supports same-repository branches with an up-to-date head only; other
+contributions remain manual. Missing/stale reviews, failed full verification or
+coverage, changed revisions and API errors cannot authorize that write. This is
+controller-enforced delivery, not unavailable native branch protection. See
+[the complete private-plan contract](docs/change-acceptance.md#controller-enforced-owner-merge-on-an-unavailable-private-plan),
+including deployment-trigger limitations. Omitting `merge_mode` preserves the
+existing native flow and optional CODEOWNERS behavior.
 
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.

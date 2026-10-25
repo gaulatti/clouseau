@@ -202,8 +202,8 @@ async function check(args, {api, installed, clock, maxPolls = 240, pause = wait}
   const config = await remoteConfiguration(api, manifest);
   const repository = await api('GET', `repos/${args.repository}`);
   const base = await api('GET', `repos/${args.repository}/branches/${encodeURIComponent(manifest.base_branch)}`);
-  requireInput(!(repository.private && !base.protected) || (config.merge_mode === 'manual' && repository.allow_auto_merge === false),
-    'unprotected private installations require explicit manual mode and disabled repository auto-merge');
+  requireInput(!(repository.private && !base.protected) || (['manual', 'automatic'].includes(config.merge_mode) && repository.allow_auto_merge === false),
+    'unprotected private installations require explicit manual or strict owner automatic mode and disabled repository auto-merge');
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
   await verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: reviewer.sha, installation: grant});
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});

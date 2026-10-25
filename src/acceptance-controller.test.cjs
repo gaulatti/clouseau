@@ -719,3 +719,83 @@ test('non-native checks also hold an external PR and finalization rechecks owner
   await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, files: [{filename: 'src/upload.test.js'}]});
   await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, pr: {...f.state.pr, merged: true}, files: []});
 }));
+
+async function privateOwnerFixture(f) {
+  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  f.state.pr.auto_merge = null;
+  f.state.pr.head.repo.node_id = 'R_private'; f.state.pr.base.repo = {node_id: 'R_private'};
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false, node_id: 'R_private'}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false,
+    commit: {sha: f.state.pr.merged ? assessment.head_sha : assessment.base_sha}}});
+  f.github.rest.repos.compareCommits = async () => ({data: {status: 'ahead', merge_base_commit: {sha: assessment.base_sha}}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  f.github.rest.pulls.createReview = async args => {f.state.writes.push({name: 'approve', args});
+    f.state.reviews.push({user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: args.commit_id}); return {data: {}};};
+  f.github.rest.checks = {create: async () => ({data: {id: 71}}), update: async () => ({data: {}})};
+  f.github.rest.actions.createWorkflowDispatch = async args => {f.state.writes.push({name: 'dispatch', args}); return {data: {}};};
+  const graphql = f.github.graphql;
+  f.github.graphql = async (query, args) => {
+    if (!query.includes('updateRefs')) return graphql(query, args);
+    f.state.writes.push({name: 'atomic', args});
+    f.state.pr.merged = true; f.state.pr.state = 'closed'; f.state.pr.merge_commit_sha = assessment.head_sha;
+    return {updateRefs: {clientMutationId: null}};
+  };
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  return {policy, assessment, core, run: nativeGate => policy.gate({github: f.github, context: f.context,
+    core, recordPath: f.recordPath, assessment, nativeGate, wait: async () => {}})};
+}
+
+test('explicit private owner automation merges only after recomputed acceptance, all technical steps and fresh bot approval', async () => {
+  for (const native of [true, false]) await fixture(async f => {
+    const p = await privateOwnerFixture(f);
+    await p.run(native);
+    assert.deepEqual(f.state.writes.filter(w => ['approve', 'atomic', 'enable-auto'].includes(w.name)).map(w => w.name), ['approve', 'atomic']);
+    assert.equal(f.state.pr.merge_commit_sha, p.assessment.head_sha);
+    await p.policy.finalize({github: f.github, context: f.context, core: p.core, assessment: p.assessment});
+    assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 1);
+  });
+});
+
+test('failed complete verification, coverage, altered acceptance, missing owners and outsiders cannot use private owner automation', async () => {
+  for (const failure of ['tests', 'coverage', 'acceptance', 'missing-owner', 'outsider', 'withdrawn-tests', 'changed-mode']) await fixture(async f => {
+    const p = await privateOwnerFixture(f);
+    if (failure === 'tests') f.state.failed = true;
+    if (failure === 'coverage') {
+      const jobs = f.github.rest.actions.listJobsForWorkflowRun;
+      f.github.rest.actions.listJobsForWorkflowRun = async args => {const value = await jobs(args);
+        value.data[0].steps.find(step => step.name === 'Enforce 100% line and branch coverage').conclusion = 'failure'; return value;};
+    }
+    if (failure === 'acceptance') {const value = JSON.parse(fs.readFileSync(f.recordPath)); value.result.decision = 'repair_required'; fs.writeFileSync(f.recordPath, JSON.stringify(value));}
+    if (failure === 'missing-owner') {
+      const content = f.github.rest.repos.getContent;
+      f.github.rest.repos.getContent = async args => {if (['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].includes(args.path)) throw Object.assign(new Error('Absent'), {status: 404}); return content(args);};
+    }
+    if (failure === 'outsider') f.github.rest.repos.getCollaboratorPermissionLevel = async () => ({data: {permission: 'read'}});
+    if (failure === 'withdrawn-tests') {
+      const approval = f.github.rest.pulls.createReview;
+      f.github.rest.pulls.createReview = async args => {const result = await approval(args); f.state.failed = true; return result;};
+    }
+    if (failure === 'changed-mode') {let calls = 0; f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: ++calls > 1, node_id: 'R_private'}});}
+    await assert.rejects(p.run(true));
+    assert.equal(f.state.writes.filter(w => ['atomic', 'enable-auto'].includes(w.name)).length, 0, failure);
+    assert.equal(f.state.pr.merged, undefined, failure);
+  });
+});
+
+test('private automatic finalization cannot authorize an unmerged candidate outside the validated acceptance gate', () => fixture(async f => {
+  const p = await privateOwnerFixture(f);
+  await assert.rejects(p.policy.finalize({github: f.github, context: f.context, core: p.core, assessment: p.assessment}), /validated acceptance gate/);
+  assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+}));
+
+test('explicit automatic mode requires configured ownership on the normal protected native path too', () => fixture(async f => {
+  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const content = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => {if (['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS'].includes(args.path)) throw Object.assign(new Error('Absent'), {status: 404}); return content(args);};
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await assert.rejects(policy.gate({github: f.github, context: f.context, core, assessment, recordPath: f.recordPath, nativeGate: true}), /code-owner approval/);
+  await policy.finalize({github: f.github, context: f.context, core, assessment});
+  assert.equal(f.state.writes.filter(w => w.name === 'enable-auto').length, 0);
+}));
