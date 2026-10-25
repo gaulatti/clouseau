@@ -57,3 +57,18 @@ test('automatic mode never falls back when protection, settings or inspection is
   f.state.error = null;
   assert.deepEqual(await f.check(false), {enforced: true});
 });
+
+test('explicit owner automatic mode admits only the unavailable private-plan path with native auto-merge disabled', async () => {
+  const f = fixture();
+  const run = () => assertMergeProtection({github: {rest: {repos: {
+    get: async () => ({data: f.state.settings}), getBranch: async () => ({data: f.state.branch}),
+  }}}, repo: {}, baseBranch: 'main', manual: false, privateOwnerAutomatic: true,
+  assertProtection: async () => {if (f.state.error) throw f.state.error;}});
+  assert.equal((await run()).controllerManaged, true);
+  f.state.error = Object.assign(new Error('Resource not accessible by integration'), {status: 403});
+  await assert.rejects(run(), /accessible/);
+  f.state.error = null;
+  await assert.rejects(run(), /Available branch protection/);
+  f.state.error = unsupported(); f.state.settings.allow_auto_merge = true;
+  await assert.rejects(run(), /auto-merge and main protection/);
+});

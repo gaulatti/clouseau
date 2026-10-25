@@ -769,3 +769,14 @@ test('separate finalization validates revision and dispatches CD only for the me
   finally {if (original === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = original;}
   assert.ok(f.writes.some(w => w.name === 'dispatch' && w.args.workflow_id === 'backend-deploy.yml'));
 });
+
+
+test('legacy controller callers cannot select private automatic writes without a validated acceptance record', async () => {
+  const f = fixture();
+  const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  await assert.rejects(policy.gate({github: f.github, context, core: {info() {}}, assessment: automatic}), /validated protocol-two acceptance record/);
+  assert.equal(f.writes.length, 0);
+});

@@ -150,8 +150,13 @@ Use the same frozen engine as the grant. Run this job in a **different workflow*
 from configured verification: it waits for that complete verification run and
 must not wait on itself. It makes zero model requests, receives no provider key
 or write permission, and cannot discard an existing review ledger. Unprotected
-private repositories must select released manual merge mode and disable
-repository auto-merge.
+private repositories must explicitly select `manual` or strict owner-only
+`automatic` merge mode and disable repository native auto-merge. Selecting the
+eventual ordinary automatic policy does not grant this installation any merge
+authority: the frozen grant binds that configuration, the initial receipt still
+requires manual owner acceptance, and ordinary changes later use accepted-base
+policy and enrollment. See the private-plan controller path in
+[change acceptance](change-acceptance.md#controller-enforced-owner-merge-on-an-unavailable-private-plan).
 
 Success explicitly returns `installation_verified`,
 `manual_owner_acceptance_required`, `ordinary_pr_approval: false` and

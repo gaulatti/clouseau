@@ -194,7 +194,7 @@ test('immutable historical engine evidence is text, never an executed or selecte
 });
 
 test('uncached historical source fetch is bounded to the fixed public repository and never falls back to current bytes', t => {
-  const calls = []; let offline = false;
+  const calls = []; let offline = false; let requested = 'scripts/resolve/action.yml';
   t.mock.method(cp, 'execFileSync', (program, args, options) => {
     assert.equal(program, 'git'); calls.push(args);
     if (args.includes('-e')) throw new Error('Object absent');
@@ -203,11 +203,14 @@ test('uncached historical source fetch is bounded to the fixed public repository
       assert.equal(options.timeout, 30000); if (offline) throw new Error('Public source unavailable'); return Buffer.alloc(0);
     }
     if (args.includes('-t')) return 'blob\n';
-    assert.equal(args.at(-1), `${first}:scripts/resolve/action.yml`); return Buffer.from('actual immutable bootstrap');
+    assert.equal(args.at(-1), `${first}:${requested}`); return Buffer.from('actual immutable bootstrap');
   });
   assert.equal(readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), 'actual immutable bootstrap');
   assert.equal(calls.filter(args => args.includes('fetch')).length, 1);
+  requested = 'src/local-receipt.cjs';
+  assert.equal(readEngineEvidence(`.clouseau-ci/${requested}@${first}`, second, '/fixture'), 'actual immutable bootstrap');
   offline = true;
+  requested = 'scripts/resolve/action.yml';
   assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), /Public source unavailable/);
 });
 
@@ -218,8 +221,8 @@ test('resolver review supplies observed shared dependencies and actual legacy so
     old: {content: `      - uses: gaulatti/clouseau@${second}\n`},
     ci: {content: `      - uses: gaulatti/clouseau/scripts/resolve@${first}\n        uses: 'gaulatti/clouseau/scripts/resolve@${first}'\n`}}};
   const before = structuredClone(snapshot); const paths = engineContext(snapshot);
-  assert.equal(paths.length, 30); assert.equal(new Set(paths).size, 30);
-  for (const filename of ['src/local-harness.cjs', 'scripts/install-agent', 'src/local-review.cjs', 'test/automatic-upgrade-contract.mjs']) {
+  assert.equal(paths.length, 31); assert.equal(new Set(paths).size, 31);
+  for (const filename of ['src/private-owner-merge.cjs', 'src/local-harness.cjs', 'scripts/install-agent', 'src/local-review.cjs', 'test/automatic-upgrade-contract.mjs']) {
     assert.ok(paths.includes(`.clouseau-ci/${filename}`));
   }
   assert.ok(paths.includes(`.clouseau-ci/scripts/resolve/action.yml@${first}`));
@@ -229,7 +232,11 @@ test('resolver review supplies observed shared dependencies and actual legacy so
   assert.deepEqual(snapshot, before);
   snapshot.sources.ci.content += "        run: require('./.clouseau-ci/src/wiki-git.cjs')\n";
   assert.ok(engineContext(snapshot).includes('.clouseau-ci/src/wiki.cjs'));
-  assert.equal(engineContext(snapshot).length, 32);
+  const bounded = engineContext(snapshot);
+  assert.equal(bounded.length, 32);
+  const deferred = `.clouseau-ci/src/local-receipt.cjs@${second}`;
+  assert.ok(!bounded.includes(deferred), 'a bounded initial seed does not falsely claim all wiki plus legacy dependencies');
+  assert.deepEqual(engineEvidence(deferred, first), {relative: 'src/local-receipt.cjs', ref: second});
   snapshot.sources.ci.content += Array.from({length: 10}, (_, i) => `      - uses: gaulatti/clouseau/scripts/resolve@${i.toString().repeat(40)}\n`).join('');
   assert.equal(engineContext(snapshot).length, 32);
   snapshot.sources.ci.content = `# uses: gaulatti/clouseau/scripts/resolve@${first}\n  uses: other/repo/scripts/resolve@${first}`;
