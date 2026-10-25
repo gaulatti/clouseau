@@ -11,6 +11,8 @@ requires its own tests and exact coverage before approval/merge. See
 Consumers without accepted recipe/enrollment/workflows use the separate
 [initial owner-authorized trust installation](docs/initial-installation.md).
 Its signed evidence cannot approve ordinary changes or automatically merge.
+Clouseau's own accepted-policy bootstrap and native coverage diagnostics are
+documented in [self-review](docs/self-review.md).
 
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,
