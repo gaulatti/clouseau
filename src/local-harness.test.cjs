@@ -2,6 +2,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const {digest} = require('./acceptance.cjs');
 const {compactSchema, invoke, askHarness} = require('./local-harness.cjs');
 
 test('native output schema shares repeated choices without weakening proof ID constraints', () => {
@@ -23,10 +24,43 @@ test('native harness process transport captures results and bounds failures with
     {input: ''}), error => error.message.includes('(3)') && !error.message.includes('fictional-sensitive-diagnostic') &&
       error.harnessDiagnostic.stderr === 'fictional-sensitive-diagnostic' && error.harnessDiagnostic.exit_code === 3);
   await assert.rejects(invoke('/nonexistent-clouseau-harness', [], {input: ''}), /ENOENT/);
-  await assert.rejects(invoke(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {input: '', timeoutMs: 20}), /failed/);
+  await assert.rejects(invoke(process.execPath, ['-e', 'setTimeout(()=>{},10000)'], {input: '', timeoutMs: 20}), error =>
+    error.message.includes('failed') && error.harnessDiagnostic.controller_kill_reasons.includes('native_timeout') &&
+      error.harnessDiagnostic.timeout_ms === 20);
   await assert.rejects(invoke(process.execPath, ['-e', 'process.stdout.write("x".repeat(1000));setTimeout(()=>{},10000)'],
-    {input: '', maxBytes: 10}), /failed/);
+    {input: '', maxBytes: 10}), error => error.message.includes('failed') &&
+      error.harnessDiagnostic.controller_kill_reasons.includes('native_output_limit') &&
+      error.harnessDiagnostic.stdout_characters > 10 && error.harnessDiagnostic.max_characters === 10);
   assert.equal(await invoke('/usr/bin/true', [], {input: 'x'.repeat(1000000)}), '');
+});
+
+test('failed native stdout is retained privately with bounded tails, full counts and digest', async () => {
+  const stdout = 'fictional-private-output-'.repeat(150) + JSON.stringify({type: 'result', subtype: 'fictional-error', is_error: true});
+  const stderr = 'fictional-private-stderr-'.repeat(150);
+  await assert.rejects(invoke(process.execPath, ['-e',
+    `process.stdout.write(${JSON.stringify(stdout)}, () => process.stderr.write(${JSON.stringify(stderr)}, () => process.exit(1)))`],
+  {input: ''}), error => {
+    const diagnostic = error.harnessDiagnostic;
+    assert.equal(diagnostic.stdout_tail, stdout.slice(-2000));
+    assert.equal(diagnostic.stderr, stderr.slice(-2000));
+    assert.equal(diagnostic.stdout_characters, stdout.length);
+    assert.equal(diagnostic.stdout_bytes, Buffer.byteLength(stdout));
+    assert.equal(diagnostic.stdout_digest, digest(stdout));
+    assert.deepEqual(diagnostic.controller_kill_reasons, []);
+    assert.equal(diagnostic.timeout_ms, 300000);
+    assert.equal(diagnostic.max_characters, 3000000);
+    assert.ok(diagnostic.elapsed_ms >= 0);
+    assert.ok(!error.message.includes('fictional-private'));
+    assert.ok(error.message.includes(digest(diagnostic)));
+    return true;
+  });
+});
+
+test('native transport preserves UTF-8 characters split across process writes', async () => {
+  const text = 'fictional 💡 العربية';
+  const script = `const bytes=Buffer.from(${JSON.stringify(text)}); let index=0;
+    function next(){if(index<bytes.length) process.stdout.write(bytes.subarray(index,index+1),()=>{index++;setTimeout(next,5);});} next();`;
+  assert.equal(await invoke(process.execPath, ['-e', script], {input: ''}), text);
 });
 
 test('an oversized Codex prompt stops before invoking the transport without truncating evidence', async () => {

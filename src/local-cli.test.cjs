@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
+const {invoke} = require('./local-harness.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
 const {options, stateDirectory, initializeIdentity, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main} = require('./local-cli.cjs');
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
@@ -188,11 +189,13 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
     let calls = 0;
-    const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {calls++; throw Object.assign(new Error('Fixture transport unavailable'),
-      {harnessDiagnostic: {exit_code: 1, stderr: 'fictional-private-diagnostic'}});}};
+    const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {
+      calls++;
+      return invoke(process.execPath, ['-e', 'process.stdout.write("fictional-private-stdout", () => process.stderr.write("fictional-private-diagnostic", () => process.exit(1)))'], {input: ''});
+    }};
     await assert.rejects(runReview(args, deps), error => {
-      assert.match(error.message, /transport unavailable.*preserved review evidence:/);
-      assert.ok(!error.message.includes('fictional-private-diagnostic'));
+      assert.match(error.message, /Local harness failed.*preserved review evidence:/);
+      assert.ok(!error.message.includes('fictional-private'));
       return true;
     });
     await assert.rejects(runReview(args, deps), /already run/);
@@ -204,7 +207,11 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     assert.equal(snapshot.head_sha, git(f.directory, ['rev-parse', 'HEAD']).trim());
     assert.equal(fs.statSync(path.join(cache, 'snapshot.json')).mode & 0o777, 0o600);
     const failure = path.join(cache, 'failure.json');
-    assert.equal(JSON.parse(fs.readFileSync(failure)).harness.stderr, 'fictional-private-diagnostic');
+    const diagnostic = JSON.parse(fs.readFileSync(failure)).harness;
+    assert.equal(diagnostic.stderr, 'fictional-private-diagnostic');
+    assert.equal(diagnostic.stdout_tail, 'fictional-private-stdout');
+    assert.equal(diagnostic.stdout_digest, digest('fictional-private-stdout'));
+    assert.deepEqual(diagnostic.controller_kill_reasons, []);
     assert.equal(fs.statSync(failure).mode & 0o777, 0o600);
     assert.equal(fs.existsSync(path.join(cache, 'receipt.json')), false);
   } finally {fs.rmSync(state, {recursive: true, force: true});}
