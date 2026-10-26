@@ -16,7 +16,7 @@ async function describe(filename) {
 async function reportTests({label, artifacts, args, cwd = process.cwd(), stdout = process.stdout, stderr = process.stderr}) {
   if (!/^[a-z][a-z0-9-]*$/.test(label) || !Array.isArray(args) || !args.includes('--test') ||
       args.some(arg => typeof arg !== 'string' || arg === '--test-reporter' || arg.startsWith('--test-reporter=') && arg !== '--test-reporter=lcov')) {
-    throw new Error('Native test reporting requires a label, --test and unchanged test arguments; dot/spec reporters are controller-owned');
+    throw new Error('Native test reporting requires a label, --test and unchanged test arguments; spec reporter is controller-owned');
   }
   const root = path.resolve(artifacts);
   fs.mkdirSync(root, {recursive: true});
@@ -26,8 +26,7 @@ async function reportTests({label, artifacts, args, cwd = process.cwd(), stdout 
   const outPath = path.join(directory, 'native.stdout');
   const errPath = path.join(directory, 'native.stderr');
   const out = fs.openSync(outPath, 'wx', 0o600), err = fs.openSync(errPath, 'wx', 0o600);
-  const argv = ['--test-reporter=dot', '--test-reporter-destination=stdout',
-    '--test-reporter=spec', `--test-reporter-destination=${spec}`, ...args];
+  const argv = ['--test-reporter=spec', `--test-reporter-destination=${spec}`, ...args];
   const started = new Date().toISOString();
   const reporter = {path: __filename, sha256: hashFile(__filename)};
   fs.writeFileSync(path.join(directory, 'started.json'), JSON.stringify({version: 1, run_id: path.basename(directory),
@@ -54,9 +53,10 @@ async function reportTests({label, artifacts, args, cwd = process.cwd(), stdout 
     if (traces.spec) await pipeline(fs.createReadStream(spec), stderr, {end: false});
     if (spawnError) stderr.write(`${spawnError.code}: ${spawnError.message}\n`);
   }
+  const outcome = nativeCode === 0 && traces.spec ? 'passed' : 'failed';
   const reference = traces.spec ? `Native trace: ${spec} sha256=${traces.spec.sha256}` : 'Native trace unavailable; inspect retained stdout/stderr';
   await new Promise(resolve => stderr.write('', resolve));
-  await new Promise(resolve => stdout.write(`\n${reference}\nNative manifest: ${manifestPath} sha256=${hashFile(manifestPath)}\n`, resolve));
+  await new Promise(resolve => stdout.write(`\nNative tests ${outcome}.\n${reference}\nNative manifest: ${manifestPath} sha256=${hashFile(manifestPath)}\n`, resolve));
   if (!traces.spec && code === 0) throw new Error('Native reporter produced no complete trace');
   return {code: spawnError ? 1 : code, signal, spawnError, manifestPath};
 }

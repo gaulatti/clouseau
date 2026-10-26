@@ -7,10 +7,11 @@ bash scripts/verify-coverage
 bash scripts/verify-archive
 ```
 
-Both commands run their selected Node tests once. The native Node `dot` reporter
-provides compact progress on the console, while the native `spec` reporter writes
+Both commands run their selected Node tests once. The native `spec` reporter writes
 every case, diagnostic, test stdout/stderr message and coverage summary to a
-separate file from that same execution. Node 22 supports these paired
+separate file from that same execution. The wrapper prints its actual native
+outcome and retained artifact identities on completion, forwarding raw child
+stdout/stderr unchanged. Node 22 supports paired
 [reporters and destinations](https://nodejs.org/download/release/v22.22.0/docs/api/test.html#multiple-reporters).
 The reporter format is native Node output; the reporting helper does not parse
 it, invent test counts or rerun tests to obtain another report.
@@ -56,4 +57,7 @@ successful and failed archive teardown. The temporary archive is still removed.
 Coverage keeps its original test selection, source include/exclude flags,
 100% line/branch thresholds, and `.clouseau-work/node.lcov` destination. Python
 commands, workflow tests, local recipe, CI policies and providers are unchanged.
+The coverage invocation uses only native spec and the existing LCOV reporter.
+Adding a third dot reporter produces a real Node22 listener warning, so live
+dots are deliberately avoided without suppressing warnings or changing limits.
 Compact successful reporting does not change the tests executed or any gate.

@@ -42,6 +42,8 @@ test('one native execution selects the exact files and retains all per-case stdo
     f.write('excluded.spec.cjs', "throw Error('This unselected source must never execute');");
     const run = execute(f, 'success', ['--test', first, second]);
     assert.equal(run.status, 0, run.stderr); assert.equal(run.signal, null);
+    assert.match(run.stdout, /Native tests passed/);
+    assert.doesNotMatch(run.stderr, /MaxListenersExceededWarning/);
     assert.match(run.stdout, /Native trace: .*sha256=[a-f0-9]{64}/);
     assert.doesNotMatch(run.stdout, /first actual native case|complete stdout/);
     const record = manifests(f)[0]; checkTrace(record);
@@ -93,7 +95,7 @@ test('native line/branch flags and the original LCOV destination still fail an u
     const run = execute(f, 'coverage', args);
     assert.equal(run.status, 1); assert.match(run.stderr, /coverage|branch/);
     assert.match(fs.readFileSync(report, 'utf8'), /BRDA:.*0/m);
-    const record = manifests(f)[0]; checkTrace(record); assert.deepEqual(record.argv.slice(4), args);
+    const record = manifests(f)[0]; checkTrace(record); assert.deepEqual(record.argv.slice(2), args);
   } finally {f.cleanup();}
 });
 
@@ -133,6 +135,7 @@ test('reporter argument validation is explicit and a native argument failure rem
     const run = execute(f, 'arguments', ['--test', '--no-such-node-option']);
     assert.notEqual(run.status, 0); assert.match(run.stderr, /bad option/);
     const record = manifests(f)[0]; checkTrace(record); assert.equal(record.traces.spec, null);
+    assert.ok(run.stderr.startsWith(fs.readFileSync(record.traces.stderr.path, 'utf8')));
     const missing = cp.spawnSync(process.execPath, [reporter], {env: environment(), encoding: 'utf8'});
     assert.equal(missing.status, 1); assert.match(missing.stderr, /Usage:/);
   } finally {f.cleanup();}
@@ -171,6 +174,8 @@ test('a zero native exit without a report is a reporting failure rather than a f
     const run = execute(f, 'no-report', ['--test', '--version']);
     assert.equal(run.status, 1); assert.match(run.stderr, /no complete trace/);
     const record = manifests(f)[0]; assert.equal(record.native_exit_code, 0); assert.equal(record.traces.spec, null);
+    const raw = fs.readFileSync(record.traces.stdout.path, 'utf8');
+    assert.ok(raw.startsWith(process.version)); assert.ok(run.stdout.startsWith(raw));
   } finally {f.cleanup();}
 });
 

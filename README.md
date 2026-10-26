@@ -285,7 +285,7 @@ python3 -m pip install -r requirements-test.txt
 ./scripts/verify-coverage
 ```
 
-Successful native Node runs print compact progress and retain complete same-run
+Successful native Node runs print compact outcomes and retain complete same-run
 traces with per-run hashes; see [native verification traces](docs/native-verification.md).
 
 CI also exercises the packaged composite action and verifies both passing and
