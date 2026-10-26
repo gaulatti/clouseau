@@ -43,7 +43,8 @@ function reviewDecision(record) {
     result.config_digest === snapshot.config_digest, 'review does not match evidence');
   requireReceipt(Array.isArray(result.usage) && result.usage.length >= 4 &&
     result.execution_digest === digest(result.usage) && new Set(result.usage.map(item => item.session)).size === result.usage.length &&
-    result.usage.every(item => ['codex', 'claude'].includes(item.harness) && typeof item.session === 'string' && item.session.length > 0 &&
+    result.usage.every(item => ['codex', 'claude', 'opencode'].includes(item.harness) && [undefined, 'agent_session'].includes(item.execution) &&
+      typeof item.session === 'string' && item.session.length > 0 &&
       ['request_digest', 'response_digest', 'transport_digest'].every(name => /^[a-f0-9]{64}$/.test(item[name]))) &&
     ['examiner', 'challenger'].every(role => ['investigation', 'grading'].every(phase =>
       result.usage.some(item => item.role === role && item.phase === phase))), 'complete independent harness execution records required');

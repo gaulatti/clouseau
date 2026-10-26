@@ -21,10 +21,25 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
    `.clouseau-local.json` supplies verification commands and native coverage
    configuration independently of any GitHub Actions installation. Preserve work
    outside the requirement. Commit the complete candidate before signing.
-3. Store the requirement text outside the checkout and run
-   `clouseau review --directory REPO --request-file FILE --harness codex`.
-   Use `--harness claude` when working with that authenticated harness. No CI
-   provider keys are needed. Real verification outcomes are recorded first;
+3. Store the requirement text outside the checkout. Inside an AI harness
+   (Claude Code, Codex or opencode) run the review in agent-driven mode:
+   `clouseau review --directory REPO --request-file FILE --agent claude|codex|opencode`
+   naming the harness you are running in. Do not start a nested headless harness.
+   The command ends with exit code 3 and `status: awaiting_agent` whenever it
+   needs one examiner or challenger session. For each request: start a fresh
+   subagent or session that has not seen this conversation and give it only the
+   `prompt_file` and `schema_file` as its task; it must write only the JSON answer
+   to `answer_file` and must not modify the repository. If the harness cannot
+   start a fresh session, stop and report that; never answer a request yourself
+   in the implementing session. Register the answer with
+   `clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session ID`,
+   using the subagent's own unique session identifier, then repeat the identical
+   review command. An invalid answer is rejected with the reason; the same
+   request allows three attempts. Real verification runs once and is reused. If
+   Clouseau main advances between commands the review restarts under the new
+   revision. Only outside an AI harness use the headless form
+   `clouseau review --directory REPO --request-file FILE --harness codex|claude`.
+   No CI provider keys are needed. Real verification outcomes are recorded first;
    partial coverage, a failing coverage command or unavailable/invalid coverage
    never suppresses local AI review or becomes fabricated passing counts. Fresh
    examiner and challenger sessions receive the frozen evidence without the
