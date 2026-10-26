@@ -195,6 +195,13 @@ class CoveragePyGateTests(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.run_check()["lines"], [4, 4])
             link.unlink()
+        for name in ("node_modules", "venv", "tests"):
+            link = self.root / name
+            link.symlink_to(self.root / "service.py")
+            with patch.object(Path, "open", side_effect=AssertionError("must not read target")), \
+                    self.subTest(name=name), self.assertRaisesRegex(ValueError, "Symbolic or escaped"):
+                source_inventory(self.root.resolve())
+            link.unlink()
 
     def test_extensionless_candidates_retain_syntax_pragma_and_shebang_validation(self):
         entrypoint = self.root / "launch"

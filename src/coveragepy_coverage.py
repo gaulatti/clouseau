@@ -63,7 +63,7 @@ def source_inventory(root):
     for file in root.rglob("*"):
         if file.suffix not in {"", ".py"} or not production_python(file.relative_to(root)):
             continue
-        if file.name in DEPENDENCY_DIRECTORIES | {"test", "tests"} and (file.is_symlink() or file.is_dir()):
+        if file.name in DEPENDENCY_DIRECTORIES | {"test", "tests"} and file.is_dir():
             continue
         if file.is_symlink() or not file.resolve().is_relative_to(root):
             raise ValueError(f"Symbolic or escaped Python application source: {file}")
