@@ -5,10 +5,12 @@ from collections import Counter
 import io
 from pathlib import Path
 import re
+import shlex
 import tokenize
 
 
 DEPENDENCY_DIRECTORIES = {".git", ".venv", "venv", ".tox", ".nox", "__pycache__", "node_modules"}
+PYTHON_INTERPRETER = re.compile(r"python(?:[0-9]+(?:\.[0-9]+)*)?\Z")
 
 
 def production_python(relative):
@@ -21,13 +23,52 @@ def production_python(relative):
     )
 
 
+def python_shebang(file):
+    """Classify an extensionless regular file without executing its interpreter."""
+    with file.open("rb") as stream:
+        if stream.read(2) != b"#!":
+            return False
+        first = stream.readline(4097)
+    if len(first) > 4096:
+        raise ValueError(f"Overlong application shebang: {file}")
+    try:
+        words = shlex.split(first.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError(f"Malformed application shebang: {file}") from error
+    if not words:
+        raise ValueError(f"Malformed application shebang: {file}")
+    interpreter = Path(words[0])
+    if interpreter.name == "env":
+        words = words[1:]
+        if words and words[0] == "-S":
+            words = words[1:]
+        if not words:
+            raise ValueError(f"Malformed application shebang: {file}")
+        command = Path(words[0])
+        if not PYTHON_INTERPRETER.fullmatch(command.name):
+            if any(PYTHON_INTERPRETER.fullmatch(Path(word).name) for word in words):
+                raise ValueError(f"Unsupported Python application shebang: {file}")
+            return False
+        if "/" in words[0] and not command.is_absolute():
+            raise ValueError(f"Nonabsolute Python application shebang: {file}")
+    elif not PYTHON_INTERPRETER.fullmatch(interpreter.name):
+        return False
+    if not interpreter.is_absolute():
+        raise ValueError(f"Nonabsolute Python application shebang: {file}")
+    return True
+
+
 def source_inventory(root):
     sources = {}
-    for file in root.rglob("*.py"):
-        if not production_python(file.relative_to(root)):
+    for file in root.rglob("*"):
+        if file.suffix not in {"", ".py"} or not production_python(file.relative_to(root)):
+            continue
+        if file.name in DEPENDENCY_DIRECTORIES | {"test", "tests"} and file.is_dir():
             continue
         if file.is_symlink() or not file.resolve().is_relative_to(root):
             raise ValueError(f"Symbolic or escaped Python application source: {file}")
+        if not file.is_file() or file.suffix != ".py" and not python_shebang(file):
+            continue
         with tokenize.open(file) as stream:
             text = stream.read()
         try:

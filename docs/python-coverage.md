@@ -21,6 +21,23 @@ statements is allowed, but an empty report or empty executable module is not
 evidence of full coverage. The selected application must have nonzero line and
 branch totals.
 
+The inventory also includes extensionless files with a Python shebang: an
+absolute interpreter path ending in `python`, `python3` or a numeric version
+such as `python3.13`, or an absolute `env` path followed by that interpreter
+name or an absolute Python interpreter path. `env -S python3 -u` supports split
+interpreter arguments; direct Python interpreter arguments are also recognized. Classification reads the header and
+parses the Python source without executing it. Header inspection reads at most
+4096 bytes after `#!`; a longer shebang fails explicitly. Malformed shebangs,
+relative Python interpreter paths and unsupported `env` option prefixes before a Python
+interpreter fail closed. Non-Python scripts are not Python sources.
+
+Coverage.py's unloaded-module discovery does not necessarily report these
+extensionless entrypoints. Exercise each real entrypoint through the native
+coverage runner; omission from the report remains a missing-source failure.
+An extensionless symbolic candidate is rejected before reading its target,
+including broken links and links outside the declared root. The same syntax,
+pragma and native counter checks apply to these sources as to `.py` modules.
+
 Inventory excludes concrete nonproduction conventions only: `test/` and
 `tests/` directories, `test_*.py`, `*_test.py`, `tests.py`, `conftest.py`, and
 dependency/cache directories `.git`, `.venv`, `venv`, `.tox`, `.nox`,
