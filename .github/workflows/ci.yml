@@ -114,13 +114,7 @@ jobs:
       - name: Test distributable action without Git metadata
         if: *verify-code
         shell: bash
-        run: |
-          bundle="$(mktemp -d)"
-          trap 'rm -rf "$bundle"' EXIT
-          git archive HEAD | tar -x -C "$bundle"
-          cd "$bundle"
-          python3 -m unittest discover -s src -p 'test_*.py'
-          node --test src/*.test.cjs
+        run: ./scripts/verify-archive
       - name: Test workflow security
         if: *verify-code
         run: |
@@ -198,6 +192,16 @@ jobs:
         env:
           MULTI_GAP_OUTCOME: ${{ steps.multi-gap.outcome }}
         run: test "$MULTI_GAP_OUTCOME" = failure
+      - name: Retain native verification traces
+        if: >-
+          always() && ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == ''))
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .clouseau-work/verification-runs
+          include-hidden-files: true
+          if-no-files-found: warn
 
   prepare-installation:
     if: &install-event >-

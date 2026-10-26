@@ -6,8 +6,8 @@ python3 -m coverage run -m unittest discover -s src -p 'test_*.py'
 python3 -m coverage report
 mkdir -p .clouseau-work
 python3 -m coverage json -o .clouseau-work/python.json
-node --experimental-test-coverage --test \
-  --test-reporter=spec --test-reporter-destination=stdout \
+node src/native-test-report.cjs coverage "$PWD/.clouseau-work/verification-runs" -- \
+  --experimental-test-coverage --test \
   --test-reporter=lcov --test-reporter-destination=.clouseau-work/node.lcov \
   --test-coverage-lines=100 --test-coverage-branches=100 \
   --test-coverage-include='src/**/*.cjs' \
