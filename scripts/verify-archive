@@ -2,9 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+trace_root="$PWD/.clouseau-work/verification-runs"
 bundle="$(mktemp -d)"
 trap 'rm -rf "$bundle"' EXIT
 git archive HEAD | tar -x -C "$bundle"
 cd "$bundle"
 python3 -m unittest discover -s src -p 'test_*.py'
-node --test src/*.test.cjs
+node src/native-test-report.cjs archive "$trace_root" -- --test src/*.test.cjs

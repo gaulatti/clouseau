@@ -285,6 +285,9 @@ python3 -m pip install -r requirements-test.txt
 ./scripts/verify-coverage
 ```
 
+Successful native Node runs print compact progress and retain complete same-run
+traces with per-run hashes; see [native verification traces](docs/native-verification.md).
+
 CI also exercises the packaged composite action and verifies both passing and
 failing coverage reports. No provider credential is needed for regression tests.
 The new repository's wiki is not initialized; operational documentation lives
