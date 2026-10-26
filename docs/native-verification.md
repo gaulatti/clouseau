@@ -56,8 +56,28 @@ successful and failed archive teardown. The temporary archive is still removed.
 
 Coverage keeps its original test selection, source include/exclude flags,
 100% line/branch thresholds, and `.clouseau-work/node.lcov` destination. Python
-commands, workflow tests, local recipe, CI policies and providers are unchanged.
+commands, workflow test selection, local recipe, CI permissions/gates and providers
+are unchanged.
 The coverage invocation uses only native spec and the existing LCOV reporter.
 Adding a third dot reporter produces a real Node22 listener warning, so live
 dots are deliberately avoided without suppressing warnings or changing limits.
 Compact successful reporting does not change the tests executed or any gate.
+
+## Hosted retention and cleanup
+
+The existing CI verification job uploads the complete per-run directory as
+`native-verification-RUN_ID-RUN_ATTEMPT`, even after a verification failure. Its
+event predicate is the same as the code checks, so metadata-only runs do not
+upload artifacts. A Python failure before Node starts may leave no Node trace;
+the uploader reports that honestly without replacing the original failure.
+
+After the hosted runner is discarded, download that run/attempt-specific artifact
+and use each relative `coverage-UNIQUE` or `archive-UNIQUE` directory to locate
+the original trace. Verify all manifest hashes. Keep a verified downloaded copy
+with the review evidence before hosted retention expires. The archived test step
+uses the same archive script and archived helper as local verification.
+
+Do not remove a local checkout's referenced trace directory during cleanup until
+the complete started/manifest/raw/spec files are archived and hash-verified.
+Record the original path and stable archive/artifact location together; a hash
+without the retained full bytes is insufficient evidence.
