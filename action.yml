@@ -120,7 +120,6 @@ runs:
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |
-        python3 -m unittest discover -s src -p 'test_*.py'
         node --test src/*.test.cjs
     - name: Enforce 100% line and branch coverage
       if: inputs.operation == 'coverage'
@@ -135,10 +134,10 @@ runs:
         if [[ -n "$COVERAGE_CONFIG" ]]; then
           test -z "$COVERAGE_REPORT"
           test -z "$SOURCE_DIRECTORY"
-          python3 "$CLOUSEAU_ROOT/src/coverage_plan.py" "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+          node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
         else
           test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-          python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+          node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
         fi
     - name: Verify local review or assess repository intent
       id: assess

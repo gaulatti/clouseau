@@ -404,7 +404,7 @@ test('partial native coverage and a real failing exact gate still reach both loc
     fs.writeFileSync(path.join(f.directory, 'coverage.json'), JSON.stringify(nativeFixture(f.directory, true)));
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input while preserving accepted input.');
     const extra = path.join(state, 'checks.json');
-    fs.writeFileSync(extra, JSON.stringify([['python3', path.join(__dirname, 'check_coverage.py'),
+    fs.writeFileSync(extra, JSON.stringify([[process.execPath, path.join(__dirname, '..', 'bin', 'coverage-gate.cjs'), 'check',
       path.join(f.directory, 'coverage.json'), path.join(f.directory, 'src'), 'istanbul']]));
     const ask = fakeHarness(); const roles = [];
     const result = await runReview({directory: f.directory, base: f.base, 'request-file': request, 'additional-checks': extra}, {

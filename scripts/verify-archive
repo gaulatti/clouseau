@@ -7,5 +7,4 @@ bundle="$(mktemp -d)"
 trap 'rm -rf "$bundle"' EXIT
 git archive HEAD | tar -x -C "$bundle"
 cd "$bundle"
-python3 -m unittest discover -s src -p 'test_*.py'
 node src/native-test-report.cjs archive "$trace_root" -- --test src/*.test.cjs
