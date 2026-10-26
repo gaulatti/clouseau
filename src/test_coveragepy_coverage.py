@@ -136,6 +136,98 @@ class CoveragePyGateTests(unittest.TestCase):
         (self.root / "README.md").write_text("Documentation\n")
         self.assertEqual(self.run_check()["lines"], [4, 4])
 
+    def test_real_native_extensionless_entrypoint_full_partial_and_missing_controls(self):
+        entrypoint = self.root / "launch"
+        entrypoint.write_text("#!/usr/bin/env python3\n" + SOURCE)
+        driver = ("import service, runpy; service.choose(True); service.choose(False); "
+                  "entry = runpy.run_path('launch'); entry['choose'](True)")
+        complete = native_report(self.root, driver + "; entry['choose'](False)")
+        self.assertIn("launch", complete["files"])
+        self.assertEqual(self.run_check(complete), {"lines": [8, 8], "branches": [4, 4]})
+        partial = native_report(self.root, driver)
+        self.assertEqual(counters(partial, self.root, "coveragepy"),
+                         {"lines": [8, 7], "branches": [4, 3]})
+        with self.assertRaisesRegex(ValueError, "1 uncovered"):
+            self.run_check(partial)
+        omitted = native_report(self.root)
+        self.assertNotIn("launch", omitted["files"])
+        with self.assertRaisesRegex(ValueError, "Missing application Python.*launch"):
+            self.run_check(omitted)
+
+    def test_direct_and_env_python_shebangs_are_statically_inventoried(self):
+        entrypoint = self.root / "launch"
+        for header in ("#!/usr/bin/python", "#!/opt/local/bin/python3", "#!/usr/bin/python3.13 -u",
+                       "#! /usr/bin/env python3", "#!/usr/bin/env -S python3 -u",
+                       "#!/usr/bin/env -S python3.13 -u\r", "#!/usr/bin/env /usr/bin/python3",
+                       "#!/usr/bin/env -S /opt/local/bin/python3.13 -u"):
+            entrypoint.write_text(header + "\n" + SOURCE)
+            with self.subTest(header=header):
+                self.assertIn(entrypoint.resolve(), source_inventory(self.root.resolve()))
+        # Inventory never executes the source, even if importing it would write.
+        marker = self.root.parent / "executed"
+        entrypoint.write_text("#!/usr/bin/env python3\nfrom pathlib import Path\n"
+                              f"Path({str(marker)!r}).touch()\n")
+        self.assertIn(entrypoint.resolve(), source_inventory(self.root.resolve()))
+        self.assertFalse(marker.exists())
+
+    def test_extensionless_nonpython_and_excluded_entrypoints_remain_outside_inventory(self):
+        for name, source in (("shell", "#!/bin/sh\necho ready\n"),
+                             ("env-shell", "#!/usr/bin/env bash\necho ready\n"),
+                             ("text", "application documentation\n"),
+                             ("binary", "\x00\xff\n"),
+                             ("large-binary", "x" * 10000),
+                             ("not-an-interpreter", "#!/usr/bin/python-helper\n"),
+                             ("tests/launch", "#!/usr/bin/env python3\ninvalid excluded source\n"),
+                             ("test_launch", "#!/usr/bin/python3\ninvalid excluded source\n"),
+                             (".venv/launch", "#!/usr/bin/python3\ninvalid dependency\n")):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(source.encode("latin1"))
+        self.assertEqual(self.run_check()["lines"], [4, 4])
+
+    def test_dependency_and_test_symlink_directories_are_not_inspected(self):
+        external = self.root.parent / "external"
+        external.mkdir()
+        (external / "launch").write_text("#!/usr/bin/env python3\ninvalid outside source\n")
+        for name in ("node_modules", "venv", ".venv", "test", "tests"):
+            link = self.root / name
+            link.symlink_to(external, target_is_directory=True)
+            with self.subTest(name=name):
+                self.assertEqual(self.run_check()["lines"], [4, 4])
+            link.unlink()
+
+    def test_extensionless_candidates_retain_syntax_pragma_and_shebang_validation(self):
+        entrypoint = self.root / "launch"
+        for header in ("#!", "#!/usr/bin/env", "#!/usr/bin/env -S", "#!python3",
+                       "#!env python3", '#!/usr/bin/env -S "python3',
+                       "#!/usr/bin/env -u VALUE python3", "#!/usr/bin/env ./python3"):
+            entrypoint.write_text(header + "\n" + SOURCE)
+            with self.subTest(header=header), self.assertRaisesRegex(ValueError, "shebang"):
+                source_inventory(self.root.resolve())
+        entrypoint.write_text("#!/usr/bin/python3 " + "x" * 4096 + "\n" + SOURCE)
+        with self.assertRaisesRegex(ValueError, "Overlong application shebang"):
+            source_inventory(self.root.resolve())
+        entrypoint.write_bytes(b"#!/usr/bin/env python3 \xff\n" + SOURCE.encode())
+        with self.assertRaisesRegex(ValueError, "Malformed application shebang"):
+            source_inventory(self.root.resolve())
+        entrypoint.write_text("#!/usr/bin/env python3\ndef invalid(:\n")
+        with self.assertRaisesRegex(ValueError, "Invalid Python application source"):
+            source_inventory(self.root.resolve())
+        entrypoint.write_text("#!/usr/bin/python3\n" + SOURCE + "# pragma: no branch\n")
+        with self.assertRaisesRegex(ValueError, "ignore directives"):
+            source_inventory(self.root.resolve())
+
+    def test_extensionless_symbolic_sources_are_rejected_before_reading_targets(self):
+        external = self.root.parent / "outside"
+        external.write_text("#!/usr/bin/env python3\n" + SOURCE)
+        for target in (external, self.root / "service.py", self.root.parent / "missing"):
+            link = self.root / "launch"
+            link.symlink_to(target)
+            with patch.object(Path, "open", side_effect=AssertionError("must not read target")), \
+                    self.subTest(target=target), self.assertRaisesRegex(ValueError, "Symbolic or escaped"):
+                source_inventory(self.root.resolve())
+            link.unlink()
+
     def test_absolute_and_cwd_relative_native_paths_resolve_without_substitution(self):
         absolute = {str(self.root / name): entry for name, entry in self.report["files"].items()}
         self.assertEqual(self.run_check({**self.report, "files": absolute})["branches"], [2, 2])
