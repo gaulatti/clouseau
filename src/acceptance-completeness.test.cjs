@@ -332,20 +332,12 @@ test('a dismissed claim stays dismissed and unsupported reopening metadata fails
 });
 
 
-test('product obligations keep their history identity and legacy closures without evidence cannot be reopened', () => {
-  const f = complete();
-  f.report.units[0].fit.outcome.min = 0; f.report.units[0].fit.outcome.max = 0;
-  let state = reconcile(result(f), f.snapshot);
-  assert.equal(state.findings[0].kind, 'product');
-  assert.equal(state.findings[0].basis.length, 1);
-  f.report.units[0].id = state.findings[0].id;
-  f.report.accounting[0].units = [state.findings[0].id];
-  assert.equal(reconcile(result(f), f.snapshot, state.findings).findings[0].id, state.findings[0].id);
+test('legacy closures without evidence cannot be reopened', () => {
   const g = complete(); g.report.findings = [finding()];
   const prior = reconcile(result(g), g.snapshot).findings;
   prior[0].blocking = false; prior[0].state = 'dismissed'; delete prior[0].basis;
   g.report.findings[0].id = prior[0].id; g.snapshot.prior_findings = prior;
-  state = reconcile(result(g), g.snapshot, prior);
+  let state = reconcile(result(g), g.snapshot, prior);
   assert.deepEqual(state.unresolved, [prior[0].id]);
   prior[0].basis = ['different'];
   g.report.reopenings = [{id: prior[0].id, reason: 'A changed source now supports the claim.', evidence: ['source']}];
@@ -381,7 +373,7 @@ test('an optional repetition cannot erase a closure and bypass the next revision
     const closed = reconcile(result(f), f.snapshot, original).findings;
     f.snapshot.prior_findings = closed; f.report.resolutions = [];
     f.report.findings = [{...finding(), id: original[0].id}];
-    for (const factor of Object.values(f.report.findings[0].factors)) Object.assign(factor, {min: 0, max: 0});
+    for (const factor of Object.values(f.report.findings[0].factors)) factor.value = 0;
     const optional = reconcile(result(f), f.snapshot, closed).findings;
     assert.deepEqual(optional, closed, 'optional observations retain the accepted closure and evidence');
     f.snapshot.prior_findings = optional;

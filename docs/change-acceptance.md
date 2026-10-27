@@ -39,7 +39,7 @@ still receive their own scope, factual and proportionality assessment.
 | Fit, F | 35 outcome + 25 workflow + 20 domain + 10 component boundary + 10 operating model |
 | Need, N | 100 × max(binding obligation, evidence × (.50 value + .30 unmetness + .20 timeliness)) |
 | Proportionality, P | 100 × (1 − greatest demonstrated excess) |
-| Acceptance, J | min(F, N, P), requiring at least 80 for every material unit |
+| Acceptance, J | min(F, N, P); informational, it never decides approval |
 
 Excess covers abstraction, added surface, duplicated authority, dependencies,
 collateral changes and generalization beyond the demonstrated need. Every excess
@@ -156,8 +156,11 @@ failures and replacing the production behavior under test block approval.
 Missing verification is an evidence gap rather than proof of deception. Ordinary
 mocks at real dependency boundaries remain legitimate.
 
-Unknown conditions retain ranges. A range crossing a policy threshold requires
-investigation. The source reader accepts at most eight paths per request, two
+Every factor is one number from 0 to 1. A condition the evidence cannot
+establish counts as level0 (0). A finding's formula output is its single score;
+a score of 70 or more must be fixed and anything lower is advisory. The review
+is approved when no finding reaches 70 and no gate is violated or unresolved.
+The source reader accepts at most eight paths per request, two
 additional source rounds per inspection and two complete examination cycles.
 New source invalidates earlier incomplete context. A role revisits its own draft
 without seeing the other role's findings; an earlier causal concern must be

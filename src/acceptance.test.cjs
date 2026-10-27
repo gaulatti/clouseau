@@ -16,21 +16,17 @@ test('accepted maintenance has a complete, source-bound product justification', 
   assert.equal(validateReport(report, snapshot).decision, 'auto_approve');
 });
 
-test('product scores cannot average away unnecessary implementation or unsupported capabilities', () => {
+test('unit scores are computed from point factors and are informational only', () => {
   const {report, snapshot} = fixture();
   report.units[0].excess.abstraction = factor(0.5);
   report.units[0].alternative = 'Call the existing validator directly; no plugin framework is needed.';
-  assert.equal(validateReport(report, snapshot).units[0].min.acceptance, 50);
-  assert.equal(validateReport(report, snapshot).decision, 'repair_required');
-  report.units[0].excess.abstraction = factor(0, 0.5);
-  assert.equal(validateReport(report, snapshot).decision, 'review_incomplete');
+  assert.equal(validateReport(report, snapshot).units[0].acceptance, 50);
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'only findings and gates decide approval');
   report.units[0].excess.abstraction = factor(0);
   const need = report.units[0].need;
   need.binding = factor(0); need.value = factor(0.5); need.unmetness = factor(0.5); need.timeliness = factor(0);
-  assert.equal(productScore(report.units[0], 'min').need, 40);
-  assert.equal(validateReport(report, snapshot).decision, 'repair_required');
-  need.binding = factor(0.5, 1, ['contract']);
-  assert.equal(validateReport(report, snapshot).decision, 'review_incomplete');
+  assert.equal(productScore(report.units[0]).need, 40);
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve');
 });
 
 test('purpose exclusions and owner authority are never compensated by product scores', () => {
@@ -53,11 +49,11 @@ test('purpose exclusions and owner authority are never compensated by product sc
 
 test('missing narrower alternatives hold approval without erasing an independent integrity veto', () => {
   const {report, snapshot} = fixture();
-  for (const [min, max] of [[0, 1], [0.25, 0.25], [1, 1]]) {
-    report.units[0].excess.abstraction = factor(min, max);
+  for (const value of [0.25, 1]) {
+    report.units[0].excess.abstraction = factor(value);
     const scored = validateReport(report, snapshot);
     assert.equal(scored.decision, 'review_incomplete');
-    assert.equal(scored.units[0].min.proportionality, 100 * (1 - max));
+    assert.equal(scored.units[0].proportionality, 100 * (1 - value));
     report.gates.find(gate => gate.name === 'test_integrity').state = 'violated';
     assert.equal(validateReport(report, snapshot).decision, 'blocked_integrity');
     report.gates.find(gate => gate.name === 'test_integrity').state = 'satisfied';
@@ -85,23 +81,23 @@ test('the nine-factor defect score preserves necessity and all five consequence 
   const item = finding();
   item.factors.necessity = factor(0.5); item.factors.severity = factor(0.5);
   item.factors.reach = factor(0.5); item.factors.propagation = factor(0.5);
-  assert.equal(findingScore(item, 'min'), 90);
+  assert.equal(findingScore(item), 90);
   item.factors.activation = factor(0);
-  assert.equal(findingScore(item, 'min'), 50, 'inactive consequences cannot cancel an established obligation');
+  assert.equal(findingScore(item), 50, 'inactive consequences cannot cancel an established obligation');
   item.factors.necessity = factor(0.7);
-  assert.equal(findingScore(item, 'min'), RULES.defect_threshold);
-  item.factors.confidence = factor(0.5, 1);
-  assert.equal(findingScore(item, 'min'), 35);
+  assert.equal(findingScore(item), RULES.defect_threshold);
+  item.factors.confidence = factor(0.5);
+  assert.equal(findingScore(item), 35);
 });
 
-test('a potentially blocking finding with uncertain evidence remains incomplete', () => {
+test('a finding blocks only when its single score reaches the threshold', () => {
   const {report, snapshot} = fixture();
   const item = finding(); report.findings.push(item);
   assert.equal(validateReport(report, snapshot).decision, 'repair_required');
-  item.factors.confidence = factor(0.5, 1);
-  let result = validateReport(report, snapshot);
-  assert.equal(result.decision, 'review_incomplete');
-  assert.deepEqual([result.findings[0].min, result.findings[0].max], [50, 100]);
+  item.factors.confidence = factor(0.5);
+  const result = validateReport(report, snapshot);
+  assert.equal(result.decision, 'auto_approve');
+  assert.equal(result.findings[0].score, 50);
   item.factors.confidence = factor(1); item.factors.activation = factor(0); item.factors.necessity = factor(0.5);
   assert.equal(validateReport(report, snapshot).decision, 'auto_approve');
   assert.equal(validateReport(report, snapshot).findings[0].disposition, 'nonblocking');
@@ -160,8 +156,8 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
     r => {r.evidence[0].quote = 'not in source';}, r => {r.evidence[0].quote = ' ';},
     r => {r.units = [];}, r => {r.units.push(r.units[0]);}, r => {r.units[0].kind = 'anything';},
     r => {r.units[0].paths = [];}, r => {r.units[0].paths = ['outside.rs'];},
-    r => {r.units[0].fit.domain.min = -1;}, r => {r.units[0].fit.domain.max = 2;},
-    r => {r.units[0].fit.domain.min = 1.1;}, r => {r.units[0].fit.domain.min = NaN;},
+    r => {r.units[0].fit.domain.value = -1;}, r => {r.units[0].fit.domain.value = 2;},
+    r => {r.units[0].fit.domain.value = 1.1;}, r => {r.units[0].fit.domain.value = NaN;},
     r => {r.units[0].fit.domain.evidence = [];}, r => {r.units[0].fit.domain.evidence = ['unknown'];},
     r => {r.units[0].fit.domain.evidence = ['source', 'source'];}, r => {r.units[0].fit.domain.reason = '';},
     r => {r.units[0].need.binding.evidence = ['source'];}, r => {r.units[0].alternative = null;},
@@ -169,7 +165,6 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
     r => {r.findings = [finding(), finding()];}, r => {r.findings = [{...finding(), path: 'outside.rs'}];},
     r => {r.findings = [{...finding(), trigger: ''}];}, r => {r.findings = [{...finding(), blast_radius: 0}];},
     r => {r.findings = [{...finding(), evidence: ['contract']}];},
-    r => {const item = finding(); item.factors.confidence = factor(0.6); r.findings = [item];},
     r => {r.findings = [{...finding(), blast_radius: Infinity}];},
     r => {r.findings = [{...finding(), opportunity: {mechanical: 1, beneficial: true, within_scope: true, verified: true}}];},
     r => {r.findings = [{...finding(), repair_paths: []}];}, r => {r.findings = [{...finding(), repair_paths: ['elsewhere.rs']}];},

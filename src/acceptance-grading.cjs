@@ -46,7 +46,7 @@ function packetFor(location, report, snapshot) {
 
 function applyCompleteness(report, entries) {
   const audit = entries.find(item => item.id === 'review_completeness');
-  if (!audit || audit.target.min === 1 && audit.target.max === 1) return;
+  if (!audit || audit.target.value === 1) return;
   const gate = report.gates.find(item => item.name === 'review_completeness');
   if (gate.state === 'satisfied') {
     gate.state = 'unresolved';
@@ -54,20 +54,21 @@ function applyCompleteness(report, entries) {
   }
 }
 
-function bounds(answer) {
+// A factor's value is the established level. A condition the evidence cannot
+// establish counts as level0; only an unresolved provider distribution is
+// ambiguous, which routes the factor to the reasoning grader.
+function grade(answer) {
   if (typeof answer === 'string') {
-    if (answer === 'unknown') return {min: 0, max: 1};
+    if (answer === 'unknown') return {value: 0, ambiguous: false};
     if (!/^level[0-4]$/.test(answer)) throw new Error('Invalid semantic rubric answer');
-    const value = Number(answer.at(-1)) / 4;
-    return {min: value, max: value};
+    return {value: Number(answer.at(-1)) / 4, ambiguous: false};
   }
-  // Provider confidence expresses a distribution, never a proof. Preserve a
-  // broad interval whenever the atomic judgment itself is unresolved.
-  if (answer.choice === 'unknown' || answer.confidence < 0.91 || answer.probabilities.unknown >= 0.05) return {min: 0, max: 1};
+  // Provider confidence expresses a distribution, never a proof.
+  if (answer.choice === 'unknown' || answer.confidence < 0.91 || answer.probabilities.unknown >= 0.05) return {value: 0, ambiguous: true};
   const levels = Object.entries(answer.probabilities).filter(([key, probability]) => key !== 'unknown' && probability >= 0.025)
     .map(([key]) => Number(key.at(-1)) / 4);
   if (!levels.length) throw new Error('Jev distribution has no supported semantic level');
-  return {min: Math.min(...levels), max: Math.max(...levels)};
+  return {value: Math.min(...levels), ambiguous: levels.length > 1};
 }
 
 function authorityBounds(report, snapshot) {
@@ -81,9 +82,9 @@ function authorityBounds(report, snapshot) {
     });
     if (trusted) continue;
     const explanation = 'The cited evidence has no trusted contract authority. Investigator observation: ';
-    Object.assign(entry.target, {min: 0, max: 0,
+    Object.assign(entry.target, {value: 0,
       reason: entry.target.reason.startsWith(explanation) ? entry.target.reason : explanation + entry.target.reason});
-    decisions.push({id: entry.id, provider: 'controller', answer: 'no_trusted_contract_citation', range: {min: 0, max: 0}});
+    decisions.push({id: entry.id, provider: 'controller', answer: 'no_trusted_contract_citation', value: 0});
   }
   return decisions;
 }
@@ -129,11 +130,10 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
       transport: {raw: completion.raw, canonical: completion.canonical}});
     if (!answers || Object.keys(answers).sort().join('\0') !== batch.map(item => item.id).sort().join('\0')) throw new Error('Incomplete atomic factor grades');
     for (const item of batch) {
-      const value = bounds(answers[item.id]);
-      decisions.push({id: item.id, provider: selected, answer: answers[item.id], range: {...value}});
-      if (selected === 'typesafe' && value.min !== value.max) {pending.push(item); continue;}
-      if (item.group === 'defect' && item.name === 'confidence' && value.max > 0) value.max = 1;
-      Object.assign(item.target, value);
+      const {value, ambiguous} = grade(answers[item.id]);
+      decisions.push({id: item.id, provider: selected, answer: answers[item.id], value});
+      if (selected === 'typesafe' && ambiguous) {pending.push(item); continue;}
+      item.target.value = value;
     }
     usage.push(...completion.usage);
   };
@@ -150,4 +150,4 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
   return {report: graded, usage, grading: {provider, escalated: pending.map(item => item.id), decisions}};
 }
 
-module.exports = {JEV_FACTORS, locations, packetFor, bounds, authorityBounds, applyCompleteness, gradeReport};
+module.exports = {JEV_FACTORS, locations, packetFor, grade, authorityBounds, applyCompleteness, gradeReport};

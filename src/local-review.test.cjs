@@ -186,7 +186,7 @@ test('the larger batch allowance still rejects cumulative oversized evidence bef
   assert.equal(reads, 4); assert.equal(grading, 0);
 });
 
-test('missing atomic grades stop local acceptance and uncertainty preserves an incomplete verdict', async () => {
+test('missing atomic grades stop local acceptance and an unestablished condition counts as level0', async () => {
   for (const answers of [null, {}]) {
     const f = await fixture();
     await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => task.phase === 'grading' ?
@@ -198,7 +198,7 @@ test('missing atomic grades stop local acceptance and uncertainty preserves an i
     if (task.phase === 'grading') response.value.answers[Object.keys(response.value.answers)[0]] = 'unknown';
     return response;
   }});
-  assert.equal(result.decision, 'review_incomplete');
+  assert.ok(result.reviews[0].grading.decisions.some(entry => entry.answer === 'unknown' && entry.value === 0));
 });
 
 test('local grading cannot turn untrusted requirement evidence into contract authority', async () => {
@@ -209,7 +209,7 @@ test('local grading cannot turn untrusted requirement evidence into contract aut
     return response;
   }});
   assert.equal(result.decision, 'auto_approve');
-  assert.equal(result.reviews[0].report.units[0].need.binding.max, 0);
+  assert.equal(result.reviews[0].report.units[0].need.binding.value, 0);
   assert.ok(result.reviews[0].grading.decisions.some(entry => entry.provider === 'controller'));
 });
 

@@ -461,8 +461,8 @@ test('deleted, altered or revoked purpose evidence holds approval before any pub
   });
 });
 
-test('a citable owner purpose receipt cannot waive low product scores or an integrity veto', async () => {
-  for (const failure of ['need', 'integrity']) await fixture(async f => {
+test('a citable owner purpose receipt cannot waive an integrity veto', async () => {
+  for (const failure of ['integrity']) await fixture(async f => {
     f.state.comments.push({id: 51, user: {login: 'gaulatti', type: 'User'},
       body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\nPreserve durable upload acceptance.`});
     if (failure === 'integrity') f.state.alter = report => {report.gates.find(item => item.name === 'test_integrity').state = 'violated';};
@@ -474,7 +474,7 @@ test('a citable owner purpose receipt cannot waive low product scores or an inte
         Object.fromEntries(Object.keys(questions).map(id => [id,
           id.includes('_need_') || id.includes('_excess_') ? 'level0' : 'level4']))})}}]})};
     }});
-    assert.equal(assessment.decision, failure === 'need' ? 'repair_required' : 'blocked_integrity');
+    assert.equal(assessment.decision, 'blocked_integrity');
     assert.ok(JSON.parse(fs.readFileSync(f.recordPath)).snapshot.intent_confirmation);
     await assert.rejects(f.gate(assessment), /cannot waive/);
     assert.equal(f.state.writes.some(item => item.name === 'approve'), false);
@@ -553,7 +553,7 @@ test('incomplete grading retains exact replay inputs and still cannot approve or
   const snapshot = trace.snapshots[graded.snapshot];
   assert.equal(response.value.answers.u0_excess_abstraction, 'level1');
   assert.equal(response.packet.state.factors.u0_excess_abstraction.context.narrower_alternative, '');
-  assert.equal(graded.report.units[0].excess.abstraction.min, 0.25);
+  assert.equal(graded.report.units[0].excess.abstraction.value, 0.25);
   assert.equal(snapshot.digest, graded.report.snapshot);
   assert.equal(require('./acceptance.cjs').validateReport(graded.report, snapshot).decision,
     'review_incomplete', 'the retained inputs reproduce the exact hold without calling a provider');

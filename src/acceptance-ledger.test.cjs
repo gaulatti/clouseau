@@ -74,17 +74,17 @@ test('one reviewer blocker stays visible once with its evidence even when the ot
   assert.doesNotMatch(visible, /Owner decision required|\*\*Optional:/);
 });
 
-test('uncertain findings, optional benefits and missing integrity evidence remain distinct', () => {
+test('sub-threshold findings, optional benefits and missing integrity evidence remain distinct', () => {
   const {result, snapshot} = setup();
   for (const review of result.reviews) {
-    review.report.findings[0].factors.necessity = factor(0.25, 1);
+    review.report.findings[0].factors.necessity = factor(0.25);
     review.report.findings[0].factors.activation = factor(0);
     review.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
   }
   let visible = grade(result, snapshot);
   assert.match(visible, /Review incomplete/);
-  assert.match(visible, /\*\*Investigate:/);
-  assert.match(visible, /25.00–100.00/);
+  assert.match(visible, /\*\*Optional:/);
+  assert.match(visible, /\*\*Score:\*\* 25.00 \/ 100/);
   assert.match(visible, /Check requiring attention — review completeness/);
   assert.doesNotMatch(visible, /Owner decision required/);
   for (const verified of [false, true]) {
@@ -101,14 +101,10 @@ test('uncertain findings, optional benefits and missing integrity evidence remai
   }
 });
 
-test('product rework, owner choices and test integrity vetoes have actionable separate summaries', () => {
+test('owner choices and test integrity vetoes have actionable separate summaries', () => {
   const {result, snapshot} = setup(false);
-  for (const review of result.reviews) review.report.units[0].fit.outcome = factor(0);
-  let visible = grade(result, snapshot);
-  assert.match(visible, /Change requiring attention: Validate before acceptance/);
-  assert.match(visible, /65.00 \/ 100/);
+  let visible;
   for (const review of result.reviews) {
-    review.report.units[0].fit.outcome = factor(1);
     review.report.decisions = [{kind: 'authority', question: 'May uploads grant a new privilege?',
       options: ['Keep existing privileges', 'Authorize the new privilege'], evidence: ['source']}];
   }
@@ -147,7 +143,7 @@ test('rendered acceptance records expose every factor and preserve exact decisio
   for (const name of ['confidence', 'recurrence', 'generalization', 'binding', 'operating_model']) assert.ok(body.includes(name));
   assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
   assert.equal(clean('<script>@name|`\nline'), '&lt;script&gt;name&#124;&#96; line');
-  assert.equal(score(12.345, 12.345), '12.35'); assert.equal(score(12, 13), '12.00–13.00');
+  assert.equal(score(12.345), '12.35'); assert.equal(score(12), '12.00');
   assert.equal(state.findings.length, 1, 'identical causal roots from independent roles share one history identity');
   assert.equal(state.findings[0].state, 'confirmed');
   const parsed = priorState([{id: 4, user: {login: 'github-actions[bot]'}, body}], snapshot.repository, snapshot.number);
@@ -173,6 +169,7 @@ test('a disappeared or merely downgraded prior blocker remains outstanding witho
   for (const review of empty.reviews) review.report.resolutions = [{id: previous[0].id, state: 'corrected', reason: 'The current source restores rejection.', evidence: ['source']}];
   let state = reconcile(empty, snapshot, previous);
   assert.equal(state.findings[0].state, 'corrected'); assert.equal(state.findings[0].blocking, false);
+  assert.match(render(empty, snapshot, state), /Disposition .*\*\*corrected\*\* — The current source restores rejection/);
   empty.reviews[1].report.resolutions[0].state = 'dismissed';
   assert.equal(reconcile(empty, snapshot, previous).findings[0].state, 'dismissed');
 });
@@ -185,8 +182,8 @@ test('one independent blocker survives and an optional declined observation crea
   assert.equal(reconcile(result, snapshot, old).findings[0].blocking, true);
   result.reviews[0].scores.findings[0].disposition = 'nonblocking';
   assert.equal(reconcile(result, snapshot).findings[0].blocking, true);
-  result.reviews[1].scores.findings[0].disposition = 'investigate';
-  assert.equal(reconcile(result, snapshot).findings[0].state, 'investigating');
+  result.reviews[1].scores.findings[0].disposition = 'nonblocking';
+  assert.equal(reconcile(result, snapshot).findings[0].blocking, false);
   const advisory = {...old[0], blocking: false, state: 'advisory_closed'};
   const empty = setup(false).result;
   assert.equal(reconcile(empty, snapshot, [advisory]).unresolved.length, 0);
@@ -286,32 +283,3 @@ test('overlapping citations from both roles retain all source lines and referenc
   assert.deepEqual(restored.findings, state.findings, 'persistent blocker history survives the compact display');
 });
 
-test('a product rejection persists across renamed or disappeared acceptance units and cannot impersonate a technical root', () => {
-  const {result, snapshot} = setup(false);
-  for (const review of result.reviews) {
-    review.report.units[0].fit.outcome = factor(0);
-    review.scores = validateReport(review.report, snapshot);
-  }
-  const previous = reconcile(result, snapshot).findings;
-  assert.equal(previous.length, 1); assert.equal(previous[0].kind, 'product');
-  const accepted = setup(false).result;
-  let state = reconcile(accepted, snapshot, previous);
-  assert.deepEqual(state.unresolved, [previous[0].id]);
-  for (const review of accepted.reviews) review.report.resolutions = [{id: previous[0].id, state: 'dismissed', reason: 'The concrete change serves the cited obligation.', evidence: ['source']}];
-  state = reconcile(accepted, snapshot, previous);
-  assert.equal(state.findings[0].state, 'dismissed');
-  assert.match(render(accepted, snapshot, state), /The concrete change serves/);
-  for (const review of result.reviews) {
-    review.report.units[0].id = previous[0].id; review.report.accounting[0].units = [previous[0].id];
-    review.scores = validateReport(review.report, snapshot);
-  }
-  assert.equal(reconcile(result, snapshot, previous).findings[0].id, previous[0].id);
-  const technical = setup().result;
-  for (const review of technical.reviews) review.report.findings[0].id = previous[0].id;
-  assert.equal(reconcile(technical, snapshot, previous).findings.length, 2, 'a technical claim cannot overwrite a product root by borrowing its identifier');
-  const technicalRoot = reconcile(setup().result, snapshot).findings[0];
-  for (const review of result.reviews) {review.report.units[0].id = technicalRoot.id; review.report.accounting[0].units = [technicalRoot.id];}
-  assert.equal(reconcile(result, snapshot, [technicalRoot]).findings.length, 2, 'a product unit cannot impersonate a prior technical defect');
-  for (const review of result.reviews) {review.report.units[0].fit.outcome = factor(0, 1); review.scores = validateReport(review.report, snapshot);}
-  assert.equal(reconcile(result, snapshot).findings[0].state, 'investigating');
-});

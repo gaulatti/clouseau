@@ -37,7 +37,7 @@ Preference, file count, helper count and fewer lines alone establish no excess.
 The controller computes fit = 35*outcome + 25*workflow + 20*domain + 10*boundary +
 10*operating_model; need = 100*max(binding, evidence*(.5*value+.3*unmetness+
 .2*timeliness)); proportionality = 100*(1-max(excess)); acceptance is their minimum.
-Each material unit needs acceptance >=80. Do not average across capabilities.
+Unit scores are informational and never decide approval. Only findings (score >=70 blocks), gates and owner decisions do.
 An accepted contract violation, explicit requirement or mandatory coverage policy
 can establish necessity without a new ticket. Binding obligations must cite
 trusted contract evidence, never the PR's own assertions.
@@ -92,7 +92,7 @@ Each immutable citation or changed-source anchor selects at most 40 inclusive
 lines. Cite the specific relevant verification steps instead of a whole receipt.
 The controller partitions longer valid intervals without dropping cited lines
 or references; it never changes a judgment or retries a completed answer to do so.
-Invalid ranges stop the assessment; they are never trimmed or resampled to pass.
+Invalid factor values stop the assessment; they are never trimmed or resampled to pass.
 A positive graded binding claim requires trusted contract proof. Before grading,
 an investigator's observation that no binding obligation is established can cite
 the actual source without inventing authority. Fact validation never produces an
@@ -106,11 +106,11 @@ generates their register, bounded coordinates and literal text; do not invent
 source bookkeeping. The atomic grader receives this same trusted policy so that
 supporting-work justification is assessed consistently across stages.
 
-Every numeric input has an explanation and immutable citations. Unknowns produce
-ranges. Partial causal evidence must retain confidence.max=1: low confidence
-cannot hide a potentially blocking finding. confidence.max=0 requires decisive
-counterevidence disproving it. Complete source proofs and reproductions can
-establish confidence=1; model agreement and eloquence cannot.
+Every numeric input is a single value from 0 to 1 with an explanation and
+immutable citations. A condition the evidence cannot establish is 0. Partial
+causal evidence lowers confidence proportionally, so a finding's one score
+reflects it. Complete source proofs and reproductions can establish confidence=1;
+model agreement and eloquence cannot.
 Possible excess without a narrower alternative holds review incomplete. It can
 never permit approval or erase an independently established integrity veto.
 The controller may remove trailing JSON commas outside strings, preserving every
