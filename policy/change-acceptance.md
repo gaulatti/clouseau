@@ -17,44 +17,19 @@ Keep material engineering choices separate. Documentation that introduces a new
 promise or unrelated subject requires its own scope and factual assessment.
 Every supporting artifact still needs direct source accounting, factual accuracy
 and proportionality review. Large test changes do not imply product drift.
-An internal mechanism alone is not a new product direction. When the accepted
-outcome is clear, remedy unnecessary machinery within that outcome. When the PR
-requests an unaccepted product outcome, ask one concrete purpose/authority
-question rather than silently removing the requested outcome as a repair.
-Use kind `capability` for a user-observable outcome and `mechanism` for machinery
-serving it. A purpose question is eligible only when a capability's evidence-
-graded fit is below the acceptance boundary. It cannot turn an internal
-implementation preference into an owner decision. Distinct privilege or outcome
-tradeoffs still require their own concrete authority or tradeoff evidence.
-
-Fit: outcome, workflow, domain, component boundary, operating model.
-Need: binding obligation, evidence of need, outcome value, unmetness, timeliness.
-Excess: speculative abstraction, unnecessary surface, duplicated authority,
-avoidable dependencies, collateral expansion, generalization beyond the need.
-Excess must cite a feasible narrower alternative preserving the same guarantees.
-Preference, file count, helper count and fewer lines alone establish no excess.
-
-The controller computes fit = 35*outcome + 25*workflow + 20*domain + 10*boundary +
-10*operating_model; need = 100*max(binding, evidence*(.5*value+.3*unmetness+
-.2*timeliness)); proportionality = 100*(1-max(excess)); acceptance is their minimum.
-Unit scores are informational and never decide approval. Only findings (score >=70 blocks), gates and owner decisions do.
-An accepted contract violation, explicit requirement or mandatory coverage policy
-can establish necessity without a new ticket. Binding obligations must cite
-trusted contract evidence, never the PR's own assertions.
-
-Binding authority is checked by the controller before semantic grading. When a
-binding observation cites no source marked both trusted and contract, its binding
-credit is exactly zero and no model is asked to manufacture authority. Explicit
-requests, source defects and verification evidence can still establish need
-through the separate evidence/value/unmetness/timeliness formula. This does not
-raise any grade or relax the final trusted-proof check.
+Group the change into acceptance units so every changed file is accounted for:
+kind `capability` for a user-observable outcome and `mechanism` for machinery
+serving it. Units carry no scores and never decide approval. Unrequested or
+over-built code is reported as a finding only when it causes a distinct runtime,
+data, security, compatibility or verification failure. Only findings scoring
+at least 70 and violated gates stop approval.
 
 An authenticated exact-revision intent comment from the configured human owner
 is trusted evidence that the proposed purpose is accepted. The controller checks
 the actor's current repository permission and includes the literal confirmation
 in the immutable contract proof catalog; the write gate revalidates it. Reuse
-this accepted purpose when assessing fit and need. It establishes no numeric
-grade and does not make every supporting mechanism necessary or proportionate.
+this accepted purpose when judging whether a concern is a real defect. It
+establishes no numeric grade.
 The PR description, changed source and issue text retain their existing authority.
 Intent is never evidence of implementation correctness, test integrity or the
 absence of a technical defect, and cannot waive any review or execution gate.
@@ -76,10 +51,8 @@ Admit a finding only with changed/newly enabled cause, feasible trigger, affecte
 obligation, consequence and exact source evidence. Keywords only nominate a
 trace. Pre-existing debt is separate unless activated, widened or relied upon.
 Close false allegations with counterevidence rather than inventing work.
-Purpose fit and unnecessary machinery belong in the product units and scope
-gate. Do not duplicate them as technical findings without a distinct runtime,
-data, security, compatibility or verification consequence. An owner product
-decision must not acquire a fictitious technical veto.
+Purpose fit and unnecessary machinery are not technical findings without a
+distinct runtime, data, security, compatibility or verification consequence.
 
 Finding factors: intrinsic repair necessity, causal evidence strength, immediate
 severity, activation, lasting irreversibility, direct reach, difficulty detecting
@@ -111,8 +84,7 @@ immutable citations. A condition the evidence cannot establish is 0. Partial
 causal evidence lowers confidence proportionally, so a finding's one score
 reflects it. Complete source proofs and reproductions can establish confidence=1;
 model agreement and eloquence cannot.
-Possible excess without a narrower alternative holds review incomplete. It can
-never permit approval or erase an independently established integrity veto.
+An independently established integrity veto is never erased.
 The controller may remove trailing JSON commas outside strings, preserving every
 value and raw response. Other malformed data stops review with replay evidence;
 it never causes a model retry or changes a judgment.
