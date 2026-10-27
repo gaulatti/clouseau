@@ -100,7 +100,7 @@ jobs:
         if: *verify-code
         with:
           python-version: '3.13'
-      - name: Install coverage tooling
+      - name: Install coverage.py for the real-report integration test
         if: *verify-code
         run: python3 -m pip install -r requirements-test.txt
       - name: Enforce 100% line and branch coverage
@@ -122,36 +122,35 @@ jobs:
           npm test --prefix .github/tests
       - name: Build coverage contract fixtures
         if: *verify-code
-        shell: python
+        shell: bash
         run: |
-          import json
-          from pathlib import Path
-          source = Path('work/application/main.rs').resolve()
-          source.parent.mkdir(parents=True, exist_ok=True)
-          source.write_text('fn main() {}\n')
-          for name, covered in [('full', 2), ('gap', 1)]:
-              report = {'type': 'llvm.coverage.json.export', 'data': [{'files': [{
-                  'filename': str(source), 'summary': {
-                      'lines': {'count': 2, 'covered': 2},
-                      'branches': {'count': 2, 'covered': covered}}}]}]}
-              Path(f'work/{name}.json').write_text(json.dumps(report))
-          parts = []
-          for name, branched in [('backend-js', True), ('frontend-js', False)]:
-              source = Path(f'work/{name}/main.js').resolve()
-              source.parent.mkdir(parents=True, exist_ok=True)
-              source.write_text('module.exports = value => value ? 1 : 0;\n' if branched else 'module.exports = 1;\n')
-              report = {str(source): {'path': str(source),
-                  'statementMap': {'0': {'start': {'line': 1}}}, 's': {'0': 1},
-                  'branchMap': {'0': {'locations': [{}, {}]}} if branched else {},
-                  'b': {'0': [1, 1]} if branched else {}}}
-              Path(f'work/{name}.json').write_text(json.dumps(report))
-              parts.append({'format': 'istanbul', 'report': f'work/{name}.json', 'source_directory': f'work/{name}'})
-          Path('work/multi-full.json').write_text(json.dumps({'version': 2, 'coverage': parts}))
-          branched = json.loads(Path('work/backend-js.json').read_text())
-          next(iter(branched.values()))['b']['0'][1] = 0
-          Path('work/backend-js-gap.json').write_text(json.dumps(branched))
-          parts[0] = {**parts[0], 'report': 'work/backend-js-gap.json'}
-          Path('work/multi-gap.json').write_text(json.dumps({'version': 2, 'coverage': parts}))
+          node <<'FIXTURES'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const write = (name, value) => fs.writeFileSync(path.join('work', name), JSON.stringify(value));
+          const source = path.resolve('work/application/main.rs');
+          fs.mkdirSync(path.dirname(source), {recursive: true});
+          fs.writeFileSync(source, 'fn main() {}\n');
+          for (const [name, covered] of [['full', 2], ['gap', 1]]) {
+            write(`${name}.json`, {type: 'llvm.coverage.json.export', data: [{files: [{filename: source, summary: {
+              lines: {count: 2, covered: 2}, branches: {count: 2, covered}}}]}]});
+          }
+          const parts = [];
+          for (const [name, branched] of [['backend-js', true], ['frontend-js', false]]) {
+            const file = path.resolve(`work/${name}/main.js`);
+            fs.mkdirSync(path.dirname(file), {recursive: true});
+            fs.writeFileSync(file, branched ? 'module.exports = value => value ? 1 : 0;\n' : 'module.exports = 1;\n');
+            write(`${name}.json`, {[file]: {path: file, statementMap: {0: {start: {line: 1}}}, s: {0: 1},
+              branchMap: branched ? {0: {locations: [{}, {}]}} : {}, b: branched ? {0: [1, 1]} : {}}});
+            parts.push({format: 'istanbul', report: `work/${name}.json`, source_directory: `work/${name}`});
+          }
+          write('multi-full.json', {version: 2, coverage: parts});
+          const branched = JSON.parse(fs.readFileSync('work/backend-js.json', 'utf8'));
+          Object.values(branched)[0].b['0'][1] = 0;
+          write('backend-js-gap.json', branched);
+          parts[0] = {...parts[0], report: 'work/backend-js-gap.json'};
+          write('multi-gap.json', {version: 2, coverage: parts});
+          FIXTURES
       - name: Accept complete application coverage
         if: *verify-code
         uses: ./

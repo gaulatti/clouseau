@@ -55,8 +55,7 @@ before entering the temporary Git-free archive. Traces therefore survive both
 successful and failed archive teardown. The temporary archive is still removed.
 
 Coverage keeps its original test selection, source include/exclude flags,
-100% line/branch thresholds, and `.clouseau-work/node.lcov` destination. Python
-commands, workflow test selection, local recipe, CI permissions/gates and providers
+100% line/branch thresholds, and `.clouseau-work/node.lcov` destination. Workflow test selection, local recipe, CI permissions/gates and providers
 are unchanged.
 The coverage invocation uses only native spec and the existing LCOV reporter.
 Adding a third dot reporter produces a real Node22 listener warning, so live
@@ -68,7 +67,7 @@ Compact successful reporting does not change the tests executed or any gate.
 The existing CI verification job uploads the complete per-run directory as
 `native-verification-RUN_ID-RUN_ATTEMPT`, even after a verification failure. Its
 event predicate is the same as the code checks, so metadata-only runs do not
-upload artifacts. A Python failure before Node starts may leave no Node trace;
+upload artifacts. A failure before Node starts may leave no Node trace;
 the uploader reports that honestly without replacing the original failure.
 
 After the hosted runner is discarded, download that run/attempt-specific artifact

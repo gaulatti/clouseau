@@ -30,10 +30,6 @@ function fixture(run, {branchless = false} = {}) {
   finally {fs.rmSync(directory, {recursive: true, force: true});}
 }
 
-function measuringWith(measure) {
-  return (program, argv, settings) => program === 'python3' ? measure(program, argv, settings) : cp.spawnSync(program, argv, settings);
-}
-
 test('partial native counters and a coverage command exit remain separate honest evidence', () => fixture(f => {
   const native = f.report([1, 0]);
   const code = `require('node:assert').equal(require('./src/handler')('news'), 'news');` +
@@ -103,7 +99,7 @@ test('missing, malformed, unsupported and empty native coverage remain unavailab
   });
 });
 
-test('coverage symlinks outside the checkout and directory artifacts are never read by the measurement subprocess', () => {
+test('coverage symlinks outside the checkout and directory artifacts are never read for measurement', () => {
   for (const kind of ['outside-symlink', 'directory']) fixture(f => {
     const external = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-outside-artifact-'));
     try {
@@ -111,10 +107,7 @@ test('coverage symlinks outside the checkout and directory artifacts are never r
       const filename = path.join(external, 'outside.json'); fs.writeFileSync(filename, content);
       if (kind === 'outside-symlink') fs.symlinkSync(filename, f.filename);
       else fs.mkdirSync(f.filename);
-      let measurements = 0;
-      const run = measuringWith(() => {measurements++; throw new Error('Unsafe artifact must not reach parser');});
-      const result = executeVerification({...f, run});
-      assert.equal(measurements, 0);
+      const result = executeVerification(f);
       assert.equal(result.coverage.status, 'unavailable');
       assert.equal(result.report_digest, null);
       assert.equal(JSON.stringify(result).includes(content), false);
@@ -143,19 +136,16 @@ test('spawn failures and interrupted commands are explicit failures while remain
   assert.match(result.commands[4].stdout, /last check ran/);
 }));
 
-test('measurement process and wire failures yield unavailable coverage without terminating verification evidence', () => {
-  const outputs = [
-    () => {throw new Error('fixture parser spawn throw');},
-    () => ({status: null, error: new Error('fixture parser transport error')}),
-    () => ({status: 9}),
-    () => ({status: 0, stdout: '{malformed'}),
-    () => ({status: 0, stdout: JSON.stringify({lines: [0, 0], branches: [0, 0]})}),
-    () => ({status: 0, stdout: JSON.stringify({lines: [1, 2], branches: [2, 2]})}),
-    () => undefined,
+test('unreadable, ambiguous and empty native reports yield unavailable coverage without terminating verification evidence', () => {
+  const reports = [
+    '{malformed',
+    '{"type": "istanbul", "type": "istanbul"}',
+    JSON.stringify({}),
+    JSON.stringify({[path.join('src', 'handler.js')]: {path: 'src/handler.js', statementMap: {}, s: {}, branchMap: {}, b: {}}}),
   ];
-  for (const measure of outputs) fixture(f => {
-    fs.writeFileSync(f.filename, JSON.stringify(f.report()));
-    const result = executeVerification({...f, run: measuringWith(measure)});
+  for (const content of reports) fixture(f => {
+    fs.writeFileSync(f.filename, content);
+    const result = executeVerification(f);
     assert.equal(result.coverage.status, 'unavailable');
     assert.equal(result.exact_coverage, null);
     assert.equal(result.commands[0].exit_code, 0);
@@ -195,7 +185,7 @@ test('opaque native artifact I/O errors remain unavailable observations rather t
 }));
 
 
-test('normal verification and native measurement inherit only the existing safe local environment boundary', () => fixture(f => {
+test('normal verification inherits only the existing safe local environment boundary', () => fixture(f => {
   const previousKey = process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY;
   const previousVisible = process.env.CLOUSEAU_FIXTURE_VISIBLE;
   process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY = 'fixture-only-must-not-enter-model-evidence';
@@ -203,17 +193,8 @@ test('normal verification and native measurement inherit only the existing safe 
   try {
     fs.writeFileSync(f.filename, JSON.stringify(f.report()));
     const verification = [[process.execPath, '-e', 'const a=require("node:assert/strict");a.equal(process.env.CLOUSEAU_FIXTURE_PROVIDER_KEY,undefined);a.equal(process.env.CLOUSEAU_FIXTURE_VISIBLE,"preserved-nonsecret-fixture");a.ok(process.env.PATH);console.log("credential boundary preserved")']];
-    let parserChecks = 0;
-    const run = (program, argv, settings) => {
-      if (program === 'python3') {
-        const checked = cp.spawnSync(program, ['-c', 'import os; assert "CLOUSEAU_FIXTURE_PROVIDER_KEY" not in os.environ; assert os.environ["CLOUSEAU_FIXTURE_VISIBLE"] == "preserved-nonsecret-fixture"'], settings);
-        assert.equal(checked.status, 0); parserChecks++;
-      }
-      return cp.spawnSync(program, argv, settings);
-    };
-    const result = executeVerification({...f, config: {...f.config, verification}, run});
+    const result = executeVerification({...f, config: {...f.config, verification}});
     assert.equal(result.verification_status, 'passed');
-    assert.equal(parserChecks, 1);
     assert.match(result.commands[0].stdout, /credential boundary preserved/);
     assert.equal(JSON.stringify(result).includes('fixture-only-must-not-enter-model-evidence'), false);
   } finally {

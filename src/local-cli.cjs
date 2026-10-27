@@ -16,6 +16,8 @@ const {reconcile} = require('./acceptance-ledger.cjs');
 const {refresh, safePath} = require('./acceptance-sources.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
 const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
+const gate = require('./coverage-gate.cjs');
+const {loadReport} = require('./coverage-util.cjs');
 
 const root = path.join(__dirname, '..');
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
@@ -88,30 +90,11 @@ function executeVerification({directory, config, additional = [], run = cp.spawn
   let measured = null;
   let coverageError = observed.find(part => part.error)?.error;
   if (!coverageError) {
-    const checkScript = config.version === 1 ?
-      'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import measure,load_report\n' +
-        'print(json.dumps(measure(load_report(sys.argv[2]),sys.argv[3],sys.argv[4])))\n' :
-      'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom coverage_plan import measure_plan\n' +
-        'print(json.dumps(measure_plan(json.loads(sys.argv[2]),sys.argv[3])))\n';
-    const args = config.version === 1 ? [path.join(directory, parts[0].report),
-      path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
-    let checked;
-    try {checked = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
-      {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000, env}) || {status: null, error: new Error('Native coverage measurement returned no result')};}
-    catch (error) {checked = {status: null, error};}
-    if (checked.error || checked.status !== 0) coverageError = checked.stderr || checked.error?.message || 'Native coverage could not be measured';
-    else {
-      try {
-        measured = JSON.parse(checked.stdout);
-        const valid = counts => counts && ['lines', 'branches'].every(metric => Array.isArray(counts[metric]) &&
-          counts[metric].length === 2 && counts[metric].every(Number.isSafeInteger) &&
-          counts[metric][0] >= 0 && counts[metric][1] >= 0 && counts[metric][1] <= counts[metric][0]) && counts.lines[0] > 0;
-        if (!(config.version === 1 ? valid(measured) : valid(measured.totals) &&
-            Array.isArray(measured.parts) && measured.parts.length === parts.length && measured.parts.every(part => valid(part.counts)))) {
-          throw new Error('Invalid native measurement');
-        }
-      } catch {measured = null; coverageError = 'Native coverage measurement returned malformed data';}
-    }
+    try {
+      measured = config.version === 1 ?
+        gate.measure(loadReport(path.join(directory, parts[0].report)), path.join(directory, parts[0].source_directory), parts[0].format, directory) :
+        gate.measurePlan(parts, directory);
+    } catch (error) {coverageError = error.message || 'Native coverage could not be measured';}
   }
   for (const argv of additional) execute(argv);
   if (additional.length && observed.some((part, index) => digest(part) !== digest(observe(parts[index])))) {

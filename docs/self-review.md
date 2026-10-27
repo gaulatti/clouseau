@@ -1,14 +1,13 @@
 # Clouseau self-review
 
-The repository's local recipe runs the existing exact native Python and Node
-coverage gates, a Git-free archive test, and the workflow security/contract
-suite. Use Node 22, Python 3.13 and `requirements-test.txt`, matching CI. Run the
+The repository's local recipe runs the existing exact native Node
+coverage gate, a Git-free archive test, and the workflow security/contract
+suite. Use Node 22 and `requirements-test.txt` (coverage.py, used only by one real-report integration test), matching CI. Run the
 global `clouseau review` command from a clean committed candidate. The accepted
 base supplies the recipe and public signer enrollment; neither is trusted merely
 because it appears on a proposed branch.
 
-`scripts/verify-coverage` retains the native coverage.py JSON report at
-`.clouseau-work/python.json` and Node's native LCOV report at
+`scripts/verify-coverage` retains Node's native LCOV report at
 `.clouseau-work/node.lcov`. The existing 100% line and branch thresholds and
 complete source loader remain in force. No textual percentage is converted into
 Istanbul or LLVM counters. Node's LCOV report is not a supported shared local

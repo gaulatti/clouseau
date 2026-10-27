@@ -26,8 +26,7 @@
     "policy/",
     "test/",
     "scripts/",
-    "requirements-test.txt",
-    ".coveragerc"
+    "requirements-test.txt"
   ],
   "deployment": null,
   "acceptance": {

@@ -52,7 +52,7 @@ for the version 2 policy configuration.
 | Operation | Inputs | Result |
 | --- | --- | --- |
 | `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
-| `test` | none | Run Clouseau's Python and Node regression suites |
+| `test` | none | Run Clouseau's Node regression suite |
 | `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
@@ -269,23 +269,27 @@ bake windows, and ticket closure remain separate delivery work.
 ## Development
 
 ```sh
-python3 -m unittest discover -s src -p 'test_*.py'
 node --test src/*.test.cjs
 ```
 
 Clouseau's own CI also requires exactly 100% line and branch coverage across
-all production Python and JavaScript modules. New source files are included
+all production JavaScript modules. New source files are included
 even when no test imports them. Test code is outside the production scope;
 there are no exclusions for production failure paths or rounded thresholds.
 
 To run the same gate locally with Node 22:
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements-test.txt
 ./scripts/verify-coverage
 ```
+
+Clouseau needs only Node. One integration test runs a fixture Python application
+under real coverage.py to prove the `coveragepy` adapter against live output, so
+install `requirements-test.txt` (coverage.py 7.13.0) to run the whole suite. The
+coverage gate itself is `bin/coverage-gate.cjs`
+(`check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy]` or
+`plan ACCEPTED_CONFIG [DIRECTORY]`), so reviewing a Python application requires
+Python only for that application's own tests.
 
 Successful native Node runs print compact outcomes and retain complete same-run
 traces with per-run hashes; see [native verification traces](docs/native-verification.md).
