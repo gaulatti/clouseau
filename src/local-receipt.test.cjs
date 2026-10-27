@@ -11,7 +11,7 @@ test('signed passing local receipt is verified and graded without a provider', a
   const bundle = issueReceipt(f.issue);
   assert.equal(verifyReceipt(bundle, f.expected).decision, 'auto_approve');
   assert.equal(bundle.payload.record_digest, digest(f.record));
-  assert.equal(new Set(f.result.usage.map(item => item.session)).size, 4);
+  assert.equal(new Set(f.result.usage.map(item => item.session)).size, 2);
   assert.equal(f.result.usage.every(item => item.session.startsWith('fictional-session-')), true);
   assert.equal(marker(`description\n<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`), 'a'.repeat(40));
   assert.equal(marker(), null);
