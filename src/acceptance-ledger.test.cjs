@@ -20,18 +20,18 @@ function grade(result, snapshot) {
   return render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
 }
 
-test('the initial view has one scorecard and preserves the complete audit and exact result without AI work', () => {
+test('the initial view is short and preserves the complete audit and exact result without AI work', () => {
   const {result, snapshot} = setup(false);
   const state = reconcile(result, snapshot);
   const before = JSON.stringify({result, snapshot, state});
   const body = render(result, snapshot, state);
   const visible = body.split('<details>')[0];
   assert.match(visible, /Clouseau — Approved/);
-  assert.equal((visible.match(/^\| Assessment /gm) || []).length, 1);
+  assert.doesNotMatch(visible, /\| Assessment /);
   assert.ok(visible.length < 1600);
   assert.match(visible, /Technical findings:\*\* None/);
   assert.doesNotMatch(visible, /Technical Q|Fit =|\| Unit |\| Gate |\| Finding |examiner|challenger/);
-  for (const value of ['Scoring and evidence', 'confidence', 'binding', 'Literal immutable source excerpts']) {
+  for (const value of ['Scoring and evidence', 'confidence', 'severity', 'Literal immutable source excerpts']) {
     assert.ok(body.includes(value));
   }
   assert.equal(JSON.stringify({result, snapshot, state}), before);
@@ -51,9 +51,6 @@ test('the published Palazzo review becomes five times shorter to read with the s
   assert.match(visible, /Clouseau — Approved/);
   for (const review of fixture.result.reviews) {
     assert.equal(review.scores.decision, 'auto_approve');
-    for (const unit of review.scores.units) {
-      assert.deepEqual(unit.min, {fit: 100, need: 100, proportionality: 100, acceptance: 100});
-    }
   }
   assert.match(visible, /Technical findings:\*\* None/);
   assert.equal(JSON.stringify(fixture), before);
@@ -101,20 +98,12 @@ test('sub-threshold findings, optional benefits and missing integrity evidence r
   }
 });
 
-test('owner choices and test integrity vetoes have actionable separate summaries', () => {
+test('a protected-controls owner decision and a test integrity veto have separate summaries', () => {
   const {result, snapshot} = setup(false);
-  let visible;
-  for (const review of result.reviews) {
-    review.report.decisions = [{kind: 'authority', question: 'May uploads grant a new privilege?',
-      options: ['Keep existing privileges', 'Authorize the new privilege'], evidence: ['source']}];
-  }
-  visible = grade(result, snapshot);
-  assert.match(visible, /Owner decision required/);
-  assert.match(visible, /May uploads grant a new privilege/);
-  assert.match(visible, /Keep existing privileges; Authorize the new privilege/);
-  for (const review of result.reviews) review.report.decisions = [];
   result.decision = 'owner_decision';
-  assert.match(render(result, snapshot, reconcile(result, snapshot)), /Confirm this exact revision/);
+  let visible = render(result, snapshot, reconcile(result, snapshot));
+  assert.match(visible, /Owner decision required/);
+  assert.match(visible, /Confirm this exact revision/);
   for (const review of result.reviews) review.report.gates.find(gate => gate.name === 'test_integrity').state = 'violated';
   visible = grade(result, snapshot);
   assert.match(visible, /Test integrity repair required/);
@@ -139,8 +128,7 @@ test('rendered acceptance records expose every factor and preserve exact decisio
   const {result, snapshot} = setup();
   const state = reconcile(result, snapshot);
   const body = render(result, snapshot, state);
-  assert.ok(body.includes('Fit | Need | Proportionality'));
-  for (const name of ['confidence', 'recurrence', 'generalization', 'binding', 'operating_model']) assert.ok(body.includes(name));
+  for (const name of ['confidence', 'recurrence', 'necessity', 'severity']) assert.ok(body.includes(name));
   assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
   assert.equal(clean('<script>@name|`\nline'), '&lt;script&gt;name&#124;&#96; line');
   assert.equal(score(12.345), '12.35'); assert.equal(score(12), '12.00');
@@ -230,7 +218,7 @@ test('large evidence is published losslessly in bounded Unicode-safe pages witho
     for (const review of result.reviews) {
       review.report.snapshot = snapshot.digest;
       review.report.evidence.push({id: 'large-source', source: 'head', start: 3, end: 3, quote: '😀'});
-      review.report.units[0].excess.abstraction.evidence.push('large-source');
+      review.report.gates[0].evidence.push('large-source');
       review.scores = validateReport(review.report, snapshot);
     }
     const before = JSON.stringify({result, snapshot});
@@ -239,7 +227,7 @@ test('large evidence is published losslessly in bounded Unicode-safe pages witho
     const {body, pages} = publication(result, snapshot, state);
     assert.ok(pages.length >= 3); assert.ok(body.length < 64000);
     assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
-    assert.match(body, /Fits the repository/);
+    assert.match(body, /Blocking: Invalid input reaches durable acceptance/);
     const chunks = pages.map(page => {
       assert.ok(page.length < 64000); assert.ok(!page.includes(MARKER));
       const chunk = page.slice(page.indexOf('\n\n') + 2);
@@ -266,7 +254,7 @@ test('overlapping citations from both roles retain all source lines and referenc
       const start = index % 20 + 3;
       const entry = {id: `support-${index}`, source: 'head', start, end: start, quote: extra[index % 20]};
       review.report.evidence.push(entry);
-      review.report.units[0].excess.abstraction.evidence.push(entry.id);
+      review.report.gates[0].evidence.push(entry.id);
     }
     review.scores = validateReport(review.report, snapshot);
   }

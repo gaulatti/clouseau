@@ -17,8 +17,6 @@ function schemas(snapshot) {
     `${referenceRule} Select one primary proof and any distinct additional proofs. The controller preserves these citations without inventing evidence.`};
   const factor = object({evidence: citations, reason: string});
   const group = name => object(Object.fromEntries(FACTORS[name].map(key => [key, factor])));
-  const need = group('need');
-  need.properties.binding = object({evidence: {...citations, description: `${referenceRule} An established obligation requires a source marked authority=trusted and kind=contract. For an observed absence, cite the actual evidence without inventing contract authority; positive numeric grades require trusted proof after grading.`}, reason: string});
   const paths = array(enumeration(snapshot.paths));
   const available = [...new Set(Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha).map(source => source.path))];
   const dependencies = {anyOf: [
@@ -34,10 +32,9 @@ function schemas(snapshot) {
   ]};
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   return {
-    acceptance_report: object({version: {type: 'integer', const: 3}, snapshot: enumeration([snapshot.digest]), summary: string,
-      units: {...array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string,
-        fit: group('fit'), need, excess: group('excess'), alternative: string})),
-        description: 'Identify material outcomes and engineering choices. Account for accurate companion documentation of the same behavior within its accepted outcome, not as a separate feature needing a request for prose. Independently assess new promises, unrelated documentation and material mechanisms.'},
+    acceptance_report: object({version: {type: 'integer', const: 4}, snapshot: enumeration([snapshot.digest]), summary: string,
+      units: {...array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string})),
+        description: 'Group the change into material outcomes and engineering choices so every changed file is accounted for. Account for accurate companion documentation of the same behavior within its accepted outcome.'},
       findings: array(object({id: string, title: string, anchor: enumeration(catalog.filter(entry => anchors.includes(entry.source)).map(entry => entry.id)),
         cause: string, trigger: string, consequence: string,
         obligation: string, evidence: citations, factors: group('defect'), blast_radius: {type: 'number', minimum: 1, maximum: 10},
@@ -45,7 +42,6 @@ function schemas(snapshot) {
       gates: array(object({name: enumeration(GATES), state: enumeration(STATES), reason: string, evidence: citations})),
       accounting: array(object({path: enumeration(snapshot.paths), units: array(string), evidence: {...citations,
         description: `${referenceRule} Include an ID citing this path's own changed base_source or head_source, not only other files or verification.`}, reason: string})),
-      decisions: array(object({kind: enumeration(['purpose', 'authority', 'tradeoff']), question: string, options: array(string), evidence: citations})),
       resolutions: array(object({id: string, state: enumeration(['corrected', 'dismissed']), reason: string, evidence: citations})),
       ...(snapshot.review_manifest_version ? {
         coverage: object({sources: array(sources),

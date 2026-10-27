@@ -116,23 +116,11 @@ function overview(result, snapshot, state) {
   const [title, next] = decisions[result.decision];
   const summary = Array.from(clean(result.reviews[0].report.summary));
   const lines = [MARKER, `## Clouseau — ${title}`, '',
-    summary.slice(0, 500).join('') + (summary.length > 500 ? '…' : ''), '',
-    '| Assessment | Lowest score | Required |', '|---|---:|---:|'];
-  for (const [name, label] of [['fit', 'Fits the repository'], ['need', 'Solves a demonstrated need'],
-    ['proportionality', 'Keeps scope and complexity appropriate']]) {
-    const units = result.reviews.flatMap(review => review.scores.units);
-    lines.push(`| ${label} | ${score(Math.min(...units.map(unit => unit[name])))} / 100 | ${RULES.product_threshold} |`);
-  }
-  lines.push('', 'Unit scores are informational. Approval depends only on findings, gates and owner decisions.');
+    summary.slice(0, 500).join('') + (summary.length > 500 ? '…' : '')];
   if (new Set(result.reviews.map(review => review.scores.decision)).size > 1) {
     lines.push('', '**Reviewer disagreement:** ' + result.reviews.map(review => `${clean(review.role)}: ${decisions[review.scores.decision][0]}`).join('; ') + '.');
   }
-  if (result.decision === 'owner_decision') {
-    const questions = new Set(result.reviews.flatMap(review => review.report.decisions)
-      .map(decision => `${clean(decision.question)} Options: ${decision.options.map(clean).join('; ')}.`));
-    if (!questions.size) questions.add('Confirm this exact revision’s changes to protected review controls.');
-    for (const question of questions) lines.push('', `**Owner decision:** ${question}`);
-  }
+  if (result.decision === 'owner_decision') lines.push('', '**Owner decision:** Confirm this exact revision’s changes to protected review controls.');
   const findings = new Map();
   for (const review of result.reviews) for (const [index, finding] of review.report.findings.entries()) {
     const identity = digest([finding.path, finding.cause.trim().toLowerCase().replace(/\s+/g, ' '),
@@ -181,16 +169,11 @@ function render(result, snapshot, state, {compact = false, unbounded = false} = 
   const lines = overview(result, snapshot, state);
   if (!compact) lines.push('', '<details><summary>Scoring and evidence</summary>', '',
     `Revision: \`${snapshot.head_sha}\` · Policy: \`${snapshot.policy_digest}\``, '',
-    'Scores are policy indices. Product acceptance requires at least 80 in every dimension; a technical finding at or above 70 blocks. Uncertainty crossing a threshold requires investigation. Display rounding never decides eligibility.', '');
-  if (!compact) lines.push('Fit = 35 outcome + 25 workflow + 20 domain + 10 boundary + 10 operating model. Need = 100 × max(binding, evidence × (.50 value + .30 unmetness + .20 timeliness)). Proportionality = 100 × (1 − greatest excess). Unit acceptance = min(Fit, Need, Proportionality), informational only.', '',
-    'Technical Q = 100 × confidence × min(1, max(necessity, activation × severity × (1 + .25 irreversibility + .20 reach + .20 detection + .20 propagation + .15 recurrence))). xG affects optional priority only; it never creates a blocker.', '');
+    `A technical finding scoring ${RULES.defect_threshold} or above blocks approval. Display rounding never decides eligibility.`, '');
+  if (!compact) lines.push('Technical Q = 100 × confidence × min(1, max(necessity, activation × severity × (1 + .25 irreversibility + .20 reach + .20 detection + .20 propagation + .15 recurrence))). xG affects optional priority only; it never creates a blocker.', '');
   if (!compact) for (const review of result.reviews) {
     lines.push(`### ${clean(review.role)}`, '', clean(review.report.summary), '',
-      '| Unit | Fit | Need | Proportionality | Acceptance |', '|---|---:|---:|---:|---:|');
-    for (const unit of review.scores.units) {
-      lines.push(`| ${clean(unit.id)} | ${score(unit.fit)} | ${score(unit.need)} | ${score(unit.proportionality)} | ${score(unit.acceptance)} |`);
-    }
-    lines.push('', '| Finding | Score | BR | xG | Optional priority | Disposition |', '|---|---:|---:|---:|---:|---|');
+      '| Finding | Score | BR | xG | Optional priority | Disposition |', '|---|---:|---:|---:|---:|---|');
     for (const [index, finding] of review.report.findings.entries()) {
       const value = review.scores.findings[index];
       lines.push(`| ${clean(finding.title)} | ${score(value.score)} | ${finding.blast_radius} | ${value.xg} | ${value.priority.toFixed(2)} | ${value.disposition} |`);
@@ -198,14 +181,6 @@ function render(result, snapshot, state, {compact = false, unbounded = false} = 
     if (!review.report.findings.length) lines.push('| No admitted technical findings | — | — | — | — | — |');
     lines.push('', '| Gate | State | Evidence |', '|---|---|---|');
     for (const gate of review.report.gates) lines.push(`| ${gate.name} | ${gate.state} | ${clean(gate.reason)} |`);
-    for (const unit of review.report.units) {
-      lines.push('', `<details><summary>Inputs: ${clean(unit.title)}</summary>`, '', '| Group | Factor | Value | Reason | Citations |', '|---|---|---:|---|---|');
-      for (const group of ['fit', 'need', 'excess']) for (const name of FACTORS[group]) {
-        const factor = unit[group][name];
-        lines.push(`| ${group} | ${name} | ${score(factor.value)} | ${clean(factor.reason)} | ${clean(factor.evidence.join(', '))} |`);
-      }
-      lines.push('', '</details>');
-    }
     for (const finding of review.report.findings) {
       lines.push('', `<details><summary>Inputs: ${clean(finding.title)}</summary>`, '',
         `Cause: ${clean(finding.cause)} · Trigger: ${clean(finding.trigger)} · Consequence: ${clean(finding.consequence)}`, '',

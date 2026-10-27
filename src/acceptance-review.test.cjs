@@ -14,7 +14,6 @@ const response = value => {
   for (const entry of value.evidence || []) delete entry.quote;
   for (const unit of value.units || []) {
     delete unit.paths;
-    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) delete factor.value;
   }
   for (const finding of value.findings || []) {
     const evidence = value.evidence.find(entry => finding.evidence.includes(entry.id) && entry.source !== 'contract');
@@ -39,7 +38,6 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   assert.equal(original.evidence.length, 2);
   const fresh = fixture().snapshot;
   const facts = template(fresh);
-  assert.equal(materialize(facts, fresh).units[0].fit.outcome.value, 0);
   const concern = finding();
   concern.anchor = {source: 'head', start: 1, end: 1}; delete concern.path;
   concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
@@ -54,9 +52,9 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   }
   const conflicting = template(fresh); conflicting.units[0].paths = ['invented'];
   assert.throws(() => materialize(conflicting, fresh), /exclusively from complete file accounting/);
-  facts.units[0].fit.outcome.extra = 'unrecognized';
+  facts.findings[0].factors.necessity.extra = 'unrecognized';
   assert.throws(() => materialize(facts, fresh), /observations and citations only/);
-  facts.units[0].fit.outcome = null;
+  facts.findings[0].factors.necessity = null;
   assert.throws(() => materialize(facts, fresh), /observations and citations only/);
   for (const mutate of [
     entry => {entry.quote = 'Fabricated quote';}, entry => {entry.source = 'invented';},
@@ -82,7 +80,7 @@ test('the native inspection selects controller proofs without generating source 
     calls++;
     const request = JSON.parse(options.body); const view = JSON.parse(request.messages[1].content);
     const schema = request.tools[0].function.parameters;
-    assert.deepEqual(schema.properties.units.items.properties.fit.properties.outcome.properties.evidence.items.enum,
+    assert.deepEqual(schema.properties.findings.items.properties.factors.properties.necessity.properties.evidence.items.enum,
       view.proofs.map(proof => proof.id));
     return wire(facts);
   }});
@@ -109,7 +107,7 @@ test('native source-line citations normalize to existing catalog blocks without 
   require('./acceptance-sources.cjs').refresh(f.snapshot);
   const facts = modelTemplate(f.snapshot);
   facts.gates.forEach(gate => {gate.state = 'satisfied';});
-  facts.units[0].excess.collateral.evidence = ['proof-1-53', 'proof-1-41', 'proof-1-69'];
+  facts.gates[0].evidence = ['proof-1-53', 'proof-1-41', 'proof-1-69'];
   facts.accounting[0].evidence = ['proof-1-53'];
   const concern = finding(); delete concern.path;
   concern.anchor = 'proof-1-69'; concern.evidence = ['proof-1-53'];
@@ -126,7 +124,7 @@ test('native source-line citations normalize to existing catalog blocks without 
   assert.equal(calls, 1);
   assert.deepEqual(facts, original, 'the original observations and causal finding remain intact');
   assert.doesNotThrow(() => validateInspection(result.report, f.snapshot));
-  assert.deepEqual(result.report.units[0].excess.collateral.evidence, ['proof-1-41']);
+  assert.deepEqual(result.report.gates[0].evidence, ['proof-1-41']);
   assert.deepEqual(result.report.accounting[0].evidence, ['proof-1-41']);
   const proof = result.report.evidence.find(entry => entry.id === 'proof-1-41');
   assert.deepEqual({source: proof.source, start: proof.start, end: proof.end}, {source: 'head', start: 41, end: 80});
@@ -156,9 +154,9 @@ test('complete independent source reports are graded and combined without exposi
     const body = JSON.parse(options.body); requests.push(body);
     if (body.messages[0].content.includes('Role:')) return response(f.report);
     const packet = JSON.parse(body.messages[1].content);
-    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))});
+    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4']))});
   }});
-  assert.equal(result.decision, 'auto_approve'); assert.equal(result.reviews.length, 2); assert.equal(result.usage.length, 4);
+  assert.equal(result.decision, 'auto_approve'); assert.equal(result.reviews.length, 2); assert.equal(result.usage.length, 2, 'a change without findings needs no grading');
   assert.deepEqual(requests.slice(0, 2).map(request => request.model), ['deepseek-flash', 'deepseek-v4-pro']);
   assert.equal(requests[0].messages[1].content, requests[1].messages[1].content);
   const native = requests[0].tools.find(item => item.function.name === 'acceptance_report').function.parameters;
@@ -171,7 +169,7 @@ test('complete independent source reports are graded and combined without exposi
     const body = JSON.parse(options.body);
     if (body.messages[0].content.includes('Role:')) return response(f.report);
     const packet = JSON.parse(body.messages[1].content);
-    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))});
+    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4']))});
   }});
   assert.equal(quiet.decision, 'auto_approve', 'optional telemetry cannot be a prerequisite for the decision');
 }));
@@ -205,24 +203,13 @@ test('multi-file syntax gives every accounting entry its own changed-source proo
   }
 });
 
-test('facts can observe no binding requirement while final positive grades still require trusted contract proof', () => {
-  const {report, snapshot} = fixture();
-  const facts = template(snapshot);
-  facts.units[0].need.binding = {evidence: ['source'], reason: 'The changed code establishes no accepted requirement by itself.'};
-  const materialized = materialize(facts, snapshot);
-  const {validateFacts, validateReport} = require('./acceptance.cjs');
+test('fact validation produces no approval score and rejects unknown citations', () => {
+  const {snapshot} = fixture();
+  const materialized = materialize(template(snapshot), snapshot);
+  const {validateFacts} = require('./acceptance.cjs');
   assert.equal(validateFacts(materialized, snapshot), undefined, 'fact validation cannot provide an approval score');
   assert.doesNotThrow(() => validateInspection(materialized, snapshot));
-  materialized.units[0].need.binding.value = 1;
-  assert.throws(() => validateReport(materialized, snapshot), /binding obligation lacks trusted contract authority/);
-  materialized.units[0].need.binding.value = 0;
-  report.units[0].need.binding = {value: 0, ...facts.units[0].need.binding};
-  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'established value and need can justify work without claiming a binding requirement');
-  report.units[0].need.binding.value = 0.25;
-  assert.throws(() => validateReport(report, snapshot), /binding obligation lacks trusted contract authority/);
-  report.units[0].need.binding.evidence = ['contract'];
-  assert.doesNotThrow(() => validateReport(report, snapshot));
-  materialized.units[0].need.binding.evidence = ['undeclared'];
+  materialized.accounting[0].evidence = ['undeclared'];
   assert.throws(() => validateFacts(materialized, snapshot), /missing or unknown citation/);
 });
 
@@ -271,18 +258,13 @@ test('long source and causal-anchor proofs preserve all lines, references and bl
   const original = structuredClone(facts);
   const value = materialize(facts, snapshot);
   assert.deepEqual(facts, original, 'the captured model response stays immutable');
-  for (const refs of [value.accounting[0].evidence, value.gates[0].evidence, value.units[0].excess.abstraction.evidence]) {
+  for (const refs of [value.accounting[0].evidence, value.gates[0].evidence]) {
     assert.equal(refs.map(id => value.evidence.find(entry => entry.id === id).quote).join('\n'), snapshot.sources.head.content);
   }
   const causal = value.findings[0].evidence.filter(id => id.startsWith('clouseau-'));
   // The finding also retains its original source proof, plus its complete anchor.
   assert.ok(causal.length >= 3);
   assert.equal(value.findings[0].path, report.findings[0].path);
-  for (const [i, unit] of value.units.entries()) for (const group of ['fit', 'need', 'excess']) {
-    for (const [key, factor] of Object.entries(unit[group])) {
-      factor.value = report.units[i][group][key].value;
-    }
-  }
   for (const [key, factor] of Object.entries(value.findings[0].factors)) factor.value = report.findings[0].factors[key].value;
   assert.deepEqual(validateReport(value, snapshot), scoreReport(report));
   assert.equal(validateReport(value, snapshot).decision, 'repair_required');
