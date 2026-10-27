@@ -3,6 +3,8 @@
 Clouseau also provides a centrally maintained local agent skill and signed review
 receipts. Agent-only installation is independent of CI: it uses authenticated
 coding harnesses and creates no Actions configuration or provider secrets.
+Inside Claude Code, Codex or opencode the calling agent supplies the review
+sessions (`--agent`); the headless `--harness` form is for a plain terminal.
 Local AI review runs regardless of coverage percentage or availability and keeps
 its quality verdict separate from real verification results. Opted-in CI verifies
 an enrolled runner's passing AI receipt without repeating the review, then still

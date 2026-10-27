@@ -15,6 +15,7 @@ const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {refresh, safePath} = require('./acceptance-sources.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
+const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
 
 const root = path.join(__dirname, '..');
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
@@ -22,7 +23,8 @@ const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
 function options(argv) {
   const [command, ...args] = argv;
   const parsed = {command};
-  const allowed = ['directory', 'base', 'harness', 'request-file', 'output', 'identity', 'receipt', 'additional-checks'];
+  const allowed = ['directory', 'base', 'harness', 'agent', 'request-file', 'output', 'identity', 'receipt', 'additional-checks',
+    'agent-request', 'answer', 'session'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
     if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) throw new Error('Invalid Clouseau local arguments');
@@ -157,7 +159,10 @@ function readHistory(filename, repository, branch) {
 async function runReview(args, {ask = askHarness, verify = executeVerification, state = stateDirectory(), installed = installation} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
-  const base = args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
+  const agent = args.agent;
+  if (agent && args.harness) throw new Error('Choose either --agent (inside an AI harness) or --harness (headless), not both');
+  if (agent && !AGENTS.includes(agent)) throw new Error(`Supported agent harnesses: ${AGENTS.join(', ')}`);
+  const base =args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
   const config = readLocalConfig(JSON.parse(git(directory, ['show', `${base}:.clouseau-local.json`])));
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const repo = githubRepository(directory);
@@ -197,7 +202,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
-    request, config, ciConfig, harness: args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {})});
+    request, config, ciConfig, harness: agent ? `agent:${agent}` : args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {})});
   if (sameRevision && previous.reviewer_sha === reviewerSha && previous.request_digest === requestDigest) cacheId = previous.cache_id;
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
@@ -214,7 +219,11 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
       provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical)};
   }
-  if (fs.existsSync(journal)) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
+  const agentDirectory = path.join(cache, 'agent');
+  // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
+  const resuming = Boolean(agent) && fs.existsSync(path.join(agentDirectory, 'technical.json')) &&
+    !fs.existsSync(path.join(agentDirectory, 'completed.json'));
+  if (fs.existsSync(journal) && !resuming) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
   const output = path.resolve(args.output || path.join(cache, 'record.json'));
   if (output.startsWith(directory + path.sep)) throw new Error('Store review evidence outside the source checkout');
   let identity = null;
@@ -227,24 +236,54 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
       throw new Error('The signer and reviewer revision must already be enrolled in the protected CI configuration');
     }
   }
-  const technical = verify({directory, config, additional});
+  const technicalPath = path.join(agentDirectory, 'technical.json');
+  let technical;
+  if (resuming) technical = JSON.parse(fs.readFileSync(technicalPath, 'utf8'));
+  else {
+    technical = verify({directory, config, additional});
+    if (agent) {
+      // The agent exchange spans several commands; persist the one real verification so later commands cannot rerun it.
+      technical = JSON.parse(JSON.stringify(technical));
+      fs.mkdirSync(agentDirectory, {recursive: true, mode: 0o700});
+      fs.writeFileSync(technicalPath, JSON.stringify(technical), {mode: 0o600});
+    }
+  }
   if (git(directory, ['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed during local verification');
   const collected = collectLocal({directory, base, request, technical, ciConfig, reviewerSha});
   collected.snapshot.prior_findings = priorFindings;
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
-  const result = await localReview({...collected, ask: async task => {
+  if (agent) {
+    const frozen = path.join(agentDirectory, 'snapshot.digest');
+    if (!fs.existsSync(frozen)) fs.writeFileSync(frozen, collected.snapshot.digest, {mode: 0o600});
+    else if (fs.readFileSync(frozen, 'utf8') !== collected.snapshot.digest) {
+      throw new Error(`Source or evidence changed since this agent exchange began; evidence preserved in ${agentDirectory}`);
+    }
+  }
+  const exchange = agent ? createExchange({directory: agentDirectory, agent,
+    journal: entry => fs.appendFileSync(journal, JSON.stringify(entry) + '\n', {mode: 0o600})}) : null;
+  let result;
+  try {
+    result = await localReview({...collected, ask: async task => {
     fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+    if (exchange) return exchange.ask(task);
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started',
       request_digest: digest(task)}) + '\n', {mode: 0o600});
     const response = await ask({...task, harness: args.harness || 'codex'});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
     return response;
-  }}).catch(error => {
+    }});
+  } catch (error) {
+    if (error instanceof AwaitingAgent) {
+      return {status: 'awaiting_agent', ...error.info, reviewer_sha: reviewerSha, provider_api_calls: 0, harness_invocations: 0,
+        respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session FRESH_SESSION_ID`,
+        then: 'Repeat the identical review command. If Clouseau main advanced, the review restarts under the new revision.'};
+    }
     fs.writeFileSync(path.join(cache, 'failure.json'), JSON.stringify({failure: error.message,
       harness: error.harnessDiagnostic || null}, null, 2) + '\n', {mode: 0o600});
     error.message += `; preserved review evidence: ${cache}`; throw error;
-  });
+  }
+  if (agent) fs.writeFileSync(path.join(agentDirectory, 'completed.json'), '{}\n', {mode: 0o600});
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
@@ -290,8 +329,9 @@ async function main(argv, runtime = {}) {
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
   if (args.command === 'review') return runReview(args, runtime);
+  if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
-  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --harness codex|claude --identity FILE --additional-checks FILE] | publish --directory PATH --receipt FILE');
+  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --agent claude|codex|opencode | --harness codex|claude --identity FILE --additional-checks FILE] | respond --agent-request FILE --answer FILE --session ID | publish --directory PATH --receipt FILE');
 }
 
 module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};

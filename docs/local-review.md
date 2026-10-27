@@ -159,7 +159,51 @@ Nonsecret runtime and tooling variables remain available. Repository verificatio
 commands supply their own nonproduction fixture configuration. PEM private-key
 output is rejected before it can enter AI evidence.
 
-Use `--harness claude` for Claude Code. The controller runs real verification,
+### Agent-driven review inside an AI harness
+
+The headless `--harness codex|claude` form launches a separate child process per
+model session. It is for a person at a plain terminal. Inside Claude Code, Codex
+or opencode the calling agent supplies those sessions itself:
+
+```bash
+clouseau review --directory /path/to/repository --base origin/main \
+  --request-file /path/to/requirement.txt --agent opencode
+```
+
+`--agent` accepts `claude`, `codex` or `opencode` and excludes `--harness`.
+The controller still owns real verification, immutable sources, citations, grading
+formulas, the finding ledger and the decision. When it needs a model session it
+writes `request-NNNN.json`, the full `prompt-NNNN.txt` and `schema-NNNN.json` under
+the review cache's `agent/` directory (outside the checkout), prints
+`status: awaiting_agent` and exits with code 3. The agent starts a fresh subagent
+or session that sees only those files, has it write a JSON answer to the request's
+`answer_file`, and registers it:
+
+```bash
+clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session SESSION_ID
+```
+
+`respond` validates the answer against the request schema (the supported subset
+fails closed on unknown keywords), refuses a session identifier already used for
+another request in the exchange, and allows three attempts per request. Repeating
+the identical `review` command then resumes: it reuses the one recorded
+verification, requires the same frozen evidence digest, replays accepted answers
+and stops at the next pending session. A request whose stored digest no longer
+matches stops the review rather than guessing. If protected Clouseau main advances
+between commands the cache identity changes and the review restarts.
+
+Usage records for these sessions carry `harness` (`claude`, `codex` or `opencode`),
+`execution: agent_session`, the supplied session identifier and digests of the
+request, answer and stored response file. Receipt validation accepts them alongside
+headless records and still requires distinct sessions for the examiner and
+challenger investigation and grading phases. The controller cannot itself prove
+that a subagent was isolated from the implementer, so this independence rests on
+the runner's trust boundary and on the enrolled engine revision: CI accepts a
+receipt only from a Clouseau revision the protected configuration enrolls, which is
+where an owner decides whether to trust agent-driven receipts. The signed handoff,
+`independent_ci_required` and `merge_authority: false` are unchanged.
+
+Outside an AI harness, use `--harness claude` to run Claude Code headlessly. The controller runs real verification,
 records its actual outcomes, captures immutable base/head sources and accepted
 purpose, and starts separate examiner and challenger sessions. Coverage below
 100%, a failing coverage command, or unavailable, malformed or unsupported
