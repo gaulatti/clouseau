@@ -10,7 +10,7 @@ const {fixture} = require('../test/local-review-fixture.cjs');
 const {localReview} = require('./local-review.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {runReview, main} = require('./local-cli.cjs');
-const {validateValue, respond} = require('./local-agent.cjs');
+const {validateValue, respond, createExchange} = require('./local-agent.cjs');
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
 // Stand-in for a fresh subagent: answers each frozen request from its own prompt and schema files.
@@ -178,4 +178,5 @@ test('respond refuses malformed requests and unreadable answers', () => withRevi
 
 test('an unsupported agent harness is refused before any exchange starts', () => withReview(async ({deps, argv}) => {
   await assert.rejects(main([...argv.slice(0, -1), 'unknown'], deps), /Supported agent harnesses/);
+  assert.throws(() => createExchange({directory: path.join(os.tmpdir(), 'clouseau-never-created'), agent: 'unknown'}), /Supported agent harnesses/);
 }));
