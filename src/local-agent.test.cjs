@@ -125,3 +125,19 @@ test('signed receipts accept opencode agent sessions and still reject unknown ha
     assert.throws(() => verifyReceipt(issueReceipt(f.issue), f.expected), /independent harness/);
   }
 });
+
+test('a stored response that does not match its request is rejected on resume', () => withReview(async ({deps, argv}) => {
+  const first = await main(argv, deps);
+  fs.writeFileSync(first.answer_file, JSON.stringify(subagent(JSON.parse(fs.readFileSync(first.request_file, 'utf8')))));
+  respond({request: first.request_file, answer: first.answer_file, session: 'opencode-subagent-1'});
+  const responseFile = path.join(path.dirname(first.request_file), 'response-0001.json');
+  const stored = JSON.parse(fs.readFileSync(responseFile, 'utf8')); stored.request_digest = '0'.repeat(64);
+  fs.writeFileSync(responseFile, JSON.stringify(stored));
+  await assert.rejects(main(argv, deps), /does not match its request/);
+}));
+
+test('source or evidence that changes after an exchange began is refused', () => withReview(async ({deps, argv}) => {
+  const first = await main(argv, deps);
+  fs.writeFileSync(path.join(path.dirname(first.request_file), 'snapshot.digest'), 'f'.repeat(64));
+  await assert.rejects(main(argv, deps), /changed since this agent exchange began/);
+}));
