@@ -186,31 +186,36 @@ test('the larger batch allowance still rejects cumulative oversized evidence bef
   assert.equal(reads, 4); assert.equal(grading, 0);
 });
 
+const withFinding = f => async task => {
+  const response = await f.ask(task);
+  if (task.phase === 'investigation') {
+    const report = response.value.report;
+    const evidence = report.accounting[0].evidence;
+    report.findings = [{id: 'fictional-causal-fixture', title: 'Fictional fixture defect', anchor: evidence[0],
+      cause: 'Synthetic fixture cause.', trigger: 'Synthetic fixture trigger.', consequence: 'Synthetic fixture consequence.',
+      obligation: 'Synthetic fixture obligation.', evidence,
+      factors: Object.fromEntries(FACTORS.defect.map(name => [name, {evidence, reason: 'Synthetic fixture observation.'}])),
+      blast_radius: 1, opportunity: {mechanical: false, beneficial: false, within_scope: false, verified: false},
+      repair_paths: f.snapshot.paths}];
+  }
+  return response;
+};
+
 test('missing atomic grades stop local acceptance and an unestablished condition counts as level0', async () => {
   for (const answers of [null, {}]) {
     const f = await fixture();
+    const ask = withFinding(f);
     await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => task.phase === 'grading' ?
-      {value: {answers}} : f.ask(task)}), /Incomplete local atomic/);
+      {value: {answers}} : ask(task)}), /Incomplete local atomic/);
   }
   const f = await fixture();
+  const ask = withFinding(f);
   const result = await localReview({snapshot: f.snapshot, ask: async task => {
-    const response = await f.ask(task);
+    const response = await ask(task);
     if (task.phase === 'grading') response.value.answers[Object.keys(response.value.answers)[0]] = 'unknown';
     return response;
   }});
   assert.ok(result.reviews[0].grading.decisions.some(entry => entry.answer === 'unknown' && entry.value === 0));
-});
-
-test('local grading cannot turn untrusted requirement evidence into contract authority', async () => {
-  const f = await fixture();
-  const result = await localReview({snapshot: f.snapshot, ask: async task => {
-    const response = await f.ask(task);
-    if (task.phase === 'investigation') response.value.report.units[0].need.binding.evidence = response.value.report.accounting[0].evidence;
-    return response;
-  }});
-  assert.equal(result.decision, 'auto_approve');
-  assert.equal(result.reviews[0].report.units[0].need.binding.value, 0);
-  assert.ok(result.reviews[0].grading.decisions.some(entry => entry.provider === 'controller'));
 });
 
 test('local causal findings retain conservative confidence and literal changed-source anchors', async () => {

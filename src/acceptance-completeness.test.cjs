@@ -78,7 +78,7 @@ test('dependency exclusions are explicit and material paths cannot be invented o
 test('the native response schema requires a selected proof for inspected and excluded coverage, and none for missing', () => {
   const f = complete();
   const schema = schemas(f.snapshot).acceptance_report;
-  const ordinary = schema.properties.units.items.properties.fit.properties.outcome.properties.evidence;
+  const ordinary = schema.properties.gates.items.properties.evidence;
   assert.equal(ordinary.type, 'array', 'factor and gate citation formats remain unchanged');
   for (const name of ['sources', 'dependencies']) {
     const choices = schema.properties.coverage.properties[name].items.anyOf;
@@ -165,7 +165,6 @@ test('coverage proof objects materialize exactly without changing captured facts
   assert.deepEqual(facts, original);
   assert.deepEqual(report.coverage.sources[0].evidence, [first, second]);
   assert.deepEqual(report.coverage.dependencies[0].evidence, [second, first]);
-  assert.deepEqual(report.units[0].fit.outcome.evidence, facts.units[0].fit.outcome.evidence);
   assert.deepEqual(report.gates[0].evidence, facts.gates[0].evidence);
   assert.doesNotThrow(() => validateFacts(report, f.snapshot));
   assert.deepEqual(report.coverage.sources.map(item => item.source), Object.keys(f.snapshot.sources));

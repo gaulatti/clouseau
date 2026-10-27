@@ -5,7 +5,7 @@ const path = require('node:path');
 const {digest, validateReport} = require('./acceptance.cjs');
 const {schemas} = require('./acceptance-schema.cjs');
 const {modelEvidence, modelTemplate, materialize, validateInspection, combine} = require('./acceptance-review.cjs');
-const {locations, packetFor, grade, authorityBounds} = require('./acceptance-grading.cjs');
+const {locations, packetFor, grade} = require('./acceptance-grading.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
@@ -90,9 +90,8 @@ async function localReview({snapshot, ask, addSources}) {
   const reviews = [];
   for (const item of inspections.values()) {
     const report = structuredClone(item.report);
-    const decisions = authorityBounds(report, snapshot);
-    const controlled = new Set(decisions.map(entry => entry.id));
-    const entries = locations(report).filter(entry => !controlled.has(entry.id));
+    const decisions = [];
+    const entries = locations(report);
     const questions = Object.fromEntries(entries.map(entry => [entry.id, {
       evidence: packetFor(entry, report, snapshot), rubric: RUBRICS[entry.group][entry.name],
     }]));

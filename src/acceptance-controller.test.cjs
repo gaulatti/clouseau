@@ -208,7 +208,7 @@ async function fixture(run) {
 
 test('v2 assessment and native approval exchange a complete source-bound record and retain all existing protection checks', () => fixture(async f => {
   const assessment = await f.assess();
-  assert.equal(assessment.decision, 'auto_approve'); assert.equal(f.state.calls, 4);
+  assert.equal(assessment.decision, 'auto_approve'); assert.equal(f.state.calls, 2, 'a change without findings needs no grading');
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   assert.equal(assessment.record_digest, digest(record));
   assert.equal(record.technical.attempt, 1); assert.equal(record.technical.job.id, 10);
@@ -413,12 +413,12 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   finally {if (saved === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = saved;}
 }));
 
-test('authenticated accepted purpose reaches both independent investigations and atomic grading as literal citable evidence', () => fixture(async f => {
+test('authenticated accepted purpose reaches both independent investigations as literal citable evidence', () => fixture(async f => {
   const purpose = 'Preserve durable upload acceptance with meaningful production-path regression tests.';
   const comment = {id: 51, user: {login: 'gaulatti', type: 'User'},
     body: `/approve-intent ${f.state.pr.head.sha}\n\nAccepted purpose:\n${purpose}`};
   f.state.comments.push(comment);
-  let investigations = 0; let graders = 0;
+  let investigations = 0;
   const assessment = await f.assess({fetchImpl: async (url, options) => {
     const body = JSON.parse(options.body); const packet = JSON.parse(body.messages[1].content);
     if (body.tools) {
@@ -429,16 +429,11 @@ test('authenticated accepted purpose reaches both independent investigations and
       assert.equal(packet.intent_confirmation.accepted_purpose, purpose);
       assert.ok(source.numbered_lines.includes(purpose));
       assert.ok(packet.proofs.some(item => packet.sources[item.source].path === source.path));
-    } else {
-      graders++;
-      const contract = packet.state.accepted_contract.find(item => item.path === 'pulls/3/intent/51');
-      assert.equal(JSON.parse(contract.content).body, comment.body);
-      assert.equal(JSON.parse(contract.content).accepted_purpose, purpose);
     }
     return f.fetchImpl(url, options);
   }});
   assert.equal(assessment.decision, 'auto_approve');
-  assert.equal(investigations, 2); assert.equal(graders, 2);
+  assert.equal(investigations, 2);
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   assert.equal(record.snapshot.intent_confirmation.actor, 'gaulatti');
   assert.equal(record.snapshot.intent_confirmation.head_sha, f.state.pr.head.sha);
@@ -483,9 +478,8 @@ test('a citable owner purpose receipt cannot waive an integrity veto', async () 
 
 test('all evidence pages must publish before native approval, and a partial publication is safely resumed without new model calls', () => fixture(async f => {
   f.state.alter = report => {
-    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(report.units[0][group])) {
-      factor.reason = 'Unchanged cited source evidence. '.repeat(60);
-    }
+    // Enough register rows that the rendered evidence needs more than one comment page.
+    for (let i = 0; i < 1800; i++) report.evidence.push({...report.evidence[1], id: `repeat-${i}-${'r'.repeat(40)}`});
   };
   const assessment = await f.assess();
   assert.equal(assessment.decision, 'auto_approve');
@@ -534,31 +528,6 @@ test('a model failure or pending/failed verification cannot reach an approval or
     fetchImpl: async () => {throw new Error('still offline');}});
   assert.equal(ready.decision, 'review_incomplete');
   assert.equal(f.state.writes.length, 0);
-}));
-
-test('incomplete grading retains exact replay inputs and still cannot approve or waive a missing alternative', () => fixture(async f => {
-  const assessment = await f.assess({fetchImpl: async (url, options) => {
-    const body = JSON.parse(options.body);
-    if (body.tools) return f.fetchImpl(url, options);
-    const {questions} = JSON.parse(body.messages[1].content);
-    const answers = Object.fromEntries(Object.keys(questions).map(id => [id,
-      id === 'u0_excess_abstraction' ? 'level1' : id.includes('_excess_') ? 'level0' : 'level4']));
-    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify({answers})}}]})};
-  }});
-  assert.equal(assessment.decision, 'review_incomplete');
-  const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
-  assert.equal(trace.failure, undefined, 'missing repair detail is incomplete analysis, not invalid source evidence');
-  const response = trace.observations.find(item => item.phase === 'grading_response');
-  const graded = trace.observations.find(item => item.phase === 'graded_report');
-  const snapshot = trace.snapshots[graded.snapshot];
-  assert.equal(response.value.answers.u0_excess_abstraction, 'level1');
-  assert.equal(response.packet.state.factors.u0_excess_abstraction.context.narrower_alternative, '');
-  assert.equal(graded.report.units[0].excess.abstraction.value, 0.25);
-  assert.equal(snapshot.digest, graded.report.snapshot);
-  assert.equal(require('./acceptance.cjs').validateReport(graded.report, snapshot).decision,
-    'review_incomplete', 'the retained inputs reproduce the exact hold without calling a provider');
-  await assert.rejects(f.gate(assessment), /incomplete/);
-  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
 }));
 
 test('malformed provider JSON retains the exact undecodable response and cannot reach approval', () => fixture(async f => {
