@@ -141,3 +141,41 @@ test('source or evidence that changes after an exchange began is refused', () =>
   fs.writeFileSync(path.join(path.dirname(first.request_file), 'snapshot.digest'), 'f'.repeat(64));
   await assert.rejects(main(argv, deps), /changed since this agent exchange began/);
 }));
+
+test('schema validation fails closed on unusable schemas and checks numbers, booleans and bounds', () => {
+  for (const schema of [null, [], 'text', {anyOf: []}, {anyOf: 'x'}]) assert.throws(() => validateValue(schema, 1), /Unsupported schema/);
+  validateValue({type: ['string', 'null']}, null);
+  validateValue({type: 'boolean'}, true);
+  validateValue({type: 'number', maximum: 2}, 1.5);
+  assert.throws(() => validateValue({type: 'number', maximum: 1}, 2), /above its maximum/);
+  assert.throws(() => validateValue({type: 'number', minimum: 1}, 0), /below its minimum/);
+  assert.throws(() => validateValue({type: 'boolean'}, 1), /must be boolean/);
+  validateValue({type: 'object'}, {});
+  assert.throws(() => validateValue({type: 'object', properties: {a: {type: 'string'}}, required: ['a']}, {}), /required/);
+  assert.throws(() => validateValue({type: 'object', additionalProperties: false}, {extra: 1}), /not allowed/);
+});
+
+test('respond refuses malformed requests and unreadable answers', () => withReview(async ({state, deps, argv}) => {
+  assert.throws(() => respond({}), /respond requires/);
+  assert.throws(() => respond({request: path.join(state, 'other.json'), answer: 'a', session: 'opencode-subagent-1'}), /agent request file/);
+  const first = await main(argv, deps);
+  const directory = path.dirname(first.request_file);
+  const stored = JSON.parse(fs.readFileSync(first.request_file, 'utf8'));
+  const alter = change => {
+    const forged = path.join(directory, 'request-0009.json');
+    fs.writeFileSync(forged, JSON.stringify({...stored, ...change(stored)}));
+    return forged;
+  };
+  for (const change of [() => ({version: 2}), () => ({answer_file: path.join(directory, 'answer-0001.json')}), () => ({agent: 'unknown', answer_file: path.join(directory, 'answer-0009.json')}),
+    () => ({answer_file: undefined})]) {
+    assert.throws(() => respond({request: alter(change), answer: first.answer_file, session: 'opencode-subagent-1'}), /Invalid agent request file/);
+  }
+  fs.writeFileSync(first.answer_file, 'x'.repeat(3000001));
+  assert.throws(() => respond({request: first.request_file, answer: first.answer_file, session: 'opencode-subagent-2'}), /size budget/);
+  fs.writeFileSync(first.answer_file, '{not json');
+  assert.throws(() => respond({request: first.request_file, answer: first.answer_file, session: 'opencode-subagent-3'}), /not valid JSON/);
+}));
+
+test('an unsupported agent harness is refused before any exchange starts', () => withReview(async ({deps, argv}) => {
+  await assert.rejects(main([...argv.slice(0, -1), 'unknown'], deps), /Supported agent harnesses/);
+}));

@@ -91,7 +91,7 @@ function sessions(directory) {
     .map(name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')).session);
 }
 
-function createExchange({directory, agent, journal = () => {}}) {
+function createExchange({directory, agent, journal}) {
   if (!AGENTS.includes(agent)) fail(`Supported agent harnesses: ${AGENTS.join(', ')}`);
   fs.mkdirSync(directory, {recursive: true, mode: 0o700});
   let sequence = 0;
