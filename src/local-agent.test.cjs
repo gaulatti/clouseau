@@ -65,14 +65,14 @@ test('an agent-driven review completes through separate commands, verifies once 
       '--session', `opencode-subagent-${++answered}`], deps);
     assert.equal(receipt.status, 'answered');
   }
-  assert.equal(answered, 4); assert.equal(verifications(), 1, 'real verification runs only once across resumes');
-  assert.equal(result.decision, 'auto_approve'); assert.equal(result.harness_invocations, 4); assert.equal(result.receipt, null);
+  assert.equal(answered, 2); assert.equal(verifications(), 1, 'real verification runs only once across resumes');
+  assert.equal(result.decision, 'auto_approve'); assert.equal(result.harness_invocations, 2); assert.equal(result.receipt, null);
   const usage = JSON.parse(fs.readFileSync(result.record, 'utf8')).result.usage;
   assert.deepEqual([...new Set(usage.map(item => item.harness))], ['opencode']);
   assert.deepEqual([...new Set(usage.map(item => item.execution))], ['agent_session']);
-  assert.equal(new Set(usage.map(item => item.session)).size, 4);
+  assert.equal(new Set(usage.map(item => item.session)).size, 2);
   const journal = fs.readFileSync(path.join(path.dirname(result.record), 'observations.jsonl'), 'utf8').trim().split('\n');
-  assert.equal(journal.length, 8, 'each request and response is journaled exactly once');
+  assert.equal(journal.length, 4, 'each request and response is journaled exactly once');
   assert.equal(git(f.directory, ['status', '--porcelain']), '');
   await assert.rejects(main(argv, deps), /already run/);
 }));

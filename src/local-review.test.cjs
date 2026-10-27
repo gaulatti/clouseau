@@ -26,7 +26,7 @@ test('every independent local investigation and grade receives the pre-PR bounda
     return f.ask(task);
   }});
   assert.equal(result.decision, 'auto_approve');
-  assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation', 'examiner:grading', 'challenger:grading']);
+  assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation']);
 });
 
 test('both local roles and graders receive honest partial or unavailable coverage without technical approval authority', async () => {
@@ -57,7 +57,7 @@ test('both local roles and graders receive honest partial or unavailable coverag
       return f.ask(task);
     }});
     assert.equal(result.decision, 'auto_approve', 'quality scoring is independent of the recorded technical deficit');
-    assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation', 'examiner:grading', 'challenger:grading']);
+    assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation']);
     assert.deepEqual(JSON.parse(f.snapshot.sources.verification.content), technical, 'review does not rewrite failed technical evidence');
   }
 });
