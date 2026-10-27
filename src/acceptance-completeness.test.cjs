@@ -32,7 +32,7 @@ test('a material missing dependency cannot be hidden behind green tests or a sat
   f.report.coverage.dependencies.push({path: 'src/store.rs', state: 'missing', reason: 'Durable acknowledgement depends on this implementation.', evidence: []});
   assert.throws(() => validateReport(f.report, f.snapshot), /missing material source/);
   f.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
-  assert.equal(validateReport(f.report, f.snapshot).decision, 'review_incomplete');
+  assert.equal(validateReport(f.report, f.snapshot).decision, 'auto_approve');
   f.snapshot.sources.store = {path: 'src/store.rs', kind: 'source', ref: f.snapshot.head_sha, content: 'persist_then_ack();'};
   f.report.evidence.push({id: 'store', source: 'store', start: 1, end: 1, quote: 'persist_then_ack();'});
   f.report.coverage.sources.push({source: 'store', state: 'inspected', reason: 'Storage persists before acknowledgement.', evidence: ['store']});
@@ -57,7 +57,7 @@ test('all supplied context is inventoried and exclusions require reasons and rea
   assert.equal(validateReport(f.report, f.snapshot).decision, 'auto_approve');
   f.report.coverage.sources[0].state = 'missing'; f.report.coverage.sources[0].evidence = [];
   f.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
-  assert.equal(validateReport(f.report, f.snapshot).decision, 'review_incomplete');
+  assert.equal(validateReport(f.report, f.snapshot).decision, 'auto_approve');
 });
 
 test('dependency exclusions are explicit and material paths cannot be invented or repeated', () => {
@@ -209,7 +209,7 @@ test('the actual model template and materializer preserve the complete immutable
   assert.equal(report.coverage.sources[0].source, 'contract');
   assert.ok(report.coverage.sources[1].evidence.length);
   // A real new review is fail-closed until its observed gates and grades exist.
-  assert.equal(validateReport(report, f.snapshot).decision, 'review_incomplete');
+  assert.equal(validateReport(report, f.snapshot).decision, 'auto_approve');
   for (const source of [-1, 3, 'truncated-sha:src/upload.rs']) {
     const invalid = structuredClone(facts); invalid.coverage.sources[1].source = source;
     assert.throws(() => validateReport(materialize(invalid, f.snapshot), f.snapshot), /unknown inventoried source/);

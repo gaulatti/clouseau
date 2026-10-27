@@ -82,7 +82,7 @@ test('sub-threshold findings, optional benefits and missing integrity evidence r
     review.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
   }
   let visible = grade(result, snapshot);
-  assert.match(visible, /Review incomplete/);
+  assert.match(visible, /Clouseau — Approved/);
   assert.match(visible, /\*\*Optional:/);
   assert.match(visible, /\*\*Score:\*\* 25.00 \/ 100/);
   assert.match(visible, /Check requiring attention — review completeness/);

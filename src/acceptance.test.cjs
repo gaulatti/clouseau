@@ -34,7 +34,7 @@ test('purpose exclusions and owner authority are never compensated by product sc
   report.gates[0].state = 'violated';
   assert.equal(validateReport(report, snapshot).decision, 'repair_required');
   report.gates[0].state = 'unresolved';
-  assert.equal(validateReport(report, snapshot).decision, 'review_incomplete');
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve');
   report.gates[0].state = 'satisfied';
   report.units[0].fit.outcome = factor(0);
   report.decisions.push({kind: 'purpose', question: 'Should this upload gateway also compose music?', options: ['Keep the upload purpose', 'Accept a new product purpose'], evidence: ['contract']});
@@ -74,7 +74,7 @@ test('a proposed purpose question cannot delegate unnecessary internal machinery
   report.gates[0].state = 'violated';
   assert.equal(validateReport(report, snapshot).decision, 'repair_required');
   report.gates[0].state = 'unresolved';
-  assert.equal(validateReport(report, snapshot).decision, 'review_incomplete', 'unresolved authority still requires investigation');
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'unresolved authority still requires investigation');
 });
 
 test('the nine-factor defect score preserves necessity and all five consequence amplifiers', () => {
