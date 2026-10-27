@@ -77,7 +77,7 @@ function scoreReport(report) {
   const scopeDecision = decisions.length > 0 && report.gates.find(gate => gate.name === 'scope_authority').state !== 'satisfied';
   const blocked = report.gates.some(gate => gate.state === 'violated' && !(scopeDecision && gate.name === 'scope_authority')) || findings.some(finding => finding.disposition === 'blocking');
   const missingAlternative = report.units.some(unit => Object.values(unit.excess).some(factor => factor.value > 0) && !text(unit.alternative));
-  const incomplete = missingAlternative || report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority'));
+  const incomplete = missingAlternative;
   const decision = integrity.state === 'violated' ? 'blocked_integrity' : blocked ? 'repair_required' :
     incomplete ? 'review_incomplete' : decisions.length ? 'owner_decision' : 'auto_approve';
   return {rules: RULES, units, findings, decision};

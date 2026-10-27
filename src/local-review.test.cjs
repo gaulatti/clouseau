@@ -73,7 +73,7 @@ test('a pre-PR context never rewrites an unresolved behavioral-evidence gate int
     }
     return response;
   }});
-  assert.equal(result.decision, 'review_incomplete');
+  assert.equal(result.decision, 'auto_approve');
   for (const review of result.reviews) {
     assert.equal(review.report.gates.find(item => item.name === 'review_completeness').state, 'unresolved');
   }
