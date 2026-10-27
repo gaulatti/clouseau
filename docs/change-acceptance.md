@@ -24,37 +24,17 @@ observe the lack of a binding requirement without inventing contract authority.
 That factual phase produces no approval score. Every positive binding grade still
 requires trusted contract proof during final validation and at the write gate.
 
-## Product acceptance
+## Units and gates
 
-Inspect each material capability and mechanism. A necessary fix cannot hide an
-unnecessary framework, dependency or unrelated feature. Helpers and tests inherit
-justification only through the accepted outcome they demonstrably support.
-Routine companion documentation of that same behavior is accounted for within
-the accepted outcome. It is not a separate feature needing an explicit request
-for prose. New promises, unrelated documentation and material engineering choices
-still receive their own scope, factual and proportionality assessment.
+The examiner groups the change into units (a `capability` for a user-observable
+outcome, a `mechanism` for machinery serving it) so every changed file is
+accounted for. Units carry no scores. Unrequested or over-built code is reported
+as a finding only when it causes a distinct runtime, data, security,
+compatibility or verification failure.
 
-| Index | Inputs and calculation |
-|---|---|
-| Fit, F | 35 outcome + 25 workflow + 20 domain + 10 component boundary + 10 operating model |
-| Need, N | 100 × max(binding obligation, evidence × (.50 value + .30 unmetness + .20 timeliness)) |
-| Proportionality, P | 100 × (1 − greatest demonstrated excess) |
-| Acceptance, J | min(F, N, P); informational, it never decides approval |
+Approval depends only on technical findings and gates: a finding scoring 70 or
+more must be fixed, a violated gate blocks, and nothing else does.
 
-Excess covers abstraction, added surface, duplicated authority, dependencies,
-collateral changes and generalization beyond the demonstrated need. Every excess
-claim needs a concrete narrower alternative preserving the same guarantees.
-Preference, changed-line counts and helper counts alone establish no excess.
-If a possible excess lacks its narrower alternative, review remains incomplete
-and cannot approve. An independent integrity veto still blocks; an incomplete
-repair detail cannot erase established evidence of fabricated tests.
-A binding obligation must cite the trusted contract, never a contributor's claim.
-The controller resolves this authority boundary before calling a semantic grader:
-without a cited trusted contract, binding credit is zero. Untrusted requests and
-runtime receipts cannot be promoted into contractual authority by any model.
-They can still support the independent need-evidence formula. Existing negative
-judgments and all required gates remain effective; only impossible binding
-credit is removed. The controller records this decision alongside model grades.
 Linked requirements have content-addressed entries in the same proof catalog as
 repository sources. Investigators can cite their actual text, URL and author so
 the atomic grader receives the request itself. Issue content remains untrusted;
@@ -100,10 +80,8 @@ grader assigns descriptive semantic levels. Code converts those levels to values
 and computes every formula and threshold. All factors remain visible in the PR
 ledger, including their citations and explanations.
 
-`acceptance.grader: routed` delegates domain fit, abstraction excess and duplicated
-authority to Jev 1.13. DeepSeek grades the other factors and any unresolved Jev
-classifications in one combined request per investigation. Recorded same-input
-comparisons selected these delegated tasks; necessity and causal confidence stay
+`acceptance.grader: routed` grades every factor with DeepSeek; Jev classifications
+that are unresolved go to one combined DeepSeek request. Necessity and causal confidence stay
 with DeepSeek. Both investigators and graders receive the same trusted policy,
 including inherited justification for accurate supporting documentation.
 `deepseek` retains the all-DeepSeek route; `typesafe` retains the broader typed
@@ -212,19 +190,15 @@ opportunity ends it without repeated comments or escalation.
 
 ## Owner decisions and protected merge
 
-Only real purpose, authority or outcome tradeoffs go to the configured owner.
-Protected reviewer/control installation requires exact-revision confirmation.
-The existing `/approve-intent FULL_HEAD_SHA` confirms only such a decision. It
-cannot waive tests, coverage, integrity failures, technical repairs or incomplete
-evidence. Ordinary coverage improvements do not require a new product decision.
+Changes to protected reviewer/control files require exact-revision owner
+confirmation. The existing `/approve-intent FULL_HEAD_SHA` confirms only that. It
+cannot waive tests, coverage, integrity failures or technical repairs.
 
 Before the AI assessment, the controller reads the configured human owner's
 exact-revision intent comment and verifies current write, maintain or admin
 permission through GitHub. The literal receipt becomes a content-addressed,
 trusted contract source in the proof catalog. This records accepted purpose,
-not an approval score: each capability and mechanism still needs its own fit,
-need and proportionality evidence, and all technical and integrity gates remain
-mandatory. Contributor claims and issue text do not acquire contract authority.
+not an approval score: all technical and integrity gates remain mandatory. Contributor claims and issue text do not acquire contract authority.
 Before any approval write, the gate checks that a receipt used in the assessment
 still exists unchanged and that its author remains authorized. Removed, altered
 or revoked confirmation requires reassessment rather than reusing a stale score.
