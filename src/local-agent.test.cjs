@@ -180,3 +180,19 @@ test('an unsupported agent harness is refused before any exchange starts', () =>
   await assert.rejects(main([...argv.slice(0, -1), 'unknown'], deps), /Supported agent harnesses/);
   assert.throws(() => createExchange({directory: path.join(os.tmpdir(), 'clouseau-never-created'), agent: 'unknown'}), /Supported agent harnesses/);
 }));
+
+test('a schema-valid answer that fails evidence validation goes back to the agent instead of ending the review', () => withReview(async ({deps, argv}) => {
+  const first = await main(argv, deps);
+  const answer = subagent(JSON.parse(fs.readFileSync(first.request_file, 'utf8')));
+  answer.report.units.push({...answer.report.units[0], id: 'orphan-unit'});
+  fs.writeFileSync(first.answer_file, JSON.stringify(answer));
+  respond({request: first.request_file, answer: first.answer_file, session: 'opencode-subagent-1'});
+  const again = await main(argv, deps);
+  assert.equal(again.status, 'awaiting_agent'); assert.equal(again.sequence, 1); assert.equal(again.rejections, 1);
+  assert.match(again.reason, /previous answer was rejected: Invalid acceptance evidence/);
+  assert.throws(() => respond({request: again.request_file, answer: again.answer_file, session: 'opencode-subagent-1'}), /cannot answer two requests/);
+  fs.writeFileSync(again.answer_file, JSON.stringify(subagent(JSON.parse(fs.readFileSync(again.request_file, 'utf8')))));
+  respond({request: again.request_file, answer: again.answer_file, session: 'opencode-subagent-2'});
+  const next = await main(argv, deps);
+  assert.equal(next.status, 'awaiting_agent'); assert.equal(next.sequence, 2);
+}));
