@@ -3,14 +3,11 @@
 const {createHash} = require('node:crypto');
 
 const FACTORS = Object.freeze({
-  fit: ['outcome', 'workflow', 'domain', 'boundary', 'operating_model'],
-  need: ['binding', 'evidence', 'value', 'unmetness', 'timeliness'],
-  excess: ['abstraction', 'surface', 'authority', 'dependencies', 'collateral', 'generalization'],
   defect: ['necessity', 'confidence', 'severity', 'activation', 'irreversibility', 'reach', 'detection', 'propagation', 'recurrence'],
 });
 const GATES = Object.freeze(['scope_authority', 'test_integrity', 'security_isolation', 'compatibility_recovery', 'review_completeness']);
 const STATES = Object.freeze(['satisfied', 'violated', 'unresolved', 'inapplicable']);
-const RULES = Object.freeze({version: 2, product_threshold: 80, defect_threshold: 70, xg_bonus: 20});
+const RULES = Object.freeze({version: 4, defect_threshold: 70, xg_bonus: 20});
 const MAX_CITATION_LINES = 40;
 
 function requireThat(condition, message) {
@@ -30,10 +27,9 @@ function unique(values, label) {
   requireThat(Array.isArray(values) && values.every(text) && new Set(values).size === values.length, label);
 }
 
-function range(value) {
-  keys(value, ['min', 'max', 'evidence', 'reason']);
-  requireThat(Number.isFinite(value.min) && Number.isFinite(value.max) &&
-    0 <= value.min && value.min <= value.max && value.max <= 1, 'factor range');
+function point(value) {
+  keys(value, ['value', 'evidence', 'reason']);
+  requireThat(Number.isFinite(value.value) && 0 <= value.value && value.value <= 1, 'factor value');
   requireThat(text(value.reason), 'factor explanation');
   unique(value.evidence, 'factor citations');
   requireThat(value.evidence.length > 0, 'factor without evidence');
@@ -43,57 +39,27 @@ function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
-function productScore(unit, bound) {
-  const f = name => unit.fit[name][bound];
-  const n = name => unit.need[name][bound];
-  const fit = 35 * f('outcome') + 25 * f('workflow') + 20 * f('domain') + 10 * f('boundary') + 10 * f('operating_model');
-  const need = 100 * Math.max(n('binding'), n('evidence') * (0.50 * n('value') + 0.30 * n('unmetness') + 0.20 * n('timeliness')));
-  // Excess is adverse: the upper excess bound produces the lower acceptance bound.
-  const opposite = bound === 'min' ? 'max' : 'min';
-  const proportionality = 100 * (1 - Math.max(...FACTORS.excess.map(name => unit.excess[name][opposite])));
-  return {fit, need, proportionality, acceptance: Math.min(fit, need, proportionality)};
-}
-
-function findingScore(finding, bound) {
-  const v = name => finding.factors[name][bound];
+function findingScore(finding) {
+  const v = name => finding.factors[name].value;
   const impact = 1 + 0.25 * v('irreversibility') + 0.20 * v('reach') + 0.20 * v('detection') + 0.20 * v('propagation') + 0.15 * v('recurrence');
   return 100 * v('confidence') * Math.min(1, Math.max(v('necessity'), v('activation') * v('severity') * impact));
 }
 
 function scoreReport(report) {
-  const units = report.units.map(unit => {
-    const min = productScore(unit, 'min');
-    const max = productScore(unit, 'max');
-    return {id: unit.id, min, max, disposition: min.acceptance >= RULES.product_threshold ? 'accepted' :
-      max.acceptance < RULES.product_threshold ? 'rework' : 'investigate'};
-  });
   const findings = report.findings.map(finding => {
-    const min = findingScore(finding, 'min');
-    const max = findingScore(finding, 'max');
+    const score = findingScore(finding);
     const xg = Object.values(finding.opportunity).every(value => value === true) ? 1 : 0;
-    const priority = Math.min(100, max + RULES.xg_bonus * xg / finding.blast_radius ** 2);
-    return {id: finding.id, min, max, xg, priority, disposition: min >= RULES.defect_threshold ? 'blocking' :
-      max < RULES.defect_threshold ? 'nonblocking' : 'investigate'};
+    const priority = Math.min(100, score + RULES.xg_bonus * xg / finding.blast_radius ** 2);
+    return {id: finding.id, score, xg, priority, disposition: score >= RULES.defect_threshold ? 'blocking' : 'nonblocking'};
   });
   const integrity = report.gates.find(gate => gate.name === 'test_integrity');
-  // A purpose question needs a material user outcome outside the accepted
-  // purpose. Unnecessary machinery serving an accepted outcome is rework,
-  // even if an inspector proposes asking the owner to authorize that machinery.
-  const newOutcome = units.some((unit, index) => report.units[index].kind === 'capability' && unit.max.fit < RULES.product_threshold);
-  const decisions = report.decisions.filter(item => item.kind !== 'purpose' || newOutcome);
-  const scopeDecision = decisions.length > 0 && report.gates.find(gate => gate.name === 'scope_authority').state !== 'satisfied';
-  const blocked = report.gates.some(gate => gate.state === 'violated' && !(scopeDecision && gate.name === 'scope_authority')) || findings.some(finding => finding.disposition === 'blocking');
-  const missingAlternative = report.units.some(unit => Object.values(unit.excess).some(value => value.max > 0) && !text(unit.alternative));
-  const incomplete = missingAlternative || report.gates.some(gate => gate.state === 'unresolved' && !(scopeDecision && gate.name === 'scope_authority')) ||
-    units.some(unit => unit.disposition === 'investigate') || findings.some(finding => finding.disposition === 'investigate');
-  const rework = units.some(unit => unit.disposition === 'rework');
-  const decision = integrity.state === 'violated' ? 'blocked_integrity' : blocked ? 'repair_required' :
-    incomplete ? 'review_incomplete' : decisions.length ? 'owner_decision' : rework ? 'repair_required' : 'auto_approve';
-  return {rules: RULES, units, findings, decision};
+  const blocked = report.gates.some(gate => gate.state === 'violated') || findings.some(finding => finding.disposition === 'blocking');
+  const decision = integrity.state === 'violated' ? 'blocked_integrity' : blocked ? 'repair_required' : 'auto_approve';
+  return {rules: RULES, findings, decision};
 }
 
-function validateEvidence(report, snapshot, graded) {
-  keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'decisions', 'resolutions',
+function validateEvidence(report, snapshot) {
+  keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'resolutions',
     ...(snapshot.review_manifest_version ? ['coverage', 'reopenings'] : [])]);
   requireThat(report.version === RULES.version && report.snapshot === snapshot.digest && text(report.summary), 'stale identity or missing summary');
   requireThat(Array.isArray(report.evidence) && report.evidence.length > 0, 'missing evidence register');
@@ -116,22 +82,17 @@ function validateEvidence(report, snapshot, graded) {
   };
   const factors = (value, group) => {
     keys(value, FACTORS[group]);
-    for (const factor of Object.values(value)) {range(factor); citations(factor.evidence);}
+    for (const factor of Object.values(value)) {point(factor); citations(factor.evidence);}
   };
   requireThat(Array.isArray(report.units) && report.units.length > 0, 'empty acceptance plan');
   const unitIds = new Set();
   for (const unit of report.units) {
-    keys(unit, ['id', 'title', 'kind', 'paths', 'obligation', 'fit', 'need', 'excess', 'alternative']);
+    keys(unit, ['id', 'title', 'kind', 'paths', 'obligation']);
     requireThat(text(unit.id) && !unitIds.has(unit.id) && text(unit.title) && text(unit.obligation) &&
       ['capability', 'mechanism'].includes(unit.kind), 'acceptance unit identity');
     unitIds.add(unit.id);
     unique(unit.paths, 'unit paths');
     requireThat(unit.paths.length > 0 && unit.paths.every(name => snapshot.paths.includes(name)), 'unit outside changed paths');
-    factors(unit.fit, 'fit'); factors(unit.need, 'need'); factors(unit.excess, 'excess');
-    if (graded && unit.need.binding.max > 0) requireThat(unit.need.binding.evidence.some(id =>
-      snapshot.sources[evidence.get(id).source].authority === 'trusted' &&
-      snapshot.sources[evidence.get(id).source].kind === 'contract'), 'binding obligation lacks trusted contract authority');
-    requireThat(typeof unit.alternative === 'string' && unit.alternative.length <= 2000, 'invalid narrower alternative');
   }
   requireThat(Array.isArray(report.findings), 'missing findings register');
   const findingIds = new Set();
@@ -144,7 +105,6 @@ function validateEvidence(report, snapshot, graded) {
     requireThat(finding.evidence.some(id => snapshot.sources[evidence.get(id).source].path === finding.path ||
       snapshot.files.some(file => file.path === finding.path &&
         [file.base_source, file.head_source].includes(evidence.get(id).source))), 'finding lacks changed-path causal evidence');
-    requireThat([0, 1].includes(finding.factors.confidence.max), 'uncertain causal evidence must retain a possible blocking upper bound');
     requireThat(Number.isFinite(finding.blast_radius) && finding.blast_radius >= 1 && finding.blast_radius <= 10, 'repair blast radius');
     keys(finding.opportunity, ['mechanical', 'beneficial', 'within_scope', 'verified']);
     requireThat(Object.values(finding.opportunity).every(value => typeof value === 'boolean'), 'opportunity evidence');
@@ -171,13 +131,6 @@ function validateEvidence(report, snapshot, graded) {
       'accounting lacks direct changed-file evidence');
   }
   if (snapshot.review_manifest_version) validateCompleteness(report, snapshot, evidence, citations);
-  requireThat(Array.isArray(report.decisions), 'missing authority decisions');
-  for (const item of report.decisions) {
-    keys(item, ['kind', 'question', 'options', 'evidence']);
-    requireThat(['purpose', 'authority', 'tradeoff'].includes(item.kind) && text(item.question), 'unsupported human handoff');
-    unique(item.options, 'decision options'); requireThat(item.options.length >= 2 && item.options.length <= 4, 'decision needs concrete options');
-    citations(item.evidence);
-  }
   requireThat(Array.isArray(report.resolutions), 'missing prior-finding dispositions');
   const resolved = new Set();
   for (const item of report.resolutions) {
@@ -244,12 +197,12 @@ function validateCompleteness(report, snapshot, evidence, citations) {
 // Investigators supply facts, not numeric claims. Their placeholder range is
 // not an assertion of a binding obligation and cannot yield an approval score.
 function validateFacts(report, snapshot) {
-  validateEvidence(report, snapshot, false);
+  validateEvidence(report, snapshot);
 }
 
 function validateReport(report, snapshot) {
-  validateEvidence(report, snapshot, true);
+  validateEvidence(report, snapshot);
   return scoreReport(report);
 }
 
-module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, productScore, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, findingScore, scoreReport, validateFacts, validateReport};

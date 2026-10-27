@@ -41,13 +41,16 @@ function reviewDecision(record) {
     'altered evidence snapshot');
   requireReceipt(result.snapshot === snapshot.digest && result.policy_digest === snapshot.policy_digest &&
     result.config_digest === snapshot.config_digest, 'review does not match evidence');
-  requireReceipt(Array.isArray(result.usage) && result.usage.length >= 4 &&
+  const graded = role => result.reviews?.find(item => item.role === role)?.report?.findings?.length > 0;
+  requireReceipt(Array.isArray(result.usage) && result.usage.length >= 2 &&
     result.execution_digest === digest(result.usage) && new Set(result.usage.map(item => item.session)).size === result.usage.length &&
     result.usage.every(item => ['codex', 'claude', 'opencode'].includes(item.harness) && [undefined, 'agent_session'].includes(item.execution) &&
       typeof item.session === 'string' && item.session.length > 0 &&
       ['request_digest', 'response_digest', 'transport_digest'].every(name => /^[a-f0-9]{64}$/.test(item[name]))) &&
+    // Grading runs only for findings, so a role without findings has no grading round to record.
     ['examiner', 'challenger'].every(role => ['investigation', 'grading'].every(phase =>
-      result.usage.some(item => item.role === role && item.phase === phase))), 'complete independent harness execution records required');
+      (phase === 'grading' && !graded(role)) || result.usage.some(item => item.role === role && item.phase === phase))),
+    'complete independent harness execution records required');
   requireReceipt(Array.isArray(result.reviews) && result.reviews.length === 2 &&
     result.reviews.map(item => item.role).join(',') === 'examiner,challenger', 'two independent roles required');
   const reviews = result.reviews.map(item => ({...item,

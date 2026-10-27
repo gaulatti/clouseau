@@ -92,7 +92,7 @@
     "digest": "ad5f375b77b20024a1c3df07580393f6029c76dd21d8fb81ccb262cef1d5b060"
   },
   "report": {
-    "version": 2,
+    "version": 3,
     "snapshot": "ad5f375b77b20024a1c3df07580393f6029c76dd21d8fb81ccb262cef1d5b060",
     "summary": "The only changed file is src/upload.test.js. It adds one test covering the three rejection branches of acceptUpload (missing tenant, zero bytes, oversized bytes) and asserts that the persist callback is never invoked in those cases. No production source changes. The contract requires meaningful tests establishing existing behavior with exact line and branch coverage; the verification receipt reports 6/6 lines and 7/7 branches covered with exit code 0. The new test exercises real production paths with discriminating assertions (assert.throws with specific error patterns plus writes===0), so it is not a fake test. The contract also directs inspection of src/storage-policy.js, which is not supplied; that file is unchanged by this PR, so it does not affect the assessment of a test-only change, but the persistence boundary contract cannot be verified from the supplied excerpt.",
     "units": [
@@ -103,143 +103,127 @@
         "obligation": "Contract requires meaningful tests establishing existing upload behavior (reject missing tenant, zero/oversized bodies before durable acceptance) with exact line and branch coverage.",
         "fit": {
           "outcome": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-1-1",
               "proof-4-1"
             ],
-            "reason": "Tests assert the contract's rejection outcomes (Unauthorized, Invalid size) and that storage is never reached."
+            "reason": "Tests assert the contract's rejection outcomes (Unauthorized, Invalid size) and that storage is never reached.",
+            "value": 1
           },
           "workflow": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-1-1",
               "proof-4-1"
             ],
-            "reason": "Uses the existing node:test runner and the existing acceptUpload interface; no new workflow."
+            "reason": "Uses the existing node:test runner and the existing acceptUpload interface; no new workflow.",
+            "value": 1
           },
           "domain": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-1-1",
               "proof-4-1"
             ],
-            "reason": "Domain is tenant-authenticated photograph upload validation, matching the contract."
+            "reason": "Domain is tenant-authenticated photograph upload validation, matching the contract.",
+            "value": 1
           },
           "boundary": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-5-1",
               "proof-4-1"
             ],
-            "reason": "Test-only change; production boundary in src/upload.js is untouched and exercised through its public function."
+            "reason": "Test-only change; production boundary in src/upload.js is untouched and exercised through its public function.",
+            "value": 1
           },
           "operating_model": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-1-1",
               "proof-4-1"
             ],
-            "reason": "Single process, existing dependencies, no flags or configuration added."
+            "reason": "Single process, existing dependencies, no flags or configuration added.",
+            "value": 1
           }
         },
         "need": {
           "binding": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-1-1"
             ],
-            "reason": "Trusted contract states meaningful tests with exact line and branch coverage are required maintenance."
+            "reason": "Trusted contract states meaningful tests with exact line and branch coverage are required maintenance.",
+            "value": 1
           },
           "evidence": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-3-1",
               "proof-4-1"
             ],
-            "reason": "Base test file covered only the success path; rejection branches were untested."
+            "reason": "Base test file covered only the success path; rejection branches were untested.",
+            "value": 1
           },
           "value": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-4-1",
               "proof-5-1"
             ],
-            "reason": "New test discriminates prior behavior: it would fail if rejection checks or pre-persist ordering regressed."
+            "reason": "New test discriminates prior behavior: it would fail if rejection checks or pre-persist ordering regressed.",
+            "value": 1
           },
           "unmetness": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-3-1"
             ],
-            "reason": "Base file had no test for zero, oversized or missing-tenant inputs."
+            "reason": "Base file had no test for zero, oversized or missing-tenant inputs.",
+            "value": 1
           },
           "timeliness": {
-            "min": 1,
-            "max": 1,
             "evidence": [
               "proof-1-1"
             ],
-            "reason": "Contract requires this coverage for the current release; no feature flag gates the path."
+            "reason": "Contract requires this coverage for the current release; no feature flag gates the path.",
+            "value": 1
           }
         },
         "excess": {
           "abstraction": {
-            "min": 0,
-            "max": 0,
             "evidence": [
               "proof-4-1"
             ],
-            "reason": "No new abstraction; a single table-driven test loop."
+            "reason": "No new abstraction; a single table-driven test loop.",
+            "value": 0
           },
           "surface": {
-            "min": 0,
-            "max": 0,
             "evidence": [
               "proof-4-1"
             ],
-            "reason": "Adds one test case only; no new public surface."
+            "reason": "Adds one test case only; no new public surface.",
+            "value": 0
           },
           "authority": {
-            "min": 0,
-            "max": 0,
             "evidence": [
               "proof-4-1"
             ],
-            "reason": "No new authority or privilege introduced."
+            "reason": "No new authority or privilege introduced.",
+            "value": 0
           },
           "dependencies": {
-            "min": 0,
-            "max": 0,
             "evidence": [
               "proof-4-1"
             ],
-            "reason": "Uses only node:test and node:assert already imported."
+            "reason": "Uses only node:test and node:assert already imported.",
+            "value": 0
           },
           "collateral": {
-            "min": 0,
-            "max": 0,
             "evidence": [
               "proof-4-1"
             ],
-            "reason": "No unrelated files or behavior changed."
+            "reason": "No unrelated files or behavior changed.",
+            "value": 0
           },
           "generalization": {
-            "min": 0,
-            "max": 0,
             "evidence": [
               "proof-4-1"
             ],
-            "reason": "Covers exactly the three contract rejection conditions, no broader generalization."
+            "reason": "Covers exactly the three contract rejection conditions, no broader generalization.",
+            "value": 0
           }
         },
         "alternative": "",

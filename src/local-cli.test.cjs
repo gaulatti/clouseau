@@ -153,7 +153,7 @@ test('agent-only local review needs no CI config or provider keys and does not r
     const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
     const report = await main(['review', '--directory', f.directory, '--base', f.base, '--request-file', request, '--harness', 'claude'], deps);
     assert.equal(report.decision, 'auto_approve'); assert.equal(report.receipt, null);
-    assert.equal(report.provider_api_calls, 0); assert.equal(report.harness_invocations, 4);
+    assert.equal(report.provider_api_calls, 0); assert.equal(report.harness_invocations, 2);
     assert.equal(git(f.directory, ['status', '--porcelain']), '');
     await assert.rejects(runReview(args, deps), /already run/);
     await assert.rejects(runReview({directory: f.directory}, deps), /requirement file/);
@@ -240,7 +240,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
       // receipt must remain intact while a fresh review signs the new exact SHA.
       const advancedDeps = {...deps, installed: () => ({sha: 'f'.repeat(40), digest: 'e'.repeat(64), clean: true})};
       const advanced = await runReview(args, advancedDeps);
-      assert.equal(advanced.harness_invocations, 4); assert.equal(advanced.reviewer_sha, 'f'.repeat(40));
+      assert.equal(advanced.harness_invocations, 2); assert.equal(advanced.reviewer_sha, 'f'.repeat(40));
       assert.notEqual(advanced.receipt, result.receipt);
       assert.equal(JSON.parse(fs.readFileSync(result.receipt)).payload.reviewer_sha, reviewerSha);
       assert.equal(JSON.parse(fs.readFileSync(advanced.receipt)).payload.reviewer_sha, 'f'.repeat(40));
@@ -425,7 +425,7 @@ test('partial native coverage and a real failing exact gate still reach both loc
     });
     assert.deepEqual(roles, ['examiner', 'challenger']);
     assert.equal(result.decision, 'auto_approve');
-    assert.equal(result.harness_invocations, 4);
+    assert.equal(result.harness_invocations, 2);
     assert.equal(result.local_verification.commands, 'failed');
     assert.equal(result.local_verification.coverage.status, 'below_threshold');
     assert.equal(result.decision_scope, 'review_reuse_only');

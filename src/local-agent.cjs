@@ -87,8 +87,8 @@ function readJson(filename, label) {
 }
 
 function sessions(directory) {
-  return fs.readdirSync(directory).filter(name => /^response-\d{4}\.json$/.test(name))
-    .map(name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')).session);
+  return fs.readdirSync(directory).filter(name => /^(response-\d{4}|rejected-\d{4}-\d+)\.json$/.test(name))
+    .map(name => JSON.parse(fs.readFileSync(path.join(directory, name), 'utf8')).session).filter(Boolean);
 }
 
 function createExchange({directory, agent, journal}) {
@@ -129,6 +129,17 @@ function createExchange({directory, agent, journal}) {
       fail(`Agent response ${sequence} does not match its request`);
     }
     validateValue(task.schema, response.value);
+    if (task.check) {
+      try {task.check(response.value);} catch (error) {
+        // A semantically invalid answer is returned to the agent for correction; its session stays spent.
+        fs.writeFileSync(path.join(directory, `rejected-${id}-${rejected + 1}.json`),
+          JSON.stringify({session: response.session, reason: error.message}) + '\n', {mode: 0o600});
+        fs.unlinkSync(responsePath);
+        throw new AwaitingAgent({agent, sequence, role: task.role, phase: task.phase, request_file: requestPath,
+          prompt_file: promptPath, schema_file: schemaPath, answer_file: answerFile, rejections: rejected + 1,
+          reason: `The previous answer was rejected: ${error.message}`});
+      }
+    }
     const provenance = {harness: agent, execution: 'agent_session', role: task.role, phase: task.phase,
       session: response.session, request_digest: requestDigest, response_digest: digest(response.value),
       transport_digest: digest(text)};

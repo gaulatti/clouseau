@@ -238,7 +238,7 @@ function casePassed(scenario, result) {
   return scenario.expected.includes(result.decision) && (!scenario.unavailableSource ||
     result.reviews.every(view => view.report.coverage.dependencies.some(item => item.path === scenario.unavailableSource && item.state === 'missing')) ||
     result.reviews.some(view => view.report.gates.some(gate => gate.name === 'review_completeness' && gate.state === 'unresolved') &&
-      view.grading?.decisions.some(item => item.id === 'review_completeness' && item.range.min < 1))) && (!scenario.requiredFinding ||
+      view.grading?.decisions.some(item => item.id === 'review_completeness' && item.value < 1))) && (!scenario.requiredFinding ||
     result.known_defect_match?.binding === digest(defectPacket(scenario, result)) &&
     result.known_defect_match.answer.choice === 'matched' && result.known_defect_match.answer.probabilities.matched >= 0.8);
 }

@@ -25,7 +25,7 @@ test('initial review executes real Python tests and native coverage before signi
     assert.equal(result.ordinary_pr_approval, false);
     assert.equal(result.manual_owner_acceptance_required, true);
     assert.equal(result.provider_api_calls, 0);
-    assert.equal(runtime.ask.calls(), 4, 'semantic answers are explicitly deterministic test fixtures');
+    assert.equal(runtime.ask.calls(), 2, 'semantic answers are explicitly deterministic test fixtures');
     const record = JSON.parse(fs.readFileSync(result.record));
     assert.deepEqual(record.technical.exact_coverage, {lines: [4, 4], branches: [2, 2]});
     assert.equal(record.technical.commands.length, 2);
@@ -50,7 +50,7 @@ test('initial review executes real Python tests and native coverage before signi
     const observedFailure = harness(true);
     const rejected = await cli.runReview(args, {...runtime, ask: observedFailure});
     const failedRecord = JSON.parse(fs.readFileSync(rejected.record));
-    assert.equal(observedFailure.calls(), 4, 'failed behavior is assessed rather than suppressing AI');
+    assert.equal(observedFailure.calls(), 2, 'failed behavior is assessed rather than suppressing AI');
     assert.equal(failedRecord.technical.verification_status, 'failed');
     assert.equal(failedRecord.technical.commands[0].exit_code, 1);
     assert.match(failedRecord.technical.commands[0].stderr, /ValueError not raised/);
