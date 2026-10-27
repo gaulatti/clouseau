@@ -14,12 +14,12 @@ const response = value => {
   for (const entry of value.evidence || []) delete entry.quote;
   for (const unit of value.units || []) {
     delete unit.paths;
-    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) {delete factor.min; delete factor.max;}
+    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) delete factor.value;
   }
   for (const finding of value.findings || []) {
     const evidence = value.evidence.find(entry => finding.evidence.includes(entry.id) && entry.source !== 'contract');
     finding.anchor = {source: evidence.source, start: evidence.start, end: evidence.end}; delete finding.path;
-    for (const factor of Object.values(finding.factors)) {delete factor.min; delete factor.max;}
+    for (const factor of Object.values(finding.factors)) delete factor.value;
   }
   return {ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
   {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: value.request_sources ? 'source_request' : 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})};
@@ -39,12 +39,12 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   assert.equal(original.evidence.length, 2);
   const fresh = fixture().snapshot;
   const facts = template(fresh);
-  assert.equal(materialize(facts, fresh).units[0].fit.outcome.max, 1);
+  assert.equal(materialize(facts, fresh).units[0].fit.outcome.value, 0);
   const concern = finding();
   concern.anchor = {source: 'head', start: 1, end: 1}; delete concern.path;
   concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
   facts.findings.push(concern);
-  assert.equal(materialize(facts, fresh).findings[0].factors.necessity.max, 1);
+  assert.equal(materialize(facts, fresh).findings[0].factors.necessity.value, 0);
   assert.equal(materialize(facts, fresh).findings[0].path, 'src/upload.rs');
   const outside = structuredClone(facts); outside.findings[0].anchor.source = 'contract';
   assert.throws(() => materialize(outside, fresh), /outside changed source/);
@@ -213,10 +213,12 @@ test('facts can observe no binding requirement while final positive grades still
   const {validateFacts, validateReport} = require('./acceptance.cjs');
   assert.equal(validateFacts(materialized, snapshot), undefined, 'fact validation cannot provide an approval score');
   assert.doesNotThrow(() => validateInspection(materialized, snapshot));
+  materialized.units[0].need.binding.value = 1;
   assert.throws(() => validateReport(materialized, snapshot), /binding obligation lacks trusted contract authority/);
-  report.units[0].need.binding = {min: 0, max: 0, ...facts.units[0].need.binding};
+  materialized.units[0].need.binding.value = 0;
+  report.units[0].need.binding = {value: 0, ...facts.units[0].need.binding};
   assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'established value and need can justify work without claiming a binding requirement');
-  report.units[0].need.binding.max = 0.25;
+  report.units[0].need.binding.value = 0.25;
   assert.throws(() => validateReport(report, snapshot), /binding obligation lacks trusted contract authority/);
   report.units[0].need.binding.evidence = ['contract'];
   assert.doesNotThrow(() => validateReport(report, snapshot));
@@ -278,11 +280,10 @@ test('long source and causal-anchor proofs preserve all lines, references and bl
   assert.equal(value.findings[0].path, report.findings[0].path);
   for (const [i, unit] of value.units.entries()) for (const group of ['fit', 'need', 'excess']) {
     for (const [key, factor] of Object.entries(unit[group])) {
-      Object.assign(factor, {min: report.units[i][group][key].min, max: report.units[i][group][key].max});
+      factor.value = report.units[i][group][key].value;
     }
   }
-  for (const [key, factor] of Object.entries(value.findings[0].factors)) Object.assign(factor,
-    {min: report.findings[0].factors[key].min, max: report.findings[0].factors[key].max});
+  for (const [key, factor] of Object.entries(value.findings[0].factors)) factor.value = report.findings[0].factors[key].value;
   assert.deepEqual(validateReport(value, snapshot), scoreReport(report));
   assert.equal(validateReport(value, snapshot).decision, 'repair_required');
   value.findings[0].evidence.push('invented');

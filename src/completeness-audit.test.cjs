@@ -13,7 +13,7 @@ function facts() {
   for (const unit of report.units) {
     delete unit.paths;
     for (const group of ['fit', 'need', 'excess']) for (const value of Object.values(unit[group])) {
-      delete value.min; delete value.max;
+      delete value.value;
     }
   }
   return report;
@@ -76,12 +76,12 @@ test('the canonical local route enforces the same independent completeness answe
 test('completeness grading never upgrades a missing or violated inspector gate and requires an exact complete condition', () => {
   const report = structuredClone(recorded.report), gate = report.gates.find(item => item.name === 'review_completeness');
   applyCompleteness(report, []); assert.equal(gate.state, 'satisfied');
-  applyCompleteness(report, [{id: 'review_completeness', target: {min: 1, max: 1}}]); assert.equal(gate.state, 'satisfied');
+  applyCompleteness(report, [{id: 'review_completeness', target: {value: 1}}]); assert.equal(gate.state, 'satisfied');
   for (const state of ['unresolved', 'violated']) {
     gate.state = state;
-    applyCompleteness(report, [{id: 'review_completeness', target: {min: 0, max: 1}}]); assert.equal(gate.state, state);
-    applyCompleteness(report, [{id: 'review_completeness', target: {min: 1, max: 1}}]); assert.equal(gate.state, state);
+    applyCompleteness(report, [{id: 'review_completeness', target: {value: 0}}]); assert.equal(gate.state, state);
+    applyCompleteness(report, [{id: 'review_completeness', target: {value: 1}}]); assert.equal(gate.state, state);
   }
-  gate.state = 'satisfied'; applyCompleteness(report, [{id: 'review_completeness', target: {min: 0.75, max: 1}}]);
+  gate.state = 'satisfied'; applyCompleteness(report, [{id: 'review_completeness', target: {value: 0.75}}]);
   assert.equal(gate.state, 'unresolved');
 });

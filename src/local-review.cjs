@@ -5,7 +5,7 @@ const path = require('node:path');
 const {digest, validateReport} = require('./acceptance.cjs');
 const {schemas} = require('./acceptance-schema.cjs');
 const {modelEvidence, modelTemplate, materialize, validateInspection, combine} = require('./acceptance-review.cjs');
-const {locations, packetFor, bounds, authorityBounds, applyCompleteness} = require('./acceptance-grading.cjs');
+const {locations, packetFor, grade, authorityBounds, applyCompleteness} = require('./acceptance-grading.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
@@ -112,10 +112,9 @@ async function localReview({snapshot, ask, addSources}) {
         throw new Error('Incomplete local atomic grades');
       }
       for (const entry of entries) {
-        const range = bounds(answers[entry.id]);
-        if (entry.group === 'defect' && entry.name === 'confidence' && range.max > 0) range.max = 1;
-        Object.assign(entry.target, range);
-        decisions.push({id: entry.id, provider: 'local-harness', answer: answers[entry.id], range: {...range}});
+        const {value} = grade(answers[entry.id]);
+        entry.target.value = value;
+        decisions.push({id: entry.id, provider: 'local-harness', answer: answers[entry.id], value});
       }
     }
     applyCompleteness(report, entries);

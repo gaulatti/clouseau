@@ -34,7 +34,7 @@ function schemas(snapshot) {
   ]};
   const anchors = [...new Set(snapshot.files.flatMap(file => [file.base_source, file.head_source]).filter(Boolean))];
   return {
-    acceptance_report: object({version: {type: 'integer', const: 2}, snapshot: enumeration([snapshot.digest]), summary: string,
+    acceptance_report: object({version: {type: 'integer', const: 3}, snapshot: enumeration([snapshot.digest]), summary: string,
       units: {...array(object({id: string, title: string, kind: enumeration(['capability', 'mechanism']), obligation: string,
         fit: group('fit'), need, excess: group('excess'), alternative: string})),
         description: 'Identify material outcomes and engineering choices. Account for accurate companion documentation of the same behavior within its accepted outcome, not as a separate feature needing a request for prose. Independently assess new promises, unrelated documentation and material mechanisms.'},

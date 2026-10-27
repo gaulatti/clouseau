@@ -48,9 +48,9 @@ test('qualification requires causal adjudication of the reference defect, not an
   assert.equal(casePassed(missing, result), true);
   report.coverage.dependencies = [];
   const gate = report.gates.find(item => item.name === 'review_completeness'); gate.state = 'unresolved';
-  result.reviews[0].grading = {decisions: [{id: 'review_completeness', range: {min: 0, max: 1}}]};
+  result.reviews[0].grading = {decisions: [{id: 'review_completeness', value: 0}]};
   assert.equal(casePassed(missing, result), true, 'independent completeness grading can fail closed despite an inspector omitting or excluding the dependency');
-  result.reviews[0].grading.decisions[0].range = {min: 1, max: 1};
+  result.reviews[0].grading.decisions[0].value = 1;
   assert.equal(casePassed(missing, result), false, 'an unrelated incomplete verdict does not qualify the required completeness audit');
 });
 

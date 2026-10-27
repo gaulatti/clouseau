@@ -2,8 +2,8 @@
 
 const {FACTORS, GATES, digest} = require('../../src/acceptance.cjs');
 
-function factor(min = 1, max = min, evidence = ['source']) {
-  return {min, max, evidence, reason: 'Established by the cited source and accepted contract.'};
+function factor(value = 1, evidence = ['source']) {
+  return {value, evidence, reason: 'Established by the cited source and accepted contract.'};
 }
 
 function fixture() {
@@ -13,14 +13,14 @@ function fixture() {
   }};
   snapshot.digest = digest(snapshot);
   const group = (name, value) => Object.fromEntries(FACTORS[name].map(key => [key, factor(value)]));
-  const report = {version: 2, snapshot: snapshot.digest, summary: 'Restores the established upload contract with direct validation and real regression tests.',
+  const report = {version: 3, snapshot: snapshot.digest, summary: 'Restores the established upload contract with direct validation and real regression tests.',
     evidence: [
       {id: 'contract', source: 'contract', start: 1, end: 2, quote: 'Validate every upload before durable acceptance.'},
       {id: 'source', source: 'head', start: 1, end: 2, quote: 'validate(input)?;'},
     ],
     units: [{id: 'upload-validation', title: 'Validate before acceptance', kind: 'capability', paths: snapshot.paths,
       obligation: 'Reject invalid uploads before accepting bytes.', fit: group('fit', 1),
-      need: {...group('need', 1), binding: factor(1, 1, ['contract'])}, excess: group('excess', 0), alternative: ''}],
+      need: {...group('need', 1), binding: factor(1, ['contract'])}, excess: group('excess', 0), alternative: ''}],
     findings: [], gates: GATES.map(name => ({name, state: 'satisfied', reason: 'The cited production path preserves the required boundary.', evidence: ['source']})),
     accounting: [{path: 'src/upload.rs', units: ['upload-validation'], reason: 'Implements the accepted validation obligation.', evidence: ['source']}],
     decisions: [], resolutions: []};
