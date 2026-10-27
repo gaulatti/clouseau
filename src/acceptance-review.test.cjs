@@ -174,6 +174,19 @@ test('complete independent source reports are graded and combined without exposi
   assert.equal(quiet.decision, 'auto_approve', 'optional telemetry cannot be a prerequisite for the decision');
 }));
 
+test('findings are graded and a blocking score stops approval', withKey(async () => {
+  const f = fixture(); f.report.findings.push(finding());
+  const config = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'deepseek', grading_model: 'deepseek-flash'};
+  const result = await reviewChange({...f, config, fetchImpl: async (_, options) => {
+    const body = JSON.parse(options.body);
+    if (body.messages[0].content.includes('Role:')) return response(f.report);
+    const packet = JSON.parse(body.messages[1].content);
+    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4']))});
+  }});
+  assert.equal(result.decision, 'repair_required'); assert.equal(result.usage.length, 4);
+  assert.equal(result.reviews[0].scores.findings[0].score, 100);
+}));
+
 test('independent negative findings retain their decision and cannot be voted away', () => {
   for (const decision of ['blocked_integrity', 'repair_required', 'review_incomplete', 'owner_decision', 'auto_approve']) {
     assert.equal(combine([{scores: {decision: 'auto_approve'}}, {scores: {decision}}]), decision);
