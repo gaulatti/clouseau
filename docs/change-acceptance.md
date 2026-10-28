@@ -153,7 +153,7 @@ observations close without creating recurring follow-up work.
 
 When complete evidence exceeds GitHub's comment limit, the primary ledger keeps
 every score, finding, gate and persistent disposition. It links bounded evidence
-comments containing the complete factor explanations and source excerpts, with
+comments containing the complete factor explanations and evidence citations (source and line ranges, not copied source text), with
 revision and content identities. No evidence is truncated. All evidence pages
 and the primary ledger must publish successfully before approval. Retrying a
 partial publication reuses matching bot pages without calling a model; the
