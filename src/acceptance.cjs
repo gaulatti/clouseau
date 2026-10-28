@@ -39,10 +39,14 @@ function digest(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+function impactOf(finding) {
+  const v = name => finding.factors[name].value;
+  return 1 + 0.25 * v('irreversibility') + 0.20 * v('reach') + 0.20 * v('detection') + 0.20 * v('propagation') + 0.15 * v('recurrence');
+}
+
 function findingScore(finding) {
   const v = name => finding.factors[name].value;
-  const impact = 1 + 0.25 * v('irreversibility') + 0.20 * v('reach') + 0.20 * v('detection') + 0.20 * v('propagation') + 0.15 * v('recurrence');
-  return 100 * v('confidence') * Math.min(1, Math.max(v('necessity'), v('activation') * v('severity') * impact));
+  return 100 * v('confidence') * Math.min(1, Math.max(v('necessity'), v('activation') * v('severity') * impactOf(finding)));
 }
 
 function scoreReport(report) {
@@ -205,4 +209,4 @@ function validateReport(report, snapshot) {
   return scoreReport(report);
 }
 
-module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
