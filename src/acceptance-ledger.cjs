@@ -1,6 +1,6 @@
 'use strict';
 
-const {digest, FACTORS, RULES} = require('./acceptance.cjs');
+const {digest, impactOf, FACTORS, RULES} = require('./acceptance.cjs');
 
 const MARKER = '<!-- clouseau-acceptance:v2 -->';
 const STATE = /<!-- clouseau-state:([A-Za-z0-9+/=]+) -->/;
@@ -114,9 +114,7 @@ function overview(result, snapshot, state) {
     owner_decision: ['Owner decision required', 'The owner decides the purpose or authority question; all technical checks remain mandatory.'],
   };
   const [title, next] = decisions[result.decision];
-  const summary = Array.from(clean(result.reviews[0].report.summary));
-  const lines = [MARKER, `## Clouseau — ${title}`, '',
-    summary.slice(0, 500).join('') + (summary.length > 500 ? '…' : '')];
+  const lines = [MARKER, `## Clouseau — ${title}`];
   if (new Set(result.reviews.map(review => review.scores.decision)).size > 1) {
     lines.push('', '**Reviewer disagreement:** ' + result.reviews.map(review => `${clean(review.role)}: ${decisions[review.scores.decision][0]}`).join('; ') + '.');
   }
@@ -125,32 +123,39 @@ function overview(result, snapshot, state) {
   for (const review of result.reviews) for (const [index, finding] of review.report.findings.entries()) {
     const identity = digest([finding.path, finding.cause.trim().toLowerCase().replace(/\s+/g, ' '),
       finding.obligation.trim().toLowerCase().replace(/\s+/g, ' ')]);
-    if (!findings.has(identity)) findings.set(identity, {finding, report: review.report, scores: []});
-    findings.get(identity).scores.push(review.scores.findings[index]);
+    const entry = review.scores.findings[index];
+    const best = findings.get(identity);
+    if (!best || entry.score > best.entry.score) findings.set(identity, {finding, entry, report: review.report});
   }
-  if (!findings.size) lines.push('', '**Technical findings:** None.');
-  for (const {finding, report, scores} of findings.values()) {
-    const value = Math.max(...scores.map(entry => entry.score));
-    const status = value >= RULES.defect_threshold ? 'Blocking' : 'Optional';
-    const citation = report.evidence.find(item => item.id === finding.evidence[0]);
-    const source = snapshot.sources[citation.source];
-    const evidence = /^[a-f0-9]{40}$/.test(source.ref) && ['source', 'contract'].includes(source.kind)
-      ? `[${clean(source.path)}:${citation.start}](https://github.com/${snapshot.repository}/blob/${source.ref}/${source.path.split('/').map(encodeURIComponent).join('/')}#L${citation.start}-L${citation.end})`
-      : clean(citation.id);
-    lines.push('', `**${status}: ${clean(finding.title)}**`, '',
-      `${clean(finding.cause)} ${clean(finding.consequence)}`, '',
-      `**Score:** ${score(value)} / 100. Findings at ${RULES.defect_threshold} or above block approval.`,
-      `**Affected area:** ${clean(finding.path)}. **Trigger:** ${clean(finding.trigger)}`,
-      `**Evidence:** ${evidence}. **Required outcome:** ${clean(finding.obligation)}`);
-    if (status === 'Optional') lines.push(`**Expected benefit:** ${scores.some(value => value.xg === 1) ? 'Verified' : 'Not established'}. Optional priority: ${Math.max(...scores.map(value => value.priority)).toFixed(2)} / 100.`);
+  if (!findings.size) {
+    const summary = Array.from(clean(result.reviews[0].report.summary));
+    lines.push('', summary.slice(0, 240).join('') + (summary.length > 240 ? '…' : ''), '', '**Technical findings:** None.');
+  } else {
+    const rows = [...findings.values()].sort((a, b) => b.entry.score - a.entry.score);
+    const blocking = rows.filter(({entry}) => entry.score >= RULES.defect_threshold).length;
+    lines.push('', `**${rows.length} ${rows.length === 1 ? 'finding' : 'findings'}** · **${blocking} blocking** (score ${RULES.defect_threshold} or above) · highest **${Math.round(rows[0].entry.score)}/100**`, '',
+      '| Finding | Need | Conf | Sev | Active | Impact | Score |', '|---|---:|---:|---:|---:|---:|---:|');
+    for (const {finding, entry} of rows) {
+      const value = name => score(finding.factors[name].value);
+      lines.push(`| ${clean(finding.title)}${entry.score >= RULES.defect_threshold ? '' : ' *(optional)*'} | ${value('necessity')} | ${value('confidence')} | ${value('severity')} | ${value('activation')} | ×${impactOf(finding).toFixed(2)} | **${Math.round(entry.score)}** |`);
+    }
+    lines.push('', `Score = 100 × Conf × the larger of Need or (Active × Sev × Impact), capped at 100. ${RULES.defect_threshold} or above blocks approval.`, '', '**TL;DR**');
+    const sentence = text => { const first = clean(text).match(/^.*?[.!?](?=\s|$)/)?.[0] || clean(text); return Array.from(first).length > 200 ? Array.from(first).slice(0, 199).join('') + '…' : first; };
+    for (const {finding, entry, report} of rows) {
+      const citation = report.evidence.find(item => item.id === finding.evidence[0]);
+      const source = snapshot.sources[citation.source];
+      const evidence = /^[a-f0-9]{40}$/.test(source.ref) && ['source', 'contract'].includes(source.kind)
+        ? `[${clean(source.path)}:${citation.start}](https://github.com/${snapshot.repository}/blob/${source.ref}/${source.path.split('/').map(encodeURIComponent).join('/')}#L${citation.start}-L${citation.end})`
+        : clean(citation.id);
+      lines.push(`- **${clean(finding.title)}** (${evidence}): ${sentence(finding.consequence)} **Fix:** ${sentence(finding.obligation)}${entry.score >= RULES.defect_threshold ? '' : ' Optional.'}`);
+    }
   }
-  const gates = new Set();
+  const gates = new Map();
   for (const review of result.reviews) for (const gate of review.report.gates) {
-    if (['satisfied', 'inapplicable'].includes(gate.state)) continue;
-    const detail = `**Check requiring attention — ${clean(gate.name.replaceAll('_', ' '))}:** ${clean(gate.reason)}`;
-    gates.add(detail);
+    if (['satisfied', 'inapplicable'].includes(gate.state) || gates.has(gate.name)) continue;
+    gates.set(gate.name, `**Check requiring attention — ${clean(gate.name.replaceAll('_', ' '))}:** ${clean(gate.reason)}`);
   }
-  for (const gate of gates) lines.push('', gate);
+  for (const gate of gates.values()) lines.push('', gate);
   if (state.unresolved.length) {
     lines.push('', '**Outstanding prior blockers:** ' + state.findings.filter(finding => state.unresolved.includes(finding.id))
       .map(finding => `${clean(finding.title)} (${clean(finding.path)})`).join('; ') + '.');

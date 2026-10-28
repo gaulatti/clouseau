@@ -64,12 +64,13 @@ test('one reviewer blocker stays visible once with its evidence even when the ot
   const visible = grade(result, snapshot);
   assert.match(visible, /Repair required/);
   assert.match(visible, /Reviewer disagreement/);
-  assert.equal((visible.match(/\*\*Blocking:/g) || []).length, 1);
-  assert.match(visible, /\*\*Score:\*\* 100.00 \/ 100/);
+  assert.match(visible, /\*\*1 finding\*\* · \*\*1 blocking\*\*/);
+  assert.equal((visible.match(/\| \*\*100\*\* \|/g) || []).length, 1, 'the finding appears once in the table');
+  assert.match(visible, /\| Finding \| Need \| Conf \| Sev \| Active \| Impact \| Score \|/);
+  assert.match(visible, /\*\*TL;DR\*\*/);
   assert.match(visible, /blob\/a{40}\/src\/upload.rs#L1-L2/);
-  assert.match(visible, /Affected area/);
-  assert.match(visible, /Required outcome/);
-  assert.doesNotMatch(visible, /Owner decision required|\*\*Optional:/);
+  assert.match(visible, /\*\*Fix:\*\*/);
+  assert.doesNotMatch(visible, /Owner decision required|\(optional\)/);
 });
 
 test('sub-threshold findings, optional benefits and missing integrity evidence remain distinct', () => {
@@ -81,8 +82,9 @@ test('sub-threshold findings, optional benefits and missing integrity evidence r
   }
   let visible = grade(result, snapshot);
   assert.match(visible, /Clouseau — Approved/);
-  assert.match(visible, /\*\*Optional:/);
-  assert.match(visible, /\*\*Score:\*\* 25.00 \/ 100/);
+  assert.match(visible, /\*\*0 blocking\*\*/);
+  assert.match(visible, /\*\(optional\)\*/);
+  assert.match(visible, /\| \*\*25\*\* \|/);
   assert.match(visible, /Check requiring attention — review completeness/);
   assert.doesNotMatch(visible, /Owner decision required/);
   for (const verified of [false, true]) {
@@ -93,9 +95,10 @@ test('sub-threshold findings, optional benefits and missing integrity evidence r
     }
     visible = grade(result, snapshot);
     assert.match(visible, /Clouseau — Approved/);
-    assert.match(visible, /\*\*Optional:/);
-    assert.match(visible, new RegExp(`Expected benefit:\\*\\* ${verified ? 'Verified' : 'Not established'}`));
-    assert.match(visible, /Optional priority/);
+    assert.match(visible, /\*\(optional\)\*/);
+    assert.match(visible, /Optional\./);
+    const full = render(result, snapshot, reconcile(result, snapshot));
+    assert.match(full, /Optional priority/, 'optional priority and xG stay in the audit details');
   }
 });
 
@@ -113,17 +116,20 @@ test('a protected-controls owner decision and a test integrity veto have separat
 });
 
 test('summary shortening preserves Unicode and non-file evidence never receives a fabricated file link', () => {
-  const {result, snapshot} = setup();
-  result.reviews[0].report.summary = 'a'.repeat(499) + '😀 suffix';
-  snapshot.sources.head.kind = 'verification';
-  let visible = render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
+  const quiet = setup(false);
+  quiet.result.reviews[0].report.summary = 'a'.repeat(239) + '😀 suffix';
+  let visible = render(quiet.result, quiet.snapshot, reconcile(quiet.result, quiet.snapshot)).split('<details>')[0];
   assert.match(visible, /😀…/);
-  assert.match(visible, /\*\*Evidence:\*\* source/);
+  const {result, snapshot} = setup();
+  snapshot.sources.head.kind = 'verification';
+  visible = render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
+  assert.match(visible, /\(source\):/);
   assert.doesNotMatch(visible, /\/blob\//);
   snapshot.sources.head.ref = 'not-a-commit';
   visible = render(result, snapshot, reconcile(result, snapshot)).split('<details>')[0];
   assert.doesNotMatch(visible, /\/blob\//);
 });
+
 
 test('rendered acceptance records expose every factor and preserve exact decision values separately from display rounding', () => {
   const {result, snapshot} = setup();
@@ -208,7 +214,9 @@ test('oversized summaries remain lossless in evidence pages while the primary su
   assert.ok(pages.length > 0);
   assert.ok(pages.map(page => page.slice(page.indexOf('\n\n') + 2)).join('').includes(result.reviews[0].report.summary));
   result.reviews[0].report.findings[0].consequence = 'A large unresolved consequence '.repeat(3000);
-  assert.throws(() => publication(result, snapshot, reconcile(result, snapshot)), /comment budget/);
+  const concise = publication(result, snapshot, reconcile(result, snapshot));
+  assert.ok(concise.body.length < 64000, 'the visible comment shows only the first sentence of a large consequence');
+  assert.ok(concise.pages.join('').includes('A large unresolved consequence'), 'the full text stays in the evidence pages');
 });
 
 test('large evidence is published losslessly in bounded Unicode-safe pages without changing the scores or history', () => {
@@ -225,7 +233,7 @@ test('large evidence is published losslessly in bounded Unicode-safe pages witho
     const {body, pages} = publication(result, snapshot, state);
     assert.ok(pages.length >= 3); assert.ok(body.length < 64000);
     assert.match(body, /missing-rejection|Invalid input reaches durable acceptance/);
-    assert.match(body, /Blocking: Invalid input reaches durable acceptance/);
+    assert.match(body, /\*\*1 blocking\*\*/);
     const chunks = pages.map(page => {
       assert.ok(page.length < 64000); assert.ok(!page.includes(MARKER));
       const chunk = page.slice(page.indexOf('\n\n') + 2);
