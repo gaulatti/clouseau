@@ -97,7 +97,11 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     if (file.status !== 'removed') item.head_source = source(file.filename, head);
     snapshot.files.push(item);
   }
-  for (const filename of require('./central-version.cjs').engineContext(snapshot)) source(filename, head);
+  // The seed lists files every pinned engine revision might hold; a revision
+  // that never had one simply has no such evidence, and a request can still ask.
+  for (const filename of require('./central-version.cjs').engineContext(snapshot)) {
+    try {source(filename, head);} catch (error) {if (error.code !== 'ENGINE_PATH_ABSENT') throw error;}
+  }
   refresh(snapshot);
   const addSources = async paths => {
     if (!Array.isArray(paths) || !paths.length || paths.length > 8 || new Set(paths).size !== paths.length) {
