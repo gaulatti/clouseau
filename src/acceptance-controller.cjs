@@ -191,7 +191,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body: page});
       links.push(`[Evidence ${index + 1}/${pages.length}](https://github.com/${record.snapshot.repository}/pull/${pr.number}#issuecomment-${response.data.id})`);
     }
-    let published = links.length ? `${body}\n\nComplete factor inputs and literal evidence: ${links.join(' · ')}` : body;
+    let published = links.length ? `${body}\n\nComplete factor inputs and evidence citations: ${links.join(' · ')}` : body;
     if (record.local_receipt) published += `\n\nAuthenticated local review: ` +
       `[signed evidence](https://github.com/${record.snapshot.repository}/blob/${record.local_artifact}/clouseau-review.json). ` +
       'CI verified the signature, source, scores and passing tests/coverage. **CI AI review calls: 0.**';

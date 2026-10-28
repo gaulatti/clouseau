@@ -212,7 +212,9 @@ findings show expected benefit and optional priority without creating a blocker.
 
 Expand **Scoring and evidence** for the unchanged formulas, every individual
 grade and explanation, both independent reviews, persistent finding history and
-immutable source excerpts. Large audits retain lossless evidence pages. Summary
+the evidence register (source and line ranges). Source text is not copied into PR
+comments; the complete source-bound record stays in the run's acceptance artifact.
+Large audits retain lossless evidence pages. Summary
 formatting uses the already validated record and makes no model requests. A
 review decision never claims that merge, deployment or live verification finished.
 

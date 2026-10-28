@@ -501,7 +501,7 @@ test('all evidence pages must publish before native approval, and a partial publ
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
   assert.equal(f.state.writes.filter(item => item.name === 'update-ledger').length, 1, 'the first complete page is reused in place');
   const primary = f.state.comments.find(item => item.body.includes('<!-- clouseau-acceptance:v2 -->'));
-  assert.match(primary.body, /Complete factor inputs and literal evidence: \[Evidence 1\//);
+  assert.match(primary.body, /Complete factor inputs and evidence citations: \[Evidence 1\//);
   for (const comment of f.state.comments) assert.ok(comment.body.length < 64000);
   assert.equal(fs.readFileSync(f.recordPath, 'utf8'), originalRecord);
   assert.equal(f.state.calls, calls, 'publishing or retrying publication never calls a model');

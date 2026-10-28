@@ -196,16 +196,6 @@ function render(result, snapshot, state, {compact = false, unbounded = false} = 
     lines.push('', '</details>');
     for (const resolution of review.report.resolutions) lines.push('', `Disposition ${clean(resolution.id)}: **${resolution.state}** — ${clean(resolution.reason)} (${clean(resolution.evidence.join(', '))})`);
   }
-  if (!compact) {
-    lines.push('', '<details><summary>Literal immutable source excerpts</summary>', '',
-      'Each cited source line appears once. The per-review registers retain every evidence ID and exact line range.', '');
-    for (const [name, source] of sources) {
-      lines.push('', `**${source.id} — ${clean(name)}**`, '');
-      const content = snapshot.sources[name].content.split('\n');
-      for (const number of [...source.lines].sort((a, b) => a - b)) lines.push(`L${number}: ${clean(content[number - 1])}`);
-    }
-    lines.push('', '</details>');
-  }
   if (!compact && state.findings.length) {
     lines.push('', '| Persistent finding | State | Blocking | Path |', '|---|---|---|---|');
     for (const finding of state.findings) {

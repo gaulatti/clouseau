@@ -31,9 +31,10 @@ test('the initial view is short and preserves the complete audit and exact resul
   assert.ok(visible.length < 1600);
   assert.match(visible, /Technical findings:\*\* None/);
   assert.doesNotMatch(visible, /Technical Q|Fit =|\| Unit |\| Gate |\| Finding |examiner|challenger/);
-  for (const value of ['Scoring and evidence', 'confidence', 'severity', 'Literal immutable source excerpts']) {
+  for (const value of ['Scoring and evidence', 'confidence', 'severity']) {
     assert.ok(body.includes(value));
   }
+  assert.ok(!body.includes('Literal immutable source excerpts'), 'source lines stay in the run artifact, not in PR comments');
   assert.equal(JSON.stringify({result, snapshot, state}), before);
   assert.deepEqual(priorState([{id: 1, user: {login: 'github-actions[bot]'}, body}],
     snapshot.repository, snapshot.number).findings, state.findings);
@@ -213,13 +214,10 @@ test('oversized summaries remain lossless in evidence pages while the primary su
 test('large evidence is published losslessly in bounded Unicode-safe pages without changing the scores or history', () => {
   for (const prefix of ['', 'x']) {
     const {result, snapshot} = setup();
-    snapshot.sources.head.content += prefix + '😀'.repeat(60000);
-    require('./acceptance-sources.cjs').refresh(snapshot);
     for (const review of result.reviews) {
       review.report.snapshot = snapshot.digest;
-      review.report.evidence.push({id: 'large-source', source: 'head', start: 3, end: 3, quote: '😀'});
-      review.report.gates[0].evidence.push('large-source');
       review.scores = validateReport(review.report, snapshot);
+      review.report.gates[0].reason = prefix + '😀'.repeat(60000);
     }
     const before = JSON.stringify({result, snapshot});
     const state = reconcile(result, snapshot);
@@ -243,7 +241,7 @@ test('large evidence is published losslessly in bounded Unicode-safe pages witho
   assert.deepEqual(publication(result, snapshot, reconcile(result, snapshot)).pages, []);
 });
 
-test('overlapping citations from both roles retain all source lines and references without duplicating their bytes', () => {
+test('overlapping citations from both roles keep every reference in the registers and copy no source text', () => {
   const {result, snapshot} = setup();
   const extra = Array.from({length: 20}, (_, index) => `// immutable supporting line ${index}: ${'x'.repeat(700)}`);
   snapshot.sources.head.content = snapshot.sources.head.content.trimEnd() + '\n' + extra.join('\n');
@@ -264,7 +262,7 @@ test('overlapping citations from both roles retain all source lines and referenc
   assert.ok(body.length < 64000);
   for (let index = 0; index < 60; index++) assert.equal(body.split(`| support-${index} |`).length - 1, 2, 'both role registers retain every original reference');
   for (let index = 0; index < extra.length; index++) {
-    assert.equal(body.split(`L${index + 3}: ${clean(extra[index])}`).length - 1, 1, 'each literal source line appears exactly once');
+    assert.ok(!body.includes(clean(extra[index])), 'cited source text is never copied into the comment');
   }
   assert.equal(JSON.stringify({result, snapshot}), before, 'display compaction changes no evidence, grade or decision');
   const restored = priorState([{id: 7, user: {login: 'github-actions[bot]'}, body}], snapshot.repository, snapshot.number);
