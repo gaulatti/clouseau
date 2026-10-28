@@ -134,3 +134,28 @@ test('resolver installation preloads its actual pinned bootstrap and the current
     assertUnchanged(f.directory, collected.snapshot);
   } finally {fs.rmSync(root, {recursive: true, force: true});}
 }));
+
+test('a seeded engine file that a pinned legacy revision never had is skipped, while other seed failures still stop the review', () => repository(f => {
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'legacy-context-'));
+  try {
+    for (const entry of ['src', 'test', 'bin', 'skills', 'scripts']) fs.cpSync(path.join(__dirname, '..', entry), path.join(root, entry), {recursive: true});
+    git(root, ['init', '-q']);
+    const commit = message => { git(root, ['add', '-A']); git(root, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', message]); return git(root, ['rev-parse', 'HEAD']).trim(); };
+    for (const filename of ['src/config.cjs', 'src/policy.cjs', 'src/local-receipt.cjs']) fs.rmSync(path.join(root, filename));
+    fs.writeFileSync(path.join(root, 'action.yml'), 'old action');
+    fs.mkdirSync(path.join(root, 'scripts/resolve'), {recursive: true}); fs.writeFileSync(path.join(root, 'scripts/resolve/action.yml'), 'old bootstrap');
+    const old = commit('legacy engine without receipt, config or policy sources');
+    for (const filename of ['src/config.cjs', 'src/policy.cjs', 'src/local-receipt.cjs']) fs.cpSync(path.join(__dirname, '..', filename), path.join(root, filename));
+    const current = commit('current engine');
+    fs.mkdirSync(path.join(f.directory, '.github/workflows'), {recursive: true});
+    fs.writeFileSync(path.join(f.directory, '.github/workflows/ci.yml'),
+      `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${old}\n      - uses: gaulatti/clouseau@${old}\n`);
+    git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: migrate from the legacy pin']);
+    const collected = collectLocal({...f, request: 'Migrate the legacy pin.', technical: {fixture_only: true}, reviewerSha: current, engineRoot: root});
+    const paths = Object.values(collected.snapshot.sources).map(source => source.path);
+    assert.ok(paths.includes(`.clouseau-ci/action.yml@${old}`), 'files the legacy revision had are still seeded');
+    assert.ok(!paths.includes(`.clouseau-ci/src/local-receipt.cjs@${old}`), 'a file it never had is not evidence');
+    fs.writeFileSync(path.join(root, 'src/policy.cjs'), 'binary\0source'); commit('corrupt current seed');
+    assert.throws(() => collectLocal({...f, request: 'Migrate the legacy pin.', technical: {fixture_only: true}, reviewerSha: git(root, ['rev-parse', 'HEAD']).trim(), engineRoot: root}), /Binary or oversized/);
+  } finally {fs.rmSync(root, {recursive: true, force: true});}
+}));

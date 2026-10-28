@@ -186,6 +186,10 @@ test('immutable historical engine evidence is text, never an executed or selecte
     assert.equal(readEngineEvidence(`.clouseau-ci/scripts/bootstrap.cjs@${old}`, current, root), 'throw Error("old text must never execute");');
     assert.equal(git(['rev-parse', 'HEAD']), current);
     assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts@${old}`, current, root), /must be a file/);
+    fs.writeFileSync(path.join(root, 'added-later.cjs'), 'new file'); git(['add', '.']);
+    git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'later file']);
+    assert.throws(() => readEngineEvidence(`.clouseau-ci/added-later.cjs@${old}`, git(['rev-parse', 'HEAD']), root),
+      error => error.code === 'ENGINE_PATH_ABSENT' && /does not exist at/.test(error.message));
     for (const bytes of [Buffer.from([255]), Buffer.from('binary\0source'), Buffer.alloc(300001, 'x')]) {
       fs.writeFileSync(path.join(root, 'invalid'), bytes);
       assert.throws(() => readEngineEvidence('.clouseau-ci/invalid', current, root), /encoded data|Binary or oversized/);

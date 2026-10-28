@@ -87,7 +87,15 @@ function readEngineEvidence(filename, reviewerSha, root = path.join(__dirname, '
   else {
     try {cp.execFileSync('git', ['-C', root, 'cat-file', '-e', `${ref}^{commit}`], {stdio: 'ignore'});}
     catch {cp.execFileSync('git', ['-C', root, 'fetch', '--quiet', '--no-write-fetch-head', '--no-tags', '--depth=1', `https://github.com/${SOURCE.repository}.git`, ref], {stdio: 'pipe', timeout: 30000});}
-    if (cp.execFileSync('git', ['-C', root, 'cat-file', '-t', `${ref}:${relative}`], {encoding: 'utf8'}).trim() !== 'blob') throw new Error('Engine evidence must be a file');
+    let kind;
+    try {kind = cp.execFileSync('git', ['-C', root, 'cat-file', '-t', `${ref}:${relative}`], {encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe']}).trim();}
+    catch (error) {
+      if (/exists on disk, but not in|does not exist in|Not a valid object name/.test(String(error.stderr || error.message))) {
+        throw Object.assign(new Error(`Engine file ${relative} does not exist at ${ref}`), {code: 'ENGINE_PATH_ABSENT'});
+      }
+      throw error;
+    }
+    if (kind !== 'blob') throw new Error('Engine evidence must be a file');
     bytes = cp.execFileSync('git', ['-C', root, 'show', `${ref}:${relative}`], {maxBuffer: 300000});
   }
   const content = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
