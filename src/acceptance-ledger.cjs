@@ -150,13 +150,12 @@ function overview(result, snapshot, state) {
       lines.push(`- **${clean(finding.title)}** (${evidence}): ${sentence(finding.consequence)} **Fix:** ${sentence(finding.obligation)}${entry.score >= RULES.defect_threshold ? '' : ' Optional.'}`);
     }
   }
-  const gates = new Set();
+  const gates = new Map();
   for (const review of result.reviews) for (const gate of review.report.gates) {
-    if (['satisfied', 'inapplicable'].includes(gate.state)) continue;
-    const detail = `**Check requiring attention — ${clean(gate.name.replaceAll('_', ' '))}:** ${clean(gate.reason)}`;
-    gates.add(detail);
+    if (['satisfied', 'inapplicable'].includes(gate.state) || gates.has(gate.name)) continue;
+    gates.set(gate.name, `**Check requiring attention — ${clean(gate.name.replaceAll('_', ' '))}:** ${clean(gate.reason)}`);
   }
-  for (const gate of gates) lines.push('', gate);
+  for (const gate of gates.values()) lines.push('', gate);
   if (state.unresolved.length) {
     lines.push('', '**Outstanding prior blockers:** ' + state.findings.filter(finding => state.unresolved.includes(finding.id))
       .map(finding => `${clean(finding.title)} (${clean(finding.path)})`).join('; ') + '.');
