@@ -8,7 +8,7 @@ bash scripts/verify-archive
 ```
 
 Both commands run their selected Node tests once. The native `spec` reporter writes
-every case, diagnostic, test stdout/stderr message and coverage summary to a
+every case, diagnostic and test stdout/stderr message to a
 separate file from that same execution. The wrapper prints its actual native
 outcome and retained artifact identities on completion, forwarding raw child
 stdout/stderr unchanged. Node 22 supports paired
@@ -54,10 +54,20 @@ The archive command creates its trace destination in the original checkout
 before entering the temporary Git-free archive. Traces therefore survive both
 successful and failed archive teardown. The temporary archive is still removed.
 
-Coverage keeps its original test selection, source include/exclude flags,
-100% line/branch thresholds, and `.clouseau-work/node.lcov` destination. Workflow test selection, local recipe, CI permissions/gates and providers
-are unchanged.
-The coverage invocation uses only native spec and the existing LCOV reporter.
+Coverage keeps its original test selection, source scope, exact 100% line and
+branch requirement and `.clouseau-work/node.lcov` destination. Workflow test
+selection, local recipe, CI permissions/gates and providers are unchanged.
+The test run uses only the native spec reporter. Each test process writes its raw
+V8 coverage report to `.clouseau-work/v8-coverage` (`NODE_V8_COVERAGE`), and
+`scripts/v8-coverage-gate.cjs` merges those reports with `src/v8-coverage.cjs`
+and writes the LCOV file. Node's own `--experimental-test-coverage` merge is not
+used: it folds the reports in the order the filesystem lists them, V8 omits a
+block range whose count equals its parent's, and the fold therefore reports a
+different (sometimes falsely incomplete, sometimes falsely complete) result for
+different directory orders. The repository merge adds per-character execution
+counts, which does not depend on order, and its tests prove every arrival order
+of the same reports gives the same result.
+
 Adding a third dot reporter produces a real Node22 listener warning, so live
 dots are deliberately avoided without suppressing warnings or changing limits.
 Compact successful reporting does not change the tests executed or any gate.
