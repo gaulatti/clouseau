@@ -55,10 +55,43 @@ function verifyRecord(record, assessment, config, engine = null) {
     {...record.snapshot, number: assessment.number}, state)};
 }
 
+function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle}) {
+  return {...verified, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical,
+    local_author: author, local_artifact: artifact, local_receipt: bundle};
+}
+
+const COMPACT_KEYS = ['local_artifact', 'local_author', 'local_receipt_reference', 'previous', 'technical', 'version'];
+
 function createAcceptancePolicy(config, legacy, engine = null) {
   if (config.local_review?.central_source && !require('./central-version.cjs').acceptsEngine(config.local_review, engine)) {
     throw new Error('Protected central-source integration requires this run frozen engine identity');
   }
+  // A transported compact local record is expanded only from its immutable signed
+  // receipt, then verifyRecord binds the result to the assessed record digest.
+  async function rehydrate(record, assessment, {github, repo}) {
+    if (!record.local_receipt_reference) {
+      if (assessment.record_reference_digest !== undefined) throw new Error('Stale or altered acceptance record');
+      return record;
+    }
+    if (digest(record) !== assessment.record_reference_digest) throw new Error('Stale or altered acceptance record');
+    if (engine && (digest(record.engine) !== digest(engine) || digest(assessment.engine) !== digest(engine))) {
+      throw new Error('Acceptance record belongs to a different frozen engine');
+    }
+    const extra = Object.keys(record).filter(key => !COMPACT_KEYS.includes(key));
+    if (record.local_receipt_reference !== true || Object.hasOwn(record, 'local_receipt') || Object.hasOwn(record, 'snapshot') ||
+        COMPACT_KEYS.some(key => !Object.hasOwn(record, key)) || extra.some(key => !['engine', 'local_authorization'].includes(key))) {
+      throw new Error('Invalid compact local review record');
+    }
+    const receipts = require('./local-receipt.cjs');
+    const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact});
+    const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
+      repository: `${repo.owner}/${repo.repo}`, author: record.local_author, headSha: assessment.head_sha,
+      baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest()});
+    return localRecord(verified.record, {engine: record.engine, authorization: record.local_authorization,
+      previous: record.previous, technical: record.technical, author: record.local_author,
+      artifact: record.local_artifact, bundle});
+  }
+
   async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false}) {
     const repo = context.repo;
     const number = numberFor(context);
@@ -102,12 +135,18 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           return {...identity, ...technicalBlock, review_source: 'authenticated_local', provider_api_calls: 0,
             reason: `Authenticated local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
-        const record = {...verified.record, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical, local_author: pr.user.login,
-          local_artifact: receiptRef, local_receipt: bundle};
-        fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
+        const record = localRecord(verified.record, {engine, authorization, previous, technical, author: pr.user.login,
+          artifact: receiptRef, bundle});
+        // The signed bundle already lives at an immutable reference. Transport
+        // only the run-specific facts; the write boundary rehydrates and
+        // independently re-verifies the complete record from that reference.
+        const compact = {version: 2, local_receipt_reference: true, local_artifact: receiptRef,
+          local_author: pr.user.login, previous, technical, ...(engine ? {engine} : {}),
+          ...(authorization ? {local_authorization: authorization} : {})};
+        fs.writeFileSync(recordPath, JSON.stringify(compact, null, 2) + '\n');
         if (report) report('Authenticated local Clouseau review verified. CI AI calls: 0.');
         return {...identity, decision: authorization ? 'owner_decision' : 'auto_approve', record_digest: digest(record),
-          review_source: 'authenticated_local', provider_api_calls: 0,
+          record_reference_digest: digest(compact), review_source: 'authenticated_local', provider_api_calls: 0,
           reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
       }
       if (receiptOnly || config.local_review?.mode === 'required') {
@@ -164,7 +203,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const hold = reason => legacy.gate({github, context, core, ...options,
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) return hold(assessment.reason);
-    const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+    const record = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
     const {body, pages} = verifyRecord(record, assessment, config, engine);
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
@@ -208,7 +247,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       // The private-plan path cannot delegate freshness to unavailable native
       // protection. Revalidate the exact record at its atomic write boundary.
       verifyAcceptance: async () => {
-        const currentRecord = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
+        const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
         const {data: currentPr} = await github.rest.pulls.get({...context.repo, pull_number: pr.number});
         if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
@@ -241,7 +280,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     return legacy.finalize({...options, assessment});
   }
 
-  return {...legacy, assess, assessWhenReady, gate, finalize};
+  return {...legacy, assess, assessWhenReady, gate, finalize, rehydrate};
 }
 
 module.exports = {RECORD, policyDigest, numberFor, decided, verifyRecord, createAcceptancePolicy};
