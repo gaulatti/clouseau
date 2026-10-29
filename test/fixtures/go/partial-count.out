@@ -1,0 +1,13 @@
+mode: count
+example.com/fixture/service.go:5.2,5.8 1 2
+example.com/fixture/service.go:6.3,7.1 1 1
+example.com/fixture/service.go:8.2,8.10 1 1
+example.com/fixture/service.go:13.2,14.1 1 2
+example.com/fixture/idle/idle.go:5.2,6.1 1 0
+example.com/fixture/util/util.go:5.2,5.11 1 0
+example.com/fixture/util/util.go:7.3,7.15 1 0
+example.com/fixture/util/util.go:9.3,9.16 1 0
+example.com/fixture/util/util.go:5.2,5.11 1 0
+example.com/fixture/util/util.go:7.3,7.15 1 0
+example.com/fixture/util/util.go:9.3,9.16 1 0
+example.com/fixture/idle/idle.go:5.2,6.1 1 0

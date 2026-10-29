@@ -13,7 +13,7 @@ function coverageParts(config, {allowUnsupported = false} = {}) {
   const roots = [];
   for (const part of parts) {
     if (!part || !(allowUnsupported ? typeof part.format === 'string' && /^[a-z][a-z0-9_-]{0,39}$/.test(part.format) :
-        (config.version === 1 ? ['llvm', 'istanbul', 'coveragepy'] : ['istanbul', 'coveragepy']).includes(part.format)) ||
+        (config.version === 1 ? ['llvm', 'istanbul', 'coveragepy', 'go'] : ['istanbul', 'coveragepy', 'go']).includes(part.format)) ||
       !safePath(part.report) || !(part.source_directory === '.' || safePath(part.source_directory))) fail();
     if (config.version === 2 && Object.keys(part).sort().join(',') !== 'format,report,source_directory') fail();
     if (reports.has(part.report) || roots.some(root => root === '.' || part.source_directory === '.' || part.source_directory === root ||

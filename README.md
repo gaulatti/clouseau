@@ -105,8 +105,14 @@ coverage.py's executable lines and branch decision exits, not statement
 percentages or every traced transition. Empty global totals, omitted application
 modules, exclusions, partial coverage and inconsistent counters fail closed.
 
+For Go, select `coverage-format: go` and supply the `go test -coverprofile` text
+profile built with `-coverpkg=./...`. Go records statements and basic blocks only, so
+`lines` means statements and `branches` means basic blocks; implicit false exits and
+short-circuit operands are not measured. See the [native Go coverage
+contract](docs/go-coverage.md) for exact semantics, inventory and failures.
+
 Monorepos may use the accepted-base version 2 local recipe with separate native
-Istanbul and coverage.py parts. `operation: coverage` accepts that recipe through
+Istanbul, coverage.py and Go parts. `operation: coverage` accepts that recipe through
 `coverage-config` and uses the shared per-part and aggregate measurement rules.
 The CI gate requires each part to be complete and exact; local AI can assess
 honest partial or unavailable measurements. There is no consumer-side report
@@ -289,7 +295,7 @@ Clouseau needs only Node. One integration test runs a fixture Python application
 under real coverage.py to prove the `coveragepy` adapter against live output, so
 install `requirements-test.txt` (coverage.py 7.13.0) to run the whole suite. The
 coverage gate itself is `bin/coverage-gate.cjs`
-(`check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy]` or
+(`check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|go]` or
 `plan ACCEPTED_CONFIG [DIRECTORY]`), so reviewing a Python application requires
 Python only for that application's own tests.
 
