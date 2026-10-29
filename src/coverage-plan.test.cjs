@@ -14,7 +14,7 @@ const recipe = coverage => ({version: 2, base_branch: 'main', readme: 'README.md
 
 test('canonical repository source root is representable without relaxing report or general paths', () => {
   for (const version of [1, 2]) {
-    for (const format of version === 1 ? ['llvm', 'istanbul', 'coveragepy'] : ['istanbul', 'coveragepy']) {
+    for (const format of version === 1 ? ['llvm', 'istanbul', 'coveragepy', 'go'] : ['istanbul', 'coveragepy', 'go']) {
       const coverage = part('.', 'native.json', format);
       const config = {...recipe(version === 1 ? coverage : [coverage]), version};
       assert.deepEqual(coverageParts(config), [coverage]);
@@ -37,7 +37,7 @@ test('canonical repository source root is representable without relaxing report 
 });
 
 test('v2 explicit native parts preserve the v1 single-artifact contract', () => {
-  for (const format of ['llvm', 'istanbul', 'coveragepy']) {
+  for (const format of ['llvm', 'istanbul', 'coveragepy', 'go']) {
     const coverage = {...part('src', 'native.json', format), legacy_metadata: true};
     const config = {...recipe(coverage), version: 1, legacy_metadata: true};
     assert.deepEqual(coverageParts(config), [coverage]);
@@ -84,7 +84,7 @@ test('the complete v2 plan comes from accepted base rather than the proposed rec
 
 
 test('local assessment retains a safe unsupported format as unavailable evidence while native CI configuration remains strict', () => {
-  for (const format of ['go', 'llvm']) {
+  for (const format of ['gcov', 'llvm']) {
     const config = recipe([part('src', 'native.json', format)]);
     assert.equal(readLocalConfig(config), config);
     assert.deepEqual(coverageParts(config, {allowUnsupported: true}), config.coverage);

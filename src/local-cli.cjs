@@ -17,7 +17,6 @@ const {refresh, safePath} = require('./acceptance-sources.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
 const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
 const gate = require('./coverage-gate.cjs');
-const {loadReport} = require('./coverage-util.cjs');
 
 const root = path.join(__dirname, '..');
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
@@ -92,7 +91,7 @@ function executeVerification({directory, config, additional = [], run = cp.spawn
   if (!coverageError) {
     try {
       measured = config.version === 1 ?
-        gate.measure(loadReport(path.join(directory, parts[0].report)), path.join(directory, parts[0].source_directory), parts[0].format, directory) :
+        gate.measure(gate.readReport(parts[0].format, path.join(directory, parts[0].report)), path.join(directory, parts[0].source_directory), parts[0].format, directory) :
         gate.measurePlan(parts, directory);
     } catch (error) {coverageError = error.message || 'Native coverage could not be measured';}
   }

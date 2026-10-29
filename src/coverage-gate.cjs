@@ -5,6 +5,7 @@ const path = require('node:path');
 const {fail, isObject, get, realPath, isInside, loadReport, emptyCounts} = require('./coverage-util.cjs');
 const istanbul = require('./coverage-istanbul.cjs');
 const coveragepy = require('./coverage-coveragepy.cjs');
+const go = require('./coverage-go.cjs');
 
 function llvmCounters(report, sourceDirectory, cwd) {
   if (get(report, 'type') !== 'llvm.coverage.json.export') fail('Expected an LLVM coverage export');
@@ -36,10 +37,14 @@ function llvmCounters(report, sourceDirectory, cwd) {
   return counts;
 }
 
+// Go cover profiles are text; every other native report is JSON.
+const readReport = (format, filename) => format === 'go' ? fs.readFileSync(filename, 'utf8') : loadReport(filename);
+
 function counters(report, sourceDirectory, format, cwd) {
   if (format === 'istanbul') return istanbul.counters(report, sourceDirectory, cwd);
   if (format === 'coveragepy') return coveragepy.counters(report, sourceDirectory, cwd);
-  if (format !== 'llvm') fail('Unknown coverage format; use llvm, istanbul or coveragepy');
+  if (format === 'go') return go.counters(report, sourceDirectory, cwd);
+  if (format !== 'llvm') fail('Unknown coverage format; use llvm, istanbul, coveragepy or go');
   return llvmCounters(report, sourceDirectory, cwd);
 }
 
@@ -82,7 +87,7 @@ function measurePlan(parts, directory) {
   const plan = [];
   for (const part of parts) {
     if (!isObject(part) || Object.keys(part).sort().join(',') !== 'format,report,source_directory' ||
-        !['istanbul', 'coveragepy'].includes(part.format)) {
+        !['istanbul', 'coveragepy', 'go'].includes(part.format)) {
       fail('Each coverage part requires a supported native format, report and source_directory');
     }
     const report = planPath(root, part.report, false);
@@ -98,7 +103,7 @@ function measurePlan(parts, directory) {
   const totals = emptyCounts();
   const results = [];
   for (const {part, report, source} of plan) {
-    const measured = counters(loadReport(report), source, part.format, root);
+    const measured = counters(readReport(part.format, report), source, part.format, root);
     if (measured.lines[0] === 0) fail('Every coverage part requires nonempty application line counters');
     for (const metric of Object.keys(totals)) {
       totals[metric][0] += measured[metric][0];
@@ -139,10 +144,12 @@ function main(argv, {cwd, stdout, stderr}) {
     if (command === 'plan') {
       stdout(JSON.stringify(planMain(rest, cwd)) + '\n');
     } else if (command === 'check' && (rest.length === 2 || rest.length === 3)) {
-      const counts = counters(loadReport(path.resolve(cwd, rest[0])), path.resolve(cwd, rest[1]), rest[2] ?? 'llvm', cwd);
+      const format = rest[2] ?? 'llvm';
+      const counts = counters(readReport(format, path.resolve(cwd, rest[0])), path.resolve(cwd, rest[1]), format, cwd);
       for (const [metric, [count, covered]] of Object.entries(counts)) stdout(`${metric}: ${covered}/${count}\n`);
+      if (format === 'go') stdout('note: go lines are statements and go branches are basic blocks\n');
       enforce(counts);
-    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY]');
+    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|go] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY]');
     return 0;
   } catch (error) {
     stderr(`Coverage gate failed: ${error.message}\n`);
@@ -150,4 +157,4 @@ function main(argv, {cwd, stdout, stderr}) {
   }
 }
 
-module.exports = {counters, measure, enforce, check, measurePlan, checkPlan, planMain, main};
+module.exports = {readReport, counters, measure, enforce, check, measurePlan, checkPlan, planMain, main};

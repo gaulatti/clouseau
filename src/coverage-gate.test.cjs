@@ -513,7 +513,7 @@ test('branchless components and empty parts cannot pass a plan', () => plan(({di
 }));
 
 test('invalid plan shapes, formats and extra policy fields fail', () => plan(({directory, parts}) => {
-  const values = [null, {}, [], 'not a plan', Array(17).fill(parts).flat(), [null], [{}], [{...parts[0], format: 'go'}],
+  const values = [null, {}, [], 'not a plan', Array(17).fill(parts).flat(), [null], [{}], [{...parts[0], format: 'gcov'}],
     [{...parts[0], format: 'llvm'}], [{...parts[0], exclude: ['hidden.js']}]];
   for (const value of values) messages(() => gate.checkPlan(value, directory), /coverage plan|coverage part/);
 }));
@@ -587,4 +587,134 @@ test('the command line checks reports and plans and exits nonzero with a reason 
   assert.equal(run('plan').status, 1);
   assert.match(run('plan', 'missing.json').err, /Coverage gate failed/);
   assert.ok(frontend);
+}));
+
+// ---- Go ----
+
+// The profiles are real `go test -coverpkg=./... -coverprofile` output (Go 1.27.3) for the tree
+// in test/fixtures/go/app. They keep Go's repeated per-package-binary rows.
+const GO_FIXTURES = path.join(__dirname, '..', 'test', 'fixtures', 'go');
+const goProfile = name => fs.readFileSync(path.join(GO_FIXTURES, `${name}.out`), 'utf8');
+const withGoTree = run => temp(directory => {
+  fs.cpSync(path.join(GO_FIXTURES, 'app'), directory, {recursive: true});
+  return run(directory);
+});
+const checkGo = (report, directory) => gate.check(report, directory, 'go', directory);
+
+test('native Go profiles count statements and basic blocks, aggregating repeated rows as a union', () => withGoTree(directory => {
+  assert.deepEqual(checkGo(goProfile('full-set'), directory), {lines: [8, 8], branches: [8, 8]});
+  assert.deepEqual(checkGo(goProfile('full-atomic'), directory), {lines: [8, 8], branches: [8, 8]});
+  const partial = gate.measure(goProfile('partial-count'), directory, 'go', directory);
+  assert.deepEqual(partial, {lines: [8, 4], branches: [8, 4]});
+  messages(() => checkGo(goProfile('partial-count'), directory), /lines: 4 uncovered/);
+}));
+
+test('a Go source subdirectory binds to its enclosing module and ignores profile rows outside it', () => withGoTree(directory => {
+  const util = path.join(directory, 'util');
+  assert.deepEqual(gate.check(goProfile('full-set'), util, 'go', directory), {lines: [3, 3], branches: [3, 3]});
+  fs.appendFileSync(path.join(directory, 'service.go'), '// no trailing newline');
+  fs.writeFileSync(path.join(directory, 'tail.go'), 'package app // trailing comment');
+  assert.deepEqual(checkGo(goProfile('full-set'), directory), {lines: [8, 8], branches: [8, 8]});
+}));
+
+test('Go sources absent from the profile, or conflicting with it, fail closed', () => withGoTree(directory => {
+  const full = goProfile('full-set');
+  messages(() => checkGo(full.split('\n').filter(row => !row.includes('util/util.go')).join('\n'), directory), /missing from the profile.*util\.go/);
+  // A declaration-only file needs no entry; a file with functions always does.
+  fs.writeFileSync(path.join(directory, 'extra.go'), 'package app\n\n// func in a comment, "func" in a string\nconst c = `func`\nvar r = \'f\'\n/* func */\n');
+  assert.deepEqual(checkGo(full, directory), {lines: [8, 8], branches: [8, 8]});
+  fs.writeFileSync(path.join(directory, 'extra_linux.go'), '//go:build linux\n\npackage app\n\nfunc Extra() {}\n');
+  messages(() => checkGo(full, directory), /extra_linux\.go/);
+}));
+
+test('malformed, stale and wrong-source Go profiles are rejected', () => withGoTree(directory => {
+  const full = goProfile('full-set');
+  const row = 'example.com/fixture/service.go:5.2,5.8 1 1';
+  const bad = (text, pattern) => messages(() => checkGo(text, directory), pattern);
+  bad('', /mode line/);
+  bad('mode: bogus\n', /mode line/);
+  bad(`mode: set\n${row} extra\n`, /Malformed/);
+  bad(`mode: set\nexample.com/fixture/service.go:5.2,4.8 1 1\n`, /ends before it starts/);
+  bad(`mode: set\nexample.com/fixture/service.go:5.9,5.8 1 1\n`, /ends before it starts/);
+  bad(`mode: set\nexample.com/fixture/service.go:5.2,5.8 1 99999999999999999999\n`, /safe integers/);
+  bad(`mode: set\nexample.com/fixture/service.go:5.2,500.8 1 1\n`, /beyond the source file/);
+  bad(`mode: set\nexample.com/fixture/nothere.go:5.2,5.8 1 1\n`, /Unexpected Go application coverage/);
+  bad(`${full}${row.replace(' 1 1', ' 2 1')}\n`, /Conflicting/);
+  bad(`${full}example.com/fixture/service.go:5.4,6.1 1 1\n`, /Overlapping/);
+  // Other modules and files outside the declared directory are not application coverage.
+  const other = 'example.org/dep/x.go:1.1,2.1 1 1\n';
+  assert.deepEqual(checkGo(full.replace(/^mode: set\n/, `mode: set\n${other}`), directory).lines, [8, 8]);
+  bad(`mode: set\n${other}`, /missing from the profile/);
+  assert.throws(() => gate.counters(Buffer.from(full), directory, 'go', directory), /as text/);
+}));
+
+test('Go source inventory skips tests, dependencies and nested modules and rejects invalid sources', () => withGoTree(directory => {
+  for (const name of ['vendor', 'testdata', '.hidden', '_ignored', 'nested']) {
+    fs.mkdirSync(path.join(directory, name));
+    fs.writeFileSync(path.join(directory, name, 'x.go'), 'package x\n\nfunc X() {}\n');
+  }
+  fs.writeFileSync(path.join(directory, 'nested', 'go.mod'), 'module example.com/nested\n');
+  fs.writeFileSync(path.join(directory, 'service_test.go'), 'package app\n\nfunc helper() {}\n');
+  assert.deepEqual(checkGo(goProfile('full-set'), directory), {lines: [8, 8], branches: [8, 8]});
+  const invalid = (text, pattern) => {
+    fs.writeFileSync(path.join(directory, 'bad.go'), text);
+    messages(() => checkGo(goProfile('full-set'), directory), pattern);
+    fs.rmSync(path.join(directory, 'bad.go'));
+  };
+  invalid(Buffer.from([0xff, 0xfe]), /Invalid Go application source/);
+  for (const text of ['package a\n/* open', 'package a\nvar s = `open', 'package a\nvar s = "open\n', "package a\nvar r = 'x", 'package a\nvar s = "\\']) {
+    invalid(text, /Invalid Go application source/);
+  }
+  fs.symlinkSync(path.join(directory, 'service.go'), path.join(directory, 'link.go'));
+  messages(() => checkGo(goProfile('full-set'), directory), /Symbolic Go application source/);
+  fs.rmSync(path.join(directory, 'link.go'));
+  fs.symlinkSync(path.join(directory, 'util'), path.join(directory, 'alias'));
+  messages(() => checkGo(goProfile('full-set'), directory), /Symbolic Go application source/);
+  fs.rmSync(path.join(directory, 'alias'));
+  fs.symlinkSync(path.join(directory, 'missing-target'), path.join(directory, 'broken'));
+  assert.deepEqual(checkGo(goProfile('full-set'), directory), {lines: [8, 8], branches: [8, 8]});
+}));
+
+test('Go module and source discovery fail without a usable go.mod or Go sources', () => temp(directory => {
+  const src = path.join(directory, 'src');
+  fs.mkdirSync(src);
+  messages(() => gate.counters('mode: set\n', src, 'go', directory) , /No go\.mod/);
+  fs.writeFileSync(path.join(directory, 'go.mod'), 'go 1.22\n');
+  messages(() => gate.counters('mode: set\n', src, 'go', directory), /no module path/);
+  fs.writeFileSync(path.join(directory, 'go.mod'), 'module "example.com/q" // quoted\n');
+  messages(() => gate.counters('mode: set\n', src, 'go', directory), /No application Go sources/);
+  // A directory with only declarations has no statements, so the gate reports nothing measured.
+  fs.writeFileSync(path.join(src, 'types.go'), 'package q\n\ntype T int\n');
+  assert.deepEqual(gate.counters('mode: set\n', src, 'go', directory), {lines: [0, 0], branches: [0, 0]});
+  messages(() => gate.measure('mode: set\n', src, 'go', directory), /No lines measured/);
+  messages(() => gate.check('mode: set\n', src, 'go', directory), /No lines measured/);
+}));
+
+test('the command line reads Go text profiles, labels the measurement and plans accept the go format', () => withGoTree(directory => {
+  const report = path.join(directory, 'cover.out');
+  fs.writeFileSync(report, goProfile('full-set'));
+  let out = '';
+  assert.equal(gate.main(['check', report, directory, 'go'], {cwd: directory, stdout: text => {out += text;}, stderr: () => {}}), 0);
+  assert.match(out, /lines: 8\/8\nbranches: 8\/8\nnote: go lines are statements and go branches are basic blocks/);
+  fs.writeFileSync(report, goProfile('partial-count'));
+  let err = '';
+  assert.equal(gate.main(['check', report, directory, 'go'], {cwd: directory, stdout: () => {}, stderr: text => {err += text;}}), 1);
+  assert.match(err, /uncovered/);
+  const parts = [{format: 'go', report: 'cover.out', source_directory: '.'}];
+  assert.deepEqual(gate.measurePlan(parts, directory).totals, {lines: [8, 4], branches: [8, 4]});
+  fs.writeFileSync(report, goProfile('full-set'));
+  assert.deepEqual(gate.checkPlan(parts, directory).totals, {lines: [8, 8], branches: [8, 8]});
+}));
+
+test('real go test output measures a changed tree and the gate follows real execution', {skip: require('node:child_process').spawnSync('go', ['version']).status !== 0}, () => withGoTree(directory => {
+  const {spawnSync} = require('node:child_process');
+  fs.writeFileSync(path.join(directory, 'service_test.go'), 'package app\n\nimport "testing"\n\nfunc TestChoose(t *testing.T) {\n\tif Choose(true) != 1 {\n\t\tt.Fatal("x")\n\t}\n}\n');
+  for (const name of ['util', 'idle']) {
+    fs.writeFileSync(path.join(directory, name, `${name}_test.go`), `package ${name}\n\nimport "testing"\n\nfunc TestNothing(t *testing.T) {}\n`);
+  }
+  const run = spawnSync('go', ['test', '-covermode=set', '-coverpkg=./...', '-coverprofile=cover.out', './...'], {cwd: directory, encoding: 'utf8'});
+  assert.equal(run.status, 0, run.stderr);
+  const counts = gate.measure(fs.readFileSync(path.join(directory, 'cover.out'), 'utf8'), directory, 'go', directory);
+  assert.ok(counts.lines[0] > counts.lines[1] && counts.lines[1] > 0);
+  messages(() => gate.check(fs.readFileSync(path.join(directory, 'cover.out'), 'utf8'), directory, 'go', directory), /uncovered/);
 }));

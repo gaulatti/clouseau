@@ -103,13 +103,14 @@ in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
 Python test/dependency conventions. Those non-application entries may appear in
 a native report but cannot contribute passing counters.
 
-Version 2 supports native measurement through the complete-inventory `istanbul`
-and `coveragepy` adapters. Version 1's single-report interface, including LLVM,
+Version 2 supports native measurement through the complete-inventory `istanbul`,
+`coveragepy` and `go` adapters. Version 1's single-report interface, including LLVM,
 remains supported. Unsupported native formats are reported as unavailable local
 coverage; they do not suppress AI review or acquire invented counters. CI still
 rejects unsupported formats. LLVM multi-root plans require a complete
-compiled-source inventory capability and are not measured by version 2; Go
-statement reports do not become line/branch coverage through this interface.
+compiled-source inventory capability and are not measured by version 2.
+Go is measured only through the `go` adapter, whose lines are statements and
+branches are basic blocks ([native Go coverage](go-coverage.md)).
 
 The accepted base supplies the complete recipe in normal local review. Local
 evidence records actual command outcomes and output, native counters when valid,
