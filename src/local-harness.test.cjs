@@ -3,7 +3,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {digest} = require('./acceptance.cjs');
-const {compactSchema, invoke, askHarness} = require('./local-harness.cjs');
+const {boundedTail, compactSchema, invoke, askHarness} = require('./local-harness.cjs');
 
 test('native output schema shares repeated choices without weakening proof ID constraints', () => {
   const choice = {type: 'string', enum: ['proof-1', 'proof-2'], description: 'controller supplied proofs'};
@@ -54,6 +54,32 @@ test('failed native stdout is retained privately with bounded tails, full counts
     assert.ok(error.message.includes(digest(diagnostic)));
     return true;
   });
+});
+
+test('failed non-ASCII output keeps whole code points in bounded tails and distinct byte counts', async () => {
+  const stdout = 'x' + '💡'.repeat(1500) + 'العربية';
+  const stderr = '💡'.repeat(1500);
+  await assert.rejects(invoke(process.execPath, ['-e',
+    `process.stdout.write(${JSON.stringify(stdout)}, () => process.stderr.write(${JSON.stringify(stderr)}, () => process.exit(1)))`],
+  {input: ''}), error => {
+    const diagnostic = error.harnessDiagnostic;
+    assert.ok(diagnostic.stdout_tail.length <= 2000 && diagnostic.stderr.length <= 2000);
+    for (const tail of [diagnostic.stdout_tail, diagnostic.stderr]) {
+      assert.ok(!/^[\uDC00-\uDFFF]/.test(tail) && !/[\uD800-\uDBFF]$/.test(tail));
+      assert.equal(Buffer.from(tail, 'utf8').toString('utf8'), tail);
+    }
+    assert.equal(diagnostic.stdout_characters, stdout.length);
+    assert.equal(diagnostic.stdout_bytes, Buffer.byteLength(stdout));
+    assert.notEqual(diagnostic.stdout_bytes, diagnostic.stdout_characters);
+    assert.equal(diagnostic.stdout_digest, digest(stdout));
+    return true;
+  });
+});
+
+test('bounded tails drop only a leading low surrogate', () => {
+  assert.equal(boundedTail('abcdef', 3), 'def');
+  assert.equal(boundedTail('a💡b', 2), 'b');
+  assert.equal(boundedTail('💡b', 3), '💡b');
 });
 
 test('native transport preserves UTF-8 characters split across process writes', async () => {

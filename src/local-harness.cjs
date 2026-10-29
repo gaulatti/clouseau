@@ -23,6 +23,13 @@ function compactSchema(schema) {
   return Object.keys(definitions).length ? {...result, $defs: definitions} : result;
 }
 
+// Keep the last `limit` UTF-16 code units without starting on the low half of a
+// surrogate pair, so a diagnostic tail never begins inside a code point.
+function boundedTail(text, limit = 2000) {
+  const tail = text.slice(-limit);
+  return /^[\uDC00-\uDFFF]/.test(tail) ? tail.slice(1) : tail;
+}
+
 function invoke(program, args, options) {
   return new Promise((resolve, reject) => {
     const started = Date.now();
@@ -36,12 +43,12 @@ function invoke(program, args, options) {
     // Decode across stream chunks: a chunk may end within a UTF-8 character.
     child.stdout.setEncoding('utf8'); child.stderr.setEncoding('utf8');
     child.stdout.on('data', chunk => {stdout += chunk; if (stdout.length > maxCharacters) kill('native_output_limit');});
-    child.stderr.on('data', chunk => {stderr = (stderr + chunk).slice(-2000);});
+    child.stderr.on('data', chunk => {stderr = boundedTail(stderr + chunk);});
     child.on('error', error => {clearTimeout(timer); reject(error);});
     child.on('close', (code, signal) => {
       clearTimeout(timer);
       if (code !== 0) {
-        const diagnostic = {program, exit_code: code, signal, stderr, stdout_tail: stdout.slice(-2000),
+        const diagnostic = {program, exit_code: code, signal, stderr, stdout_tail: boundedTail(stdout),
           stdout_characters: stdout.length, stdout_bytes: Buffer.byteLength(stdout), stdout_digest: digest(stdout),
           elapsed_ms: Date.now() - started, controller_kill_reasons: [...killReasons],
           timeout_ms: timeoutMs, max_characters: maxCharacters};
@@ -99,4 +106,4 @@ async function askHarness({harness, role, phase, schema, prompt, execute = invok
   } finally {fs.rmSync(directory, {recursive: true, force: true});}
 }
 
-module.exports = {compactSchema, invoke, askHarness};
+module.exports = {boundedTail, compactSchema, invoke, askHarness};
