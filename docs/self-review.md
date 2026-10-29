@@ -7,10 +7,10 @@ global `clouseau review` command from a clean committed candidate. The accepted
 base supplies the recipe and public signer enrollment; neither is trusted merely
 because it appears on a proposed branch.
 
-`scripts/verify-coverage` retains Node's native LCOV report at
-`.clouseau-work/node.lcov`. The existing 100% line and branch thresholds and
+`scripts/verify-coverage` retains an LCOV report, merged deterministically from
+the raw V8 reports of the native test run, at `.clouseau-work/node.lcov`. The existing 100% line and branch thresholds and
 complete source loader remain in force. No textual percentage is converted into
-Istanbul or LLVM counters. Node's LCOV report is not a supported shared local
+Istanbul or LLVM counters. This LCOV report is not a supported shared local
 coverage adapter, so the local recipe deliberately records diagnostic
 `coverage.status: unavailable` with no claimed aggregate counters. That is
 separate from the real verification command results and never authorizes a

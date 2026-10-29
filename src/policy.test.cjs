@@ -390,6 +390,24 @@ test('manual decisions are assigned to gaulatti and request his review on contri
   }
 });
 
+test('manual-merge repositories wait for intent without claiming that auto-merge is armed', async () => {
+  const messages = [];
+  const manual = createPolicy(require('../test/fixtures/config.json'), {manualMerge: true});
+  const f = fixture();
+  f.state.pr.auto_merge = null;
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  const core = {info: message => messages.push(message), summary: {addRaw() {return this;}, async write() {}}};
+  await manual.gate({github: f.github, context, core, assessment: {...automatic, decision: 'second_opinion'}, wait: async () => {}, maxPolls: 1, mergePolls: 1});
+  assert.ok(messages.includes('Automatic merge is disabled; waiting for a maintainer intent confirmation.'));
+  assert.ok(!messages.some(message => message.startsWith('Auto-merge is armed')));
+  assert.ok(!f.writes.some(write => write.name === 'arm' || write.name === 'review'));
+  messages.length = 0;
+  const armed = fixture();
+  armed.state.pr.auto_merge = null;
+  await gate({github: armed.github, context, core, assessment: {...automatic, decision: 'second_opinion'}, wait: async () => {}, maxPolls: 1, mergePolls: 1});
+  assert.ok(messages.includes('Auto-merge is armed; waiting for a maintainer intent confirmation.'));
+});
+
 test('manual handoff does not duplicate an existing assignment or review request', async () => {
   const f = fixture();
   f.state.pr.assignees = [{login: 'gaulatti'}];

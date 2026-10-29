@@ -163,6 +163,13 @@ test('CI independently compares all signed sources and inventory against immutab
   const contracts = structuredClone(f.snapshot);
   delete contracts.sources[Object.keys(contracts.sources).find(id => id.endsWith(':README.md'))];
   await assert.rejects(verifySources({...options, snapshot: contracts}), /purpose evidence/);
+  const link = structuredClone(f.snapshot); const linkIds = Object.keys(link.sources).filter(id => id.endsWith(':src/upload.test.js'));
+  for (const id of linkIds) link.sources[id].content = '../elsewhere/node_modules';
+  const linked = {...f.github, rest: {...f.github.rest, repos: {...f.github.rest.repos, getContent: async args => args.path === 'src/upload.test.js' ?
+    {data: {type: 'symlink', target: '../elsewhere/node_modules', path: args.path}} : f.github.rest.repos.getContent(args)}}};
+  await verifySources({...options, github: linked, snapshot: link});
+  link.sources[linkIds[0]].content = '../fabricated';
+  await assert.rejects(verifySources({...options, github: linked, snapshot: link}), /differs from/);
   const promotedSource = structuredClone(f.snapshot);
   promotedSource.sources[Object.keys(promotedSource.sources).find(id => id.endsWith(':src/upload.test.js'))].authority = 'trusted';
   await assert.rejects(verifySources({...options, snapshot: promotedSource}), /promoted/);

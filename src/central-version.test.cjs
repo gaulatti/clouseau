@@ -218,6 +218,18 @@ test('uncached historical source fetch is bounded to the fixed public repository
   assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), /Public source unavailable/);
 });
 
+test('an unexpected Git failure while reading historical engine evidence is surfaced unchanged, never read as an absent path', t => {
+  const failures = [Object.assign(new Error('git failed'), {stderr: 'fatal: unable to read object database'}), new Error('spawn git ENOENT')];
+  for (const failure of failures) {
+    t.mock.method(cp, 'execFileSync', (program, args) => {
+      if (args.includes('-t')) throw failure;
+      return Buffer.alloc(0);
+    });
+    assert.throws(() => readEngineEvidence(`.clouseau-ci/src/policy.cjs@${first}`, second, '/fixture'), error => error === failure && error.code === undefined);
+    t.mock.restoreAll();
+  }
+});
+
 test('resolver review supplies observed shared dependencies and actual legacy source, bounded to 32 context files', () => {
   const workflow = '.github/workflows/ci.yml';
   const snapshot = {files: [{path: 'README.md', head_source: 'readme'}, {path: '.github/workflows/removed.yml'},
