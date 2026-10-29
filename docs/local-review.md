@@ -412,7 +412,7 @@ source. Differing or unavailable earlier literals remain explicit. No source,
 concern, disposition or score is truncated to fit transport. Oversized Codex
 input fails before invocation. Native stdout/stderr are decoded across UTF-8
 stream boundaries, preserving characters split between process writes. Failed
-harness exits retain the final 2,000 characters of stdout and stderr, complete
+harness exits retain the final 2,000 UTF-16 code units (never starting inside a surrogate pair, so a tail may be one unit shorter) of stdout and stderr, complete
 stdout character/UTF-8 byte counts and digest, elapsed time, exit status/signal,
 configured bounds and controller timeout/output-limit kill reasons in private
 `failure.json` beside the snapshot and journal. The stdout tail is explicitly
