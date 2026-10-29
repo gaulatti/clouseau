@@ -211,8 +211,10 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted');
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
     const {data} = await github.rest.repos.getContent({...sourceRepo, path: source.path, ref: source.ref});
-    requireReceipt(data.encoding === 'base64' && Buffer.from(data.content, 'base64').toString('utf8') === source.content,
-      'signed evidence differs from repository source');
+    // The Contents API describes a symlink by its target; `git show` yields the same bytes locally.
+    requireReceipt(data.type === 'symlink' ? data.target === source.content :
+      data.encoding === 'base64' && Buffer.from(data.content, 'base64').toString('utf8') === source.content,
+    'signed evidence differs from repository source');
   }
   for (const file of snapshot.files) {
     const live = files.find(item => item.filename === file.path);
