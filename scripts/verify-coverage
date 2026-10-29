@@ -2,14 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Every test process writes its own raw V8 coverage report. Node's built-in
+# merge is directory-order dependent, so coverage is merged and gated by
+# src/v8-coverage.cjs, which is order independent. See docs/native-verification.md.
 mkdir -p .clouseau-work
-node src/native-test-report.cjs coverage "$PWD/.clouseau-work/verification-runs" -- \
-  --experimental-test-coverage --test \
-  --test-reporter=lcov --test-reporter-destination=.clouseau-work/node.lcov \
-  --test-coverage-lines=100 --test-coverage-branches=100 \
-  --test-coverage-include='src/**/*.cjs' \
-  --test-coverage-include='src/**/*.js' \
-  --test-coverage-include='src/**/*.mjs' \
-  --test-coverage-exclude='src/**/*.test.*' \
-  --test-coverage-exclude='src/**/*.spec.*' \
-  --import ./test/load-sources.mjs src/*.test.cjs
+rm -rf .clouseau-work/v8-coverage
+NODE_V8_COVERAGE="$PWD/.clouseau-work/v8-coverage" \
+  node src/native-test-report.cjs coverage "$PWD/.clouseau-work/verification-runs" -- \
+  --test --import ./test/load-sources.mjs src/*.test.cjs
+node scripts/v8-coverage-gate.cjs .clouseau-work/v8-coverage .clouseau-work/node.lcov
