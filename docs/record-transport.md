@@ -53,6 +53,21 @@ unexpected, missing or altered repair bundle fails before the writer runs.
 An incomplete assessment may carry no record; this cannot create passing review
 evidence. Every caller must retain its failed-assessment job guard.
 
+## Authenticated local review records
+
+When a signed local review is reused, the assessment does not copy the signed
+snapshot, result and receipt into the transported record a second time. The
+record carries only the run facts (`previous`, `technical`, the author, optional
+engine and owner authorization) and the immutable receipt reference. The
+assessment binds it with `record_reference_digest`, and `record_digest` still
+names the complete record. Each write boundary (the gate and the private-plan
+atomic merge check) independently loads the receipt from its immutable Git blob,
+re-verifies signature, author, base, head, config, policy and engine, rebuilds
+the complete record and requires its digest to equal `record_digest` before any
+write. A missing, substituted or unavailable receipt fails closed with no AI
+fallback. Complete records produced by earlier engines remain accepted; they are
+distinguished by the absence of `record_reference_digest`.
+
 ## Data format and limits
 
 `review-record` is a compact canonical JSON array of exactly four strings. They

@@ -38,6 +38,24 @@ test('bounded record transport preserves the entire record and optional repair d
   assert.deepEqual(transport.decode({...f, payload: transport.encode(f)}), {record: f.record, repair: f.repair});
 });
 
+test('a compact local record travels by its own digest and cannot carry or stand in for a complete record', () => {
+  const f = fixture();
+  const compact = {version: 2, local_receipt_reference: true, local_artifact: 'd'.repeat(40), local_author: 'contributor',
+    previous: {findings: []}, technical: {commands: []}};
+  Object.assign(f, {record: compact});
+  f.assessment.record_reference_digest = digest(compact);
+  const payload = transport.encode(f);
+  assert.deepEqual(transport.decode({...f, payload}), {record: compact, repair: null});
+  assert.ok(Buffer.byteLength(JSON.stringify(envelope(payload))) < 2000, 'only run facts, not the signed review, are transported');
+  for (const record of [{...compact, local_receipt_reference: false}, {...compact, snapshot: f.record.snapshot}, {...compact, local_artifact: 'e'.repeat(40)}]) {
+    assert.throws(() => transport.encode({...f, record}), /compact record digest differs/);
+  }
+  assert.throws(() => transport.encode({...f, repair: {proposal: 'unrequested'}}), /compact record digest differs/);
+  assert.throws(() => transport.encode({...f, assessment: {...f.assessment, repair_digest: 'c'.repeat(64)}}), /compact record digest differs/);
+  assert.throws(() => transport.decode({...f, assessment: {...f.assessment, record_reference_digest: 'c'.repeat(64)}, payload}), /foreign or stale/);
+  assert.throws(() => transport.encode({...f, assessment: {...f.assessment, record_reference_digest: 'invalid'}}), /invalid assessment digest/);
+});
+
 test('every repository, run, attempt, revision and assessment digest is bound at receipt', () => {
   const f = fixture(); const payload = transport.encode(f);
   for (const mutate of [

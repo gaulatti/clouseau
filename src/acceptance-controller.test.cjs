@@ -383,7 +383,31 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     assert.equal(mismatch.review_source, 'authenticated_local_rejected');
     assert.match(mismatch.reason, /engine mismatch.*refresh.*fresh CI run.*No paid fallback/);
   }
-  const verifiedRecord = JSON.parse(fs.readFileSync(f.recordPath));
+  const compact = JSON.parse(fs.readFileSync(f.recordPath));
+  assert.equal(compact.local_receipt_reference, true);
+  assert.ok(!('snapshot' in compact) && !('result' in compact) && !('local_receipt' in compact), 'the signed record is not transported twice');
+  assert.ok(Buffer.byteLength(JSON.stringify(compact)) < Buffer.byteLength(JSON.stringify(bundle)) / 2);
+  const jobOutput = require('./record-transport.cjs');
+  const carried = jobOutput.encode({assessment, record: compact, repair: null, context: f.context, runAttempt: '1'});
+  assert.deepEqual(jobOutput.decode({assessment, payload: carried, context: f.context, runAttempt: '1'}).record, compact);
+  const verifiedRecord = await policy.rehydrate(compact, assessment, {github: f.github, repo: f.context.repo});
+  assert.equal(digest(verifiedRecord), assessment.record_digest, 'rehydration reproduces the assessed complete record');
+  assert.equal(verifiedRecord.local_receipt.signature, bundle.signature);
+  const bind = record => ({...assessment, record_reference_digest: digest(record)});
+  const where = {github: f.github, repo: f.context.repo};
+  for (const broken of [{...compact, snapshot: verifiedRecord.snapshot}, {...compact, local_receipt: bundle},
+    {...compact, local_receipt_reference: 1}, {...compact, unexpected: true}, (({technical, ...rest}) => rest)(compact)]) {
+    await assert.rejects(policy.rehydrate(broken, bind(broken), where), /Invalid compact local review record/);
+    await assert.rejects(policy.rehydrate(broken, assessment, where), /Stale or altered/, 'an unbound shape is rejected first');
+  }
+  const unsigned = {...compact, local_artifact: 'not-a-sha'};
+  await assert.rejects(policy.rehydrate(unsigned, bind(unsigned), where), /immutable receipt reference/);
+  const forged = {...compact, previous: {...compact.previous, findings: [{id: 'substituted'}]}};
+  await assert.rejects(policy.rehydrate(forged, bind(forged), where).then(record =>
+    verifyRecord(record, assessment, trusted, engine)), /Stale or altered|substituted/);
+  const { record_reference_digest, ...legacyAssessment } = assessment;
+  assert.equal(await policy.rehydrate(verifiedRecord, legacyAssessment, where), verifiedRecord, 'complete legacy records remain accepted');
+  await assert.rejects(policy.rehydrate(verifiedRecord, assessment, where), /Stale or altered/, 'a complete record cannot answer a compact assessment');
   const swapped = structuredClone(verifiedRecord); swapped.controls = true;
   assert.throws(() => verifyRecord(swapped, {...assessment, record_digest: digest(swapped)}, trusted, engine), /substituted/);
   const history = structuredClone(verifiedRecord); history.previous.findings.push({id: 'fake'});
@@ -914,7 +938,8 @@ test('signed local quality with incomplete coverage is reused on red CI without 
     const p = await privateReceiptFixture(f, false, localTechnical);
     assert.deepEqual(p.bundle.payload.record.technical, localTechnical);
     const current = JSON.parse(fs.readFileSync(f.recordPath));
-    assert.deepEqual(current.local_receipt.payload.record.technical.exact_coverage, {lines: [20, 19], branches: [8, 6]});
+    assert.equal(current.local_receipt_reference, true);
+    assert.equal(current.local_receipt, undefined);
     assert.equal(current.technical.pending, undefined, 'green acceptance uses independent CI instead of claiming local coverage passed');
     fs.rmSync(f.recordPath);
     f.state.failed = true;
