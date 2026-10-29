@@ -133,6 +133,16 @@ test('v2 local verification binds every native artifact and allows only aggregat
   assert.equal(calls, 0, 'invalid accepted recipe stops before executing any command');
 }));
 
+test('a measurement failure without a message is still recorded as unavailable coverage with a stable reason', t => repository(f => {
+  const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
+  fs.writeFileSync(path.join(f.directory, 'coverage.json'), JSON.stringify(nativeFixture(f.directory)));
+  t.mock.method(require('./coverage-gate.cjs'), 'measure', () => {throw new Error('');});
+  const result = executeVerification({directory: f.directory, config});
+  assert.equal(result.coverage.status, 'unavailable');
+  assert.equal(result.coverage.error, 'Native coverage could not be measured');
+  assert.equal(result.exact_coverage, null);
+}));
+
 test('local native artifact loading records duplicate-key data as unavailable rather than fabricating counters', () => repository(f => {
   const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
   const report = nativeFixture(f.directory);

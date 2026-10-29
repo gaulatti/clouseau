@@ -73,6 +73,17 @@ test('one reviewer blocker stays visible once with its evidence even when the ot
   assert.doesNotMatch(visible, /Owner decision required|\(optional\)/);
 });
 
+test('several distinct findings are counted in the plural while repeated ones stay a single row', () => {
+  const {result, snapshot} = setup();
+  for (const review of result.reviews) {
+    review.report.findings.push({...finding(), id: 'second-rejection', cause: 'A second changed path accepts input without validation.',
+      obligation: 'Validate the second path before acceptance.'});
+  }
+  const visible = grade(result, snapshot);
+  assert.match(visible, /\*\*2 findings\*\* · \*\*2 blocking\*\*/);
+  assert.equal((visible.match(/\| Invalid input reaches durable acceptance /g) || []).length, 2, 'each distinct finding has its own row');
+});
+
 test('sub-threshold findings, optional benefits and missing integrity evidence remain distinct', () => {
   const {result, snapshot} = setup();
   for (const review of result.reviews) {
