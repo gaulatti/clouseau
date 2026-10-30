@@ -377,6 +377,21 @@ private plan, GitHub cannot prevent a trusted maintainer from ignoring a failed
 check. Manual mode continues to require manual merge.
 
 
+### Incomplete reviews are always visible
+
+Every `review_incomplete` assessment carries a fixed `cause` (for example
+`provider_key_missing`, `provider_key_invalid`, `provider_rejected`,
+`provider_unavailable`, `local_receipt_required`, `engine_mismatch` or
+`evidence_incomplete`). The `assess` step raises a warning annotation, and the
+`gate` creates (or updates in place) one `<!-- clouseau-review-incomplete -->`
+comment with the specific reason and a next step. Raw error text, provider
+responses and credentials are never forwarded: only fixed causes, HTTP status
+digits and variable names appear. Provider credentials are validated for shape
+(`DEEPSEEK_API_KEY`, `TYPESAFE_API_KEY`: no whitespace or line break, printable
+ASCII, not wrapped in quotation marks, at most 512 characters) before any
+request, by `check-provider` and by every review transport. A malformed value is
+refused, never trimmed or repaired; re-save the secret as the bare key.
+
 ### Controller-enforced owner merge on an unavailable private plan
 
 An accepted protocol-v2 `"merge_mode": "automatic"` explicitly selects strict

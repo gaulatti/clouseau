@@ -1,6 +1,7 @@
 'use strict';
 
 const {isDeepStrictEqual} = require('node:util');
+const {assertProviderKey} = require('./provider-key.cjs');
 const MODELS = Object.freeze(['deepseek-flash', 'deepseek-v4-pro']);
 const JEV_MODEL = 'jev-1.13.0';
 const JEV_PACKET_LIMIT = 100000;
@@ -61,7 +62,7 @@ function decodeJSON(raw) {
 // A completed answer, including a negative or malformed one, is never resampled.
 async function requestJSON({messages, model, thinking = true, schemas, fetchImpl = fetch, wait = delay, report = () => {}}) {
   if (!MODELS.includes(model)) throw new Error('Unsupported acceptance model');
-  if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
+  assertProviderKey('DEEPSEEK_API_KEY');
   const usage = [];
   let completed;
   for (let attempt = 0; ; attempt++) {
@@ -100,7 +101,7 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
 }
 
 async function requestJev({state, questions, fetchImpl = fetch, wait = delay, report = () => {}}) {
-  if (!process.env.TYPESAFE_API_KEY) throw new Error('TYPESAFE_API_KEY is not configured');
+  assertProviderKey('TYPESAFE_API_KEY');
   const ids = Object.keys(questions);
   if (!ids.length || JSON.stringify({state, questions}).length > JEV_PACKET_LIMIT) throw new Error('Jev requires a bounded atomic-question packet');
   const usage = [];

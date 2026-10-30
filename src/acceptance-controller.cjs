@@ -156,7 +156,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
       }
       if (receiptOnly || config.local_review?.mode === 'required') {
-        return {...identity, decision: 'review_incomplete', reason: 'This repository requires an authenticated local Clouseau review receipt.'};
+        return {...identity, decision: 'review_incomplete', cause: 'local_receipt_required',
+          reason: 'This repository requires an authenticated local Clouseau review receipt.'};
       }
       const intentConfirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
       snapshot = await collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation});
@@ -190,9 +191,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
       const engineMismatch = error.message.startsWith('Invalid local review receipt: engine mismatch;');
-      return {...identity, decision: 'review_incomplete',
-        ...(engineMismatch ? {review_source: 'authenticated_local_rejected', provider_api_calls: 0} : {}),
-        reason: engineMismatch ? error.message : 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.'};
+      const {cause, reason} = engineMismatch ? {cause: 'engine_mismatch', reason: error.message} : require('./incomplete.cjs').classify(error);
+      return {...identity, decision: 'review_incomplete', cause,
+        ...(engineMismatch ? {review_source: 'authenticated_local_rejected', provider_api_calls: 0} : {}), reason};
     }
   }
 
@@ -211,6 +212,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const hold = reason => legacy.gate({github, context, core, ...options,
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) {
+      if (assessment.decision === 'review_incomplete') await require('./incomplete.cjs').post({github, context, assessment});
       return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
         'It is reassessed automatically when PR verification completes where the workflow has the verification trigger; otherwise re-run it ' +
         'once verification has completed, or push a new head if re-running does not produce a record.');
