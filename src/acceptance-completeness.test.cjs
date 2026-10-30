@@ -127,7 +127,7 @@ test('native inspection sends the cited-exclusion schema and preserves an invali
   const original = structuredClone(facts); const observations = []; let calls = 0;
   const previous = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
   try {
-    await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', observe: value => observations.push(value),
+    await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', log: line => observations.push({log: line}), observe: value => observations.push(value),
       fetchImpl: async (_, options) => {
         calls++;
         const request = JSON.parse(options.body);
@@ -145,7 +145,7 @@ test('native inspection sends the cited-exclusion schema and preserves an invali
       }}), /missing or unknown citation/);
     assert.equal(calls, 3, 'a malformed output (not a verdict) is retried twice with the identical prompt, then fails closed');
     assert.deepEqual(facts, original);
-    assert.deepEqual(observations[0].report, original, 'negative diagnostic retains the uncited claim exactly');
+    assert.deepEqual(observations.find(item => item.report).report, original, 'negative diagnostic retains the uncited claim exactly');
   } finally {
     if (previous === undefined) delete process.env.DEEPSEEK_API_KEY;
     else process.env.DEEPSEEK_API_KEY = previous;

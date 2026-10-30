@@ -168,6 +168,7 @@ test('coverage is transitive through supplied files only (changed callers and ba
   f.snapshot.sources = {...f.snapshot.sources,
     test: source('tests/unit/nav.test.tsx', "import { FeedItem } from '../../src/components/feed-item';\nimport type { Barrel } from '../../src';\n"),
     caller: source('src/components/feed-item.tsx', "import { resolve } from '../utils/helper.js';\nexport const FeedItem = 1;\n"),
+    cycle: source('src/utils/helper.ts', "import '../components/feed-item';\nimport '../components/feed-item.tsx';\n"),
     barrel: source('src/index.ts', "export * from './widgets/clock';\nexport { x } from \"./components/button\";\n")};
   f.snapshot.test_imports = [{path: 'tests/unit/utils.test.ts', specifiers: ['../../src/utils/attention-color', 'vitest', '../../src/nowhere']}];
   f.snapshot.files = ['src/components/feed-item.tsx', 'src/utils/helper.ts', 'src/utils/attention-color.ts', 'src/widgets/clock.ts', 'src/components/button.tsx'].map(path => ({path, status: 'added'}));
