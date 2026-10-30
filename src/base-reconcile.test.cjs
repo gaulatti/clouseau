@@ -90,3 +90,33 @@ test('a repeated push replaces the same notice instead of adding another', async
   assert.deepEqual(f.state.edited.map(item => item.comment_id), [77]);
   assert.equal(f.state.created.filter(item => item.issue_number === 3).length, 0);
 });
+
+test('merges made by the bot with GITHUB_TOKEN raise no push event: a completed review run of a merged PR, a schedule or a dispatch reconcile instead', async () => {
+  const runContext = (extra = {}) => ({repo, eventName: 'workflow_run', payload: {workflow_run: {event: 'pull_request_target', head_sha: sha(1), pull_requests: [{number: 1}], ...extra}}});
+  const withMerged = (f, merged, base = 'main') => {
+    f.github.rest.pulls.get = async args => ({data: {number: args.pull_number, merged, base: {ref: base}}});
+    f.github.rest.repos.listPullRequestsAssociatedWithCommit = async () => ({data: [{number: 1}]});
+    return f;
+  };
+  // The merged PR's review run completed: the base moved, siblings are reconciled.
+  const merged = withMerged(fixture(), true);
+  assert.deepEqual(await run(merged, {context: runContext()}), {updated: [2], noticed: [3, 4, 5, 6, 7]});
+  // A review run of a PR that is not merged (or merged elsewhere) moved nothing.
+  for (const [mergedFlag, base] of [[false, 'main'], [true, 'release']]) {
+    const f = withMerged(fixture(), mergedFlag, base);
+    assert.deepEqual(await run(f, {context: runContext()}), {updated: [], noticed: []}); assert.equal(f.state.created.length, 0);
+    assert.match(f.logs[0], /did not move/);
+  }
+  // Only a pull_request_target review run is a merge signal.
+  const other = withMerged(fixture(), true);
+  assert.deepEqual(await run(other, {context: runContext({event: 'pull_request'})}), {updated: [], noticed: []});
+  // A fork PR's run carries no pull request list: it is found through the head commit.
+  const fork = withMerged(fixture(), true);
+  assert.deepEqual((await run(fork, {context: runContext({pull_requests: []})})).updated, [2]);
+  const absent = withMerged(fixture(), true); absent.github.rest.repos.listPullRequestsAssociatedWithCommit = async () => ({data: []});
+  assert.deepEqual(await run(absent, {context: runContext({pull_requests: undefined})}), {updated: [], noticed: []});
+  // A schedule or manual dispatch reconciles unconditionally (covers auto-merges that finish after the run).
+  for (const eventName of ['schedule', 'workflow_dispatch']) {
+    const f = fixture(); assert.deepEqual((await run(f, {context: {repo, eventName, payload: {}}})).updated, [2]);
+  }
+});
