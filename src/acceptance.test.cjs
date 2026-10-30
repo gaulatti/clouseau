@@ -190,3 +190,19 @@ test('documentation, fixtures, configuration, lockfiles and workflows are never 
   f.snapshot.files.push({path: 'src/app.ts', status: 'modified'});
   assert.match(approvalHold(f.report, f.snapshot), /src\/app\.ts$/);
 });
+
+test('only an import statement links a module: comments and quoted titles do not', () => {
+  const stem = (content, files = [{path: 'src/utils/format.ts', status: 'modified'}]) => {
+    const f = withTest(content); f.snapshot.sources.test.path = 'tests/unit/format.test.ts'; f.snapshot.files = files; return approvalHold(f.report, f.snapshot);
+  };
+  assert.equal(stem("import {\n  a,\n} from '../../src/utils/format';\n"), null);
+  assert.equal(stem("import '../../src/utils/format';\n"), null);
+  assert.equal(stem("export * from '../../src/utils/format';\n"), null);
+  assert.equal(stem("const { a } = require('../../src/utils/format');\n"), null);
+  assert.equal(stem("const m = await import('../../src/utils/format.js');\n"), null);
+  assert.equal(stem("require('../../src/utils/format');\n"), null);
+  for (const content of ["// import {a} from '../../src/utils/format';\n", "/* import {a} from '../../src/utils/format';\n*/\n",
+    "test('import {a} from \"../../src/utils/format\"', () => {});\n", "const s = 'x';\nfoo(require('../../src/utils/format'));\n"]) {
+    assert.match(stem(content), /no supplied test imports/, content);
+  }
+});

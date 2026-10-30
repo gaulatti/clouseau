@@ -81,13 +81,17 @@ function moduleStem(name) {
 const IMPORT = /^\s*(?:(?:export\b.*\s)?from\b|import\b|use\b|pub\s+use\b|mod\b|require(?:_relative)?\b|include\b|load\b)|\b(?:require|import)\(/;
 
 // A JavaScript-style module specifier may follow a multi-line `import {\n a,\n} from '../../src/x'`,
-// so it is matched on the whole source: relative, aliased and extension-suffixed forms alike.
+// so statements are matched on the whole source once comments are removed. Only an import/export
+// statement, or a declaration initialised by require()/import(), links a module; a quoted path
+// inside a test title or a comment does not.
 function linked(snapshot, name) {
   const stem = moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const token = new RegExp(`(?:^|[\\s'"\`/.:])${stem}(?=$|[\\s'"\`.;,)/])`);
-  const specifier = new RegExp(`\\b(?:from|import|require)\\s*\\(?\\s*['"\`][^'"\`\\n]*/${stem}(?:\\.[a-z]+)?(?:/index(?:\\.[a-z]+)?)?['"\`]`);
+  const path = `['"\`][^'"\`\\n]*/${stem}(?:\\.[a-z]+)?(?:/index(?:\\.[a-z]+)?)?['"\`]`;
+  const specifier = new RegExp(`^\\s*(?:(?:import|export)\\b[^;'"\`]*?\\bfrom\\s*|import\\s*|(?:const|let|var)\\b[^;=]*=\\s*(?:await\\s*)?(?:require|import)\\s*\\(\\s*|(?:await\\s+)?(?:require|import)\\s*\\(\\s*)${path}`, 'm');
   return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' && isTestPath(source.path) &&
-    (specifier.test(source.content) || source.content.split('\n').some(line => IMPORT.test(line) && token.test(line))));
+    (specifier.test(source.content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')) ||
+      (!/\.[cm]?[jt]sx?$/.test(source.path) && source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)))));
 }
 
 // Approval needs affirmative, per-file behavioural evidence. An unresolved
