@@ -109,7 +109,7 @@ function approvalHold(report, snapshot) {
   // no behaviour to test. A model's "unresolved" without a missing source behind it is an opinion:
   // completeness holds only when the review records, or the controller omitted, missing evidence.
   const executable = snapshot.files.filter(file => isExecutablePath(file.path));
-  const testMatters = executable.some(file => !isTestPath(file.path) || /^-(?!--)/m.test(file.patch || ''));
+  const testMatters = executable.some(file => !isTestPath(file.path) || /^-(?!--)/m.test(file.patch));
   const missing = (snapshot.omitted_sources || []).length > 0 ||
     [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])].some(item => item.state === 'missing');
   if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';

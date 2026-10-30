@@ -53,6 +53,8 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   assert.equal(materialize(unnamed, fresh).findings[0].path, 'src/upload.rs');
   fresh.files[0].patch = '@@ -1,2 +1,2 @@\n-a\n+b'; fresh.files[0].head_source = 'head';
   assert.deepEqual(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))), {source: 'head', start: 1, end: 3});
+  fresh.files[0].patch = '@@ -1 +900 @@\n+x';
+  assert.equal(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))).start, 1, 'a line outside the supplied spans uses the first span');
   fresh.files[0].head_source = undefined; fresh.files[0].base_source = 'head';
   assert.equal(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))).source, 'head');
   for (const mutate of [finding => {delete finding.anchor;}, finding => {finding.path = 'invented';}, finding => {finding.anchor.extra = true;}]) {
