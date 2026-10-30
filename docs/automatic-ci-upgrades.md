@@ -182,6 +182,57 @@ A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-
 scoped record artifacts are never reused across reruns.
 
+## Approved PRs after a sibling merge moves the base
+
+Approval, the assessment and any local receipt are bound to the head **and** the
+base. When one approved PR merges, every other approved PR is left behind
+(GitHub auto-merge just waits) and no gate re-runs, so the
+`clouseau-needs-branch-update` notice from the gate can never appear. A push to
+the base branch is the only event that moves the base, so the engine
+reconciles on it with the `reconcile-base` operation:
+
+1. For every open, ready PR that has a current-head GitHub Actions bot approval
+   or armed auto-merge, compare its head with the base. A PR that is not
+   behind is left alone.
+2. Optional `update-token` (an independent credential such as a fine-grained
+   PAT or App token, like `repair-token`): the lowest-numbered stale
+   same-repository PR is brought up to date with `update-branch`
+   (`expected_head_sha`, no force). That push, unlike a `GITHUB_TOKEN` push,
+   starts normal verification, a fresh independent review and, where required,
+   a fresh local receipt. Only one PR is updated per push so the next sibling
+   merge does not invalidate several in-flight re-reviews; the merge of the
+   updated PR is itself a push that updates the next one.
+3. Every other stale PR (all of them without `update-token`, forks, deleted head
+   repositories, conflicts or a refused update) gets one visible
+   `clouseau-needs-branch-update` comment, updated in place on later pushes.
+
+Nothing is approved, merged or re-armed by this operation, and a push made with
+`GITHUB_TOKEN` is never used because it would leave the new head without
+tests, coverage or review evidence. Evidence is never reused across heads.
+Limitation: a PR that is still being reviewed when the base moves is not
+touched here; its own gate raises the notice when it finishes.
+
+Consumer workflow template (names are the consumer's own):
+
+```yaml
+on:
+  push:
+    branches: [main]
+jobs:
+  reconcile-base:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: resolve-clouseau
+    permissions: {contents: read, pull-requests: read, issues: write}
+    concurrency: {group: clouseau-reconcile-base, cancel-in-progress: false}
+    # checkout main and the frozen engine, then:
+    #   operation: reconcile-base
+    #   update-token: ${{ secrets.BRANCH_UPDATE_TOKEN }}   # optional
+```
+
+The shared contract test `assertBaseReconciliation` encodes the trigger, the
+push-only condition, issues write without contents or actions write, and
+queued (never cancelled) runs.
+
 ## Operations and boundaries
 
 In artifact mode, find `clouseau-engine-<run id>-<attempt>` for the full central

@@ -458,6 +458,39 @@ jobs:
           operation: finalize
           assessment: ${{ needs.assess-intent.outputs.assessment }}
 
+  reconcile-base:
+    # A sibling merge moves the base under every approved PR; nothing else re-checks them.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: write
+    needs: resolve-clouseau
+    concurrency:
+      group: clouseau-reconcile-base
+      cancel-in-progress: false
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
+        with:
+          operation: reconcile-base
+          update-token: ${{ secrets.BRANCH_UPDATE_TOKEN }}
+
   request-reassessment:
     if: >-
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve-intent ')) ||
