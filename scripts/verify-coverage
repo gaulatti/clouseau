@@ -2,6 +2,14 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The native fixtures run real coverage.py through `python3 -m coverage`. Fail
+# immediately and say how to fix it instead of surfacing a late test failure.
+if ! python3 -m coverage --version >/dev/null 2>&1; then
+  echo "error: Python coverage.py is required by the native fixtures but 'python3 -m coverage' is unavailable." >&2
+  echo "Install the pinned version: python3 -m pip install -r requirements-test.txt (or put a virtualenv with it first on PATH)." >&2
+  exit 2
+fi
+
 # Every test process writes its own raw V8 coverage report. Node's built-in
 # merge is directory-order dependent, so coverage is merged and gated by
 # src/v8-coverage.cjs, which is order independent. See docs/native-verification.md.
