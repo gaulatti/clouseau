@@ -336,8 +336,8 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
   await assert.rejects(investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
     calls++; return calls % 2 ? response({request_sources: [`src/new-${calls}.rs`]}) : response({...f.report, snapshot: f.snapshot.digest});
-  }}), /two complete examination cycles/);
-  assert.equal(calls, 8);
+  }}), /invalid structured result/, 'the final cycle cannot request source');
+  assert.equal(calls, 5);
   f.report.snapshot = f.snapshot.digest;
   const draft = structuredClone(f.report); draft.findings.push(finding());
   assert.throws(() => validateInspection(f.report, f.snapshot, [draft]), /prior investigation concern/);
@@ -371,3 +371,26 @@ test('a change with no executable code treats an invalid inapplicable test gate 
   snapshot.files = [{path: 'src/app.ts', status: 'modified'}];
   assert.equal(materialize(gate('inapplicable'), snapshot).gates[0].state, 'inapplicable', 'code changes keep the invalid state visible');
 });
+
+test('an earlier concern that the next examination neither retains nor resolves stands as a finding (issue 126)', withKey(async () => {
+  const f = fixture(); f.report.snapshot = f.snapshot.digest;
+  const draft = structuredClone(f.report); draft.findings.push(finding());
+  const silent = structuredClone(f.report);
+  const kept = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(silent)});
+  assert.equal(kept.report.findings.length, 1);
+  assert.equal(kept.report.findings[0].id, draft.findings[0].id);
+  assert.ok(kept.report.evidence.some(entry => entry.id.startsWith('carried-')), 'the original immutable evidence travels with it');
+  assert.ok(validateInspection(kept.report, f.snapshot, [draft]));
+  // A changed restatement under the same id is replaced by the original concern; a resolved one is left alone.
+  const changed = structuredClone(f.report); changed.findings.push({...finding(), cause: 'A different root cannot silently reuse the identifier.'});
+  const restated = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(changed)});
+  assert.equal(restated.report.findings.length, 1);
+  assert.equal(restated.report.findings[0].cause, draft.findings[0].cause);
+  const verbatim = structuredClone(draft);
+  const same = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(verbatim)});
+  assert.ok(!same.report.evidence.some(entry => entry.id.startsWith('carried-')), 'a retained concern is not duplicated');
+  const closed = structuredClone(f.report);
+  closed.resolutions = [{id: draft.findings[0].id, state: 'dismissed', reason: 'The current source proves rejection before durable acceptance.', evidence: ['source']}];
+  const resolved = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(closed)});
+  assert.equal(resolved.report.findings.length, 0);
+}));

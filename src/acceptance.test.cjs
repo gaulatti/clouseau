@@ -123,7 +123,7 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
   assert.throws(() => validateReport(report, snapshot), /citation does not match/);
 });
 
-const {approvalHold, validateApproval, isTestPath} = require('./acceptance.cjs');
+const {approvalHold, validateApproval, isTestPath, resolveSpecifier, specifiersOf, moduleStem} = require('./acceptance.cjs');
 
 function withTest(content = 'use upload;\n') {
   const f = fixture();
@@ -154,13 +154,30 @@ test('a test for one changed file never covers a different changed file', () => 
   const f = withTest('import {a} from "./feed-grid";\n');
   f.snapshot.files.push({path: 'src/format.ts', status: 'modified', head_source: 'head'});
   assert.match(approvalHold(f.report, f.snapshot), /src\/upload\.rs, src\/format\.ts|src\/upload\.rs/);
+  Object.assign(f.snapshot.sources.test, {path: 'tests/unit/feed.test.ts', content: 'import {a} from "../../src/feed-grid";\nimport {b} from "../../src/ui";\n'});
   f.snapshot.files = [{path: 'src/feed-grid.tsx', status: 'modified'}, {path: 'src/ui/index.ts', status: 'added'}];
-  f.snapshot.sources.test.content = 'import {a} from "./feed-grid";\nimport {b} from "./ui";\n';
   assert.equal(approvalHold(f.report, f.snapshot), null, 'an index module is named by its directory');
   f.snapshot.files = [{path: 'src/format.ts', status: 'modified'}, {path: 'src/gone.ts', status: 'removed'}, {path: 'README.md', status: 'modified'},
     {path: 'src/types.d.ts', status: 'modified'}, {path: 'pkg/server.go', status: 'modified'}, {path: 'vitest.config.ts', status: 'modified'}, {path: 'src/x.test.ts', status: 'modified'}];
   assert.equal(approvalHold(f.report, f.snapshot), 'no supplied test imports changed production code: src/format.ts');
 });
+
+test('coverage is transitive through supplied files only (changed callers and barrels)', () => {
+  const f = fixture();
+  const source = (path, content) => ({authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path, content});
+  f.snapshot.sources = {...f.snapshot.sources,
+    test: source('tests/unit/nav.test.tsx', "import { FeedItem } from '../../src/components/feed-item';\nimport type { Barrel } from '../../src';\n"),
+    caller: source('src/components/feed-item.tsx', "import { resolve } from '../utils/helper.js';\nexport const FeedItem = 1;\n"),
+    barrel: source('src/index.ts', "export * from './widgets/clock';\nexport { x } from \"./components/button\";\n")};
+  f.snapshot.test_imports = [{path: 'tests/unit/utils.test.ts', specifiers: ['../../src/utils/attention-color', 'vitest', '../../src/nowhere']}];
+  f.snapshot.files = ['src/components/feed-item.tsx', 'src/utils/helper.ts', 'src/utils/attention-color.ts', 'src/widgets/clock.ts', 'src/components/button.tsx'].map(path => ({path, status: 'added'}));
+  assert.equal(approvalHold(f.report, f.snapshot), null, 'caller, its helper, a name-unrelated test, and a barrel chain are all covered');
+  f.snapshot.files.push({path: 'src/utils/orphan.ts', status: 'added'}, {path: 'src/utils/format.ts', status: 'modified'});
+  assert.equal(approvalHold(f.report, f.snapshot), 'no supplied test imports changed production code: src/utils/orphan.ts, src/utils/format.ts');
+  assert.deepEqual(resolveSpecifier('tests/a.test.ts', 'react', ['src/react.ts']), [], 'a bare package is never a project file');
+  assert.deepEqual(specifiersOf("const m = await import('./a');\nfoo(require('./b'));\n// import './c';\nimport './d';"), ['./a', './d']);
+});
+
 
 test('unresolved integrity or completeness evidence holds approval, and a hold never masks a stricter outcome', () => {
   for (const name of ['test_integrity', 'review_completeness']) {
@@ -226,4 +243,10 @@ test('a test-only change is executable: unresolved test integrity still holds it
   assert.equal(approvalHold(f.report, f.snapshot), null);
   f.snapshot.files = [{path: 'tests/fixtures/sample.json', status: 'added'}, {path: 'tests/fixtures/helper.ts', status: 'added'}];
   assert.equal(approvalHold(f.report, f.snapshot), null);
+});
+
+test('a root-level index module is named by itself, a nested one by its directory', () => {
+  assert.equal(moduleStem('index.ts'), 'index');
+  assert.equal(moduleStem('src/ui/index.ts'), 'ui');
+  assert.equal(moduleStem('src/ui/button.tsx'), 'button');
 });

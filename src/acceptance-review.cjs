@@ -193,6 +193,32 @@ function changedAnchor(file, catalog) {
   return {source: span.source, start: span.start, end: span.end};
 }
 
+const sameConcern = (a, b) => digest([a.path, a.cause, a.obligation]) === digest([b.path, b.cause, b.obligation]);
+
+// A concern raised in an earlier examination by this role stands unless the new report retains it
+// verbatim or resolves it with current-source counterevidence. Silence is not a resolution, and it is
+// not a reason to end the review as incomplete either: the controller carries the concern forward
+// with its original (immutable) evidence so that it is graded like any other finding.
+function carryForward(report, drafts) {
+  let count = 0;
+  for (const draft of drafts) for (const finding of draft.findings) {
+    const retained = report.findings.find(item => item.id === finding.id);
+    if (retained && sameConcern(retained, finding)) continue;
+    if (report.resolutions.some(item => item.id === finding.id)) continue;
+    const carried = structuredClone(finding); const renamed = new Map();
+    const rename = id => {
+      if (!renamed.has(id)) {
+        const entry = draft.evidence.find(item => item.id === id);
+        const fresh = `carried-${count++}-${id}`; renamed.set(id, fresh); report.evidence.push({...entry, id: fresh});
+      }
+      return renamed.get(id);
+    };
+    carried.evidence = carried.evidence.map(rename);
+    for (const factor of Object.values(carried.factors)) factor.evidence = factor.evidence.map(rename);
+    report.findings = [...report.findings.filter(item => item.id !== finding.id), carried];
+  }
+}
+
 function validationSnapshot(snapshot, drafts = []) {
   return {...snapshot, prior_findings: [...(snapshot.prior_findings || []), ...drafts.flatMap(draft => draft.findings)]};
 }
@@ -202,17 +228,17 @@ function validateInspection(report, snapshot, drafts = []) {
   validateFacts(report, view);
   for (const finding of drafts.flatMap(draft => draft.findings)) {
     const retained = report.findings.find(item => item.id === finding.id);
-    if (retained && retained.path === finding.path && retained.cause === finding.cause && retained.obligation === finding.obligation) continue;
+    if (retained && sameConcern(retained, finding)) continue;
     const resolution = report.resolutions.find(item => item.id === finding.id);
     if (!resolution) throw new Error('A prior investigation concern requires explicit current-source counterevidence');
   }
   return view;
 }
 
-async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, log, drafts = [], observe = () => {}}) {
+async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, log, drafts = [], observe = () => {}, noRequests = false}) {
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
   const usage = [];
-  let completed; let final = false;
+  let completed; let final = noRequests;
   for (let round = 0; ; round++) {
     // The last round and any round after a request that fetched nothing must conclude.
     final = final || round >= 2;
@@ -249,6 +275,7 @@ async function inspect({snapshot, role, model, github, repo, fetchImpl, wait, lo
     // substantive source/schema validation still runs below.
     completed = materialize(result.value, snapshot); break;
   }
+  carryForward(completed, drafts);
   validateInspection(completed, snapshot, drafts);
   return {report: completed, usage};
 }
@@ -268,12 +295,13 @@ async function investigateChange({snapshot, config, github, repo, fetchImpl, wai
       const previous = inspections.get(role);
       if (previous?.report.snapshot === snapshot.digest) continue;
       const drafts = previous ? [...previous.drafts, previous.report] : [];
-      const result = await inspect({snapshot, role, model, drafts, github, repo, fetchImpl, wait, log, observe});
+      // The second cycle may not fetch more source: it must conclude on a fixed snapshot, so the
+      // examinations converge instead of invalidating each other.
+      const result = await inspect({snapshot, role, model, drafts, github, repo, fetchImpl, wait, log, observe, noRequests: cycle === 1});
       usage.push(...result.usage); inspections.set(role, {role, report: result.report, drafts});
     }
-    if ([...inspections.values()].every(item => item.report.snapshot === snapshot.digest)) return {inspections: [...inspections.values()], usage};
+    if (cycle === 1 || [...inspections.values()].every(item => item.report.snapshot === snapshot.digest)) return {inspections: [...inspections.values()], usage};
   }
-  throw new Error('Source investigation did not converge within two complete examination cycles');
 }
 
 async function gradeInvestigations({snapshot, config, investigation, fetchImpl, wait, log, observe = () => {}, diagnostic = () => {}}) {
