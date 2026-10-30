@@ -88,7 +88,7 @@ test('review workflows wait for verification through the bounded engine operatio
 test('a pending review is reassessed when verification completes, and later steps wait for the bounded step', () => {
   const wait = {id: 'wait', uses: './.clouseau-ci', with: {operation: 'await-verification'}};
   const assess = {uses: './.clouseau-ci', if: "steps.wait.outputs.verified == 'true'", with: {operation: 'assess'}};
-  const consumer = {on: {workflow_run: {workflows: ['CI'], types: ['completed']}}, jobs: {
+  const consumer = {name: 'Reassess', on: {workflow_run: {workflows: ['CI'], types: ['completed']}}, jobs: {
     'assess-intent': {steps: [wait, assess]},
     'request-reassessment': {if: "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'",
       permissions: {actions: 'write'}, steps: [{uses: './.clouseau-ci', with: {operation: 'request-reassessment'}}]}}};
@@ -102,6 +102,9 @@ test('a pending review is reassessed when verification completes, and later step
   assert.throws(() => assertReassessmentOnVerification(untriggered), /trigger on completed/);
   const unnamed = structuredClone(consumer); unnamed.on.workflow_run.types = ['requested'];
   assert.throws(() => assertReassessmentOnVerification(unnamed), /completed type/);
+  const selfWatching = structuredClone(consumer); selfWatching.name = 'CI';
+  assert.throws(() => assertReassessmentOnVerification(selfWatching), /different workflow than the one containing it/);
+  assert.equal(assertReassessmentOnVerification({...consumer, name: undefined}, 'Other'), 1, 'an explicit own name is honoured');
   const unrouted = structuredClone(consumer); unrouted.jobs['request-reassessment'].permissions = {actions: 'read'};
   assert.throws(() => assertReassessmentOnVerification(unrouted), /workflow_run events/);
 });

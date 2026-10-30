@@ -152,14 +152,20 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
       if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
         throw new Error('PR closed, became draft, or changed while verification was pending');
       }
-      result = await limited(() => technicalRun(github, context.repo, pr));
+      result = await limited(() => technicalRun(github, context.repo, pr, {wait}));
     } catch (error) {
       if (!(error instanceof RateLimitHold)) throw error;
       core.info(heldReason(error));
       core.setOutput('verified', 'false');
       return {pending: true, state: 'rate_limited', retry_after: new Date(error.resetAt).toISOString()};
     }
-    if (result.failure) throw new Error(result.failure);
+    if (result.failure) {
+      // The step still fails closed, but it publishes a complete assessment naming the failed job or step so
+      // that a write-capable job can show the visible review-incomplete notice instead of leaving the PR silent.
+      core.setOutput('assessment', JSON.stringify({version: 2, number: pull_number, head_sha: pr.head.sha, decision: 'review_incomplete',
+        cause: 'verification_failed', reason: result.failure}));
+      throw new Error(result.failure);
+    }
     if (!result.pending) {
       core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
       core.setOutput('verified', 'true');
@@ -281,7 +287,28 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
 }
 
 const etags = new Map();
-async function technicalRun(github, repo, pr, {receipt = false} = {}) {
+const JOB_REREADS = 3;
+const FINAL_STEP = new Set(['success', 'failure', 'cancelled', 'skipped', 'timed_out', 'neutral', 'action_required', 'stale']);
+
+// Final success, a final failure naming the job or step, or not-final with what is awaited.
+function judgeVerification(run, jobs) {
+  const waiting = what => ({final: false, waiting: what});
+  if (!jobs.length) return waiting('the job list is empty');
+  // Only the latest attempt of the verification job counts, whatever earlier attempts concluded.
+  const verify = jobs.filter(job => job.name === config.verification.job).sort((a, b) => (b.run_attempt ?? 0) - (a.run_attempt ?? 0))[0];
+  if (!verify) return {final: true, failure: `Verification job "${config.verification.job}" was not found in run ${run.id} attempt ${run.run_attempt}`};
+  if (verify.run_attempt > run.run_attempt) return waiting(`the job list is from attempt ${verify.run_attempt}, ahead of the run record (attempt ${run.run_attempt})`);
+  if (['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(verify.status) || !verify.conclusion) return waiting(`job "${verify.name}" is ${verify.status}`);
+  if (verify.conclusion !== 'success') return {final: true, failure: `Verification job "${verify.name}" concluded ${verify.conclusion}`};
+  for (const name of VERIFY_STEPS) {
+    const step = (verify.steps ?? []).find(item => item.name === name);
+    if (!step || !step.conclusion || !FINAL_STEP.has(step.conclusion)) return waiting(`required step "${name}" has no final conclusion yet`);
+    if (step.conclusion !== 'success') return {final: true, failure: `Required verification step "${name}" concluded ${step.conclusion}`};
+  }
+  return {final: true, verify};
+}
+
+async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = {}) {
   // A conditional request: an unchanged answer is HTTP 304, which does not count against the primary limit.
   const key = `${repo.owner}/${repo.repo}@${pr.head.sha}`; const cached = etags.get(key);
   let listed;
@@ -302,13 +329,21 @@ async function technicalRun(github, repo, pr, {receipt = false} = {}) {
   if (!run) return {pending: true, state: 'absent'};
   if (run.status !== 'completed') return {pending: true, state: run.status === 'in_progress' ? 'running' : 'queued'};
   if (run.conclusion !== 'success') return {failure: `PR verification concluded ${run.conclusion}`};
-  const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
-    {...repo, run_id: run.id, filter: 'latest', per_page: 100});
-  const verify = jobs.find(job => job.name === config.verification.job);
-  if (!verify || verify.conclusion !== 'success' || VERIFY_STEPS.some(name =>
-    !verify.steps.some(step => step.name === name && step.conclusion === 'success'))) {
-    return {failure: 'Required verification steps did not all succeed'};
+  // The decision rests on the LATEST attempt of the completed run. A snapshot taken while jobs or steps are
+  // still being finalized, or a job list that is ahead of or behind the run record, is not a failure: it is
+  // re-read a bounded number of times and otherwise reported as still pending. Only a final, definite
+  // conclusion of a required job or step is a failure, and it names exactly which one.
+  let verdict;
+  for (let read = 0; ; read++) {
+    const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
+      {...repo, run_id: run.id, filter: 'latest', per_page: 100});
+    verdict = judgeVerification(run, jobs);
+    if (verdict.final || read === JOB_REREADS) break;
+    await wait(2000 * 2 ** read);
   }
+  if (verdict.failure) return {failure: verdict.failure};
+  if (!verdict.final) return {pending: true, state: 'finalizing', detail: verdict.waiting};
+  const verify = verdict.verify;
   return receipt ? {url: run.html_url, run_id: run.id, attempt: run.run_attempt,
     head_sha: run.head_sha, event: run.event, conclusion: run.conclusion,
     job: {id: verify.id, name: verify.name, conclusion: verify.conclusion,

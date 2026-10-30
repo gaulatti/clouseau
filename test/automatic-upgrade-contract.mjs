@@ -67,10 +67,12 @@ export function assertBoundedVerificationWait(workflow) {
 
 // A review that ended pending (verification not started within the queue grace)
 // holds no runner, so completion of the PR verification run must reassess it.
-export function assertReassessmentOnVerification(workflow) {
+export function assertReassessmentOnVerification(workflow, ownName = workflow.name) {
   const trigger = workflow.on?.workflow_run;
   assert.ok(trigger, 'the workflow must trigger on completed PR verification runs');
-  assert.ok(trigger.workflows?.length > 0 && trigger.types?.includes('completed'), 'workflow_run must name this workflow and the completed type');
+  assert.ok(trigger.workflows?.length > 0 && trigger.types?.includes('completed'), 'workflow_run must name the verification workflow and the completed type');
+  // GitHub never starts a workflow from its own completion: the watched workflow must be a different file.
+  assert.ok(!trigger.workflows.includes(ownName), 'workflow_run must watch a different workflow than the one containing it');
   const jobs = Object.entries(workflow.jobs).filter(([, job]) => job.steps?.some(step =>
     step.uses === './.clouseau-ci' && step.with?.operation === 'request-reassessment'));
   assert.ok(jobs.some(([, job]) => String(job.if).includes("github.event_name == 'workflow_run'") &&
