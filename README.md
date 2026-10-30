@@ -446,7 +446,9 @@ existing provider credentials and routes. `CLOUSEAU_EVALUATION_GRADERS` selects
 not qualify a replacement. Output records the corpus and protocol fingerprints,
 selected cases, route, literal evidence, responses and bounded request usage.
 At most 64 provider requests, including historical replay usage, are permitted.
-Completed negative decisions are retained, never retried to seek approval.
+Completed negative decisions are retained, never retried to seek approval. Only unusable
+provider output (HTTP 5xx or 429, network error, invalid tool call, malformed JSON, a report that
+fails controller validation) is asked again with the identical prompt, at most twice, and recorded.
 
 Recorded-response tests exercise transport parsing, validation, history and
 scoring without calling a model. They are deterministic software evidence,
