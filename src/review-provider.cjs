@@ -59,7 +59,7 @@ function decodeJSON(raw) {
   }
 }
 
-// A completed verdict, including a negative one, is never resampled. A transport or structure
+// A completed answer, including a negative verdict, is never resampled. A transport or structure
 // failure is not a verdict: an unavailable provider (HTTP 5xx or 429, a network error or timeout), an
 // invalid tool call or malformed JSON is retried with the same prompt and no extra evidence, at most
 // twice, and every failed attempt is returned in `attempts`. Other failures are final.
