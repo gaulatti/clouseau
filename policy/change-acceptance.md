@@ -158,7 +158,7 @@ test_integrity gate or the scope question of a different change bundled with it.
 
 The controller, not the model, enforces affirmative approval: automatic approval
 requires test_integrity and review_completeness satisfied, and, for each changed
-production file, a test that imports it directly or through supplied files (a changed caller, a barrel); importers are found in the repository by content, not by file name. A concern raised in an earlier examination stands unless it is explicitly retained or resolved. Otherwise the outcome is
+production file, a test that imports it directly or through supplied files (a changed caller, a barrel); importers are found in the repository by content, not by file name. A new file extracted from existing code is covered when a changed or existing file that imports it is covered. A change consisting only of imports, type declarations or comments needs no runtime test. A concern raised in an earlier examination stands unless it is explicitly retained or resolved. Otherwise the outcome is
 review incomplete. When the independent roles disagree, the stricter outcome
 stands; a finding admitted by either role is never discounted because the other
 role missed it.

@@ -303,7 +303,7 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
     const f = fixture(); await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(value)}));
   }
   const f = fixture(); f.snapshot.head_sha = 'head';
-  f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head; require('./acceptance-sources.cjs').refresh(f.snapshot);
+  f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head; f.snapshot.covering_tests = {'src/upload.rs': []}; require('./acceptance-sources.cjs').refresh(f.snapshot);
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('source').toString('base64')}})}}};
   // A request that fetches nothing is told so, loses the right to ask again and must conclude.
   const tools = []; let turn = 0;
@@ -316,7 +316,7 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
   assert.equal(concluded.report.snapshot, f.snapshot.digest);
   let call = 0;
   await assert.rejects(inspect({...fixture(), github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: [`src/new-${++call}.rs`]})}), /invalid structured result/);
-  assert.equal(call, 3);
+  assert.equal(call, 5, 'two source rounds, then the final invalid request is retried with the same prompt, bounded');
 }));
 
 test('new challenger source triggers a bounded fresh examination while the final independent reviews share one complete snapshot', withKey(async () => {
@@ -334,10 +334,11 @@ test('new challenger source triggers a bounded fresh examination while the final
 test('source investigation cannot run indefinitely or discard a causal concern while refreshing its evidence', withKey(async () => {
   const f = fixture(); let calls = 0;
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
-  await assert.rejects(investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
+  const converged = await investigateChange({...f, github, wait: async () => {}, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
     calls++; return calls % 2 ? response({request_sources: [`src/new-${calls}.rs`]}) : response({...f.report, snapshot: f.snapshot.digest});
-  }}), /invalid structured result/, 'the final cycle cannot request source');
-  assert.equal(calls, 5);
+  }});
+  assert.equal(calls, 6, 'the final cycle cannot request source; its invalid request is a malformed output, retried');
+  assert.equal(converged.inspections.length, 2);
   f.report.snapshot = f.snapshot.digest;
   const draft = structuredClone(f.report); draft.findings.push(finding());
   assert.throws(() => validateInspection(f.report, f.snapshot, [draft]), /prior investigation concern/);

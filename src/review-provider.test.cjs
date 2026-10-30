@@ -65,10 +65,10 @@ test('JSON punctuation normalization preserves negative judgments, literals and 
       assert.match(error.message, /malformed JSON/); assert.equal(error.details.raw_response, invalid); return true;
     });
   }
-  await assert.rejects(requestJSON({model: 'deepseek-flash', messages, fetchImpl: async () =>
+  await assert.rejects(requestJSON({model: 'deepseek-flash', messages, wait: async () => {}, fetchImpl: async () =>
     reply({choices: [{finish_reason: 'stop', message: {content: '{"broken":'}}]})}), error => {
       assert.equal(error.details.raw_response, '{"broken":'); assert.equal(error.details.model, 'deepseek-flash');
-      assert.equal(error.details.usage.length, 1); return true;
+      assert.equal(error.details.usage.length, 3, 'the original request and two same-prompt retries are all recorded'); return true;
     });
 }));
 
@@ -103,10 +103,10 @@ test('native structured results bind source identities without allowing arbitrar
   }
   for (const calls of [undefined, [], [{function: {name: 'execute_shell', arguments: '{}'}}], [{}, {}]]) {
     let count = 0;
-    await assert.rejects(requestJSON({...request(false), fetchImpl: async () => {
+    await assert.rejects(requestJSON({...request(false), wait: async () => {}, fetchImpl: async () => {
       count++; return reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: calls}}]});
     }}), /invalid structured result/);
-    assert.equal(count, 1);
+    assert.equal(count, 3, 'bounded: the same prompt is retried twice, never indefinitely');
   }
 }));
 
@@ -182,3 +182,42 @@ test('malformed acceptance and grading provider keys are refused by name before 
     if (typesafe === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = typesafe;
   }
 });
+
+test('transient failures are retried with the same prompt, bounded, and every attempt is recorded (structural crash class)', keys(async () => {
+  const good = reply({choices: [{finish_reason: 'stop', message: {content: '{"decision":"ok"}'}}]});
+  const call = {function: {name: 'acceptance_report', arguments: '{"x":1}'}};
+  const schemas = {acceptance_report: {type: 'object', properties: {}, required: [], additionalProperties: false}};
+  const scenarios = [
+    ['http_503', [{ok: false, status: 503}, good], 'http_503'],
+    ['http_429', [{ok: false, status: 429}, good], 'http_429'],
+    ['network', [new TypeError('fetch failed'), good], 'request_error'],
+    ['malformed', [reply({choices: [{finish_reason: 'stop', message: {content: '{"broken":'}}]}), good], 'malformed_json'],
+  ];
+  for (const [name, sequence, outcome] of scenarios) {
+    const bodies = []; const waits = []; const reports = [];
+    const result = await requestJSON({model: 'deepseek-flash', messages, wait: async ms => waits.push(ms), report: line => reports.push(line), fetchImpl: async (_, options) => {
+      bodies.push(options.body); const next = sequence[bodies.length - 1];
+      if (next instanceof Error) throw next; return next;
+    }});
+    assert.deepEqual(result.value, {decision: 'ok'}, name);
+    assert.deepEqual(result.attempts.map(item => item.outcome), [outcome]);
+    assert.equal(new Set(bodies).size, 1, 'the retry sends the identical prompt: no extra evidence');
+    assert.deepEqual(waits, [1000]);
+    assert.ok(reports.some(line => /transient failure/.test(line)));
+  }
+  const structured = await requestJSON({model: 'deepseek-flash', messages, schemas, thinking: false, wait: async () => {}, fetchImpl: (() => {
+    let n = 0; return async () => ++n === 1 ? reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: []}}]}) : reply({choices: [{finish_reason: 'tool_calls', message: {tool_calls: [call]}}]});
+  })()});
+  assert.deepEqual(structured.attempts.map(item => item.outcome), ['invalid_structured_result']);
+  assert.deepEqual(structured.value, {x: 1});
+  for (const status of [400, 401, 404]) {
+    let count = 0;
+    await assert.rejects(requestJSON({model: 'deepseek-flash', messages, wait: async () => {}, fetchImpl: async () => {count++; return {ok: false, status};}}), new RegExp(`HTTP ${status}`));
+    assert.equal(count, 1, 'a client error is final');
+  }
+  let count = 0;
+  await assert.rejects(requestJSON({model: 'deepseek-flash', messages, wait: async () => {}, fetchImpl: async () => {count++; throw new TypeError('fetch failed');}}), /fetch failed/);
+  assert.equal(count, 3);
+  const clean = await requestJSON({model: 'deepseek-flash', messages, fetchImpl: async () => good});
+  assert.deepEqual(clean.attempts, []);
+}));

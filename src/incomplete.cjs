@@ -11,6 +11,13 @@ const NEXT_STEPS = Object.freeze({
   provider_unavailable: 'The provider did not answer successfully. Re-run the failed jobs later; no change to this PR is needed.',
   local_receipt_required: 'Run the local Clouseau review on this exact head and put its receipt marker in the PR description.',
   engine_mismatch: 'Re-run the local Clouseau review with the current frozen engine, then update the receipt marker.',
+  review_output_invalid: 'The reviewer model answered in an invalid form on every bounded attempt. Re-run the failed jobs; if it repeats, report it with the assessment diagnostic.',
+  provider_incomplete: 'The reviewer model did not finish its answer within the bounded budget. Re-run the failed jobs.',
+  evidence_budget: 'Split the change so that the changed files fit the review evidence budget, then push a new revision.',
+  changed_file_unreadable: 'A changed file cannot be read as complete text within the review limits. Split it out of this change or review it manually.',
+  changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
+  tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
+  investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
   evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
 });
@@ -25,6 +32,24 @@ function classify(error) {
     return {cause: rejected ? 'provider_rejected' : 'provider_unavailable',
       reason: `${provider[1]} provider ${rejected ? 'rejected the credential' : 'was unavailable'} (HTTP ${provider[2]}).`};
   }
+  const message = error?.message ?? '';
+  // Every known failure of the AI step maps to a fixed cause that names the missing or failing item.
+  // Only our own constant messages (and a repository path) are forwarded, never provider or source text.
+  if (error?.unavailable) return {cause: 'changed_file_unreadable', reason: `Changed file ${String(error.path ?? 'unknown').slice(0, 200)} cannot be read as complete text within the review limits (not found, binary, invalid text or over 300 KB).`};
+  if (/^Acceptance provider returned an invalid structured result$|^Acceptance provider returned malformed JSON$/.test(message)) {
+    return {cause: 'review_output_invalid', reason: 'The reviewer model returned an unusable answer (invalid tool call or malformed JSON) on 3 consecutive attempts with the same prompt.'};
+  }
+  if (message === 'Acceptance provider did not complete the bounded review') return {cause: 'provider_incomplete', reason: 'The reviewer model did not complete its answer within the bounded token budget.'};
+  const invalid = /^Invalid acceptance evidence: (.*)$/.exec(message);
+  if (invalid) {
+    const detail = /^[a-z0-9 ,'-]{1,120}$/i.test(invalid[1]) ? `: ${invalid[1]}` : '';
+    return {cause: 'review_output_invalid', reason: `The reviewer's output failed controller validation on 3 consecutive attempts${detail}.`};
+  }
+  if (/^(?:Technical finding|Unknown controller-supplied|Unit paths are derived)/.test(message)) return {cause: 'review_output_invalid', reason: 'The reviewer returned a finding or unit the controller cannot bind to the changed source, on 3 consecutive attempts.'};
+  if (message === 'Complete review evidence exceeds the source budget') return {cause: 'evidence_budget', reason: 'The changed files together exceed the 900 KB review evidence budget.'};
+  if (message === 'Changed-file evidence is incomplete') return {cause: 'changed_files_incomplete', reason: 'GitHub did not supply a complete patch for every changed file.'};
+  if (message === 'Repository tree is too large to locate the existing tests') return {cause: 'tree_truncated', reason: 'The repository tree is too large to locate the existing tests.'};
+  if (/^Automated source investigation exhausted/.test(message)) return {cause: 'investigation_exhausted', reason: 'The reviewer kept requesting source after its bounded investigation budget.'};
   return {cause: 'evidence_incomplete', reason: GENERIC};
 }
 

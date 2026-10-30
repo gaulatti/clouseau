@@ -567,7 +567,7 @@ test('a model failure or pending/failed verification cannot reach an approval or
   f.state.pr.draft = false;
   const logs = [];
   const incomplete = await f.assess({fetchImpl: async () => {throw new Error('provider offline');}, report: line => logs.push(line)});
-  assert.equal(incomplete.decision, 'review_incomplete'); assert.match(logs[0], /provider offline/);
+  assert.equal(incomplete.decision, 'review_incomplete'); assert.ok(logs.some(line => /provider offline/.test(line)));
   await assert.rejects(f.gate(incomplete), /incomplete/);
   const quiet = await f.assess({fetchImpl: async () => {throw new Error('offline');}});
   assert.equal(quiet.decision, 'review_incomplete');
@@ -624,7 +624,7 @@ test('malformed provider JSON retains the exact undecodable response and cannot 
   assert.equal(assessment.decision, 'review_incomplete');
   const trace = JSON.parse(fs.readFileSync(`${f.recordPath}.diagnostic.json`));
   assert.equal(trace.details.raw_response, raw); assert.equal(trace.details.canonical_response, raw);
-  assert.equal(trace.details.model, 'deepseek-flash'); assert.equal(trace.details.usage.length, 1);
+  assert.equal(trace.details.model, 'deepseek-flash'); assert.equal(trace.details.usage.length, 3);
   await assert.rejects(f.gate(assessment), /incomplete/);
   assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger']);
 }));
@@ -1137,3 +1137,16 @@ test('a rerun that produced no acceptance record fails with its own reason and r
     assert.ok(!f.state.writes.some(write => ['approve', 'atomic'].includes(write.name)));
   });
 });
+
+test('a reviewer that stays invalid after bounded retries ends in a classified hold whose notice names the failure', () => fixture(async f => {
+  let calls = 0;
+  const assessment = await f.assess({retryWait: async () => {}, fetchImpl: async () => {
+    calls++; return {ok: true, status: 200, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls: []}}]})};
+  }});
+  assert.equal(assessment.decision, 'review_incomplete');
+  assert.equal(assessment.cause, 'review_output_invalid');
+  assert.equal(calls, 3, 'the same prompt, three attempts, no extra evidence');
+  assert.match(assessment.reason, /invalid tool call or malformed JSON/);
+  await assert.rejects(f.gate(assessment), /incomplete/);
+  assert.match(f.state.writes[0].args.body, /unusable answer \(invalid tool call or malformed JSON\)/);
+}));

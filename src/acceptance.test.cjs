@@ -250,3 +250,13 @@ test('a root-level index module is named by itself, a nested one by its director
   assert.equal(moduleStem('src/ui/index.ts'), 'ui');
   assert.equal(moduleStem('src/ui/button.tsx'), 'button');
 });
+
+test('only imports, type declarations and comments are non-behavioural', () => {
+  const {nonBehavioural} = require('./acceptance.cjs');
+  assert.equal(nonBehavioural('@@\n-import { A, type B } from "./x";\n+import type { B } from "./x";\n+import { A } from "./x";'), true);
+  assert.equal(nonBehavioural('@@\n+export type Posted = Date | string;\n+type Local = number;\n+interface Props { a: 1 }\n+// note\n+/** doc */\n+ * more\n+\n+} from "./y";'), true);
+  assert.equal(nonBehavioural('--- a/x\n+++ b/x'), true);
+  assert.equal(nonBehavioural('@@\n+export const behaviour = 1;'), false);
+  assert.equal(nonBehavioural('@@\n-  author.trim().slice(0, 1)\n+  author.trim().slice(0, 2)'), false);
+  assert.equal(nonBehavioural(undefined), false);
+});

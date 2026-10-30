@@ -120,14 +120,35 @@ function reachedByTests(snapshot) {
   const edges = new Map(sources.map(source => [source.path, specifiersOf(source.content)]));
   const roots = [...sources.filter(source => isTestPath(source.path)).map(source => source.path), ...(snapshot.test_imports || []).map(item => item.path)];
   for (const item of snapshot.test_imports || []) edges.set(item.path, item.specifiers);
-  const reached = new Set(); const queue = [...roots];
-  while (queue.length) {
-    const from = queue.shift();
-    for (const specifier of edges.get(from) || []) for (const target of resolveSpecifier(from, specifier, known)) {
-      if (!reached.has(target)) {reached.add(target); if (!isTestPath(target)) queue.push(target);}
+  const reached = new Map();
+  for (const root of new Set(roots)) {
+    const seen = new Set(); const queue = [root];
+    while (queue.length) {
+      const from = queue.shift();
+      for (const specifier of edges.get(from) || []) for (const target of resolveSpecifier(from, specifier, known)) {
+        if (seen.has(target)) continue;
+        seen.add(target); if (!isTestPath(target)) queue.push(target);
+        reached.set(target, [...(reached.get(target) || []), root]);
+      }
     }
   }
   return reached;
+}
+
+// Controller-computed linkage shown to the reviewers: which supplied or discovered tests exercise each
+// changed code file, directly or through supplied callers and barrels. A reviewer must not report
+// "no test imports this file" for a file listed here.
+function coveringTests(snapshot) {
+  const reached = reachedByTests(snapshot);
+  return Object.fromEntries(snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path))
+    .map(file => [file.path, (reached.get(file.path) || []).slice(0, 5)]));
+}
+
+// A change whose every changed line is an import, a type or interface declaration, a type-only export or a comment
+// alters no runtime behaviour and cannot be asserted by a runtime test.
+const INERT_LINE = /^(?:import\b.*|\}?\s*from\s+['"`].*|export\s+type\b.*|(?:export\s+)?(?:declare\s+)?(?:type|interface)\s+\w+.*|\/\/.*|\/\*.*|\*.*|)$/;
+function nonBehavioural(patch) {
+  return typeof patch === 'string' && patch.split('\n').filter(line => /^[+-]/.test(line) && !/^(?:\+\+\+|---)/.test(line)).every(line => INERT_LINE.test(line.slice(1).trim()));
 }
 
 function linked(snapshot, name, reached) {
@@ -149,13 +170,13 @@ function approvalHold(report, snapshot) {
   // no behaviour to test. A model's "unresolved" without a missing source behind it is an opinion:
   // completeness holds only when the review records, or the controller omitted, missing evidence.
   const executable = snapshot.files.filter(file => isExecutablePath(file.path));
-  const testMatters = executable.some(file => !isTestPath(file.path) || /^-(?!--)/m.test(file.patch));
+  const testMatters = executable.some(file => (!isTestPath(file.path) && !nonBehavioural(file.patch)) || (isTestPath(file.path) && /^-(?!--)/m.test(file.patch)));
   const missing = (snapshot.omitted_sources || []).length > 0 ||
     [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])].some(item => item.state === 'missing');
   if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';
   if (executable.length && missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
   const reached = reachedByTests(snapshot);
-  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path, reached)).map(file => file.path);
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !nonBehavioural(file.patch) && !linked(snapshot, file.path, reached)).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;
 }
@@ -314,4 +335,4 @@ function validateApproval(report, snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
