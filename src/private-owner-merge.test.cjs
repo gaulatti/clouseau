@@ -14,7 +14,7 @@ function fixture() {
   const state = {pr: structuredClone(pr), repository, base, head, text: '* @alice\n/private/ @bob\n', permission: 'write',
     files: [{filename: 'src/handler.js', status: 'modified'}], reviews: [
       {id: 21, user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: head}],
-    comparison: {status: 'ahead', merge_base_commit: {sha: base}}, protected: false, calls: [], mutations: [], atomicCalls: 0, verifyCalls: 0};
+    comparison: {status: 'ahead', merge_base_commit: {sha: base}}, protected: false, calls: [], comments: [], mutations: [], atomicCalls: 0, verifyCalls: 0};
   const read = (name, fn) => async args => {state.calls.push({name, args}); return {data: await fn(args)};};
   const github = {rest: {repos: {
     get: read('repository', () => structuredClone(state.repository)),
@@ -30,6 +30,9 @@ function fixture() {
     get: read('pull', () => structuredClone(state.pr)),
     listFiles: read('files', () => structuredClone(state.files)),
     listReviews: read('reviews', () => structuredClone(state.reviews)),
+  }, issues: {
+    listComments: read('comments', () => structuredClone(state.comments)),
+    createComment: read('notice', args => {state.comments.push({user: {login: 'github-actions[bot]'}, body: args.body}); return {id: 1};}),
   }}};
   github.paginate = async (method, args) => (await method(args)).data;
   github.graphql = async (query, variables) => {
@@ -143,4 +146,25 @@ test('an atomic result without the exact merged PR and target observation is nev
     const f = fixture(); f.state.postMutation = () => change(f); await assert.rejects(f.check());
     assert.equal(f.state.mutations.length, 1);
   }
+});
+
+test('a base that moved after approval fails closed with one explicit needs-branch-update notice instead of a generic error', async () => {
+  const entries = [
+    ['assessed PR already reports a different base', f => {f.state.pr.base.sha = 'c'.repeat(40);}],
+    ['base branch advanced during final verification', f => {f.state.duringVerify = () => {f.state.base = 'c'.repeat(40);};}],
+    ['PR base advanced during final verification', f => {f.state.duringVerify = () => {f.state.pr.base.sha = 'c'.repeat(40);};}],
+  ];
+  for (const [label, change] of entries) {
+    const f = fixture(); change(f);
+    await assert.rejects(f.check(), /^Error: Needs branch update: main moved after approval/, label);
+    assert.equal(f.state.atomicCalls, 0, label); assert.equal(f.state.mutations.length, 0, label);
+    assert.equal(f.state.comments.length, 1, label);
+    assert.match(f.state.comments[0].body, /^<!-- clouseau-needs-branch-update:a{40}:/, label);
+  }
+  const both = fixture(); both.state.duringVerify = () => {both.state.base = 'c'.repeat(40); both.state.pr.head.sha = 'd'.repeat(40);};
+  await assert.rejects(both.check(), /head, base or protection changed before the atomic write/);
+  assert.equal(both.state.comments.length, 0, 'a changed head is a new revision, not a branch update request');
+  const protectedBranch = fixture(); protectedBranch.state.duringVerify = () => {protectedBranch.state.base = 'c'.repeat(40); protectedBranch.state.protected = true;};
+  await assert.rejects(protectedBranch.check(), /head, base or protection changed before the atomic write/);
+  assert.equal(protectedBranch.state.comments.length, 0);
 });

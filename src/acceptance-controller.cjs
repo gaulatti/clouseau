@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, validateReport} = require('./acceptance.cjs');
+const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
@@ -46,7 +46,7 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
   for (const review of reviews) {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
-    review.scores = validateReport(review.report, view);
+    review.scores = validateApproval(review.report, view);
   }
   record.result.decision = combine(reviews);
   const state = reconcile(record.result, record.snapshot, record.previous.findings);
@@ -126,6 +126,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
           configDigest: digest(config), policyDigest: policyDigest()});
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
+        // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
+        // is reused only when hosted approval's affirmative-evidence rule also holds.
+        const hold = verified.record.result.reviews.map(review => approvalHold(review.report, verified.record.snapshot)).find(Boolean);
+        if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
+          reason: `Authenticated local review held: ${hold}.`};
         const controls = legacy.scopeReason(files, pr);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
@@ -217,6 +222,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
+    const branchUpdate = require('./branch-update.cjs');
+    if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) {
+      throw await branchUpdate.surface({github, repo: context.repo, pr, assessment, baseBranch: config.base_branch});
+    }
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
     if (digest(technical) !== digest(record.technical)) throw new Error('Verification changed after acceptance investigation');
@@ -259,6 +268,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
         const {data: currentPr} = await github.rest.pulls.get({...context.repo, pull_number: pr.number});
+        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) {
+          throw await branchUpdate.surface({github, repo: context.repo, pr: currentPr, assessment, baseBranch: config.base_branch});
+        }
         if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
             currentRecord.local_receipt && currentRecord.local_author !== currentPr.user.login) throw new Error('Acceptance author or revision changed before private merge');
         if (currentRecord.local_receipt) {

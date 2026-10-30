@@ -263,11 +263,17 @@ test('job-output data still requires the complete scored record and fresh head/b
   fs.rmSync(f.recordPath);
   transport.receive({mode: 'job-output', payload, assessment, context: f.context, runAttempt: '1', recordPath: f.recordPath});
   assert.equal(verifyRecord(JSON.parse(fs.readFileSync(f.recordPath)), assessment, config).state.unresolved.length, 0);
-  for (const field of ['head', 'base']) {
-    const previous = f.state.pr[field].sha; f.state.pr[field].sha = 'e'.repeat(40);
-    await assert.rejects(f.gate(assessment), /PR changed/);
-    f.state.pr[field].sha = previous;
-  }
+  const head = f.state.pr.head.sha; f.state.pr.head.sha = 'e'.repeat(40);
+  await assert.rejects(f.gate(assessment), /PR changed/);
+  f.state.pr.head.sha = head;
+  const base = f.state.pr.base.sha; f.state.pr.base.sha = 'e'.repeat(40);
+  const getBranch = f.github.rest.repos.getBranch;
+  f.github.rest.repos.getBranch = async () => ({data: {protected: true, commit: {sha: 'e'.repeat(40)}}});
+  await assert.rejects(f.gate(assessment), /Needs branch update/);
+  assert.equal(f.state.writes.filter(item => item.name === 'create-ledger').length, 1, 'the PR receives one explicit branch-update notice');
+  assert.match(f.state.writes[0].args.body, /clouseau-needs-branch-update/);
+  f.state.writes.length = 0;
+  f.github.rest.repos.getBranch = getBranch; f.state.pr.base.sha = base;
   f.state.failed = true;
   await assert.rejects(f.gate(assessment), /Verification changed/);
   assert.equal(f.state.writes.length, 0);
@@ -301,10 +307,11 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
   const original = f.github.rest.repos.getContent;
   const contentReads = [];
+  let served = bundle;
   f.github.rest.repos.getContent = async args => {
     contentReads.push(args);
     return args.path === 'clouseau-review.json' ? {data: {
-      encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length,
+      encoding: 'base64', content: Buffer.from(JSON.stringify(served)).toString('base64'), size: JSON.stringify(served).length,
     }} : original(args);
   };
   const policy = createPolicy(trusted, {engine});
@@ -319,6 +326,19 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   assert.equal(assessment.decision, central === 'controls' ? 'owner_decision' : 'auto_approve', assessment.reason);
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
+  if (central === false) {
+    // The pre-PR stage tolerates an unresolved integrity gate; hosted CI never reuses that as approval.
+    const unresolved = structuredClone(record);
+    for (const item of unresolved.result.reviews) item.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
+    served = issueReceipt({record: unresolved, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+      keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
+    const kept = fs.readFileSync(f.recordPath); fs.rmSync(f.recordPath);
+    const holdAssessment = await assess();
+    assert.equal(holdAssessment.decision, 'review_incomplete');
+    assert.match(holdAssessment.reason, /Authenticated local review held: test integrity is unresolved/);
+    assert.equal(fs.existsSync(f.recordPath), false);
+    served = bundle; fs.writeFileSync(f.recordPath, kept);
+  }
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
   const approvedRecord = fs.readFileSync(f.recordPath);
   fs.rmSync(f.recordPath);

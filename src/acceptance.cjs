@@ -62,6 +62,43 @@ function scoreReport(report) {
   return {rules: RULES, findings, decision};
 }
 
+// Only languages whose tests name the module under test by an import; same-package
+// and inline-test languages (Go, Java, C) cannot be linked this way and are not judged here.
+const CODE = /\.(?:[cm]?[jt]sx?|py|rs|rb|php|vue|svelte)$/;
+const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|specs?|e2e|stories)\/|\.(?:test|spec|stories)\.[a-z0-9]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:go|py)$/i;
+const isTestPath = name => TEST_PATH.test(name);
+const isCodePath = name => CODE.test(name) && !isTestPath(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
+
+// A module is linked to a test only by an import-like line naming it. A word in
+// a test title or an unrelated assertion in the same change is not linkage.
+function moduleStem(name) {
+  const parts = name.split('/'); const base = parts.pop().replace(/\.[^.]+$/, '');
+  return base === 'index' && parts.length ? parts.pop() : base;
+}
+
+// A statement that imports, not a title or comment that merely contains the word.
+const IMPORT = /^\s*(?:(?:export\b.*\s)?from\b|import\b|use\b|pub\s+use\b|mod\b|require(?:_relative)?\b|include\b|load\b)|\b(?:require|import)\(/;
+
+function linked(snapshot, name) {
+  const token = new RegExp(`(?:^|[\\s'"\`/.:])${moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\s'"\`.;,)/])`);
+  return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' && isTestPath(source.path) &&
+    source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)));
+}
+
+// Approval needs affirmative, per-file behavioural evidence. An unresolved
+// integrity or completeness gate, or changed production code with no supplied
+// test that imports it, is missing verification and holds automatic approval.
+// A test for one file never satisfies a different changed file.
+function approvalHold(report, snapshot) {
+  const gate = name => report.gates.find(item => item.name === name).state;
+  for (const name of ['test_integrity', 'review_completeness']) {
+    if (gate(name) === 'unresolved') return `${name.replace('_', ' ')} is unresolved`;
+  }
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path)).map(file => file.path);
+  if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
+  return null;
+}
+
 function validateEvidence(report, snapshot) {
   keys(report, ['version', 'snapshot', 'summary', 'evidence', 'units', 'findings', 'gates', 'accounting', 'resolutions',
     ...(snapshot.review_manifest_version ? ['coverage', 'reopenings'] : [])]);
@@ -209,4 +246,11 @@ function validateReport(report, snapshot) {
   return scoreReport(report);
 }
 
-module.exports = {FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+// Hosted CI decision: the scores plus the controller's affirmative-evidence hold.
+function validateApproval(report, snapshot) {
+  const scores = validateReport(report, snapshot);
+  const hold = approvalHold(report, snapshot);
+  return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
+}
+
+module.exports = {isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
