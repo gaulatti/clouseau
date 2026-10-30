@@ -386,6 +386,9 @@ test('an earlier concern that the next examination neither retains nor resolves 
   const restated = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(changed)});
   assert.equal(restated.report.findings.length, 1);
   assert.equal(restated.report.findings[0].cause, draft.findings[0].cause);
+  const verbatim = structuredClone(draft);
+  const same = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(verbatim)});
+  assert.ok(!same.report.evidence.some(entry => entry.id.startsWith('carried-')), 'a retained concern is not duplicated');
   const closed = structuredClone(f.report);
   closed.resolutions = [{id: draft.findings[0].id, state: 'dismissed', reason: 'The current source proves rejection before durable acceptance.', evidence: ['source']}];
   const resolved = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(closed)});
