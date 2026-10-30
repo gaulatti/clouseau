@@ -260,7 +260,7 @@ An owner must install the public enrollment entry in protected CI configuration:
   "local_review": {
     "mode": "required",
     "central_source": {"repository": "gaulatti/clouseau", "ref": "refs/heads/main"},
-    "max_age_seconds": 3600,
+    "max_age_seconds": 172800,
     "keys": [{
       "id": "PUBLIC_KEY_IDENTIFIER",
       "issuer": "ENROLLED_RUNNER_IDENTIFIER",
@@ -277,6 +277,15 @@ and its frozen SHA/digest; configuration alone cannot select an engine. Legacy
 fixed installations instead enroll `reviewer_digest` and omit `central_source`.
 The modes are exclusive, and only the central-source integration avoids recurring
 release enrollment PRs.
+
+Receipt lifetime: `issueReceipt` defaults to 48 hours (172800 seconds), and the
+trust validator rejects `max_age_seconds` above 172800. Each consumer sets its
+own `max_age_seconds` in its protected `.github/clouseau.json`; consumers that
+still say 3600 keep one-hour receipts until raised separately. The first
+[initial-installation](initial-installation.md) authorization deliberately stays
+at one hour, and installation receipts are capped by it. A receipt remains bound
+to the exact head SHA, signed review history and reviewer digest, so a changed
+head invalidates it regardless of age.
 
 Only existing protected configuration can enroll or revoke a key. A contributor
 cannot authorize their own key through the proposed PR. Keys are restricted to
