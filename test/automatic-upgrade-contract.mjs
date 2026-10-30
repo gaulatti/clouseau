@@ -81,17 +81,28 @@ export function assertReassessmentOnVerification(workflow, ownName = workflow.na
   return jobs.length;
 }
 
-// A sibling merge moves the base under every approved PR and nothing else
-// re-runs their gates, so a push to the base branch must reconcile them.
-export function assertBaseReconciliation(workflow, base = 'main') {
-  assert.ok(workflow.on?.push, 'the workflow must trigger on pushes to the base branch');
-  assert.ok([workflow.on.push.branches].flat().includes(base), `push must include the ${base} branch`);
+// A sibling merge moves the base under every approved PR and nothing else re-runs their gates, so the
+// base move must reconcile them. A merge made by the bot with GITHUB_TOKEN raises no push event (GitHub
+// starts no workflow from events caused by GITHUB_TOKEN), so the unattended path needs a trigger that does
+// fire: a workflow_run of the review workflow, in a SEPARATE workflow file (a workflow never starts from
+// its own completion). A push trigger remains for human merges. At least one of the two must be present.
+export function assertBaseReconciliation(workflow, base = 'main', ownName = workflow.name) {
+  const push = workflow.on?.push && [workflow.on.push.branches].flat().includes(base);
+  const run = workflow.on?.workflow_run;
+  assert.ok(workflow.on?.push || run, 'the workflow must trigger on pushes to the base branch or on completed review runs');
+  if (workflow.on?.push) assert.ok(push, `push must include the ${base} branch`);
+  if (run) {
+    assert.ok(run.workflows?.length > 0 && run.types?.includes('completed'), 'workflow_run must name the review workflow and the completed type');
+    assert.ok(!run.workflows.includes(ownName), 'workflow_run must watch a different workflow than the one containing it');
+  }
   const jobs = Object.entries(workflow.jobs).filter(([, job]) => job.steps?.some(step =>
     step.uses === './.clouseau-ci' && step.with?.operation === 'reconcile-base'));
   assert.ok(jobs.length > 0, 'a reconcile-base job must exist');
   for (const [, job] of jobs) {
-    assert.ok(String(job.if).includes("github.event_name == 'push'") && String(job.if).includes(`refs/heads/${base}`),
-      'reconcile-base must run only for pushes to the base branch');
+    const condition = String(job.if);
+    const pushOnly = push && condition.includes("github.event_name == 'push'") && condition.includes(`refs/heads/${base}`);
+    const afterReview = run && condition.includes("github.event_name == 'workflow_run'") && condition.includes("github.event.workflow_run.event == 'pull_request_target'");
+    assert.ok(pushOnly || afterReview, 'reconcile-base must run only for pushes to the base branch or completed pull_request_target review runs');
     assert.equal(job.permissions?.issues, 'write', 'reconcile-base posts the notice, so it needs issues write');
     assert.ok(!['write'].includes(job.permissions?.contents) && !['write'].includes(job.permissions?.actions),
       'reconcile-base needs no contents or actions write: a GITHUB_TOKEN push cannot start verification');

@@ -2,7 +2,7 @@
 
 const branchUpdate = require('./branch-update.cjs');
 
-// A push to the base branch is the only event that moves the base under an
+// A move of the base branch is the only event that invalidates an
 // already-approved PR, and nothing else re-runs that PR's gate. Re-evaluate
 // every open ready PR whose approval or armed auto-merge is bound to the old
 // base. Fail closed: nothing is approved or merged here.
@@ -22,11 +22,31 @@ async function approvedByBot(github, repo, pr) {
   return Boolean(approval && approval.user.type === 'Bot' && approval.state === 'APPROVED' && approval.commit_id === pr.head.sha);
 }
 
+// A merge made with the workflow GITHUB_TOKEN (the unattended path) creates no push event, so a push is
+// not the only trigger. The base also moved when the review workflow completes for a PR that has been
+// merged (`workflow_run`, in a separate workflow file), and a schedule or manual dispatch reconciles
+// unconditionally, which also covers auto-merges that complete after the review run ended.
+async function baseMoved({github, context, baseBranch}) {
+  const repo = context.repo;
+  if (context.eventName === 'push') return context.payload.ref === `refs/heads/${baseBranch}`;
+  if (['schedule', 'workflow_dispatch'].includes(context.eventName)) return true;
+  if (context.eventName !== 'workflow_run') return false;
+  const run = context.payload.workflow_run;
+  if (run.event !== 'pull_request_target') return false;
+  const numbers = run.pull_requests?.length ? run.pull_requests.map(item => item.number) :
+    (await github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: run.head_sha})).data.map(item => item.number);
+  for (const pull_number of numbers) {
+    const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
+    if (pr.merged && pr.base.ref === baseBranch) return true;
+  }
+  return false;
+}
+
 async function reconcileBase({github, updateGithub = null, context, core, baseBranch}) {
   const repo = context.repo;
   const outcome = {updated: [], noticed: []};
-  if (context.eventName !== 'push' || context.payload.ref !== `refs/heads/${baseBranch}`) {
-    core.info('Not a push to the protected base branch; no base reconciliation is needed.');
+  if (!await baseMoved({github, context, baseBranch})) {
+    core.info('The protected base branch did not move for this event; no base reconciliation is needed.');
     return outcome;
   }
   const pulls = await github.paginate(github.rest.pulls.list, {...repo, state: 'open', base: baseBranch, per_page: 100});
@@ -56,4 +76,4 @@ async function reconcileBase({github, updateGithub = null, context, core, baseBr
   return outcome;
 }
 
-module.exports = {reconcileBase, approvedByBot};
+module.exports = {reconcileBase, approvedByBot, baseMoved};

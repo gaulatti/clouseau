@@ -116,17 +116,40 @@ test('a push to the base branch reconciles approved PRs that a sibling merge lef
   assert.match(step.with.script, /reconcileBase/);
   assert.equal(step.env.CLOUSEAU_UPDATE_TOKEN, '${{ inputs.update-token }}');
   const untriggered = structuredClone(workflow); delete untriggered.on.push;
-  assert.throws(() => assertBaseReconciliation(untriggered), /pushes to the base branch/);
+  assert.throws(() => assertBaseReconciliation(untriggered), /pushes to the base branch or on completed review runs/);
   const other = structuredClone(workflow); other.on.push.branches = ['release'];
   assert.throws(() => assertBaseReconciliation(other), /include the main branch/);
   const missing = structuredClone(workflow); delete missing.jobs['reconcile-base'];
   assert.throws(() => assertBaseReconciliation(missing), /reconcile-base job must exist/);
   const ungated = structuredClone(workflow); ungated.jobs['reconcile-base'].if = 'true';
-  assert.throws(() => assertBaseReconciliation(ungated), /only for pushes/);
+  assert.throws(() => assertBaseReconciliation(ungated), /only for pushes to the base branch or completed/);
   const silent = structuredClone(workflow); delete silent.jobs['reconcile-base'].permissions.issues;
   assert.throws(() => assertBaseReconciliation(silent), /issues write/);
   const powerful = structuredClone(workflow); powerful.jobs['reconcile-base'].permissions.contents = 'write';
   assert.throws(() => assertBaseReconciliation(powerful), /no contents or actions write/);
   const racing = structuredClone(workflow); racing.jobs['reconcile-base'].concurrency['cancel-in-progress'] = true;
   assert.throws(() => assertBaseReconciliation(racing), /queue, not cancel/);
+});
+
+test('the unattended path reconciles from a separate workflow_run of the review workflow, because a bot merge raises no push event', () => {
+  const separate = {name: 'Clouseau reassess', on: {workflow_run: {workflows: ['Palazzo CI'], types: ['completed']}}, jobs: {
+    'reconcile-base': {
+      if: "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request_target'",
+      permissions: {contents: 'read', 'pull-requests': 'read', issues: 'write'}, concurrency: {group: 'clouseau-reconcile-base', 'cancel-in-progress': false},
+      steps: [{uses: './.clouseau-ci', with: {operation: 'reconcile-base'}}]}}};
+  assert.equal(assertBaseReconciliation(separate), 1);
+  const selfWatching = structuredClone(separate); selfWatching.name = 'Palazzo CI';
+  assert.throws(() => assertBaseReconciliation(selfWatching), /different workflow than the one containing it/);
+  assert.equal(assertBaseReconciliation(selfWatching, 'main', 'Other'), 1, 'an explicit own name is honoured');
+  const wrongType = structuredClone(separate); wrongType.on.workflow_run.types = ['requested'];
+  assert.throws(() => assertBaseReconciliation(wrongType), /completed type/);
+  const unnamed = structuredClone(separate); unnamed.on.workflow_run.workflows = [];
+  assert.throws(() => assertBaseReconciliation(unnamed), /review workflow/);
+  const everyRun = structuredClone(separate); everyRun.jobs['reconcile-base'].if = "github.event_name == 'workflow_run'";
+  assert.throws(() => assertBaseReconciliation(everyRun), /only for pushes to the base branch or completed/);
+  const both = structuredClone(separate); both.on.push = {branches: ['main']};
+  both.jobs['reconcile-base'].if = "github.event_name == 'push' && github.ref == 'refs/heads/main'";
+  assert.equal(assertBaseReconciliation(both), 1, 'a push-gated job satisfies the human-merge path');
+  const wrongBranch = structuredClone(both); wrongBranch.on.push.branches = ['release'];
+  assert.throws(() => assertBaseReconciliation(wrongBranch), /include the main branch/);
 });

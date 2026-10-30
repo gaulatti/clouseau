@@ -62,7 +62,7 @@ for the version 2 policy configuration.
 | `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify the key shape (no whitespace, line break or quotes), DeepSeek authentication and JSON output without touching a PR |
-| `reconcile-base` | `config`, optional `update-token` | On a push to the base branch, update (with an independent credential) or post a needs-branch-update notice on every approved PR the push left behind; approves and merges nothing |
+| `reconcile-base` | `config`, optional `update-token` | When the base moved (a push for human merges; a completed `pull_request_target` review run of a now-merged PR, a schedule or a dispatch for bot merges, which raise no push event), update (with an independent credential) or post a needs-branch-update notice on every approved PR it left behind; approves and merges nothing |
 | `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger (or a completed PR verification `workflow_run`) and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
 | `plan-wiki` | `provider-key`, `wiki-config`, wiki/source checkouts | Generate and validate a coordinated multi-page draft after deployment; `wiki-draft: true` permits read-only validation |
 | `evaluate-wiki` | `provider-key` | Read-only live factual checks on supported and deliberately false documentation |

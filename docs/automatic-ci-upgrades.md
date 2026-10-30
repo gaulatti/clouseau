@@ -209,9 +209,19 @@ scoped record artifacts are never reused across reruns.
 Approval, the assessment and any local receipt are bound to the head **and** the
 base. When one approved PR merges, every other approved PR is left behind
 (GitHub auto-merge just waits) and no gate re-runs, so the
-`clouseau-needs-branch-update` notice from the gate can never appear. A push to
-the base branch is the only event that moves the base, so the engine
-reconciles on it with the `reconcile-base` operation:
+`clouseau-needs-branch-update` notice from the gate can never appear. The base
+moves on a merge, so the engine reconciles with the `reconcile-base` operation.
+A `push` to the base branch fires only for **human** merges: a merge made by
+the bot with `GITHUB_TOKEN` (the whole unattended path) creates no push event,
+because GitHub starts no workflow from events caused by `GITHUB_TOKEN`. The
+unattended path therefore reconciles from a trigger that does fire: a
+`workflow_run` of the review workflow completing, in a **separate workflow
+file** (a workflow is never started by its own completion; it must not name
+itself). The operation reconciles when that completed `pull_request_target` run
+belongs to a PR that is now merged into the base, and unconditionally on a
+`schedule` or manual `workflow_dispatch`, which also covers an auto-merge that
+completes after the review run ended. It is idempotent and cheap when nothing
+is behind:
 
 1. For every open, ready PR that has a current-head GitHub Actions bot approval
    or armed auto-merge, compare its head with the base. A PR that is not
@@ -234,9 +244,12 @@ tests, coverage or review evidence. Evidence is never reused across heads.
 Limitation: a PR that is still being reviewed when the base moves is not
 touched here; its own gate raises the notice when it finishes.
 
-Consumer workflow template (names are the consumer's own):
+Consumer workflow template (names are the consumer's own). The human-merge trigger stays in the
+verification workflow; the unattended trigger is in a separate file, normally the same file as the
+verification-completed reassessment above:
 
 ```yaml
+# .github/workflows/ci.yml (human merges)
 on:
   push:
     branches: [main]
@@ -251,9 +264,28 @@ jobs:
     #   update-token: ${{ secrets.BRANCH_UPDATE_TOKEN }}   # optional
 ```
 
-The shared contract test `assertBaseReconciliation` encodes the trigger, the
-push-only condition, issues write without contents or actions write, and
-queued (never cancelled) runs.
+```yaml
+# .github/workflows/clouseau-reassess.yml (bot merges; a different file than the workflow it watches)
+on:
+  workflow_run:
+    workflows: ["Palazzo CI"]
+    types: [completed]
+  schedule: [{cron: '*/30 * * * *'}]     # optional: auto-merges that finish after the review run
+jobs:
+  reconcile-base:
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request_target')
+    permissions: {contents: read, pull-requests: read, issues: write}
+    concurrency: {group: clouseau-reconcile-base, cancel-in-progress: false}
+    # checkout main and the frozen engine, then operation: reconcile-base (same inputs as above)
+```
+
+The shared contract test `assertBaseReconciliation` encodes both forms: a push trigger on
+the base branch, or a `workflow_run` trigger that watches a different workflow; the push-only or
+review-run-only job condition; issues write without contents or actions write; and queued (never
+cancelled) runs. A condition that also admits `schedule` is accepted because it still contains the
+`workflow_run` clause.
 
 ## Operations and boundaries
 
