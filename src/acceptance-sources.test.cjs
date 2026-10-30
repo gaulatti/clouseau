@@ -327,6 +327,12 @@ test('bleecker layout (lab5): extracted helper, private rename and type-only imp
   // Fail-closed: an orphan, and a behavioural edit of the same file, are still held.
   const orphan = bleecker(['src/utils/orphan.ts'], contents);
   assert.match(orphan.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, await collectSnapshot(orphan.f)), /orphan\.ts/);
+  for (const patch of ["-import {clamp} from './safe';\n+import {clamp} from './evil';", "+import './side-effect';", "+import x from 'y'; doEvil()"]) {
+    split.f.files[0].patch = `@@ -1 +1 @@\n${patch}`;
+    const hold = split.approvalHold({gates}, await collectSnapshot(split.f));
+    assert.match(hold, /test integrity is unresolved/, patch);
+    assert.match(split.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, await collectSnapshot(split.f)), /no supplied test imports changed production code/, patch);
+  }
   split.f.files[0].patch = "@@ -1 +1 @@\n-import { Input } from './input';\n+import { Input } from './input2';\n+export const behaviour = 1;";
   assert.match(split.approvalHold({gates}, await collectSnapshot(split.f)), /test integrity is unresolved/);
 });
