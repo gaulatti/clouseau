@@ -142,41 +142,63 @@ deadlock. A single-slot pool never needs the whole grace; lower it (for example
 60) to release the slot sooner. With a larger pool nothing changes while
 verification is running or starting within the grace.
 
-Consumer workflow template (names are the consumer's own):
+Consumer workflow template (names are the consumer's own). The reassessment trigger lives in a
+**separate workflow file** that watches the verification workflow: GitHub does not start a workflow from
+its own completion, so a `workflow_run` trigger that names the workflow containing it never fires.
 
 ```yaml
+# .github/workflows/ci.yml (the verification workflow, named "Palazzo CI")
 on:
-  workflow_run:
-    workflows: ["Palazzo CI"]      # this workflow's name
-    types: [completed]
+  pull_request:
+  pull_request_target:
 jobs:
   assess-intent:
+    outputs:
+      # the wait step publishes a precise incomplete assessment if verification truly failed, so the
+      # write-capable job can post the visible notice
+      assessment: ${{ steps.assess.outputs.assessment || steps.wait.outputs.assessment }}
     steps:
       # checkout main, then the frozen engine into .clouseau-ci, as for assess
       - id: wait
         uses: ./.clouseau-ci
         with:
           operation: await-verification
-          pull-request: ${{ steps.install.outputs.number }}
-      - if: steps.wait.outputs.verified == 'true'
+      - id: assess
+        if: steps.wait.outputs.verified == 'true'
         uses: ./.clouseau-ci
         with:
           operation: assess   # or verify-local
+```
+
+```yaml
+# .github/workflows/clouseau-reassess.yml (a different file)
+on:
+  workflow_run:
+    workflows: ["Palazzo CI"]      # the verification workflow's name, never this workflow's own
+    types: [completed]
+jobs:
   request-reassessment:
     if: >-
       github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
-    needs: resolve-clouseau
     permissions: {contents: read, pull-requests: read, actions: write}
     # checkout main and the frozen engine, then operation: request-reassessment
 ```
 
-The `workflow_run` event is a trusted run of the same workflow, so it needs no
+The `workflow_run` event is a trusted run of the watched workflow, so it needs no
 maintainer comment; the engine accepts only a `pull_request` run of the
 configured workflow whose head is still the ready PR's head. The shared contract
 tests `assertBoundedVerificationWait` (no inline `technicalRun` polling; later
 steps gated on `verified`) and `assertReassessmentOnVerification` (the trigger
-and job exist) encode this template. Where verification starts promptly the
+and job exist, and the trigger watches a different workflow than the one
+containing it) encode this template. Where verification starts promptly the
 review never ends pending and the trigger finds the run already succeeded.
+
+The verification wait decides only from the final state of the latest attempt of the
+exact-head `pull_request` run. A completed run whose job or step list is still being
+finalized (jobs in progress, steps without a conclusion, an empty list, a job list from a newer
+attempt than the run record) is re-read a bounded number of times and otherwise stays pending;
+it is never converted into a failure. A final failure names the run, job or step
+(`Required verification step "..." concluded skipped`) in the published incomplete assessment.
 
 A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-

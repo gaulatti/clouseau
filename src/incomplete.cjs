@@ -19,6 +19,7 @@ const NEXT_STEPS = Object.freeze({
   changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
+  verification_failed: 'Open the PR verification run, fix the failing job or step named above, and push; the review is reassessed when verification passes.',
   github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
   evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
