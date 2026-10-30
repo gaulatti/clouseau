@@ -65,7 +65,7 @@ Each immutable citation or changed-source anchor selects at most 40 inclusive
 lines. Cite the specific relevant verification steps instead of a whole receipt.
 The controller partitions longer valid intervals without dropping cited lines
 or references; it never changes a judgment or retries a completed answer to do so.
-Invalid factor values stop the assessment; they are never trimmed or resampled to pass.
+Invalid factor values are never trimmed to pass. A reviewer answer that is unusable (an invalid tool call, malformed JSON, or a report that fails controller validation) is a malformed output, not a verdict: the same prompt is asked again, at most twice and with no added evidence, every attempt is recorded, and the last failure becomes an explicit classified hold. A completed, valid answer is never resampled.
 A positive graded binding claim requires trusted contract proof. Before grading,
 an investigator's observation that no binding obligation is established can cite
 the actual source without inventing authority. Fact validation never produces an
@@ -86,8 +86,8 @@ reflects it. Complete source proofs and reproductions can establish confidence=1
 model agreement and eloquence cannot.
 An independently established integrity veto is never erased.
 The controller may remove trailing JSON commas outside strings, preserving every
-value and raw response. Other malformed data stops review with replay evidence;
-it never causes a model retry or changes a judgment.
+value and raw response. Other malformed data is retried as above and, if it stays
+invalid, stops review with replay evidence; a retry never changes a judgment.
 
 ## Required gates
 
@@ -158,7 +158,7 @@ test_integrity gate or the scope question of a different change bundled with it.
 
 The controller, not the model, enforces affirmative approval: automatic approval
 requires test_integrity and review_completeness satisfied, and, for each changed
-production file, a test that imports it directly or through supplied files (a changed caller, a barrel); importers are found in the repository by content, not by file name. A concern raised in an earlier examination stands unless it is explicitly retained or resolved. Otherwise the outcome is
+production file, a test that imports it directly or through supplied files (a changed caller, a barrel); importers are found in the repository by content, not by file name. A new file extracted from existing code is covered when a changed or existing file that imports it is covered. A change consisting only of imports, type declarations or comments needs no runtime test. A concern raised in an earlier examination stands unless it is explicitly retained or resolved. Otherwise the outcome is
 review incomplete. When the independent roles disagree, the stricter outcome
 stands; a finding admitted by either role is never discounted because the other
 role missed it.

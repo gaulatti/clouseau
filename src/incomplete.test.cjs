@@ -62,3 +62,10 @@ test('an annotation is raised only for an incomplete review', () => {
   assert.deepEqual(warnings, ['Clouseau review incomplete (provider_key_invalid): KEY problem',
     'Clouseau review incomplete (evidence_incomplete): no cause']);
 });
+
+test('classification names the unreadable file, and shows validation detail only when it is a plain constant', () => {
+  assert.match(classify(Object.assign(new Error('x'), {unavailable: true})).reason, /Changed file unknown cannot be read/);
+  assert.match(classify(Object.assign(new Error('x'), {unavailable: true, path: 'src/a.ts'})).reason, /Changed file src\/a\.ts cannot/);
+  assert.equal(classify(new Error('Invalid acceptance evidence: factor value')).reason.endsWith('attempts: factor value.'), true);
+  assert.equal(classify(new Error('Invalid acceptance evidence: <script>alert(1)</script> $secret')).reason.endsWith('3 consecutive attempts.'), true);
+});

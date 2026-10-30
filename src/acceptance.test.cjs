@@ -168,6 +168,7 @@ test('coverage is transitive through supplied files only (changed callers and ba
   f.snapshot.sources = {...f.snapshot.sources,
     test: source('tests/unit/nav.test.tsx', "import { FeedItem } from '../../src/components/feed-item';\nimport type { Barrel } from '../../src';\n"),
     caller: source('src/components/feed-item.tsx', "import { resolve } from '../utils/helper.js';\nexport const FeedItem = 1;\n"),
+    cycle: source('src/utils/helper.ts', "import '../components/feed-item';\nimport '../components/feed-item.tsx';\n"),
     barrel: source('src/index.ts', "export * from './widgets/clock';\nexport { x } from \"./components/button\";\n")};
   f.snapshot.test_imports = [{path: 'tests/unit/utils.test.ts', specifiers: ['../../src/utils/attention-color', 'vitest', '../../src/nowhere']}];
   f.snapshot.files = ['src/components/feed-item.tsx', 'src/utils/helper.ts', 'src/utils/attention-color.ts', 'src/widgets/clock.ts', 'src/components/button.tsx'].map(path => ({path, status: 'added'}));
@@ -250,3 +251,54 @@ test('a root-level index module is named by itself, a nested one by its director
   assert.equal(moduleStem('src/ui/index.ts'), 'ui');
   assert.equal(moduleStem('src/ui/button.tsx'), 'button');
 });
+
+test('only blank, comment-only, anchored type-only lines and identical normalized import sets are non-behavioural', () => {
+  const {nonBehavioural} = require('./acceptance.cjs');
+  const inert = patch => nonBehavioural(`@@\n${patch}`);
+  // Inert: splitting, merging, re-ordering and re-wrapping the SAME value specifiers from the SAME module.
+  assert.equal(inert('-import { A, type B } from "./x";\n+import type { B } from "./x";\n+import { A } from "./x";'), true);
+  assert.equal(inert("-import {a, b} from './x';\n+import {\n+  b,\n+  a,\n+} from './x';"), true);
+  assert.equal(inert("-import X, { a } from './x';\n+import { a } from './x';\n+import X from './x';"), true);
+  assert.equal(inert("-import * as ns from './x';\n+import * as ns from './x'"), true);
+  assert.equal(inert("-export { a } from './x';\n+export {\n+  a\n+} from './x';"), true);
+  // Inert: type-only statements, anchored declarations, comments, blanks.
+  assert.equal(inert("+import type { A } from './a';\n+import type B from './b';\n+import { type C, type D as E } from './c';\n+export type { F } from './f';\n+export type * from './g';"), true);
+  assert.equal(inert('+export type Posted = Date | string;\n+type Local<T> = Array<T>;\n+declare type Q = typeof value;\n+interface Props { a: string; b?: number }\n+export interface Empty {}'), true);
+  assert.equal(inert('+// note\n+/* one line */\n+/** doc\n+ * more words\n+ */\n+\n+;'), true);
+  assert.equal(inert('--- a/x\n+++ b/x'), true);
+  // Behavioural: a changed module path, a new or removed value import, a side-effect import.
+  assert.equal(inert("-import {clamp} from './safe';\n+import {clamp} from './evil';"), false);
+  assert.equal(inert("+import './side-effect';"), false);
+  assert.equal(inert("+import { clamp } from './safe';"), false);
+  assert.equal(inert("-import { clamp } from './safe';"), false);
+  assert.equal(inert("-import {a} from './x';\n+import {a, b} from './x';"), false);
+  assert.equal(inert("-import {a} from './x';\n+import {a as b} from './x';"), false);
+  assert.equal(inert("-export * from './a';\n+export * from './b';"), false);
+  assert.equal(inert("-} from './safe'\n+} from './evil'"), false);
+  assert.equal(inert("-  A,\n+  B,"), false);
+  // Behavioural: any trailing code after an otherwise inert statement or declaration.
+  assert.equal(inert("+import x from 'y'; doEvil()"), false);
+  assert.equal(inert("+import type { X } from 'y'; doEvil()"), false);
+  assert.equal(inert("+import type { X } from 'y'\n+doEvil()"), false);
+  assert.equal(inert('+type A = B; doEvil()'), false);
+  assert.equal(inert('+type A = B\n+doEvil()'), false);
+  assert.equal(inert('+type A = f();'), false);
+  assert.equal(inert('+type A = { evil: 1 };'), false);
+  assert.equal(inert('+/* c */ doEvil()'), false);
+  assert.equal(inert('+// c\n+doEvil()'), false);
+  assert.equal(inert("+interface P { a: string } doEvil()"), false);
+  assert.equal(inert('+interface P {\n+  a: string;\n+}'), false);
+  // Behavioural: code-shaped ` * ` lines, comment markers inside strings, comments split across hunks.
+  assert.equal(inert('+  a\n+  * b'), false);
+  assert.equal(inert('+ * more words'), false);
+  assert.equal(inert('+x = "/*"; evil(); y = "*/"'), false);
+  assert.equal(inert('+/* start\n@@\n+evil();\n+*/'), false);
+  assert.equal(inert('+/* c\n+*/ evil()'), false);
+  assert.equal(inert('+/* a */ run();\n+ other\n+ */'), false, 'the first closer must end the line: later closers cannot swallow code');
+  assert.equal(inert('+/* a */ run();\n+*/'), false);
+  assert.equal(inert('+/* a\n+ * b */\n+/* c */'), true);
+  assert.equal(inert('-  author.trim().slice(0, 1)\n+  author.trim().slice(0, 2)'), false);
+  assert.equal(inert('+export const behaviour = 1;'), false);
+  assert.equal(nonBehavioural(undefined), false);
+});
+

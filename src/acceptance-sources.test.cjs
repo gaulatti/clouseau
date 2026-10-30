@@ -300,3 +300,39 @@ test('content discovery of importers skips tests that vanished or are not text, 
   assert.deepEqual(snapshot.test_imports.map(item => item.path), ['tests/c.test.ts']);
   await assert.rejects(run({'tests/b.test.ts': 500}), /Server error/);
 });
+
+test('bleecker layout (lab5): extracted helper, private rename and type-only import split (issue 130)', async () => {
+  const stories = Object.fromEntries(Array.from({length: 250}, (_, i) => [`src/components/widget-${String(i).padStart(3, '0')}.stories.tsx`, "import { Widget } from './widget';\n"]));
+  const contents = {...stories,
+    'tests/unit/utils.test.ts': "import { createAttentionColor } from '../../src/utils/attention-color';\n",
+    'src/utils/attention-color.ts': "import { normalizeHue } from './normalize-hue';\nexport const createAttentionColor = 1;\n",
+  };
+  const gates = [{name: 'test_integrity', state: 'unresolved'}, {name: 'review_completeness', state: 'satisfied'}];
+  // H1-2: normalizeHue moved to a NEW file imported by the changed attention-color.ts that utils.test.ts covers.
+  const helper = bleecker(['src/utils/normalize-hue.ts', 'src/utils/attention-color.ts'], contents);
+  helper.f.files[0].status = 'added';
+  const extracted = await collectSnapshot(helper.f);
+  assert.deepEqual(extracted.covering_tests, {'src/utils/normalize-hue.ts': ['tests/unit/utils.test.ts'], 'src/utils/attention-color.ts': ['tests/unit/utils.test.ts']});
+  assert.equal(helper.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, extracted), null);
+  assert.deepEqual(extracted.importer_scan, {tests_found: 251, tests_scanned: 200}, 'real tests are scanned before Storybook fixtures; the extent is stated');
+  assert.ok(extracted.test_imports.some(item => item.path === 'tests/unit/utils.test.ts'), 'utils.test.ts sorts after 250 stories by path but is scanned first');
+  // P-REN-1: private rename inside attention-color.ts; its test has a different name.
+  const rename = bleecker(['src/utils/attention-color.ts'], contents);
+  assert.equal(rename.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, await collectSnapshot(rename.f)), null);
+  // H3-1: splitting `import { Input, type InputProps }` changes only import lines: no runtime behaviour, no test needed.
+  const split = bleecker(['src/components/search-input.tsx'], {});
+  split.f.files[0].patch = "@@ -1 +1,2 @@\n-import { Input, type InputProps } from './input';\n+import type { InputProps } from './input';\n+import { Input } from './input';";
+  const typeOnly = await collectSnapshot(split.f);
+  assert.equal(split.approvalHold({gates}, typeOnly), null, 'neither the import hold nor the test gate applies');
+  // Fail-closed: an orphan, and a behavioural edit of the same file, are still held.
+  const orphan = bleecker(['src/utils/orphan.ts'], contents);
+  assert.match(orphan.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, await collectSnapshot(orphan.f)), /orphan\.ts/);
+  for (const patch of ["-import {clamp} from './safe';\n+import {clamp} from './evil';", "+import './side-effect';", "+import x from 'y'; doEvil()"]) {
+    split.f.files[0].patch = `@@ -1 +1 @@\n${patch}`;
+    const hold = split.approvalHold({gates}, await collectSnapshot(split.f));
+    assert.match(hold, /test integrity is unresolved/, patch);
+    assert.match(split.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, await collectSnapshot(split.f)), /no supplied test imports changed production code/, patch);
+  }
+  split.f.files[0].patch = "@@ -1 +1 @@\n-import { Input } from './input';\n+import { Input } from './input2';\n+export const behaviour = 1;";
+  assert.match(split.approvalHold({gates}, await collectSnapshot(split.f)), /test integrity is unresolved/);
+});

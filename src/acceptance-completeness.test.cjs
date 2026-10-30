@@ -127,7 +127,7 @@ test('native inspection sends the cited-exclusion schema and preserves an invali
   const original = structuredClone(facts); const observations = []; let calls = 0;
   const previous = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
   try {
-    await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', observe: value => observations.push(value),
+    await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', log: line => observations.push({log: line}), observe: value => observations.push(value),
       fetchImpl: async (_, options) => {
         calls++;
         const request = JSON.parse(options.body);
@@ -143,9 +143,9 @@ test('native inspection sends the cited-exclusion schema and preserves an invali
         return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
           [{function: {name: 'acceptance_report', arguments: JSON.stringify(facts)}}]}}]})};
       }}), /missing or unknown citation/);
-    assert.equal(calls, 1, 'a completed invalid review is never retried for a different judgment');
+    assert.equal(calls, 3, 'a malformed output (not a verdict) is retried twice with the identical prompt, then fails closed');
     assert.deepEqual(facts, original);
-    assert.deepEqual(observations[0].report, original, 'negative diagnostic retains the uncited claim exactly');
+    assert.deepEqual(observations.find(item => item.report).report, original, 'negative diagnostic retains the uncited claim exactly');
   } finally {
     if (previous === undefined) delete process.env.DEEPSEEK_API_KEY;
     else process.env.DEEPSEEK_API_KEY = previous;
@@ -381,4 +381,46 @@ test('an optional repetition cannot erase a closure and bypass the next revision
     assert.equal(repeated.findings[0].state, disposition);
     assert.deepEqual(repeated.unresolved, [original[0].id]);
   }
+});
+
+test('an unaccounted source or a missing dependency is stated as missing evidence with an unresolved gate, not a rejected review', () => {
+  const f = complete();
+  const facts = modelTemplate(f.snapshot);
+  facts.coverage.sources.pop();
+  facts.gates.forEach(gate => {gate.state = 'satisfied';});
+  const report = materialize(facts, f.snapshot);
+  const added = report.coverage.sources.find(item => item.state === 'missing');
+  assert.equal(added.source, Object.keys(f.snapshot.sources).at(-1));
+  assert.deepEqual(added.evidence, []);
+  const gate = report.gates.find(item => item.name === 'review_completeness');
+  assert.equal(gate.state, 'unresolved');
+  assert.match(gate.reason, /recorded as missing/);
+  assert.doesNotThrow(() => validateFacts(report, f.snapshot));
+  // A reviewer-declared missing dependency with a satisfied gate gets the same treatment.
+  const declared = modelTemplate(f.snapshot);
+  declared.gates.forEach(item => {item.state = 'satisfied';});
+  declared.coverage.dependencies.push({path: 'src/store.rs', state: 'missing', reason: 'Durable acknowledgement depends on this.'});
+  const reconciled = materialize(declared, f.snapshot);
+  assert.equal(reconciled.gates.find(item => item.name === 'review_completeness').state, 'unresolved');
+  // A complete, consistent inventory is left untouched.
+  const invented = modelTemplate(f.snapshot); invented.coverage.sources[1].source = 99;
+  assert.equal(materialize(invented, f.snapshot).coverage.sources.length, 2, 'an invented reference is not papered over');
+  const repeated = modelTemplate(f.snapshot); repeated.coverage.sources[1].source = repeated.coverage.sources[0].source;
+  assert.equal(materialize(repeated, f.snapshot).coverage.sources.length, 2);
+  const clean = materialize(modelTemplate(f.snapshot), f.snapshot);
+  assert.ok(clean.coverage.sources.every(item => item.state !== 'missing'));
+});
+
+test('a reviewer answer without gates or dependencies is rejected by validation, never by a controller TypeError', () => {
+  const f = complete();
+  const noGates = modelTemplate(f.snapshot); delete noGates.gates;
+  assert.throws(() => validateFacts(materialize(noGates, f.snapshot), f.snapshot), /Invalid acceptance evidence/);
+  const docsOnly = complete(); const docs = modelTemplate(docsOnly.snapshot); delete docs.gates; docsOnly.snapshot.files = [{path: 'README.md', status: 'modified'}];
+  assert.doesNotThrow(() => materialize(docs, docsOnly.snapshot));
+  const noDependencies = modelTemplate(f.snapshot); delete noDependencies.coverage.dependencies;
+  noDependencies.coverage.sources.pop();
+  noDependencies.gates.forEach(gate => {gate.state = 'satisfied';});
+  assert.equal(materialize(noDependencies, f.snapshot).gates.find(gate => gate.name === 'review_completeness').state, 'unresolved');
+  const noGate = modelTemplate(f.snapshot); noGate.gates = noGate.gates.filter(gate => gate.name !== 'review_completeness'); noGate.coverage.sources.pop();
+  assert.doesNotThrow(() => materialize(noGate, f.snapshot));
 });

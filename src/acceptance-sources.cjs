@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, specifiersOf} = require('./acceptance.cjs');
+const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, specifiersOf, coveringTests} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
@@ -35,17 +35,17 @@ function refresh(snapshot) {
 }
 
 async function fetchText({github, repo, snapshot, filename, ref}) {
-  if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true});
+  if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true, path: String(filename)});
   const sourceRepo = ref === snapshot.head_sha ? snapshot.head_repository : repo;
   if (!sourceRepo) throw new Error('The immutable head repository is unavailable');
   const {data} = await github.rest.repos.getContent({...sourceRepo, path: filename, ref});
   if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > 300000) {
-    throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true});
+    throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true, path: filename});
   }
   let content;
   try {content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));}
-  catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true});}
-  if (content.includes('\0') || content.length > 300000) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true});
+  catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true, path: filename});}
+  if (content.includes('\0') || content.length > 300000) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true, path: filename});
   return content;
 }
 
@@ -132,22 +132,27 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     // kept, which keeps the reviewers' evidence small. Barrels that re-export a changed module's
     // directory are supplied in full so that a chain through them can be followed.
     const supplied = new Set(Object.values(snapshot.sources).map(source => source.path));
+    // Real tests first, then Storybook fixtures; bounded, with the scan's extent stated to the reviewers.
+    const priority = item => /\.stories\.|(?:^|\/)stories\//.test(item.path) ? 1 : 0;
     const others = tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
-      !supplied.has(item.path) && item.size < 60000).slice(0, 60);
+      !supplied.has(item.path) && item.size < 60000).sort((a, b) => priority(a) - priority(b));
+    const scanned = others.slice(0, 200);
     snapshot.test_imports = [];
-    for (const entry of others) {
-      let content;
-      try {content = await fetchText({github, repo, snapshot, filename: entry.path, ref: pr.head.sha});}
-      catch (error) {if (error.status === 404 || error.unavailable) continue; throw error;}
-      const specifiers = specifiersOf(content);
-      if (specifiers.length) snapshot.test_imports.push({path: entry.path, specifiers});
+    for (let offset = 0; offset < scanned.length; offset += 10) {
+      const batch = await Promise.all(scanned.slice(offset, offset + 10).map(async entry => {
+        try {return {path: entry.path, specifiers: specifiersOf(await fetchText({github, repo, snapshot, filename: entry.path, ref: pr.head.sha}))};}
+        catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
+      }));
+      snapshot.test_imports.push(...batch.filter(item => item && item.specifiers.length));
     }
+    snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned.length};
     const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
     for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)index\.[cm]?[jt]sx?$/.test(item.path) &&
       directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
       await readOptional({github, repo, snapshot, filename: entry.path});
     }
   }
+  snapshot.covering_tests = coveringTests(snapshot);
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
     repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
       closingIssuesReferences(first:10) { nodes { number title body url author { login } } pageInfo { hasNextPage } }
@@ -170,6 +175,7 @@ async function additionalSources({github, repo, snapshot, paths}) {
     throw new Error('Additional evidence requires one to eight distinct repository paths');
   }
   for (const filename of paths) await readOptional({github, repo, snapshot, filename});
+  snapshot.covering_tests = coveringTests(snapshot);
   return refresh(snapshot);
 }
 

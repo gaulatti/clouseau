@@ -120,14 +120,80 @@ function reachedByTests(snapshot) {
   const edges = new Map(sources.map(source => [source.path, specifiersOf(source.content)]));
   const roots = [...sources.filter(source => isTestPath(source.path)).map(source => source.path), ...(snapshot.test_imports || []).map(item => item.path)];
   for (const item of snapshot.test_imports || []) edges.set(item.path, item.specifiers);
-  const reached = new Set(); const queue = [...roots];
-  while (queue.length) {
-    const from = queue.shift();
-    for (const specifier of edges.get(from) || []) for (const target of resolveSpecifier(from, specifier, known)) {
-      if (!reached.has(target)) {reached.add(target); if (!isTestPath(target)) queue.push(target);}
+  const reached = new Map();
+  for (const root of new Set(roots)) {
+    const seen = new Set(); const queue = [root];
+    while (queue.length) {
+      const from = queue.shift();
+      for (const specifier of edges.get(from) || []) for (const target of resolveSpecifier(from, specifier, known)) {
+        if (seen.has(target)) continue;
+        seen.add(target); if (!isTestPath(target)) queue.push(target);
+        reached.set(target, [...(reached.get(target) || []), root]);
+      }
     }
   }
   return reached;
+}
+
+// Controller-computed linkage shown to the reviewers: which supplied or discovered tests exercise each
+// changed code file, directly or through supplied callers and barrels. A reviewer must not report
+// "no test imports this file" for a file listed here.
+function coveringTests(snapshot) {
+  const reached = reachedByTests(snapshot);
+  return Object.fromEntries(snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path))
+    .map(file => [file.path, (reached.get(file.path) || []).slice(0, 5)]));
+}
+
+// A change is non-behavioural only when everything it adds or removes is shown to be inert:
+// blank lines, comment-only lines, anchored type-only declarations, and import/re-export statements
+// whose normalized VALUE specifiers (module path and imported names) are identical on the removed and
+// added sides (re-ordered or re-wrapped). Anything else, including any trailing code on a line, is behavioural.
+const IMPORT_STATEMENT = /(?:^|(?<=[\s;]))(?:import(?:\s+type)?\s*(?:[\w$]+\s*,?\s*)?(?:\*\s*as\s+[\w$]+|\{[^{}]*\})?\s*from\s*|import\s*|export(?:\s+type)?\s*(?:\*(?:\s*as\s+[\w$]+)?|\{[^{}]*\})\s*from\s*)(['"])[^'"\n]+\1[ \t]*;?/g;
+const TYPE_NAME = String.raw`[\w$]+`;
+const INERT_PARTS = [
+  String.raw`;?`,
+  String.raw`\/\/.*`,
+  String.raw`\/\*(?:(?!\*\/).)*\*\/`,
+  String.raw`(?:export\s+)?(?:declare\s+)?type\s+${TYPE_NAME}(?:<[^>;{}()]*>)?\s*=\s*[^;(){}\x60]*;?`,
+  String.raw`(?:export\s+)?(?:declare\s+)?interface\s+${TYPE_NAME}(?:<[^>;{}()]*>)?(?:\s+extends\s+[\w$.,<> ]+)?\s*\{\s*(?:${TYPE_NAME}\??:\s*[\w$<>\[\]|& '".]+[;,]?\s*)*\}`,
+];
+const INERT_LINE = new RegExp(`^(?:${INERT_PARTS.join('|')})$`);
+
+function importSpecifiers(statement) {
+  const module = /(['"])([^'"\n]+)\1/.exec(statement)[2];
+  const clause = statement.slice(0, statement.lastIndexOf(module)).replace(/\s*from\s*['"]?$/, '').replace(/['"]$/, '');
+  if (/^(?:import|export)\s+type\b/.test(statement)) return [];
+  const body = clause.replace(/^(?:import|export)\s*/, '').trim();
+  if (!body || !/from\s*['"]/.test(statement)) return [`${module}|side-effect`];
+  const found = [];
+  const named = /\{([^{}]*)\}/.exec(body);
+  const head = body.replace(/\{[^{}]*\}/, '').replace(/,\s*$/, '').trim();
+  if (head) found.push(`${module}|${head.replace(/\s+/g, ' ')}`);
+  for (const item of (named ? named[1] : '').split(',').map(value => value.trim().replace(/\s+/g, ' ')).filter(Boolean)) {
+    if (!/^type\s/.test(item)) found.push(`${module}|${item}`);
+  }
+  return found;
+}
+
+function nonBehavioural(patch) {
+  if (typeof patch !== 'string') return false;
+  // Contiguous runs of one sign are one edit. A multi-line block comment is dropped only when the run
+  // itself opens it at a line start and closes it at a line end; a ` * ` line without its opener in the
+  // run is code-shaped and stays behavioural.
+  const runs = {'-': [], '+': []}; let run = null;
+  for (const line of patch.split('\n')) {
+    const sign = /^(?:\+\+\+|---)/.test(line) ? null : /^[+-]/.test(line) ? line[0] : null;
+    if (sign && run?.sign === sign) run.lines.push(line.slice(1));
+    else {run = sign ? {sign, lines: [line.slice(1)]} : null; if (run) runs[sign].push(run);}
+  }
+  const side = sign => {
+    const text = runs[sign].map(item => item.lines.join('\n').replace(/^[ \t]*\/\*(?:(?!\*\/)[\s\S])*\*\/[ \t]*$/gm, '')).join('\n');
+    const specifiers = [];
+    const rest = text.replace(IMPORT_STATEMENT, statement => {specifiers.push(...importSpecifiers(statement.trim())); return '';});
+    return {specifiers: specifiers.sort(), inert: rest.split('\n').map(line => line.trim()).every(line => line === '' || INERT_LINE.test(line))};
+  };
+  const removed = side('-'); const added = side('+');
+  return removed.inert && added.inert && JSON.stringify(removed.specifiers) === JSON.stringify(added.specifiers);
 }
 
 function linked(snapshot, name, reached) {
@@ -149,13 +215,13 @@ function approvalHold(report, snapshot) {
   // no behaviour to test. A model's "unresolved" without a missing source behind it is an opinion:
   // completeness holds only when the review records, or the controller omitted, missing evidence.
   const executable = snapshot.files.filter(file => isExecutablePath(file.path));
-  const testMatters = executable.some(file => !isTestPath(file.path) || /^-(?!--)/m.test(file.patch));
+  const testMatters = executable.some(file => (!isTestPath(file.path) && !nonBehavioural(file.patch)) || (isTestPath(file.path) && /^-(?!--)/m.test(file.patch)));
   const missing = (snapshot.omitted_sources || []).length > 0 ||
     [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])].some(item => item.state === 'missing');
   if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';
   if (executable.length && missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
   const reached = reachedByTests(snapshot);
-  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path, reached)).map(file => file.path);
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !nonBehavioural(file.patch) && !linked(snapshot, file.path, reached)).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;
 }
@@ -314,4 +380,4 @@ function validateApproval(report, snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
