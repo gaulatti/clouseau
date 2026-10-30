@@ -898,7 +898,11 @@ test('verification that is genuinely running is awaited until it succeeds, and r
 
 test('awaiting verification refuses failures, a changed PR, closed or draft PRs and an exhausted deadline', async () => {
   const failed = fixture(); failed.state.run.conclusion = 'failure';
-  await assert.rejects(awaiting.awaitVerification({github: failed.github, context, core: quiet, expectedHead: SHA}), /concluded failure/);
+  const failedOutputs = {};
+  const failedResult = await awaiting.awaitVerification({github: failed.github, context, core: {info() {}, setOutput: (n, v) => {failedOutputs[n] = v;}}, expectedHead: SHA});
+  assert.match(failedResult.failure, /concluded failure/);
+  assert.equal(failedOutputs.verified, 'false');
+  assert.equal(JSON.parse(failedOutputs.assessment).cause, 'verification_failed', 'a final failure ends the wait with a published assessment, it does not fail the step');
   const changed = fixture();
   await assert.rejects(awaiting.awaitVerification({github: changed.github, context, core: quiet, expectedHead: BASE}), /changed while verification/);
   const push = sha => ({...context, eventName: 'push', sha});

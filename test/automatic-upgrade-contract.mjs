@@ -58,6 +58,10 @@ export function assertBoundedVerificationWait(workflow) {
     waits++;
     const wait = steps[index];
     assert.ok(wait.id, `${name} must identify its await-verification step`);
+    // A finally failed verification is published by the wait step as an incomplete assessment; the job must
+    // expose it, or the write-capable job has nothing to post the visible notice from.
+    assert.ok(String(job.outputs?.assessment ?? '').includes(`steps.${wait.id}.outputs.assessment`),
+      `${name} must expose steps.${wait.id}.outputs.assessment in its assessment output so a failed verification gets a visible notice`);
     for (const later of steps.slice(index + 1).filter(step => step.uses === './.clouseau-ci' && ['assess', 'verify-local'].includes(step.with?.operation))) {
       assert.match(String(later.if), new RegExp(`steps\\.${wait.id}\\.outputs\\.verified == 'true'`), `${name} must skip assessment until verification succeeded`);
     }

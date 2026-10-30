@@ -69,8 +69,8 @@ inputs:
     default: 'false'
 outputs:
   assessment:
-    description: Commit-bound intent decision from assess
-    value: ${{ steps.assess.outputs.assessment }}
+    description: Commit-bound intent decision from assess; from await-verification, the precise review_incomplete assessment when verification finally failed
+    value: ${{ steps.assess.outputs.assessment || steps.await.outputs.assessment }}
   review-record:
     description: Opaque JSON array of four bounded base64url-gzip chunks bound to repository, run, attempt, head, base, and assessment digests
     value: ${{ steps.assess.outputs.review-record }}

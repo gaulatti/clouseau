@@ -160,11 +160,15 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
       return {pending: true, state: 'rate_limited', retry_after: new Date(error.resetAt).toISOString()};
     }
     if (result.failure) {
-      // The step still fails closed, but it publishes a complete assessment naming the failed job or step so
-      // that a write-capable job can show the visible review-incomplete notice instead of leaving the PR silent.
-      core.setOutput('assessment', JSON.stringify({version: 2, number: pull_number, head_sha: pr.head.sha, decision: 'review_incomplete',
+      // A final failure ends the wait cleanly with a complete incomplete assessment naming the failed run,
+      // job or step. The step does not fail: the write-capable job receives the assessment through the
+      // composite output, posts the visible review-incomplete notice and then holds, so nothing can approve
+      // or merge. (A failed step would not reliably expose its outputs to the consuming job.)
+      core.info(result.failure);
+      core.setOutput('assessment', JSON.stringify({version: 2, number: pull_number, head_sha: pr.head.sha, base_sha: pr.base.sha, decision: 'review_incomplete',
         cause: 'verification_failed', reason: result.failure}));
-      throw new Error(result.failure);
+      core.setOutput('verified', 'false');
+      return result;
     }
     if (!result.pending) {
       core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);

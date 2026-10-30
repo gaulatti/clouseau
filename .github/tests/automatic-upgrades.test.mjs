@@ -89,13 +89,17 @@ test('a pending review is reassessed when verification completes, and later step
   const wait = {id: 'wait', uses: './.clouseau-ci', with: {operation: 'await-verification'}};
   const assess = {uses: './.clouseau-ci', if: "steps.wait.outputs.verified == 'true'", with: {operation: 'assess'}};
   const consumer = {name: 'Reassess', on: {workflow_run: {workflows: ['CI'], types: ['completed']}}, jobs: {
-    'assess-intent': {steps: [wait, assess]},
+    'assess-intent': {outputs: {assessment: '${{ steps.assess.outputs.assessment || steps.wait.outputs.assessment }}'}, steps: [wait, assess]},
     'request-reassessment': {if: "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'",
       permissions: {actions: 'write'}, steps: [{uses: './.clouseau-ci', with: {operation: 'request-reassessment'}}]}}};
   assert.equal(assertBoundedVerificationWait(consumer), 1);
   assert.equal(assertReassessmentOnVerification(consumer), 1);
   const ungated = structuredClone(consumer); delete ungated.jobs['assess-intent'].steps[1].if;
   assert.throws(() => assertBoundedVerificationWait(ungated), /skip assessment/);
+  const silent = structuredClone(consumer); silent.jobs['assess-intent'].outputs.assessment = '${{ steps.assess.outputs.assessment }}';
+  assert.throws(() => assertBoundedVerificationWait(silent), /visible notice/);
+  const outputless = structuredClone(consumer); delete outputless.jobs['assess-intent'].outputs;
+  assert.throws(() => assertBoundedVerificationWait(outputless), /visible notice/);
   const anonymous = structuredClone(consumer); delete anonymous.jobs['assess-intent'].steps[0].id;
   assert.throws(() => assertBoundedVerificationWait(anonymous), /identify/);
   const untriggered = structuredClone(consumer); delete untriggered.on.workflow_run;
@@ -152,4 +156,10 @@ test('the unattended path reconciles from a separate workflow_run of the review 
   assert.equal(assertBaseReconciliation(both), 1, 'a push-gated job satisfies the human-merge path');
   const wrongBranch = structuredClone(both); wrongBranch.on.push.branches = ['release'];
   assert.throws(() => assertBaseReconciliation(wrongBranch), /include the main branch/);
+});
+
+test('the composite action exposes the wait step assessment, so a failed verification reaches the write-capable job', () => {
+  assert.match(action.outputs.assessment.value, /steps\.assess\.outputs\.assessment/);
+  assert.match(action.outputs.assessment.value, /steps\.await\.outputs\.assessment/, 'await-verification publishes its assessment through the same composite output');
+  assert.ok(action.runs.steps.some(step => step.id === 'await' && step.if === "inputs.operation == 'await-verification'"));
 });
