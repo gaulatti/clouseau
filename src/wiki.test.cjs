@@ -1,6 +1,8 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
+// Every provider transport validates the credential shape before its first request.
+process.env.DEEPSEEK_API_KEY ??= 'fictional-test-key';
 const {validateConfig, validateIdentity, validateBundle, planWiki} = require('./wiki.cjs');
 const config = {version: 1, source_paths: ['src/', 'README.md'], deployment_workflow: 'backend-deploy.yml', deployment_job: 'deploy', wiki_branch: 'master'};
 const identity = {repository: 'example/upload', source_sha: 'a'.repeat(40), wiki_base_sha: 'b'.repeat(40), deployment_run_id: 12};

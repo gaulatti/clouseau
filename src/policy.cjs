@@ -66,7 +66,8 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
   const reason = scopeReason(files, pr);
   if (reason && reason !== REVIEW_CONTROL_REASON) return hold(reason);
-  if (!process.env.DEEPSEEK_API_KEY) return hold('AI assessment unavailable: DEEPSEEK_API_KEY is not configured');
+  const keyProblem = require('./provider-key.cjs').keyProblem(process.env.DEEPSEEK_API_KEY);
+  if (keyProblem) return hold(`AI assessment unavailable: DEEPSEEK_API_KEY ${keyProblem}`);
   // Do not spend provider credits on a PR whose technical gate is not green.
   const technical = await technicalRun(github, repo, pr);
   if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};

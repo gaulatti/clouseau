@@ -1,7 +1,9 @@
 'use strict';
 
+const {assertProviderKey} = require('./provider-key.cjs');
+
 async function checkProvider({fetchImpl = fetch} = {}) {
-  if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
+  assertProviderKey('DEEPSEEK_API_KEY');
   const response = await fetchImpl('https://api.deepseek.com/chat/completions', {
     method: 'POST', signal: AbortSignal.timeout(90000),
     headers: {Authorization: `Bearer ${process.env.DEEPSEEK_API_KEY}`, 'Content-Type': 'application/json'},
@@ -22,6 +24,7 @@ async function checkProvider({fetchImpl = fetch} = {}) {
 // Retry only missing/truncated completions, never a completed review decision.
 async function requestReview({messages, fetchImpl = fetch,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = () => {}}) {
+  assertProviderKey('DEEPSEEK_API_KEY');
   let maxTokens = 4096;
   let outcome;
   for (let attempt = 1; attempt <= 3; attempt++) {
@@ -55,6 +58,7 @@ async function requestWiki({messages, schema, model = 'deepseek-flash', fetchImp
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = () => {}}) {
   if (!schema || schema.type !== 'object') throw new Error('Wiki JSON schema is required');
   if (!['deepseek-flash', 'deepseek-v4-pro'].includes(model)) throw new Error('Unsupported wiki model');
+  assertProviderKey('DEEPSEEK_API_KEY');
   const reasoning = model === 'deepseek-v4-pro';
   let maxTokens = 4096;
   for (let attempt = 1; attempt <= 3; attempt++) {

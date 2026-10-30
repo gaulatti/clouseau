@@ -3,6 +3,9 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {checkProvider} = require('./provider.cjs');
 
+// Every transport validates the credential shape before its first request.
+process.env.DEEPSEEK_API_KEY = 'fictional-test-key';
+
 test('provider probe requires credentials and validates complete structured output', async () => {
   const original = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
@@ -224,4 +227,24 @@ test('the factual checker can use Pro while unknown model names are refused befo
   assert.deepEqual(result, {content: '{}'});
   await assert.rejects(requestWiki({messages, schema: wikiSchema, model: 'unknown', fetchImpl: async () => {calls++;}}), /Unsupported wiki model/);
   assert.equal(calls, 1);
+});
+
+test('a malformed provider key is rejected by name before any request on every transport, without echoing it', async () => {
+  const {requestWiki} = require('./provider.cjs');
+  const original = process.env.DEEPSEEK_API_KEY;
+  const fetchImpl = async () => assert.fail('a malformed credential must never reach the network');
+  try {
+    for (const value of ['fictional-test-key\n', ' fictional-test-key', 'fictional test key', '"fictional-test-key"', '']) {
+      process.env.DEEPSEEK_API_KEY = value;
+      const attempts = [checkProvider({fetchImpl}), requestReview({messages, fetchImpl}),
+        requestWiki({messages, schema: {type: 'object'}, fetchImpl})];
+      for (const attempt of attempts) {
+        await assert.rejects(attempt, error => {
+          assert.match(error.message, /^DEEPSEEK_API_KEY (is not configured|contains whitespace or a line break|is wrapped in quotation marks)$/);
+          assert.ok(!value.trim() || !error.message.includes(value.trim()));
+          return true;
+        });
+      }
+    }
+  } finally {process.env.DEEPSEEK_API_KEY = original;}
 });

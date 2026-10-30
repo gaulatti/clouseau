@@ -60,7 +60,7 @@ for the version 2 policy configuration.
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
 | `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
-| `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
+| `check-provider` | `provider-key` | Verify the key shape (no whitespace, line break or quotes), DeepSeek authentication and JSON output without touching a PR |
 | `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
 | `plan-wiki` | `provider-key`, `wiki-config`, wiki/source checkouts | Generate and validate a coordinated multi-page draft after deployment; `wiki-draft: true` permits read-only validation |
 | `evaluate-wiki` | `provider-key` | Read-only live factual checks on supported and deliberately false documentation |

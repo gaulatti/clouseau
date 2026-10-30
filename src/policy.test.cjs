@@ -347,6 +347,16 @@ test('stale assessments are refused before any write', async () => {
   assert.equal(f.writes.length, 0);
 });
 
+test('a malformed AI credential is named and refused before any provider request', async () => {
+  const {github} = fixture();
+  const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fixture-key\n';
+  try {
+    const result = await assess({github, context, fetchImpl: () => assert.fail('must not call provider')});
+    assert.equal(result.decision, 'second_opinion');
+    assert.equal(result.reason, 'AI assessment unavailable: DEEPSEEK_API_KEY contains whitespace or a line break');
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
 test('a PR changed during CI cannot receive an approval', async () => {
   const f = fixture();
   f.state.run.status = 'in_progress';

@@ -551,7 +551,47 @@ test('a model failure or pending/failed verification cannot reach an approval or
   const ready = await f.policy.assessWhenReady({github: f.github, context: f.context, recordPath: f.recordPath,
     fetchImpl: async () => {throw new Error('still offline');}});
   assert.equal(ready.decision, 'review_incomplete');
-  assert.equal(f.state.writes.length, 0);
+  assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger'], 'only the visible incomplete notice is written');
+  assert.match(f.state.writes[0].args.body, /Clouseau review incomplete/);
+  assert.equal(incomplete.cause, 'evidence_incomplete');
+}));
+
+test('a malformed provider key stops before any request and every incomplete outcome is announced on the PR without the secret', async () => {
+  for (const [value, cause, problem] of [['sk-fictional-secret\n', 'provider_key_invalid', /contains whitespace/], ['', 'provider_key_missing', /not configured/]]) {
+    await fixture(async f => {
+      process.env.DEEPSEEK_API_KEY = value;
+      const logs = [];
+      const assessment = await f.assess({report: line => logs.push(line)});
+      assert.equal(f.state.calls, 0, 'no provider request is made with a malformed credential');
+      assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, cause);
+      assert.match(assessment.reason, /^DEEPSEEK_API_KEY /); assert.match(assessment.reason, problem);
+      assert.ok(!JSON.stringify([assessment, logs]).includes('sk-fictional-secret'));
+      const warnings = [];
+      require('./incomplete.cjs').annotate({core: {warning: line => warnings.push(line)}, assessment});
+      assert.match(warnings[0], new RegExp(cause));
+      await assert.rejects(f.gate(assessment), /DEEPSEEK_API_KEY/);
+      const [notice] = f.state.writes;
+      assert.equal(f.state.writes.length, 1); assert.equal(notice.name, 'create-ledger');
+      assert.match(notice.args.body, /Clouseau review incomplete/); assert.match(notice.args.body, /DEEPSEEK_API_KEY/);
+      assert.match(notice.args.body, /Next step:/); assert.ok(!notice.args.body.includes('sk-fictional-secret'));
+      f.state.comments.push({id: 55, user: {login: 'github-actions[bot]'}, body: notice.args.body});
+      await assert.rejects(f.gate(assessment), /DEEPSEEK_API_KEY/);
+      assert.equal(f.state.writes[1].name, 'update-ledger', 'a rerun updates the one notice');
+      assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+    });
+  }
+});
+
+test('a provider that rejects the credential is reported as a specific cause, not a generic failure', () => fixture(async f => {
+  const assessment = await f.assess({fetchImpl: async () => ({ok: false, status: 401})});
+  assert.equal(assessment.cause, 'provider_rejected'); assert.match(assessment.reason, /rejected the credential \(HTTP 401\)/);
+}));
+
+test('a repository that requires local receipts announces the missing receipt on the PR', () => fixture(async f => {
+  const assessment = await f.assess({receiptOnly: true});
+  assert.equal(assessment.cause, 'local_receipt_required');
+  await assert.rejects(f.gate(assessment), /authenticated local Clouseau review receipt/);
+  assert.match(f.state.writes[0].args.body, /Run the local Clouseau review/);
 }));
 
 test('malformed provider JSON retains the exact undecodable response and cannot reach approval', () => fixture(async f => {
@@ -563,7 +603,7 @@ test('malformed provider JSON retains the exact undecodable response and cannot 
   assert.equal(trace.details.raw_response, raw); assert.equal(trace.details.canonical_response, raw);
   assert.equal(trace.details.model, 'deepseek-flash'); assert.equal(trace.details.usage.length, 1);
   await assert.rejects(f.gate(assessment), /incomplete/);
-  assert.equal(f.state.writes.length, 0);
+  assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger']);
 }));
 
 test('failure before source collection is retained without fabricating a snapshot', () => fixture(async f => {

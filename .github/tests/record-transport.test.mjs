@@ -74,7 +74,7 @@ async function execute(step, options = {}) {
     state.verify++; assert.deepEqual(JSON.parse(JSON.stringify(actual)), record); assert.deepEqual(JSON.parse(JSON.stringify(actualAssessment)), assessment);
   }};
   const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}};
-  const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line)};
+  const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line), warning: line => (state.warnings ??= []).push(line)};
   try {
     process.chdir(dir);
     if (options.before) options.before({state, f, processEnv});
@@ -191,6 +191,7 @@ test('failed or incomplete assessment diagnostics are logged losslessly without 
   const failed = await execute(assess, {assessment, diagnostic});
   assert.ok(failed.logs.some(line => line.startsWith('CLOUSEAU_DIAGNOSTIC_GZIP_BASE64URL_BEGIN')));
   assert.deepEqual(Object.keys(failed.outputs).sort(), ['assessment', 'review-record']);
+  assert.match(failed.warnings[0], /^Clouseau review incomplete \(evidence_incomplete\): /, 'an incomplete review raises a visible annotation');
   await assert.rejects(execute(assess, {diagnostic, failure: true}), error => {
     assert.ok(error.transportState.logs.some(line => line.endsWith('BASE64URL_END')));
     return /investigation stopped/.test(error.message);
