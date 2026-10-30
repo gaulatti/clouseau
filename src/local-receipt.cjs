@@ -20,7 +20,7 @@ function validateTrust(trust) {
     trust.central_source === undefined && /^[a-f0-9]{64}$/.test(trust.reviewer_digest)) && ['required', 'optional'].includes(trust.mode) &&
     Array.isArray(trust.keys) && trust.keys.length > 0 &&
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
-    trust.max_age_seconds <= 86400, 'explicit trust policy and maximum age required');
+    trust.max_age_seconds <= 172800, 'explicit trust policy and maximum age required');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -64,11 +64,11 @@ function reviewDecision(record) {
   return {decision, reviews};
 }
 
-function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), now = Date.now(), lifetime = 3600,
+function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), now = Date.now(), lifetime = 172800,
   nonce = crypto.randomBytes(32).toString('hex')}) {
   requireReceipt(reviewDecision(record).decision === 'auto_approve', 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
-    lifetime > 0 && lifetime <= 86400, 'invalid runner revision, challenge or lifetime');
+    lifetime > 0 && lifetime <= 172800, 'invalid runner revision, challenge or lifetime');
   const key = crypto.createPrivateKey(privateKey);
   requireReceipt(key.asymmetricKeyType === 'ed25519', 'Ed25519 signing key required');
   const payload = {type: DOMAIN, key_id: keyId, issuer, reviewer_sha: reviewerSha, reviewer_digest: reviewerDigest,

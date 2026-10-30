@@ -226,7 +226,7 @@ test('v2 assessment and native approval exchange a complete source-bound record 
 test('optional local review rejects every malformed receipt claim without paid fallback while unstamped changes receive CI review', () => fixture(async f => {
   const keys = require('node:crypto').generateKeyPairSync('ed25519');
   const trusted = {...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
-    max_age_seconds: 3600, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+    max_age_seconds: 172800, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
   const policy = createPolicy(trusted);
   const local = `<!-- clouseau-local-review:v1 ${'a'.repeat(40)} -->`;
@@ -284,7 +284,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   const keys = crypto.generateKeyPairSync('ed25519');
   const trusted = {...config, local_review: {mode: 'required', reviewer_sha: 'e'.repeat(40),
-    reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 3600,
+    reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800,
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
   const engine = central ? {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha, digest: trusted.local_review.reviewer_digest} : null;
@@ -931,7 +931,7 @@ async function privateReceiptFixture(f, controls = false, localTechnical = null)
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   const keys = crypto.generateKeyPairSync('ed25519');
   const trusted = {...config, merge_mode: 'automatic', local_review: {mode: 'required',
-    reviewer_sha: 'e'.repeat(40), central_source: {...require('./central-version.cjs').SOURCE}, max_age_seconds: 3600,
+    reviewer_sha: 'e'.repeat(40), central_source: {...require('./central-version.cjs').SOURCE}, max_age_seconds: 172800,
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
   if (controls) trusted.sensitive_paths = [...trusted.sensitive_paths, 'src/upload.test.js'];
@@ -1036,7 +1036,7 @@ test('expired, revoked, wrong-engine or changed immutable source receipts never 
       const approve = f.github.rest.pulls.createReview;
       f.github.rest.pulls.createReview = async args => {
         const value = await approve(args);
-        if (failure === 'expired') {const expired = Date.now() + 3600001; t.mock.method(Date, 'now', () => expired);}
+        if (failure === 'expired') {const expired = Date.now() + 172800001; t.mock.method(Date, 'now', () => expired);}
         else {
           const content = f.github.rest.repos.getContent;
           f.github.rest.repos.getContent = async args => {
