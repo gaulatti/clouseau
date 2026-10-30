@@ -184,7 +184,7 @@ test('unresolved integrity or completeness evidence holds approval, and a hold n
 test('documentation, fixtures, configuration, lockfiles and workflows are never held for a missing test', () => {
   const f = fixture();
   f.snapshot.files = ['README.md', 'docs/guide.md', 'test/fixtures/sample.json', 'package-lock.json', 'tsconfig.json',
-    '.github/workflows/ci.yml', '.github/clouseau.md', 'config/app.yaml', 'CHANGELOG', 'assets/logo.svg', '.gitignore', 'vitest.config.ts', 'src/types.d.ts'].map(path => ({path, status: 'modified'}));
+    '.github/workflows/ci.yml', '.github/clouseau.md', '.github/CODEOWNERS', 'NOTICE.txt', 'LICENSE', 'config/app.yaml', 'CHANGELOG', 'assets/logo.svg', '.gitignore', 'vitest.config.ts', 'src/types.d.ts'].map(path => ({path, status: 'modified'}));
   assert.equal(approvalHold(f.report, f.snapshot), null);
   assert.equal(validateApproval(f.report, f.snapshot).decision, 'auto_approve');
   f.snapshot.files.push({path: 'src/app.ts', status: 'modified'});
@@ -192,7 +192,7 @@ test('documentation, fixtures, configuration, lockfiles and workflows are never 
   f.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
   f.snapshot.files = [{path: 'README.md', status: 'modified'}];
   assert.equal(approvalHold(f.report, f.snapshot), null);
-  for (const path of ['pkg/server.go', 'src/Main.java', 'scripts/deploy.sh', 'db/query.sql', 'src/styles.css', 'Makefile']) {
+  for (const path of ['src/docs/render.ts', '.github/scripts/x.js', 'src/noticeService.ts', 'src/licenseCheck.ts', 'README.ts', 'pkg/server.go', 'src/Main.java', 'scripts/deploy.sh', 'db/query.sql', 'src/styles.css', 'Makefile']) {
     f.snapshot.files = [{path, status: 'modified'}];
     assert.equal(approvalHold(f.report, f.snapshot), 'test integrity is unresolved', path);
   }

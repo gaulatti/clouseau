@@ -70,7 +70,7 @@ const isTestPath = name => TEST_PATH.test(name);
 const FIXTURE_PATH = /(?:^|\/)(?:__fixtures__|fixtures?|__mocks__|mocks?|testdata|__snapshots__)\//i;
 // Everything except documentation, data, configuration, lockfiles, workflows and fixtures can change
 // behaviour, in any language; tests are included because weakening one is a behaviour change to the suite.
-const INERT = /(?:^|\/)(?:\.github|docs?)\/|(?:^|\/)(?:LICENSE|NOTICE|CODEOWNERS|CHANGELOG|README)[^/]*$|(?:^|\/)\.[^/]*ignore$|\.(?:md|mdx|txt|rst|json|jsonc|ya?ml|toml|ini|lock|csv|tsv|svg|png|jpe?g|gif|ico|webp|pdf|snap)$|(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/i;
+const INERT = /(?:^|\/)(?:LICENSE|NOTICE|CODEOWNERS|CHANGELOG|README)(?:\.(?:md|txt|rst))?$|(?:^|\/)\.[^/]*ignore$|\.(?:md|mdx|txt|rst|json|jsonc|ya?ml|toml|ini|lock|csv|tsv|svg|png|jpe?g|gif|ico|webp|pdf|snap)$|(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/i;
 const isExecutablePath = name => !INERT.test(name) && !FIXTURE_PATH.test(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
 const isCodePath = name => CODE.test(name) && isExecutablePath(name) && !isTestPath(name);
 
