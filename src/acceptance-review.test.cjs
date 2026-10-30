@@ -149,6 +149,7 @@ test('line normalization rejects unknown sources, out-of-range offsets and unsup
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
   const f = fixture(); const reports = []; const requests = [];
+  f.snapshot.sources.test = {authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path: 'src/upload.test.rs', content: 'use upload;\n'};
   const config = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'deepseek', grading_model: 'deepseek-flash'};
   const result = await reviewChange({...f, config, diagnostic: result => reports.push(result), fetchImpl: async (_, options) => {
     const body = JSON.parse(options.body); requests.push(body);

@@ -118,6 +118,7 @@ function overview(result, snapshot, state) {
   if (new Set(result.reviews.map(review => review.scores.decision)).size > 1) {
     lines.push('', '**Reviewer disagreement:** ' + result.reviews.map(review => `${clean(review.role)}: ${decisions[review.scores.decision][0]}`).join('; ') + '.');
   }
+  for (const hold of new Set(result.reviews.map(review => review.scores.hold).filter(Boolean))) lines.push('', `**Approval held:** ${clean(hold)}.`);
   if (result.decision === 'owner_decision') lines.push('', '**Owner decision:** Confirm this exact revision’s changes to protected review controls.');
   const findings = new Map();
   for (const review of result.reviews) for (const [index, finding] of review.report.findings.entries()) {

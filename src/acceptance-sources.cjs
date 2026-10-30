@@ -44,6 +44,15 @@ async function readSource({github, repo, snapshot, filename, ref, authority = 'u
   return id;
 }
 
+// A review bot rewrites the PR body with its own "Summary by <bot>" section that
+// restates the diff as intent (for example "Bug Fixes: ..."). That text is a
+// model's reading of the change, not the contributor's claim, and carries no
+// authority; it must not be able to supply the justification for what it summarizes.
+function contributorClaim(body) {
+  if (typeof body !== 'string') return body;
+  return body.replace(/^#{1,6} +Summary by [^\n]*(?:\n(?!#{1,6} )[^\n]*)*/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
     !safePath(file.filename) || !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
@@ -90,7 +99,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     snapshot.sources[`ticket:${ticket.number}:${ref}`] = {path: `issues/${ticket.number}`, ref,
       authority: 'untrusted', kind: 'requirement', content: JSON.stringify(ticket, null, 2)};
   }
-  snapshot.claims = {title: pr.title, description: pr.body};
+  snapshot.claims = {title: pr.title, description: contributorClaim(pr.body)};
   return refresh(snapshot);
 }
 
@@ -102,4 +111,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};

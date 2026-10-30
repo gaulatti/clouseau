@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, validateReport} = require('./acceptance.cjs');
+const {digest, validateApproval} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
@@ -45,7 +45,7 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
   for (const review of reviews) {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
-    review.scores = validateReport(review.report, view);
+    review.scores = validateApproval(review.report, view);
   }
   record.result.decision = combine(reviews);
   const state = reconcile(record.result, record.snapshot, record.previous.findings);

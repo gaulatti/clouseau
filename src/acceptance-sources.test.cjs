@@ -124,3 +124,13 @@ test('incomplete evidence, unsafe prior paths, oversized packets and truncated l
     await assert.rejects(additionalSources({...fixture(), snapshot: {sources: {}}, paths}), /one to eight/);
   }
 });
+
+test('a review bot summary of the diff is not promoted into the contributor claim', async () => {
+  const {contributorClaim} = require('./acceptance-sources.cjs');
+  const body = 'Round days down.\n\n## Summary by Sourcery\n\nBug Fixes:\n- Prevent rounding up.\n\n## Notes\nKeep this.\n\n### Summary by CodeRabbit\n- more';
+  assert.equal(contributorClaim(body), 'Round days down.\n\n## Notes\nKeep this.');
+  assert.equal(contributorClaim(undefined), undefined);
+  assert.equal(contributorClaim('Plain description.'), 'Plain description.');
+  const f = fixture(); f.pr.body = body;
+  assert.ok(!(await collectSnapshot(f)).claims.description.includes('Bug Fixes'));
+});
