@@ -54,6 +54,7 @@ for the version 2 policy configuration.
 | `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
 | `test` | none | Run Clouseau's Node regression suite |
 | `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
+| `await-verification` | `config`, `pull-request` for non-PR events | Wait for the exact-head PR verification run without deadlocking a single-slot runner pool: fails fast with recovery guidance when verification is still absent or queued after the grace period |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
@@ -247,7 +248,9 @@ The consumer must retain PR, metadata-only target, comment, and manual workflow
 entry points and PR-level concurrency. The controller validates the exact latest
 PR-event run, revision, verification job, and named steps from configuration.
 The read-only `assess` job waits for the PR verification run to finish before
-calling AI. Allow 70 minutes for this job when verification can take 60 minutes.
+calling AI. That wait occupies a runner, and a verification job that is queued
+behind it on a single-slot pool can never start, so the wait is bounded by
+progress (see "Waiting for verification" in `docs/automatic-ci-upgrades.md`). Allow 70 minutes for this job when verification can take 60 minutes.
 The separate native job named `approve-and-merge` calls `gate`; it must run on
 `pull_request_target` and fail if assessment fails, intent is missing, integrity
 is rejected, or technical evidence is incomplete. Use `always()` with `needs`

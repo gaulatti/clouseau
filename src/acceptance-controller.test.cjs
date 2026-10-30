@@ -1042,3 +1042,31 @@ test('a receipt author, purpose, finding ledger or record changing after bot app
     assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0, failure);
   });
 });
+
+test('an acceptance review waiting on queued verification fails fast instead of holding a single-slot runner', () => fixture(async f => {
+  const list = f.github.rest.actions.listWorkflowRuns;
+  f.github.rest.actions.listWorkflowRuns = async args => {
+    const result = await list(args); result.data.workflow_runs[0].status = 'queued'; return result;
+  };
+  let waits = 0;
+  await assert.rejects(f.policy.assessWhenReady({github: f.github, context: f.context, recordPath: f.recordPath,
+    queuedGrace: 3, wait: async () => waits++}), /has not started.*holding a runner.*push a new head/s);
+  assert.equal(waits, 3);
+  const pending = await f.assess();
+  assert.equal(pending.decision, 'pending_technical'); assert.equal(pending.verification, 'queued');
+  assert.equal(f.state.calls, 0);
+}));
+
+test('a rerun that produced no acceptance record fails with its own reason and recovery, not a missing protocol-two record', async () => {
+  for (const [pending, reason] of [[true, /Waiting for all tests/], [false, /PR verification concluded failure/]]) await fixture(async f => {
+    const p = await privateOwnerFixture(f);
+    f.state.pending = pending; f.state.failed = !pending;
+    const held = await p.policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+    assert.ok(!held.record_digest);
+    await assert.rejects(p.policy.gate({github: f.github, context: f.context, core: p.core, recordPath: f.recordPath,
+      assessment: held, nativeGate: true, wait: async () => {}}),
+    error => reason.test(error.message) && /produced no acceptance record/.test(error.message) &&
+      /Re-run the workflow once PR verification has completed, or push a new head/.test(error.message) && !/protocol-two/.test(error.message));
+    assert.ok(!f.state.writes.some(write => ['approve', 'atomic'].includes(write.name)));
+  });
+});

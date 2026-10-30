@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
+const {stallGuard, POLL_MS} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
@@ -69,7 +70,7 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   if (!process.env.DEEPSEEK_API_KEY) return hold('AI assessment unavailable: DEEPSEEK_API_KEY is not configured');
   // Do not spend provider credits on a PR whose technical gate is not green.
   const technical = await technicalRun(github, repo, pr);
-  if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
+  if (technical.pending) return {...identity, decision: 'pending_technical', verification: technical.state, reason: 'Waiting for all tests and exact 100% coverage'};
   if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
 
   try {
@@ -110,13 +111,39 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   }
 }
 
-async function assessWhenReady({wait = sleep, maxPolls = 260, ...options}) {
+async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGrace, ...options}) {
+  const guard = stallGuard(queuedGrace);
   for (let attempt = 0; attempt < maxPolls; attempt++) {
     const result = await assess(options);
     if (result.decision !== 'pending_technical') return result;
-    await wait(15000);
+    guard(result.verification);
+    await wait(POLL_MS);
   }
   throw new Error('Verification did not finish before the assessment deadline');
+}
+
+// The bounded replacement for a consumer's inline polling loop. It holds a
+// runner only while verification is actually running; a run that never starts
+// fails fast with recovery guidance instead of waiting out the whole deadline.
+async function awaitVerification({github, context, core, expectedHead, wait = sleep, maxPolls = 120, queuedGrace}) {
+  const pull_number = numberFor(context);
+  const guard = stallGuard(queuedGrace);
+  for (let attempt = 0; attempt < maxPolls; attempt++) {
+    const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number});
+    if (pr.state !== 'open' || pr.draft || pr.head.sha !== (expectedHead || context.sha)) {
+      throw new Error('PR closed, became draft, or changed while verification was pending');
+    }
+    const result = await technicalRun(github, context.repo, pr);
+    if (result.failure) throw new Error(result.failure);
+    if (!result.pending) {
+      core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
+      return result;
+    }
+    guard(result.state);
+    core.info('Waiting for independent unit/coverage and runtime checks. No AI request has been made.');
+    await wait(POLL_MS);
+  }
+  throw new Error('PR verification did not complete before the wait deadline');
 }
 
 async function requestReassessment({github, context, core, wait = sleep}) {
@@ -190,7 +217,8 @@ async function technicalRun(github, repo, pr, {receipt = false} = {}) {
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
   runs.sort((a, b) => b.id - a.id);
   const run = runs[0];
-  if (!run || run.status !== 'completed') return {pending: true};
+  if (!run) return {pending: true, state: 'absent'};
+  if (run.status !== 'completed') return {pending: true, state: run.status === 'in_progress' ? 'running' : 'queued'};
   if (run.conclusion !== 'success') return {failure: `PR verification concluded ${run.conclusion}`};
   const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
     {...repo, run_id: run.id, filter: 'latest', per_page: 100});
@@ -255,7 +283,10 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
   const initialProtection = await protection();
   const controllerManaged = initialProtection.controllerManaged === true;
-  if (controllerManaged && typeof verifyAcceptance !== 'function') throw new Error('Private owner merge requires a validated protocol-two acceptance record');
+  // A held assessment carries no record by design; report its own reason
+  // instead of the misleading missing-record error that would hide it.
+  const held = assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity';
+  if (controllerManaged && typeof verifyAcceptance !== 'function' && !held) throw new Error('Private owner merge requires a validated protocol-two acceptance record');
   // The native job is the required check. Additional GITHUB_TOKEN API checks
   // can attach to another run's suite; publish detail in this job's summary.
   const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
@@ -445,7 +476,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 

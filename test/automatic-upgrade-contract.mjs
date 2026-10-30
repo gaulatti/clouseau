@@ -41,3 +41,18 @@ export function assertFrozenWorkflow(workflow, evaluate) {
   }
   assert.ok(count >= 2, 'multiple engine stages must be checked');
 }
+
+// A consumer's review job must not poll for verification inline: the loop holds
+// a runner while the verification job it waits on can be queued behind it. The
+// engine's await-verification operation applies the shared progress bound.
+export function assertBoundedVerificationWait(workflow) {
+  let waits = 0;
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    for (const step of job.steps || []) {
+      const script = step.with?.script || '';
+      assert.ok(!/technicalRun\s*\(/.test(script), `${name} polls for verification inline; use operation: await-verification`);
+      if (step.uses === './.clouseau-ci' && step.with?.operation === 'await-verification') waits++;
+    }
+  }
+  return waits;
+}

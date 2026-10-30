@@ -103,6 +103,40 @@ authenticated coding harness. CI configuration and provider credentials are not
 installed by bastille startup. The signature authenticates an enrolled
 workstation's evidence; it does not defend against a compromised workstation.
 
+## Waiting for verification
+
+The `pull_request_target` review run and the `pull_request` verification run are
+different workflow runs, so `needs:` cannot order them. A review job that polls
+for verification therefore holds a runner while it waits. On a runner pool with
+one slot the queued `Verify PR` job can never start behind it, and the review
+used to sit until its deadline (about 30 minutes) and fail without a decision.
+
+Waiting is now bounded by progress. Use the `await-verification` operation
+instead of an inline polling script, and `assess` with the default
+`wait-for-verification` already applies the same rule. While the exact-head
+verification run is `in_progress` the job keeps polling. If no run exists or it
+is still queued for more than eight 15-second checks, the job fails immediately
+with: no decision was made, no acceptance record exists, re-run the workflow
+after verification has completed, or push a new head.
+
+```yaml
+- name: Wait for verification without holding a stalled runner
+  uses: ./.clouseau-ci
+  with:
+    operation: await-verification
+    pull-request: ${{ steps.install.outputs.number }}
+```
+
+Consumer workflows must not carry their own `technicalRun` polling loop; the
+shared contract test `assertBoundedVerificationWait` rejects it. Where two runners
+are available, or verification runs on a different pool, nothing changes.
+
+A review run that produced no acceptance record (pending or failed verification,
+incomplete review, not ready) cannot approve or merge. `approve-and-merge` fails
+with that run's own reason and says to re-run after verification completes or to
+push a new head; it no longer reports a missing protocol-two record in place of
+the real cause. Attempt-scoped record artifacts are never reused across reruns.
+
 ## Operations and boundaries
 
 In artifact mode, find `clouseau-engine-<run id>-<attempt>` for the full central

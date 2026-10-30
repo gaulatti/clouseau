@@ -6,6 +6,7 @@ const {digest, validateReport} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
+const {stallGuard, POLL_MS} = require('./verification-wait.cjs');
 
 const RECORD = 'work/clouseau-acceptance.json';
 const policyDigest = () => digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8'));
@@ -99,7 +100,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const identity = {version: 2, number, head_sha: pr.head.sha, base_sha: pr.base.sha, ...(engine ? {engine} : {})};
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
     const technical = await legacy.technicalRun(github, repo, pr, {receipt: true});
-    const technicalBlock = technical.pending ? {decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'} :
+    const technicalBlock = technical.pending ? {decision: 'pending_technical', verification: technical.state, reason: 'Waiting for all tests and exact 100% coverage'} :
       technical.failure ? {decision: 'blocked_technical', reason: technical.failure} : null;
     const observations = [];
     const snapshots = {};
@@ -190,11 +191,13 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     }
   }
 
-  async function assessWhenReady({wait = ms => new Promise(resolve => setTimeout(resolve, ms)), maxPolls = 260, ...options}) {
+  async function assessWhenReady({wait = ms => new Promise(resolve => setTimeout(resolve, ms)), maxPolls = 260, queuedGrace, ...options}) {
+    const guard = stallGuard(queuedGrace);
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       const result = await assess(options);
       if (result.decision !== 'pending_technical') return result;
-      await wait(15000);
+      guard(result.verification);
+      await wait(POLL_MS);
     }
     throw new Error('Verification did not finish before the assessment deadline');
   }
@@ -202,7 +205,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
   async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT), recordPath = RECORD, ...options}) {
     const hold = reason => legacy.gate({github, context, core, ...options,
       assessment: {...assessment, decision: 'blocked_technical', reason}});
-    if (!assessment.record_digest) return hold(assessment.reason);
+    if (!assessment.record_digest) {
+      return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
+        'Re-run the workflow once PR verification has completed, or push a new head if re-running does not produce one.');
+    }
     const record = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
     const {body, pages} = verifyRecord(record, assessment, config, engine);
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');

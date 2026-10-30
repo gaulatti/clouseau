@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {parse} from 'yaml';
 import {data, Evaluator, Lexer, Parser} from '@actions/expressions';
-import {assertFrozenWorkflow} from '../../test/automatic-upgrade-contract.mjs';
+import {assertFrozenWorkflow, assertBoundedVerificationWait} from '../../test/automatic-upgrade-contract.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const action = parse(readFileSync(path.join(root, 'action.yml'), 'utf8'));
 const workflow = parse(readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
@@ -73,4 +73,17 @@ test('resolver failures keep the required approval check red while an authorized
   const installation = {github: {event_name: 'push', event: {deleted: false}, ref: 'refs/heads/policy-install/pr-43'},
     needs: {'resolve-clouseau': {result: 'skipped'}, 'assess-intent': {result: 'skipped'}, 'assess-installation': {result: 'success'}}};
   assert.equal(evaluate(gate.steps[0].if, installation).value, false);
+});
+
+test('review workflows wait for verification through the bounded engine operation, never an inline polling loop', () => {
+  assert.equal(assertBoundedVerificationWait(workflow), 0, 'the self review uses assess with the guarded engine wait');
+  assert.ok(action.runs.steps.some(step => step.if === "inputs.operation == 'await-verification'"));
+  assert.match(action.inputs.operation.description, /await-verification/);
+  const consumer = structuredClone(workflow);
+  consumer.jobs['assess-intent'].steps.splice(1, 0, {name: 'Wait for tests', uses: 'actions/github-script@v7',
+    with: {script: 'const result = await policy.technicalRun(github, context.repo, pr);'}});
+  assert.throws(() => assertBoundedVerificationWait(consumer), /use operation: await-verification/);
+  const bounded = structuredClone(workflow);
+  bounded.jobs['assess-intent'].steps.splice(1, 0, {name: 'Wait', uses: './.clouseau-ci', with: {operation: 'await-verification'}});
+  assert.equal(assertBoundedVerificationWait(bounded), 1);
 });

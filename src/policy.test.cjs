@@ -798,3 +798,90 @@ test('legacy controller callers cannot select private automatic writes without a
   await assert.rejects(policy.gate({github: f.github, context, core: {info() {}}, assessment: automatic}), /validated protocol-two acceptance record/);
   assert.equal(f.writes.length, 0);
 });
+
+test('verification state distinguishes an absent, queued and running PR run', async () => {
+  assert.deepEqual(await technicalRun(fixture({run: null}).github, repo, small), {pending: true, state: 'absent'});
+  for (const [status, state] of [['queued', 'queued'], ['waiting', 'queued'], ['in_progress', 'running']]) {
+    const f = fixture(); f.state.run.status = status;
+    assert.deepEqual(await technicalRun(f.github, repo, small), {pending: true, state});
+  }
+});
+
+// A single-slot pool: while the review job runs, the verification job queued
+// behind it never starts, so every poll observes the same queued run.
+function singleSlotDeadlock() {
+  const f = fixture(); f.state.run.status = 'queued'; f.state.run.conclusion = null;
+  const messages = []; let waits = 0;
+  return {f, messages, core: {info: message => messages.push(message)},
+    wait: async ms => {assert.equal(ms, 15000); waits++;}, waits: () => waits};
+}
+const awaiting = createPolicy(require('../test/fixtures/config.json'));
+const { QUEUE_GRACE_POLLS } = require('./verification-wait.cjs');
+
+test('a review that waits on its own queued verification fails fast instead of holding the only runner for 30 minutes', async () => {
+  const d = singleSlotDeadlock();
+  await assert.rejects(awaiting.awaitVerification({github: d.f.github, context, core: d.core, expectedHead: SHA, wait: d.wait}),
+    /has not started.*holding a runner.*one slot.*no acceptance record.*push a new head/s);
+  assert.equal(d.waits(), QUEUE_GRACE_POLLS, 'gives up after the grace, not after the 120-poll deadline');
+  const absent = {f: fixture({run: null}), wait: async () => {}};
+  await assert.rejects(awaiting.awaitVerification({github: absent.f.github, context, core: {info() {}}, expectedHead: SHA, wait: absent.wait}), /has not started/);
+});
+
+test('a read-only assessment that waits on queued verification fails fast with the same diagnostic', async () => {
+  const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+    const d = singleSlotDeadlock();
+    await assert.rejects(awaiting.assessWhenReady({github: d.f.github, context, wait: d.wait}), /holding a runner/);
+    assert.equal(d.waits(), QUEUE_GRACE_POLLS);
+    const custom = singleSlotDeadlock();
+    await assert.rejects(awaiting.assessWhenReady({github: custom.f.github, context, wait: custom.wait, queuedGrace: 1}), /holding a runner/);
+    assert.equal(custom.waits(), 1);
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
+test('verification that is genuinely running is awaited until it succeeds, and resets the queue grace', async () => {
+  const f = fixture(); f.state.run.status = 'queued';
+  const sequence = ['queued', 'queued', 'in_progress', 'in_progress', 'queued', 'completed'];
+  let index = 0; const messages = [];
+  const result = await awaiting.awaitVerification({github: f.github, context, core: {info: message => messages.push(message)},
+    expectedHead: SHA, queuedGrace: 2, wait: async () => {f.state.run.status = sequence[++index];}});
+  f.state.run.status = 'completed';
+  assert.match(result.url, /runs\/22/);
+  assert.ok(messages.some(message => /Verified PR CI/.test(message)));
+  assert.ok(messages.some(message => /No AI request has been made/.test(message)));
+});
+
+test('awaiting verification refuses failures, a changed PR, closed or draft PRs and an exhausted deadline', async () => {
+  const failed = fixture(); failed.state.run.conclusion = 'failure';
+  await assert.rejects(awaiting.awaitVerification({github: failed.github, context, core: {info() {}}, expectedHead: SHA}), /concluded failure/);
+  const changed = fixture();
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context, core: {info() {}}, expectedHead: BASE}), /changed while verification/);
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context: {...context, sha: BASE}, core: {info() {}}}), /changed while verification/);
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: {...context, sha: SHA}, core: {info() {}}})).url);
+  for (const mutate of [pr => {pr.state = 'closed';}, pr => {pr.draft = true;}]) {
+    const f = fixture(); mutate(f.state.pr);
+    await assert.rejects(awaiting.awaitVerification({github: f.github, context, core: {info() {}}, expectedHead: SHA}), /closed, became draft/);
+  }
+  const running = fixture(); running.state.run.status = 'in_progress';
+  await assert.rejects(awaiting.awaitVerification({github: running.github, context, core: {info() {}}, expectedHead: SHA,
+    maxPolls: 2, wait: async () => {}}), /did not complete before the wait deadline/);
+  await assert.rejects(awaiting.awaitVerification({github: running.github, context, core: {info() {}}, expectedHead: SHA, maxPolls: 0}), /deadline/);
+});
+
+test('the default sleep paces verification polling', async t => {
+  const f = fixture(); f.state.run.status = 'in_progress';
+  t.mock.method(global, 'setTimeout', callback => {f.state.run.status = 'completed'; callback(); return 0;});
+  assert.ok((await awaiting.awaitVerification({github: f.github, context, core: {info() {}}, expectedHead: SHA})).url);
+});
+
+test('a held technical assessment reports its own reason on a private owner repository instead of a missing record', async () => {
+  for (const decision of ['blocked_technical', 'blocked_integrity']) {
+    const f = fixture(); f.state.pr.auto_merge = null;
+    const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+    f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+    f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+    f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+    await assert.rejects(policy.gate({github: f.github, context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+      nativeGate: true, assessment: {...automatic, decision, reason: 'fixture held reason'}}), error => error.message === 'fixture held reason');
+  }
+});
