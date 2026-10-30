@@ -77,6 +77,17 @@ test('regenerated native data has observed freshness while a genuine branchless 
   assert.equal(result.coverage.passed, true);
 }, {branchless: true}));
 
+test('a regenerated LCOV report is measured exactly, as the repository recipe produces it', () => fixture(f => {
+  const lcov = 'TN:\nSF:src/handler.js\nDA:1,1\nLF:1\nLH:1\nBRDA:1,0,0,1\nBRDA:1,1,0,1\nBRF:2\nBRH:2\nend_of_record\n';
+  const verification = [[process.execPath, '-e', `require('node:fs').writeFileSync('node.lcov', ${JSON.stringify(lcov)})`]];
+  const config = {...f.config, verification, coverage: {format: 'lcov', report: 'node.lcov', source_directory: 'src'}};
+  const result = executeVerification({...f, config});
+  assert.equal(result.verification_status, 'passed');
+  assert.deepEqual(result.exact_coverage, {lines: [1, 1], branches: [2, 2]});
+  assert.equal(result.coverage.status, 'exact');
+  assert.equal(result.coverage.passed, true);
+}));
+
 test('missing, malformed, unsupported and empty native coverage remain unavailable rather than invented counts', () => {
   for (const kind of ['missing', 'malformed', 'unsupported', 'empty', 'empty-lines']) fixture(f => {
     let config = f.config;

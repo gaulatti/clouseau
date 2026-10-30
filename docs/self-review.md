@@ -9,13 +9,19 @@ because it appears on a proposed branch.
 
 `scripts/verify-coverage` retains an LCOV report, merged deterministically from
 the raw V8 reports of the native test run, at `.clouseau-work/node.lcov`. The existing 100% line and branch thresholds and
-complete source loader remain in force. No textual percentage is converted into
-Istanbul or LLVM counters. This LCOV report is not a supported shared local
-coverage adapter, so the local recipe deliberately records diagnostic
-`coverage.status: unavailable` with no claimed aggregate counters. That is
-separate from the real verification command results and never authorizes a
-technical approval or merge. Independent CI continues to enforce the existing
+complete source loader remain in force. The recipe declares `"format": "lcov"`: the shared
+coverage reader (`src/coverage-lcov.cjs`) measures distinct `DA` lines and `BRDA` branches against the
+complete JS/TS source inventory, cross-checks the producer's `LF/LH/BRF/BRH` totals, and rejects
+ignore directives, duplicate, foreign or missing files. A clean local review therefore records
+`commands: passed` and measured exact coverage. No textual percentage is converted into
+Istanbul or LLVM counters. LCOV is accepted for local assessment only; shared native CI
+configuration still lists only the formats in the coverage plan. Coverage never authorizes
+a technical approval or merge on its own: independent CI continues to enforce the existing
 native exact-coverage command and all other named checks.
+
+`scripts/verify-coverage` first checks that `python3 -m coverage` works and exits 2 with an
+install hint when it does not, so a missing coverage.py is reported as a setup error rather than
+a failed fixture test.
 
 The existing CI policy predates the local recipe. Generic first-install mode
 must not treat that policy as absent. Enroll the proposed recipe and public key
