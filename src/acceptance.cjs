@@ -62,7 +62,9 @@ function scoreReport(report) {
   return {rules: RULES, findings, decision};
 }
 
-const CODE = /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|cs|php|swift|scala|c|cc|cpp|h|hpp|vue|svelte)$/;
+// Only languages whose tests name the module under test by an import; same-package
+// and inline-test languages (Go, Java, C) cannot be linked this way and are not judged here.
+const CODE = /\.(?:[cm]?[jt]sx?|py|rs|rb|php|vue|svelte)$/;
 const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|specs?|e2e|stories)\/|\.(?:test|spec|stories)\.[a-z0-9]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:go|py)$/i;
 const isTestPath = name => TEST_PATH.test(name);
 const isCodePath = name => CODE.test(name) && !isTestPath(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
@@ -74,10 +76,13 @@ function moduleStem(name) {
   return base === 'index' && parts.length ? parts.pop() : base;
 }
 
+// A statement that imports, not a title or comment that merely contains the word.
+const IMPORT = /^\s*(?:(?:export\b.*\s)?from\b|import\b|use\b|pub\s+use\b|mod\b|require(?:_relative)?\b|include\b|load\b)|\b(?:require|import)\(/;
+
 function linked(snapshot, name) {
   const token = new RegExp(`(?:^|[\\s'"\`/.:])${moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\s'"\`.;,)/])`);
   return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' && isTestPath(source.path) &&
-    source.content.split('\n').some(line => /\b(?:import|from|require|use|mod|include|load)\b/.test(line) && token.test(line)));
+    source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)));
 }
 
 // Approval needs affirmative, per-file behavioural evidence. An unresolved
@@ -85,9 +90,6 @@ function linked(snapshot, name) {
 // test that imports it, is missing verification and holds automatic approval.
 // A test for one file never satisfies a different changed file.
 function approvalHold(report, snapshot) {
-  // A pre-PR local assessment precedes the CI receipt and the repository test run;
-  // its recipe and its signed receipt carry that evidence. The hold is for CI.
-  if (snapshot.sources['local-request']) return null;
   const gate = name => report.gates.find(item => item.name === name).state;
   for (const name of ['test_integrity', 'review_completeness']) {
     if (gate(name) === 'unresolved') return `${name.replace('_', ' ')} is unresolved`;

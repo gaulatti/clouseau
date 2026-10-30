@@ -139,7 +139,7 @@ test('CI approval needs a supplied test that imports each changed production fil
   const held = validateApproval(bare.report, bare.snapshot);
   assert.equal(held.decision, 'review_incomplete');
   assert.match(held.hold, /no supplied test imports changed production code: src\/upload\.rs/);
-  for (const content of ['// upload is mentioned in a comment\n', 'describe("upload", () => {});\n', 'use uploader;\n', 'use upload_gateway;\n']) {
+  for (const content of ['// upload is mentioned in a comment\n', 'describe("upload", () => {});\n', 'use uploader;\n', 'use upload_gateway;\n', 'test("loads from upload", () => {});\n', 'describe("import upload", () => {});\n']) {
     const other = withTest(content);
     assert.match(approvalHold(other.report, other.snapshot), /no supplied test imports/, content);
   }
@@ -150,6 +150,7 @@ test('CI approval needs a supplied test that imports each changed production fil
 });
 
 test('a test for one changed file never covers a different changed file', () => {
+  assert.equal(isTestPath('internal/upload_test.go'), true);
   const f = withTest('import {a} from "./feed-grid";\n');
   f.snapshot.files.push({path: 'src/format.ts', status: 'modified', head_source: 'head'});
   assert.match(approvalHold(f.report, f.snapshot), /src\/upload\.rs, src\/format\.ts|src\/upload\.rs/);
@@ -157,7 +158,7 @@ test('a test for one changed file never covers a different changed file', () => 
   f.snapshot.sources.test.content = 'import {a} from "./feed-grid";\nimport {b} from "./ui";\n';
   assert.equal(approvalHold(f.report, f.snapshot), null, 'an index module is named by its directory');
   f.snapshot.files = [{path: 'src/format.ts', status: 'modified'}, {path: 'src/gone.ts', status: 'removed'}, {path: 'README.md', status: 'modified'},
-    {path: 'src/types.d.ts', status: 'modified'}, {path: 'vitest.config.ts', status: 'modified'}, {path: 'src/x.test.ts', status: 'modified'}];
+    {path: 'src/types.d.ts', status: 'modified'}, {path: 'pkg/server.go', status: 'modified'}, {path: 'vitest.config.ts', status: 'modified'}, {path: 'src/x.test.ts', status: 'modified'}];
   assert.equal(approvalHold(f.report, f.snapshot), 'no supplied test imports changed production code: src/format.ts');
 });
 
@@ -173,9 +174,9 @@ test('unresolved integrity or completeness evidence holds approval, and a hold n
   report.gates.find(gate => gate.name === 'scope_authority').state = 'violated';
   assert.equal(validateApproval(report, snapshot).decision, 'repair_required');
   const local = fixture();
-  local.snapshot.sources['local-request'] = {authority: 'untrusted', kind: 'requirement', ref: 'e'.repeat(40), path: 'local-request', content: 'x'};
   local.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
-  assert.equal(validateApproval(local.report, local.snapshot).decision, 'auto_approve', 'the pre-PR local stage is advisory');
+  assert.equal(validateReport(local.report, local.snapshot).decision, 'auto_approve', 'the pre-PR local stage keeps unresolved evidence advisory');
+  assert.equal(validateApproval(local.report, local.snapshot).decision, 'review_incomplete', 'hosted approval does not');
   assert.ok(isTestPath('tests/unit/format.test.ts') && isTestPath('src/a/feed-grid.stories.tsx') && isTestPath('pkg/test_x.py') && isTestPath('x_test.go'));
   assert.ok(!isTestPath('src/utils/format.ts'));
 });

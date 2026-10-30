@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, validateApproval} = require('./acceptance.cjs');
+const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
@@ -125,6 +125,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
           configDigest: digest(config), policyDigest: policyDigest()});
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
+        // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
+        // is reused only when hosted approval's affirmative-evidence rule also holds.
+        const hold = verified.record.result.reviews.map(review => approvalHold(review.report, verified.record.snapshot)).find(Boolean);
+        if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
+          reason: `Authenticated local review held: ${hold}.`};
         const controls = legacy.scopeReason(files, pr);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
