@@ -180,3 +180,13 @@ test('unresolved integrity or completeness evidence holds approval, and a hold n
   assert.ok(isTestPath('tests/unit/format.test.ts') && isTestPath('src/a/feed-grid.stories.tsx') && isTestPath('pkg/test_x.py') && isTestPath('x_test.go'));
   assert.ok(!isTestPath('src/utils/format.ts'));
 });
+
+test('documentation, fixtures, configuration, lockfiles and workflows are never held for a missing test', () => {
+  const f = fixture();
+  f.snapshot.files = ['README.md', 'docs/guide.md', 'test/fixtures/sample.json', 'package-lock.json', 'tsconfig.json',
+    '.github/workflows/ci.yml', '.github/clouseau.md', 'config/app.yaml', 'Makefile', 'src/styles.css', 'src/schema.sql'].map(path => ({path, status: 'modified'}));
+  assert.equal(approvalHold(f.report, f.snapshot), null);
+  assert.equal(validateApproval(f.report, f.snapshot).decision, 'auto_approve');
+  f.snapshot.files.push({path: 'src/app.ts', status: 'modified'});
+  assert.match(approvalHold(f.report, f.snapshot), /src\/app\.ts$/);
+});

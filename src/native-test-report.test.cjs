@@ -151,9 +151,11 @@ test('native interruption signals preserve the actual child exit or signal and r
       const child = cp.spawn('bash', ['-c', 'ulimit -c 0\nexec "$@"', '--', process.execPath, reporter, 'signal', f.artifacts, '--', '--test', file], {cwd: f.root, env: environment()});
       let stderr = ''; child.stderr.on('data', chunk => {stderr += chunk;}); child.stdout.resume();
       const closed = new Promise(resolve => child.once('close', (code, signal) => resolve({code, signal})));
-      for (let count = 0; !fs.existsSync(ready) && count < 500; count++) await new Promise(resolve => setTimeout(resolve, 10));
-      assert.ok(fs.existsSync(ready), 'the actual native test must start before interruption');
-      worker = JSON.parse(fs.readFileSync(ready)).pid;
+      // The file exists before its content is written; wait for the complete record.
+      const started = () => {try {return JSON.parse(fs.readFileSync(ready)).pid;} catch {return null;}};
+      for (let count = 0; !started() && count < 500; count++) await new Promise(resolve => setTimeout(resolve, 10));
+      worker = started();
+      assert.ok(worker, 'the actual native test must start before interruption');
       child.kill(signal); const result = await closed;
       const record = manifests(f)[0]; checkTrace(record);
       assert.equal(result.code, record.native_exit_code, JSON.stringify({result, record, stderr}));

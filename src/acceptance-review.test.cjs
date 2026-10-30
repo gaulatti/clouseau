@@ -339,3 +339,16 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   }});
   assert.equal(inspected.report.resolutions[0].id, draft.findings[0].id);
 }));
+
+test('a change with no executable code treats an invalid inapplicable test gate as not required', () => {
+  const {snapshot} = fixture();
+  snapshot.files = [{path: 'README.md', status: 'modified'}];
+  const gate = state => ({units: [], accounting: [], evidence: [], findings: [], gates: [{name: 'test_integrity', state, reason: 'Nothing to test.'}, {name: 'scope_authority', state: 'inapplicable', reason: 'x'}]});
+  const converted = materialize(gate('inapplicable'), snapshot);
+  assert.equal(converted.gates[0].state, 'satisfied');
+  assert.match(converted.gates[0].reason, /No executable code changed/);
+  assert.equal(converted.gates[1].state, 'inapplicable', 'other required gates are not rewritten');
+  assert.equal(materialize(gate('unresolved'), snapshot).gates[0].state, 'unresolved');
+  snapshot.files = [{path: 'src/app.ts', status: 'modified'}];
+  assert.equal(materialize(gate('inapplicable'), snapshot).gates[0].state, 'inapplicable', 'code changes keep the invalid state visible');
+});

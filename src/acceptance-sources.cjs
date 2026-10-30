@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, MAX_CITATION_LINES} = require('./acceptance.cjs');
+const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
@@ -85,6 +85,22 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     }
     if (file.status !== 'removed') item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha});
     snapshot.files.push(item);
+  }
+  // Existing tests are not part of the change, so a reviewer cannot see what pins a changed
+  // module unless the controller supplies them. Tests whose path names a changed production
+  // module are read at the head revision; a model's later source_request may add the rest.
+  const code = files.filter(file => file.status !== 'removed' && isCodePath(file.filename));
+  if (code.length) {
+    const {data: tree} = await github.rest.git.getTree({...repo, tree_sha: pr.base.sha, recursive: 'true'});
+    if (tree.truncated) throw new Error('Repository tree is too large to locate the existing tests');
+    const changed = new Set(files.map(file => file.filename));
+    let budget = 150000;
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
+      item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
+      if (entry.size > budget) break;
+      budget -= entry.size;
+      await readSource({github, repo, snapshot, filename: entry.path, ref: pr.head.sha});
+    }
   }
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
     repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
