@@ -54,7 +54,7 @@ for the version 2 policy configuration.
 | `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
 | `test` | none | Run Clouseau's Node regression suite |
 | `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
-| `await-verification` | `config`, `pull-request` for non-PR events | Wait for the exact-head PR verification run without deadlocking a single-slot runner pool: fails fast with recovery guidance when verification is still absent or queued after the grace period |
+| `await-verification` | `config`, `pull-request` for non-PR events | Wait for the exact-head PR verification run without deadlocking a single-slot runner pool: ends cleanly with `verified=false` when verification has not started within `verification_queue_grace_seconds` (default 900), to be reassessed when the verification run completes |
 | `assess` | `config`, optional `pull-request`, `provider-key` | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
@@ -62,7 +62,7 @@ for the version 2 policy configuration.
 | `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
 | `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
-| `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
+| `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger (or a completed PR verification `workflow_run`) and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
 | `plan-wiki` | `provider-key`, `wiki-config`, wiki/source checkouts | Generate and validate a coordinated multi-page draft after deployment; `wiki-draft: true` permits read-only validation |
 | `evaluate-wiki` | `provider-key` | Read-only live factual checks on supported and deliberately false documentation |
 | `publish-wiki` | `wiki-config`, validated `wiki-plan-path`, wiki/source checkouts | Revalidate deployment and publish every page in one non-force wiki commit; no provider key |

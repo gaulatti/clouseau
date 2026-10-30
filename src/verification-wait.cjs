@@ -2,27 +2,29 @@
 
 // A review job that polls for PR verification occupies a runner while it waits.
 // On a runner pool with one slot the verification job it waits for is queued
-// behind it and can never start. Waiting is therefore bounded by progress: a
-// verification run that has not started within a short grace is a deadlock (or
-// starvation), not a delay, and fails with a message that says how to recover.
-const QUEUE_GRACE_POLLS = 8;
+// behind it and can never start. Waiting is bounded by progress: verification
+// that is running is awaited, but one that has not started within the
+// configured queue grace ends the review cleanly in a pending state. It holds
+// no runner afterwards and is reassessed when the verification run completes.
+const DEFAULT_QUEUE_GRACE_SECONDS = 900;
+const MAX_QUEUE_GRACE_SECONDS = 3600;
 const POLL_MS = 15000;
 
-function stalledVerification(polls) {
-  return new Error(`PR verification has not started after ${polls} checks and this review job is holding a runner while it waits. ` +
-    'On a runner pool with one slot the queued verification job can never start behind it. ' +
-    'No decision was made and no acceptance record exists for this run. Re-run this workflow after the PR verification run has ' +
-    'completed, or push a new head. A re-run of this attempt cannot create the missing record.');
-}
+const graceSeconds = config => config.verification_queue_grace_seconds ?? DEFAULT_QUEUE_GRACE_SECONDS;
 
-// Returns a function that is called with each pending verification state and
-// throws once verification has been absent or queued for longer than the grace.
-function stallGuard(grace = QUEUE_GRACE_POLLS) {
+const WAITING_REASON = 'Waiting for verification: PR verification had not started within the queue grace, so this review ended ' +
+  'without holding a runner and made no decision. It is reassessed automatically when the PR verification run completes; ' +
+  'otherwise re-run this workflow after verification completes, or push a new head.';
+
+// Returns a function called with each pending verification state. It returns
+// true once verification has been absent or queued for longer than the grace.
+function queueTracker(seconds) {
+  const limit = Math.ceil(seconds * 1000 / POLL_MS);
   let idle = 0;
   return state => {
     idle = state === 'running' ? 0 : idle + 1;
-    if (idle > grace) throw stalledVerification(idle);
+    return idle > limit;
   };
 }
 
-module.exports = {QUEUE_GRACE_POLLS, POLL_MS, stalledVerification, stallGuard};
+module.exports = {DEFAULT_QUEUE_GRACE_SECONDS, MAX_QUEUE_GRACE_SECONDS, POLL_MS, WAITING_REASON, graceSeconds, queueTracker};

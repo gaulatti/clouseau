@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {parse} from 'yaml';
 import {data, Evaluator, Lexer, Parser} from '@actions/expressions';
-import {assertFrozenWorkflow, assertBoundedVerificationWait} from '../../test/automatic-upgrade-contract.mjs';
+import {assertFrozenWorkflow, assertBoundedVerificationWait, assertReassessmentOnVerification} from '../../test/automatic-upgrade-contract.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const action = parse(readFileSync(path.join(root, 'action.yml'), 'utf8'));
 const workflow = parse(readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
@@ -83,7 +83,25 @@ test('review workflows wait for verification through the bounded engine operatio
   consumer.jobs['assess-intent'].steps.splice(1, 0, {name: 'Wait for tests', uses: 'actions/github-script@v7',
     with: {script: 'const result = await policy.technicalRun(github, context.repo, pr);'}});
   assert.throws(() => assertBoundedVerificationWait(consumer), /use operation: await-verification/);
-  const bounded = structuredClone(workflow);
-  bounded.jobs['assess-intent'].steps.splice(1, 0, {name: 'Wait', uses: './.clouseau-ci', with: {operation: 'await-verification'}});
-  assert.equal(assertBoundedVerificationWait(bounded), 1);
+});
+
+test('a pending review is reassessed when verification completes, and later steps wait for the bounded step', () => {
+  const wait = {id: 'wait', uses: './.clouseau-ci', with: {operation: 'await-verification'}};
+  const assess = {uses: './.clouseau-ci', if: "steps.wait.outputs.verified == 'true'", with: {operation: 'assess'}};
+  const consumer = {on: {workflow_run: {workflows: ['CI'], types: ['completed']}}, jobs: {
+    'assess-intent': {steps: [wait, assess]},
+    'request-reassessment': {if: "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'",
+      permissions: {actions: 'write'}, steps: [{uses: './.clouseau-ci', with: {operation: 'request-reassessment'}}]}}};
+  assert.equal(assertBoundedVerificationWait(consumer), 1);
+  assert.equal(assertReassessmentOnVerification(consumer), 1);
+  const ungated = structuredClone(consumer); delete ungated.jobs['assess-intent'].steps[1].if;
+  assert.throws(() => assertBoundedVerificationWait(ungated), /skip assessment/);
+  const anonymous = structuredClone(consumer); delete anonymous.jobs['assess-intent'].steps[0].id;
+  assert.throws(() => assertBoundedVerificationWait(anonymous), /identify/);
+  const untriggered = structuredClone(consumer); delete untriggered.on.workflow_run;
+  assert.throws(() => assertReassessmentOnVerification(untriggered), /trigger on completed/);
+  const unnamed = structuredClone(consumer); unnamed.on.workflow_run.types = ['requested'];
+  assert.throws(() => assertReassessmentOnVerification(unnamed), /completed type/);
+  const unrouted = structuredClone(consumer); unrouted.jobs['request-reassessment'].permissions = {actions: 'read'};
+  assert.throws(() => assertReassessmentOnVerification(unrouted), /workflow_run events/);
 });

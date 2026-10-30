@@ -71,6 +71,9 @@ outputs:
   review-record:
     description: Opaque JSON array of four bounded base64url-gzip chunks bound to repository, run, attempt, head, base, and assessment digests
     value: ${{ steps.assess.outputs.review-record }}
+  verified:
+    description: "'true' when PR verification succeeded; 'false' when it had not started within the queue grace and the review should end pending (await-verification)"
+    value: ${{ steps.await.outputs.verified }}
   wiki-commit:
     description: Published or already-documented wiki commit
     value: ${{ steps.publish-wiki.outputs.commit }}
@@ -170,6 +173,7 @@ runs:
           core.setOutput('assessment', JSON.stringify(assessment));
           transport.publish({mode, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT, core});
     - name: Wait for PR verification without holding a stalled runner
+      id: await
       if: inputs.operation == 'await-verification'
       uses: actions/github-script@v7
       env:

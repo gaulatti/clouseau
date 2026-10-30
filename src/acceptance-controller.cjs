@@ -6,7 +6,7 @@ const {digest, validateReport} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
-const {stallGuard, POLL_MS} = require('./verification-wait.cjs');
+const {queueTracker, graceSeconds, WAITING_REASON, POLL_MS} = require('./verification-wait.cjs');
 
 const RECORD = 'work/clouseau-acceptance.json';
 const policyDigest = () => digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8'));
@@ -191,12 +191,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     }
   }
 
-  async function assessWhenReady({wait = ms => new Promise(resolve => setTimeout(resolve, ms)), maxPolls = 260, queuedGrace, ...options}) {
-    const guard = stallGuard(queuedGrace);
+  async function assessWhenReady({wait = ms => new Promise(resolve => setTimeout(resolve, ms)), maxPolls = 260, queuedGraceSeconds = graceSeconds(config), ...options}) {
+    const stalled = queueTracker(queuedGraceSeconds);
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       const result = await assess(options);
       if (result.decision !== 'pending_technical') return result;
-      guard(result.verification);
+      if (stalled(result.verification)) return {...result, reason: WAITING_REASON};
       await wait(POLL_MS);
     }
     throw new Error('Verification did not finish before the assessment deadline');
@@ -207,7 +207,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) {
       return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
-        'Re-run the workflow once PR verification has completed, or push a new head if re-running does not produce one.');
+        'It is reassessed automatically when PR verification completes where the workflow has the verification trigger; otherwise re-run it ' +
+        'once verification has completed, or push a new head if re-running does not produce a record.');
     }
     const record = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
     const {body, pages} = verifyRecord(record, assessment, config, engine);
