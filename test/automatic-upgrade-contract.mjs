@@ -78,3 +78,22 @@ export function assertReassessmentOnVerification(workflow) {
   'a request-reassessment job must run for workflow_run events with actions write');
   return jobs.length;
 }
+
+// A sibling merge moves the base under every approved PR and nothing else
+// re-runs their gates, so a push to the base branch must reconcile them.
+export function assertBaseReconciliation(workflow, base = 'main') {
+  assert.ok(workflow.on?.push, 'the workflow must trigger on pushes to the base branch');
+  assert.ok([workflow.on.push.branches].flat().includes(base), `push must include the ${base} branch`);
+  const jobs = Object.entries(workflow.jobs).filter(([, job]) => job.steps?.some(step =>
+    step.uses === './.clouseau-ci' && step.with?.operation === 'reconcile-base'));
+  assert.ok(jobs.length > 0, 'a reconcile-base job must exist');
+  for (const [, job] of jobs) {
+    assert.ok(String(job.if).includes("github.event_name == 'push'") && String(job.if).includes(`refs/heads/${base}`),
+      'reconcile-base must run only for pushes to the base branch');
+    assert.equal(job.permissions?.issues, 'write', 'reconcile-base posts the notice, so it needs issues write');
+    assert.ok(!['write'].includes(job.permissions?.contents) && !['write'].includes(job.permissions?.actions),
+      'reconcile-base needs no contents or actions write: a GITHUB_TOKEN push cannot start verification');
+    assert.ok(job.concurrency && job.concurrency['cancel-in-progress'] === false, 'reconcile-base runs must queue, not cancel');
+  }
+  return jobs.length;
+}
