@@ -187,7 +187,7 @@ function nonBehavioural(patch) {
     else {run = sign ? {sign, lines: [line.slice(1)]} : null; if (run) runs[sign].push(run);}
   }
   const side = sign => {
-    const text = runs[sign].map(item => item.lines.join('\n').replace(/^[ \t]*\/\*[\s\S]*?\*\/[ \t]*$/gm, '')).join('\n');
+    const text = runs[sign].map(item => item.lines.join('\n').replace(/^[ \t]*\/\*(?:(?!\*\/)[\s\S])*\*\/[ \t]*$/gm, '')).join('\n');
     const specifiers = [];
     const rest = text.replace(IMPORT_STATEMENT, statement => {specifiers.push(...importSpecifiers(statement.trim())); return '';});
     return {specifiers: specifiers.sort(), inert: rest.split('\n').map(line => line.trim()).every(line => line === '' || INERT_LINE.test(line))};

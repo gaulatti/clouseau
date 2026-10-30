@@ -294,6 +294,9 @@ test('only blank, comment-only, anchored type-only lines and identical normalize
   assert.equal(inert('+x = "/*"; evil(); y = "*/"'), false);
   assert.equal(inert('+/* start\n@@\n+evil();\n+*/'), false);
   assert.equal(inert('+/* c\n+*/ evil()'), false);
+  assert.equal(inert('+/* a */ run();\n+ other\n+ */'), false, 'the first closer must end the line: later closers cannot swallow code');
+  assert.equal(inert('+/* a */ run();\n+*/'), false);
+  assert.equal(inert('+/* a\n+ * b */\n+/* c */'), true);
   assert.equal(inert('-  author.trim().slice(0, 1)\n+  author.trim().slice(0, 2)'), false);
   assert.equal(inert('+export const behaviour = 1;'), false);
   assert.equal(nonBehavioural(undefined), false);
