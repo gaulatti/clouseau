@@ -165,6 +165,7 @@ test('a test for one changed file never covers a different changed file', () => 
 test('unresolved integrity or completeness evidence holds approval, and a hold never masks a stricter outcome', () => {
   for (const name of ['test_integrity', 'review_completeness']) {
     const {report, snapshot} = withTest();
+    snapshot.omitted_sources = [{path: 'tests/x.test.rs', reason: 'not found at the head revision'}];
     report.gates.find(gate => gate.name === name).state = 'unresolved';
     const held = validateApproval(report, snapshot);
     assert.equal(held.decision, 'review_incomplete');
@@ -217,8 +218,12 @@ test('only an import statement links a module: comments and quoted titles do not
 test('a test-only change is executable: unresolved test integrity still holds it, a fixture-only change does not', () => {
   const f = fixture();
   f.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
-  f.snapshot.files = [{path: 'tests/unit/format.test.ts', status: 'modified'}];
-  assert.equal(approvalHold(f.report, f.snapshot), 'test integrity is unresolved');
+  f.snapshot.files = [{path: 'tests/unit/format.test.ts', status: 'modified', patch: '@@ -1,2 +1 @@\n-  expect(a).toBe(1);\n+  // skipped'}];
+  assert.equal(approvalHold(f.report, f.snapshot), 'test integrity is unresolved', 'weakening a test is held');
+  f.snapshot.files[0].patch = '@@ -1 +1,2 @@\n+  expect(a).toBe(1);\n+  expect(b).toBe(2);';
+  assert.equal(approvalHold(f.report, f.snapshot), null, 'an added assertion that may duplicate coverage is not held (issue 123)');
+  f.snapshot.files[0].patch = '--- a/x\n+++ b/x';
+  assert.equal(approvalHold(f.report, f.snapshot), null);
   f.snapshot.files = [{path: 'tests/fixtures/sample.json', status: 'added'}, {path: 'tests/fixtures/helper.ts', status: 'added'}];
   assert.equal(approvalHold(f.report, f.snapshot), null);
 });

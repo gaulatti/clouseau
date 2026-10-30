@@ -329,7 +329,10 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   if (central === false) {
     // The pre-PR stage tolerates an unresolved completeness gate; hosted CI never reuses that as approval.
     const unresolved = structuredClone(record);
-    for (const item of unresolved.result.reviews) item.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
+    for (const item of unresolved.result.reviews) {
+      item.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
+      item.report.coverage.dependencies = [{path: 'src/dependency.js', state: 'missing', reason: 'The dependency was not supplied.', evidence: []}];
+    }
     served = issueReceipt({record: unresolved, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
       keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
     const kept = fs.readFileSync(f.recordPath); fs.rmSync(f.recordPath);
