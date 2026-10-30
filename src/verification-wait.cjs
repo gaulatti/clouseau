@@ -59,17 +59,16 @@ class RateLimitHold extends Error {
 // Retries a read-only or idempotent call that hit a rate limit. The wait is the larger of what GitHub
 // asked for and a bounded exponential backoff, plus jitter so that many PRs do not wake together. If
 // the wait needed would exceed the remaining budget the call ends in a RateLimitHold stating when to retry.
-async function withRateLimit(call, {wait, now = Date.now, random = Math.random, maxAttempts = 8, maxWaitMs = 20 * 60000, report = () => {}}) {
-  let waited = 0;
-  for (let attempt = 0; ; ) {
-    try {return await call();} catch (error) {
-      const asked = rateLimitDelay(error, now());
-      if (asked === null) throw error;
-      const delay = Math.max(asked, Math.min(2 ** attempt * 1000, 60000)) + Math.floor(random() * 1000);
-      if (attempt + 1 >= maxAttempts || waited + delay > maxWaitMs) throw new RateLimitHold(now() + Math.max(asked, delay));
-      report(`GitHub API rate limit: waiting ${Math.ceil(delay / 1000)} s before retry ${attempt + 1}/${maxAttempts - 1}`);
-      waited += delay; attempt++; await wait(delay);
-    }
+async function withRateLimit(call, options, attempt = 0, waited = 0) {
+  const {wait, now = Date.now, random = Math.random, maxAttempts = 8, maxWaitMs = 20 * 60000, report = () => {}} = options;
+  try {return await call();} catch (error) {
+    const asked = rateLimitDelay(error, now());
+    if (asked === null) throw error;
+    const delay = Math.max(asked, Math.min(2 ** attempt * 1000, 60000)) + Math.floor(random() * 1000);
+    if (attempt + 1 >= maxAttempts || waited + delay > maxWaitMs) throw new RateLimitHold(now() + Math.max(asked, delay));
+    report(`GitHub API rate limit: waiting ${Math.ceil(delay / 1000)} s before retry ${attempt + 1}/${maxAttempts - 1}`);
+    await wait(delay);
+    return withRateLimit(call, options, attempt + 1, waited + delay);
   }
 }
 
