@@ -273,7 +273,7 @@ test('even a legitimately re-signed receipt cannot substitute installation autho
   ]) await assert.rejects(bootstrap.verifyInstallationReceipt(f.sign(await f.record(mutateSnapshot)), f.options()), /initial trust/);
   const key = bootstrap.readIdentity(f.enrolled.identity_file).identity.private_key;
   const long = require('./local-receipt.cjs').issueReceipt({record, privateKey: key, keyId: f.enrolled.public_identity.id,
-    issuer: f.enrolled.public_identity.issuer, reviewerSha: f.reviewer.sha, reviewerDigest: f.reviewer.digest, now: f.now + 1000, lifetime: 3601});
+    issuer: f.enrolled.public_identity.issuer, reviewerSha: f.reviewer.sha, reviewerDigest: f.reviewer.digest, now: f.now + 1000, lifetime: 3600});
   await assert.rejects(async () => bootstrap.verifyInstallationReceipt(long, {...f.options(), now: f.now + 1000}), /initial trust/);
   const unknown = f.sign(record); unknown.payload.type = 'unknown';
   unknown.signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(unknown.payload)}`), key).toString('base64url');
