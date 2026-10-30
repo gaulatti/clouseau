@@ -319,6 +319,9 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     return;
   }
   if (assessment.number !== pull_number || assessment.head_sha !== pr.head.sha || assessment.base_sha !== pr.base.sha) {
+    if (assessment.number === pull_number && require('./branch-update.cjs').baseOnlyMoved(pr, assessment, config.base_branch)) {
+      throw await require('./branch-update.cjs').surface({github, repo, pr, assessment, baseBranch: config.base_branch});
+    }
     throw new Error('Stale intent assessment: reassess the current PR revision');
   }
   if (context.eventName === 'issue_comment') {

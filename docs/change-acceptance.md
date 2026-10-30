@@ -428,3 +428,25 @@ An ancestry merge is not deployment, live health or documentation publication
 proof, and a deployment contract remains separately authorized. Standalone
 `finalize` cannot authorize an unmerged private candidate: only the validated
 acceptance gate can perform this transaction.
+
+### The base moved after approval
+
+An assessment, any signed local receipt and the exact-head bot approval are
+bound to the head **and** the base they were produced against. When another PR
+merges first, the accepted base is stale. Clouseau never merges on that stale
+evidence and never weakens the exact-head requirement, including for protected
+controls. Instead, when only the base differs (same open PR, same assessed head),
+the `gate` (and the controller-enforced owner merge, at each re-check up to the
+atomic write) fails with `Needs branch update` and posts one idempotent
+`<!-- clouseau-needs-branch-update:<head>:<base> -->` comment naming the old and
+new base. Re-running the failed job cannot succeed because its assessment is
+bound to the old base.
+
+The next step is to update the PR branch ("Update branch", `gh pr update-branch`
+or a merge commit) with the author's own credentials. That push starts normal
+verification, a fresh independent review (and, where required, a fresh local
+review receipt for the new head) and then the merge. Clouseau does not update
+the branch itself: a push authenticated with the workflow `GITHUB_TOKEN` does not
+start the verification workflow, so the new head would have no tests, coverage
+or review evidence. A changed head is a new revision and is never reported as a
+base move.

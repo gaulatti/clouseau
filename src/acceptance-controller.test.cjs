@@ -263,11 +263,17 @@ test('job-output data still requires the complete scored record and fresh head/b
   fs.rmSync(f.recordPath);
   transport.receive({mode: 'job-output', payload, assessment, context: f.context, runAttempt: '1', recordPath: f.recordPath});
   assert.equal(verifyRecord(JSON.parse(fs.readFileSync(f.recordPath)), assessment, config).state.unresolved.length, 0);
-  for (const field of ['head', 'base']) {
-    const previous = f.state.pr[field].sha; f.state.pr[field].sha = 'e'.repeat(40);
-    await assert.rejects(f.gate(assessment), /PR changed/);
-    f.state.pr[field].sha = previous;
-  }
+  const head = f.state.pr.head.sha; f.state.pr.head.sha = 'e'.repeat(40);
+  await assert.rejects(f.gate(assessment), /PR changed/);
+  f.state.pr.head.sha = head;
+  const base = f.state.pr.base.sha; f.state.pr.base.sha = 'e'.repeat(40);
+  const getBranch = f.github.rest.repos.getBranch;
+  f.github.rest.repos.getBranch = async () => ({data: {protected: true, commit: {sha: 'e'.repeat(40)}}});
+  await assert.rejects(f.gate(assessment), /Needs branch update/);
+  assert.equal(f.state.writes.filter(item => item.name === 'create-ledger').length, 1, 'the PR receives one explicit branch-update notice');
+  assert.match(f.state.writes[0].args.body, /clouseau-needs-branch-update/);
+  f.state.writes.length = 0;
+  f.github.rest.repos.getBranch = getBranch; f.state.pr.base.sha = base;
   f.state.failed = true;
   await assert.rejects(f.gate(assessment), /Verification changed/);
   assert.equal(f.state.writes.length, 0);

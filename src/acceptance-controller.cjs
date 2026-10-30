@@ -220,6 +220,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
+    const branchUpdate = require('./branch-update.cjs');
+    if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) {
+      throw await branchUpdate.surface({github, repo: context.repo, pr, assessment, baseBranch: config.base_branch});
+    }
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
     if (digest(technical) !== digest(record.technical)) throw new Error('Verification changed after acceptance investigation');
@@ -262,6 +266,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
         const {data: currentPr} = await github.rest.pulls.get({...context.repo, pull_number: pr.number});
+        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) {
+          throw await branchUpdate.surface({github, repo: context.repo, pr: currentPr, assessment, baseBranch: config.base_branch});
+        }
         if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
             currentRecord.local_receipt && currentRecord.local_author !== currentPr.user.login) throw new Error('Acceptance author or revision changed before private merge');
         if (currentRecord.local_receipt) {
