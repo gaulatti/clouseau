@@ -43,7 +43,7 @@
       "repository": "gaulatti/clouseau",
       "ref": "refs/heads/main"
     },
-    "max_age_seconds": 3600,
+    "max_age_seconds": 172800,
     "keys": [
       {
         "id": "8a6d6c24abe59c9fbafd31cc",
