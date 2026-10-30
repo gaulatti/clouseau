@@ -1117,7 +1117,7 @@ test('an acceptance review waiting on queued verification ends pending instead o
   assert.equal(held.decision, 'pending_technical'); assert.equal(held.verification, 'queued');
   assert.match(held.reason, /without holding a runner.*reassessed automatically/s);
   assert.ok(!held.record_digest);
-  assert.equal(waits, 3);
+  assert.equal(waits, 2, 'queued verification is polled 15 s then 30 s apart, not every 15 s');
   assert.equal(f.state.calls, 0);
   const pending = await f.assess();
   assert.equal(pending.decision, 'pending_technical'); assert.equal(pending.verification, 'queued');
@@ -1149,4 +1149,19 @@ test('a reviewer that stays invalid after bounded retries ends in a classified h
   assert.match(assessment.reason, /invalid tool call or malformed JSON/);
   await assert.rejects(f.gate(assessment), /incomplete/);
   assert.match(f.state.writes[0].args.body, /unusable answer \(invalid tool call or malformed JSON\)/);
+}));
+
+test('an exhausted GitHub API budget during the wait is an explicit hold that names the cause and retry time', () => fixture(async f => {
+  f.github.rest.actions.listWorkflowRuns = async () => {
+    throw Object.assign(new Error('API rate limit exceeded for installation'), {status: 403,
+      response: {headers: {'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(Math.floor(Date.now() / 1000) + 3000)}}});
+  };
+  const held = await f.policy.assessWhenReady({github: f.github, context: f.context, recordPath: f.recordPath, wait: async () => assert.fail('no sleeping for the reset')});
+  assert.equal(held.decision, 'review_incomplete'); assert.equal(held.cause, 'github_rate_limit');
+  assert.match(held.reason, /^Held: GitHub API rate limit, will retry after /);
+  assert.match(held.retry_after, /^\d{4}-/);
+  assert.equal(held.head_sha, f.context.payload.pull_request.head?.sha ?? '');
+  await assert.rejects(f.gate(held), /Stale intent assessment|incomplete/, 'a hold can never approve or merge');
+  assert.equal(f.state.calls, 0, 'no AI request was made');
+  await assert.rejects(f.policy.assessWhenReady({github: {...f.github, rest: {...f.github.rest, pulls: {...f.github.rest.pulls, get: async () => {throw new Error('boom');}}}}, context: f.context, recordPath: f.recordPath, wait: async () => {}}), /boom/, 'other errors are not swallowed as rate limits');
 }));

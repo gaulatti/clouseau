@@ -832,9 +832,9 @@ test('verification state distinguishes an absent, queued and running PR run', as
 // behind it never starts, so every poll observes the same queued run.
 function singleSlotDeadlock() {
   const f = fixture(); f.state.run.status = 'queued'; f.state.run.conclusion = null;
-  const messages = []; const outputs = {}; let waits = 0;
+  const messages = []; const outputs = {}; const delays = []; let waits = 0;
   return {f, messages, outputs, core: {info: message => messages.push(message), setOutput: (name, value) => {outputs[name] = value;}},
-    wait: async ms => {assert.equal(ms, 15000); waits++;}, waits: () => waits};
+    wait: async ms => {delays.push(ms); waits++;}, waits: () => waits, delays};
 }
 const awaiting = createPolicy(require('../test/fixtures/config.json'));
 const waitSupport = require('./verification-wait.cjs');
@@ -855,7 +855,8 @@ test('a review whose verification never starts ends pending after the grace inst
   const result = await awaiting.awaitVerification({github: d.f.github, context, core: d.core, expectedHead: SHA, wait: d.wait});
   assert.equal(result.pending, true);
   assert.equal(d.outputs.verified, 'false');
-  assert.equal(d.waits(), 60, 'the default 15 minute grace is 60 polls, not the 120-poll deadline');
+  assert.equal(d.waits(), 10, 'the default 15 minute grace is 10 backed-off polls (15, 30, 60, then 120 s), not 60 fixed ones');
+  assert.deepEqual(d.delays.slice(0, 5), [15000, 30000, 60000, 120000, 120000]);
   assert.match(d.messages.at(-1), /had not started.*without holding a runner.*made no decision.*reassessed automatically/s);
   const quick = singleSlotDeadlock();
   await awaiting.awaitVerification({github: quick.f.github, context, core: quick.core, expectedHead: SHA, wait: quick.wait, queuedGraceSeconds: 30});

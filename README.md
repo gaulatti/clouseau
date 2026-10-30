@@ -69,6 +69,8 @@ for the version 2 policy configuration.
 | `publish-wiki` | `wiki-config`, validated `wiki-plan-path`, wiki/source checkouts | Revalidate deployment and publish every page in one non-force wiki commit; no provider key |
 | `finalize` | `config`, `assessment` | Wait for GitHub auto-merge after the required native gate finishes, then preserve the existing CD handoff |
 
+The wait is cheap and rate-limit aware: a running verification is polled every 15 s, an absent or queued one at growing gaps (15, 30, 60, then 120 s; about 10 requests for the default grace instead of 60), and the workflow-run listing is a conditional request (`If-None-Match`; a 304 does not count against the primary limit). A 403/429 (retry-after, `x-ratelimit-remaining`/`reset`, secondary or abuse limit) is retried with bounded exponential backoff and jitter that respects the stated reset. If the budget stays exhausted past the bounded wait, the review ends in an explicit hold, `Held: GitHub API rate limit, will retry after <time>`, shown in the `clouseau-review-incomplete` comment (`github_rate_limit`) and in the `retry_after` output; the next verification completion or a re-run after that time reassesses the PR.
+
 For example, a caller's coverage step supplies:
 
 ```yaml
