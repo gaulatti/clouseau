@@ -40,7 +40,7 @@ test('a snapshot taken while the verify job or its steps are still finalizing is
   assert.deepEqual(eventual.waits, [2000, 4000], 'bounded exponential re-reads');
   assert.equal(eventual.reads, 3);
   // Never final within the re-reads: still pending, still not a failure.
-  for (const snapshot of [inProgress, stepsPending, [], [job({steps: []})], [job({status: 'queued', conclusion: null})]]) {
+  for (const snapshot of [inProgress, stepsPending, [], [job({steps: []})], [job({steps: undefined})], [job({status: 'queued', conclusion: null})]]) {
     const stuck = await check([snapshot]);
     assert.deepEqual({pending: stuck.result.pending, state: stuck.result.state, failure: stuck.result.failure}, {pending: true, state: 'finalizing', failure: undefined});
     assert.deepEqual(stuck.waits, [2000, 4000, 8000]); assert.equal(stuck.reads, 4);
