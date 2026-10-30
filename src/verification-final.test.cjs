@@ -49,7 +49,7 @@ test('a snapshot taken while the verify job or its steps are still finalizing is
   const ahead = await check([[job({run_attempt: 2})]], {run_attempt: 1});
   assert.equal(ahead.result.state, 'finalizing'); assert.match(ahead.result.detail, /attempt 2, ahead of the run record/);
   assert.match((await check([inProgress])).result.detail, /job "verify" is in_progress|"\w+" is in_progress/);
-  assert.match((await check([stepsPending])).result.detail, /required step ".+" has no final conclusion yet/);
+  assert.match((await check([stepsPending])).result.detail, /step ".+" has no final conclusion yet/);
 });
 
 test('only the latest attempt counts: a cancelled earlier attempt cannot fail a green re-run', async () => {
@@ -75,6 +75,10 @@ test('a final failure names exactly the run, job or step that failed', async () 
   assert.equal((await check([[{...job(), name: 'other'}]])).result.failure, `Verification job "${config.verification.job}" was not found in run 9 attempt 1`);
   assert.equal((await check([[job()]], {conclusion: 'failure'})).result.failure, 'PR verification concluded failure');
   for (const outcome of [await check([[skipped]]), await check([[failedStep]])]) assert.deepEqual(outcome.waits, [], 'a definite conclusion is not re-read');
+  const missing = job({steps: steps().filter(step => step.name !== named[2])});
+  const gone = await check([[missing]]);
+  assert.equal(gone.result.failure, `Required verification step "${named[2]}" was not found in job "${config.verification.job}"`);
+  assert.deepEqual(gone.waits, [], 'a conclusively absent required step on a settled job is blocked immediately');
   const odd = job({steps: steps().map((step, index) => index === 0 ? {...step, conclusion: 'mystery'} : step)});
   assert.equal((await check([[odd]])).result.state, 'finalizing', 'an unknown conclusion is not final');
 });
@@ -100,4 +104,23 @@ test('the wait step publishes a precise incomplete assessment for a real failure
   // A transient snapshot that never settles ends pending within the grace and is reassessed, not failed.
   const pending = await policy.awaitVerification({github: make([[]]), context, core, expectedHead: SHA, wait: async () => {}, queuedGraceSeconds: 0});
   assert.equal(pending.pending, true); assert.equal(pending.state, 'finalizing'); assert.equal(outputs.verified, 'false');
+});
+
+test('assessment routing: pending and stale wait, a settled failed or step-missing verification blocks, and no model is called', async () => {
+  const head = SHA; const previousKey = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+  for (const [scenario, expected] of [['pending', 'pending_technical'], ['failed', 'blocked_technical'], ['stale', 'pending_technical'], ['missing step', 'blocked_technical'], ['skipped step', 'blocked_technical'], ['finalizing', 'pending_technical']]) {
+    const prData = {number: 20, state: 'open', draft: false, changed_files: 1, user: {login: 'contributor'}, head: {sha: head, ref: 'fix/cors', repo: {id: 1}}, base: {sha: 'b'.repeat(40), ref: 'main'}};
+    const runData = {id: 9, head_sha: scenario === 'stale' ? 'c'.repeat(40) : head, pull_requests: [{number: 20}], status: scenario === 'pending' ? 'in_progress' : 'completed', conclusion: scenario === 'failed' ? 'failure' : 'success'};
+    const listed = config.verification.steps.filter(name => scenario !== 'missing step' || name !== config.verification.steps[1])
+      .map(name => ({name, conclusion: scenario === 'skipped step' && name === config.verification.steps[1] ? 'skipped' : scenario === 'finalizing' ? null : 'success'}));
+    const github = {rest: {pulls: {get: async () => ({data: prData}), listFiles: async () => ({data: [{filename: 'src/app.ts', status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b'}]})}, actions: {
+      listWorkflowRuns: async () => ({data: {workflow_runs: [runData]}}),
+      listJobsForWorkflowRun: async () => ({data: [{name: config.verification.job, conclusion: 'success', steps: listed}]}),
+    }}, paginate: async (method, args) => (await method(args)).data};
+    const fastPolicy = createPolicy(config);
+    const outcome = await fastPolicy.assess({github, context: {repo, payload: {pull_request: {number: 20}}}, fetchImpl: async () => assert.fail('no model request before genuine verification')});
+    assert.equal(outcome.decision, expected, `${scenario}: ${outcome.reason}`);
+  }
+  } finally {if (previousKey === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = previousKey;}
 });
