@@ -1,5 +1,6 @@
 'use strict';
 
+const {rateLimitDelay} = require('./verification-wait.cjs');
 const MARKER = '<!-- clouseau-review-incomplete -->';
 const GENERIC = 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.';
 
@@ -18,6 +19,7 @@ const NEXT_STEPS = Object.freeze({
   changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
+  github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
   evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
 });
@@ -31,6 +33,14 @@ function classify(error) {
     const rejected = ['401', '403'].includes(provider[2]);
     return {cause: rejected ? 'provider_rejected' : 'provider_unavailable',
       reason: `${provider[1]} provider ${rejected ? 'rejected the credential' : 'was unavailable'} (HTTP ${provider[2]}).`};
+  }
+  if (error?.code === 'RATE_LIMIT') return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(error.resetAt).toISOString()}.`};
+  // A raw rate-limit response that escaped the retrying wrapper is the same hold, never a crash.
+  const asked = rateLimitDelay(error);
+  if (asked !== null) {
+    const reset = error.response?.headers?.['x-ratelimit-reset'];
+    const at = reset === undefined ? Date.now() + Math.max(asked, 900000) : Number(reset) * 1000;
+    return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(at).toISOString()}.`};
   }
   const message = error?.message ?? '';
   // Every known failure of the AI step maps to a fixed cause that names the missing or failing item.

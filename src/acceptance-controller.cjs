@@ -6,7 +6,7 @@ const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
-const {queueTracker, graceSeconds, WAITING_REASON, POLL_MS} = require('./verification-wait.cjs');
+const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason} = require('./verification-wait.cjs');
 
 const RECORD = 'work/clouseau-acceptance.json';
 const policyDigest = () => digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8'));
@@ -198,12 +198,21 @@ function createAcceptancePolicy(config, legacy, engine = null) {
   }
 
   async function assessWhenReady({wait = ms => new Promise(resolve => setTimeout(resolve, ms)), maxPolls = 260, queuedGraceSeconds = graceSeconds(config), ...options}) {
-    const stalled = queueTracker(queuedGraceSeconds);
+    const schedule = pollSchedule(queuedGraceSeconds);
     for (let attempt = 0; attempt < maxPolls; attempt++) {
-      const result = await assess(options);
+      let result;
+      try {result = await withRateLimit(() => assess(options), {wait, report: options.report});}
+      catch (error) {
+        if (!(error instanceof RateLimitHold)) throw error;
+        // The shared budget is exhausted until reset: an explicit, classified hold; the next verification
+        // completion (or a re-run after the stated time) reassesses the PR.
+        return {version: 2, number: numberFor(options.context), head_sha: options.context.payload?.pull_request?.head?.sha ?? '',
+          decision: 'review_incomplete', cause: 'github_rate_limit', reason: heldReason(error), retry_after: new Date(error.resetAt).toISOString()};
+      }
       if (result.decision !== 'pending_technical') return result;
-      if (stalled(result.verification)) return {...result, reason: WAITING_REASON};
-      await wait(POLL_MS);
+      const {stalled, delay} = schedule(result.verification);
+      if (stalled) return {...result, reason: WAITING_REASON};
+      await wait(delay);
     }
     throw new Error('Verification did not finish before the assessment deadline');
   }

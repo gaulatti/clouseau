@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
-const {queueTracker, graceSeconds, WAITING_REASON, POLL_MS} = require('./verification-wait.cjs');
+const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
@@ -112,13 +112,24 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   }
 }
 
+// A hold that states the cause and the time to retry, shaped like an assessment so that the visible
+// review-incomplete notice names the rate limit. The next verification completion reassesses the PR.
+function rateLimited(context, hold) {
+  const head = context.payload?.pull_request?.head?.sha;
+  return {version: 2, number: numberFor(context), head_sha: head ?? '', decision: 'review_incomplete', cause: 'github_rate_limit',
+    reason: heldReason(hold), retry_after: new Date(hold.resetAt).toISOString()};
+}
+
 async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGraceSeconds = graceSeconds(config), ...options}) {
-  const stalled = queueTracker(queuedGraceSeconds);
+  const schedule = pollSchedule(queuedGraceSeconds);
   for (let attempt = 0; attempt < maxPolls; attempt++) {
-    const result = await assess(options);
+    let result;
+    try {result = await withRateLimit(() => assess(options), {wait, report: options.report});}
+    catch (error) {if (error instanceof RateLimitHold) return rateLimited(options.context, error); throw error;}
     if (result.decision !== 'pending_technical') return result;
-    if (stalled(result.verification)) return {...result, reason: WAITING_REASON};
-    await wait(POLL_MS);
+    const {stalled, delay} = schedule(result.verification);
+    if (stalled) return {...result, reason: WAITING_REASON};
+    await wait(delay);
   }
   throw new Error('Verification did not finish before the assessment deadline');
 }
@@ -129,30 +140,40 @@ async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGraceSeconds
 // steps are skipped and the run is reassessed when verification completes.
 async function awaitVerification({github, context, core, expectedHead, wait = sleep, maxPolls = 120, queuedGraceSeconds = graceSeconds(config)}) {
   const pull_number = numberFor(context);
-  const stalled = queueTracker(queuedGraceSeconds);
+  const schedule = pollSchedule(queuedGraceSeconds);
   // Only a push event's commit is the PR head; comment and manual events run on
   // the default branch, so they bind to the head observed when the wait starts.
   let expected = expectedHead || (context.eventName === 'push' ? context.sha : null);
+  const limited = call => withRateLimit(call, {wait, report: message => core.info(message)});
   for (let attempt = 0; attempt < maxPolls; attempt++) {
-    const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number});
-    expected ??= pr.head.sha;
-    if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
-      throw new Error('PR closed, became draft, or changed while verification was pending');
+    let pr; let result;
+    try {
+      ({data: pr} = await limited(() => github.rest.pulls.get({...context.repo, pull_number})));
+      expected ??= pr.head.sha;
+      if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
+        throw new Error('PR closed, became draft, or changed while verification was pending');
+      }
+      result = await limited(() => technicalRun(github, context.repo, pr));
+    } catch (error) {
+      if (!(error instanceof RateLimitHold)) throw error;
+      core.info(heldReason(error));
+      core.setOutput('verified', 'false');
+      return {pending: true, state: 'rate_limited', retry_after: new Date(error.resetAt).toISOString()};
     }
-    const result = await technicalRun(github, context.repo, pr);
     if (result.failure) throw new Error(result.failure);
     if (!result.pending) {
       core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
       core.setOutput('verified', 'true');
       return result;
     }
-    if (stalled(result.state)) {
+    const {stalled, delay} = schedule(result.state);
+    if (stalled) {
       core.info(WAITING_REASON);
       core.setOutput('verified', 'false');
       return result;
     }
     core.info('Waiting for independent unit/coverage and runtime checks. No AI request has been made.');
-    await wait(POLL_MS);
+    await wait(delay);
   }
   throw new Error('PR verification did not complete before the wait deadline');
 }
@@ -260,9 +281,20 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
   return false;
 }
 
+const etags = new Map();
 async function technicalRun(github, repo, pr, {receipt = false} = {}) {
-  const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
-    event: 'pull_request', head_sha: pr.head.sha, per_page: 100});
+  // A conditional request: an unchanged answer is HTTP 304, which does not count against the primary limit.
+  const key = `${repo.owner}/${repo.repo}@${pr.head.sha}`; const cached = etags.get(key);
+  let listed;
+  try {
+    listed = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
+      event: 'pull_request', head_sha: pr.head.sha, per_page: 100, ...(cached ? {headers: {'if-none-match': cached.etag}} : {})});
+  } catch (error) {
+    if (error.status !== 304 || !cached) throw error;
+    listed = {data: cached.data, headers: {}};
+  }
+  if (listed.headers?.etag) etags.set(key, {etag: listed.headers.etag, data: listed.data});
+  const {data} = listed;
   const runs = data.workflow_runs.filter(run => run.head_sha === pr.head.sha &&
     (run.pull_requests.some(pull => pull.number === pr.number) ||
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
