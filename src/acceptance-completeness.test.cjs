@@ -410,3 +410,18 @@ test('an unaccounted source or a missing dependency is stated as missing evidenc
   const clean = materialize(modelTemplate(f.snapshot), f.snapshot);
   assert.ok(clean.coverage.sources.every(item => item.state !== 'missing'));
 });
+
+test('a reviewer answer without gates or dependencies is rejected by validation, never by a controller TypeError', () => {
+  const f = complete();
+  const noGates = modelTemplate(f.snapshot); delete noGates.gates;
+  assert.throws(() => validateFacts(materialize(noGates, f.snapshot), f.snapshot), /Invalid acceptance evidence/);
+  const noGatesCode = fixture(); noGatesCode.snapshot.files = [{path: 'README.md', status: 'modified'}];
+  const docs = modelTemplate(noGatesCode.snapshot); delete docs.gates;
+  assert.doesNotThrow(() => materialize(docs, noGatesCode.snapshot));
+  const noDependencies = modelTemplate(f.snapshot); delete noDependencies.coverage.dependencies;
+  noDependencies.coverage.sources.pop();
+  noDependencies.gates.forEach(gate => {gate.state = 'satisfied';});
+  assert.equal(materialize(noDependencies, f.snapshot).gates.find(gate => gate.name === 'review_completeness').state, 'unresolved');
+  const noGate = modelTemplate(f.snapshot); noGate.gates = noGate.gates.filter(gate => gate.name !== 'review_completeness'); noGate.coverage.sources.pop();
+  assert.doesNotThrow(() => materialize(noGate, f.snapshot));
+});

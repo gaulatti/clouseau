@@ -71,7 +71,7 @@ function materialize(facts, snapshot) {
   // workflows) has no behaviour for a test to assert. The model may answer the required
   // test gate with the invalid 'inapplicable'; that means not-required, i.e. satisfied.
   if (!snapshot.files.some(file => isExecutablePath(file.path))) {
-    for (const gate of report.gates) if (gate.name === 'test_integrity' && gate.state === 'inapplicable') {
+    for (const gate of report.gates ?? []) if (gate.name === 'test_integrity' && gate.state === 'inapplicable') {
       gate.state = 'satisfied'; gate.reason = `${gate.reason} (No executable code changed, so no test is required.)`.slice(0, 2000);
     }
   }
@@ -91,8 +91,8 @@ function materialize(facts, snapshot) {
     for (const source of honest ? Object.keys(snapshot.sources) : []) if (!listed.has(source)) {
       report.coverage.sources.push({source, state: 'missing', reason: 'The reviewer did not account for this source.', evidence: []});
     }
-    const gate = report.gates.find(item => item.name === 'review_completeness');
-    if (gate.state !== 'unresolved' && [...report.coverage.sources, ...report.coverage.dependencies].some(item => item.state === 'missing')) {
+    const gate = (report.gates ?? []).find(item => item.name === 'review_completeness');
+    if (gate && gate.state !== 'unresolved' && [...report.coverage.sources, ...(report.coverage.dependencies ?? [])].some(item => item.state === 'missing')) {
       gate.state = 'unresolved'; gate.reason = `${gate.reason} (Material evidence is recorded as missing.)`.slice(0, 2000);
     }
   }
