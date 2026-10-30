@@ -243,6 +243,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
         installed: () => ({sha: reviewerSha, digest: 'e'.repeat(64), clean: true})};
       const result = await runReview(args, deps);
       assert.ok(result.receipt); assert.equal(result.decision, 'auto_approve');
+      const issued = JSON.parse(fs.readFileSync(result.receipt)).payload; assert.equal(issued.expires_at - issued.issued_at, 3600);
       const reused = await runReview({...args, identity: undefined}, {...deps,
         ask: async () => {throw new Error('A verified cached review must not call AI');}});
       assert.equal(reused.reused, true); assert.equal(reused.harness_invocations, 0);

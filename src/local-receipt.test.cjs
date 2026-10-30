@@ -100,14 +100,26 @@ test('tampered report, signature, key, repository, revision and policy never aut
   }
   assert.throws(() => verifyReceipt(bundle, {...f.expected, now: 9999000}), /future/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, author: 'unregistered-contributor'}), /PR author/);
-  assert.throws(() => verifyReceipt(bundle, {...f.expected, now: 13600000}), /expired/);
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, now: 182800000}), /expired/);
   const revoked = structuredClone(f.trust); revoked.keys[0].revoked = true;
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: revoked}), /signature/);
 });
 
+test('receipts default to a 48 hour life and the trust cap accepts exactly 172800 seconds', async () => {
+  const f = await fixture();
+  const bundle = issueReceipt(f.issue);
+  assert.equal(bundle.payload.expires_at - bundle.payload.issued_at, 172800);
+  assert.equal(verifyReceipt(bundle, {...f.expected, now: 10000000 + 172799000}).decision, 'auto_approve');
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, now: 10000000 + 172800000}), /expired/);
+  assert.doesNotThrow(() => validateTrust({...f.trust, max_age_seconds: 172800}));
+  assert.throws(() => validateTrust({...f.trust, max_age_seconds: 172801}), /receipt/);
+  assert.equal(issueReceipt({...f.issue, lifetime: 172800}).payload.expires_at - 10000, 172800);
+  assert.throws(() => issueReceipt({...f.issue, lifetime: 172801}), /lifetime/);
+});
+
 test('trust, decision and authority validation rejects forged passing flags', async () => {
   const f = await fixture();
-  for (const trust of [null, {...f.trust, keys: []}, {...f.trust, max_age_seconds: 86401},
+  for (const trust of [null, {...f.trust, keys: []}, {...f.trust, max_age_seconds: 172801},
     {...f.trust, keys: [f.trust.keys[0], f.trust.keys[0]]}]) assert.throws(() => validateTrust(trust), /receipt/);
   const bad = structuredClone(f.record); bad.snapshot.claims.title = 'altered';
   assert.throws(() => reviewDecision(bad), /snapshot/);
@@ -195,7 +207,7 @@ test('even a trusted signer cannot submit incomplete execution, altered review b
     copy.signature = crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(copy.payload)}`), f.privateKey).toString('base64url');
     return copy;
   };
-  assert.throws(() => verifyReceipt(reSign(p => {p.expires_at = p.issued_at + 3601;}), f.expected), /expired/);
+  assert.throws(() => verifyReceipt(reSign(p => {p.expires_at = p.issued_at + 172801;}), f.expected), /expired/);
   assert.throws(() => verifyReceipt(reSign(p => {p.nonce = 'weak';}), f.expected), /challenge/);
   assert.throws(() => verifyReceipt(reSign(p => {p.record.result.decision = 'owner_decision'; p.record_digest = digest(p.record);}), f.expected), /calculated/);
 });

@@ -277,7 +277,8 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (result.decision === 'auto_approve' && identity) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
-      issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest});
+      issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
+      lifetime: ciConfig.local_review.max_age_seconds});
     verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
