@@ -67,7 +67,8 @@ function scoreReport(report) {
 const CODE = /\.(?:[cm]?[jt]sx?|py|rs|rb|php|vue|svelte)$/;
 const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|specs?|e2e|stories)\/|\.(?:test|spec|stories)\.[a-z0-9]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:go|py)$/i;
 const isTestPath = name => TEST_PATH.test(name);
-const isCodePath = name => CODE.test(name) && !isTestPath(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
+const FIXTURE_PATH = /(?:^|\/)(?:__fixtures__|fixtures?|__mocks__|mocks?|testdata|__snapshots__)\//i;
+const isCodePath = name => CODE.test(name) && !isTestPath(name) && !FIXTURE_PATH.test(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
 
 // A module is linked to a test only by an import-like line naming it. A word in
 // a test title or an unrelated assertion in the same change is not linkage.
@@ -79,10 +80,14 @@ function moduleStem(name) {
 // A statement that imports, not a title or comment that merely contains the word.
 const IMPORT = /^\s*(?:(?:export\b.*\s)?from\b|import\b|use\b|pub\s+use\b|mod\b|require(?:_relative)?\b|include\b|load\b)|\b(?:require|import)\(/;
 
+// A JavaScript-style module specifier may follow a multi-line `import {\n a,\n} from '../../src/x'`,
+// so it is matched on the whole source: relative, aliased and extension-suffixed forms alike.
 function linked(snapshot, name) {
-  const token = new RegExp(`(?:^|[\\s'"\`/.:])${moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=$|[\\s'"\`.;,)/])`);
+  const stem = moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const token = new RegExp(`(?:^|[\\s'"\`/.:])${stem}(?=$|[\\s'"\`.;,)/])`);
+  const specifier = new RegExp(`\\b(?:from|import|require)\\s*\\(?\\s*['"\`][^'"\`\\n]*/${stem}(?:\\.[a-z]+)?(?:/index(?:\\.[a-z]+)?)?['"\`]`);
   return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' && isTestPath(source.path) &&
-    source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)));
+    (specifier.test(source.content) || source.content.split('\n').some(line => IMPORT.test(line) && token.test(line))));
 }
 
 // Approval needs affirmative, per-file behavioural evidence. An unresolved
@@ -91,7 +96,10 @@ function linked(snapshot, name) {
 // A test for one file never satisfies a different changed file.
 function approvalHold(report, snapshot) {
   const gate = name => report.gates.find(item => item.name === name).state;
-  for (const name of ['test_integrity', 'review_completeness']) {
+  // Nothing executable changed (documentation, data fixtures, configuration): there is no behaviour
+  // for a test to establish, so the test gate cannot hold approval. Completeness still can.
+  const executable = snapshot.files.some(file => isCodePath(file.path));
+  for (const name of executable ? ['test_integrity', 'review_completeness'] : ['review_completeness']) {
     if (gate(name) === 'unresolved') return `${name.replace('_', ' ')} is unresolved`;
   }
   const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path)).map(file => file.path);

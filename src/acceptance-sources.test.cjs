@@ -156,3 +156,62 @@ test('existing tests that name a changed production module are supplied with it'
   const limited = await collectSnapshot(budget);
   assert.equal(Object.values(limited.sources).filter(source => source.path.startsWith('t/')).length, 2, 'the evidence budget bounds supplied tests');
 });
+
+const BLEECKER_TEST = `import { afterEach, describe, expect, test, vi } from 'vitest';
+
+import {
+  formatCompactNumber,
+  formatNumber,
+  formatRelativeTime
+} from '../../src/utils/format';
+`;
+
+function bleecker(files, tests = {'tests/unit/format.test.ts': BLEECKER_TEST}) {
+  const f = fixture(); const {approvalHold} = require('./acceptance.cjs');
+  f.files = files.map(filename => ({filename, status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b'})); f.pr.changed_files = files.length;
+  f.github.tree = {truncated: false, tree: Object.keys(tests).map(path => ({type: 'blob', path, size: tests[path].length}))};
+  const getContent = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => tests[args.path] !== undefined
+    ? {data: {content: Buffer.from(tests[args.path]).toString('base64'), encoding: 'base64', size: tests[args.path].length}} : getContent(args);
+  return {f, approvalHold};
+}
+
+test('bleecker layout: an unchanged multi-line-import test for a renamed local variable is supplied and links the module (issue 117)', async () => {
+  const {f, approvalHold} = bleecker(['src/utils/format.ts']);
+  const snapshot = await collectSnapshot(f);
+  assert.ok(snapshot.sources[`${f.pr.head.sha}:tests/unit/format.test.ts`], 'the importing test is in the snapshot the reviewers see');
+  const gates = [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'satisfied'}];
+  assert.equal(approvalHold({gates}, snapshot), null);
+  for (const specifier of ["'../../src/utils/format.js'", "'@/utils/format'", "'./format.ts'", '"../../src/utils/format/index"']) {
+    for (const source of Object.values(snapshot.sources)) if (source.path === 'tests/unit/format.test.ts') source.content = `import {\n  a,\n} from ${specifier};\n`;
+    assert.equal(approvalHold({gates}, snapshot), null, specifier);
+  }
+  for (const source of Object.values(snapshot.sources)) if (source.path === 'tests/unit/format.test.ts') source.content = "import {a} from '../../src/utils/formatter';\n";
+  assert.match(approvalHold({gates}, snapshot), /src\/utils\/format\.ts/);
+});
+
+test('bleecker layout: a fixtures-only change with an unresolved test gate is not held (issue 116)', async () => {
+  const {f, approvalHold} = bleecker(['tests/fixtures/sample-feed-r1.json', 'tests/fixtures/helpers.ts', '__fixtures__/seed.js'], {});
+  const snapshot = await collectSnapshot(f);
+  assert.equal(approvalHold({gates: [{name: 'test_integrity', state: 'unresolved'}, {name: 'review_completeness', state: 'satisfied'}]}, snapshot), null);
+  assert.match(approvalHold({gates: [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'unresolved'}]}, snapshot), /review completeness/);
+});
+
+test('bleecker layout: a requested file that does not exist is missing evidence, not an aborted review (issue 115)', async () => {
+  const {f} = bleecker(['src/layout/feed-grid.tsx']);
+  const snapshot = await collectSnapshot(f);
+  const getContent = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => {
+    if (args.path.includes('feed-grid.test')) throw Object.assign(new Error('Not Found'), {status: 404});
+    if (args.path === 'boom') throw Object.assign(new Error('Server error'), {status: 500});
+    return getContent(args);
+  };
+  const before = snapshot.digest;
+  await additionalSources({...f, snapshot, paths: ['tests/unit/feed-grid.test.tsx']});
+  assert.deepEqual(snapshot.unavailable_sources, ['tests/unit/feed-grid.test.tsx']);
+  assert.notEqual(snapshot.digest, before, 'the reviewer sees new information');
+  await additionalSources({...f, snapshot, paths: ['tests/unit/feed-grid.test.tsx', 'src/real.ts']});
+  assert.deepEqual(snapshot.unavailable_sources, ['tests/unit/feed-grid.test.tsx']);
+  assert.ok(snapshot.sources[`${f.pr.head.sha}:src/real.ts`]);
+  await assert.rejects(additionalSources({...f, snapshot, paths: ['boom']}), /Server error/);
+});

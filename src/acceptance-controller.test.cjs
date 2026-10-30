@@ -327,15 +327,15 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   assert.ok(reports.some(line => line.includes('CI AI calls: 0')));
   assert.equal(providerCalls, 0);
   if (central === false) {
-    // The pre-PR stage tolerates an unresolved integrity gate; hosted CI never reuses that as approval.
+    // The pre-PR stage tolerates an unresolved completeness gate; hosted CI never reuses that as approval.
     const unresolved = structuredClone(record);
-    for (const item of unresolved.result.reviews) item.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
+    for (const item of unresolved.result.reviews) item.report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
     served = issueReceipt({record: unresolved, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
       keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
     const kept = fs.readFileSync(f.recordPath); fs.rmSync(f.recordPath);
     const holdAssessment = await assess();
     assert.equal(holdAssessment.decision, 'review_incomplete');
-    assert.match(holdAssessment.reason, /Authenticated local review held: test integrity is unresolved/);
+    assert.match(holdAssessment.reason, /Authenticated local review held: review completeness is unresolved/);
     assert.equal(fs.existsSync(f.recordPath), false);
     served = bundle; fs.writeFileSync(f.recordPath, kept);
   }
