@@ -1163,6 +1163,5 @@ test('an exhausted GitHub API budget during the wait is an explicit hold that na
   assert.equal(held.head_sha, f.context.payload.pull_request.head?.sha ?? '');
   await assert.rejects(f.gate(held), /Stale intent assessment|incomplete/, 'a hold can never approve or merge');
   assert.equal(f.state.calls, 0, 'no AI request was made');
-  const passthrough = await f.policy.assessWhenReady({github: {...f.github, rest: {...f.github.rest, pulls: {...f.github.rest.pulls, get: async () => {throw new Error('boom');}}}}, context: f.context, recordPath: f.recordPath, wait: async () => {}});
-  assert.equal(passthrough.decision, 'review_incomplete');
+  await assert.rejects(f.policy.assessWhenReady({github: {...f.github, rest: {...f.github.rest, pulls: {...f.github.rest.pulls, get: async () => {throw new Error('boom');}}}}, context: f.context, recordPath: f.recordPath, wait: async () => {}}), /boom/, 'other errors are not swallowed as rate limits');
 }));
