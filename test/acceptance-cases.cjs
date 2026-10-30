@@ -102,7 +102,7 @@ async function prepareCase(scenario) {
   const content = (filename, ref) => filename === '.github/clouseau.md' ? CONTRACT + (scenario.unavailableSource ? `\nBefore accepting this change inspect the existing persistence boundary contract in ${scenario.unavailableSource}; its behavior cannot be inferred from this excerpt.\n` : '') :
     filename === scenario.file ? ref === base ? scenario.base : scenario.head : filename === 'README.md' ? CONTRACT :
     filename === 'src/upload.js' ? ORIGINAL : filename === 'src/upload.test.js' ? ref === head && scenario.headTests ? scenario.headTests : TESTS : null;
-  const github = {rest: {repos: {
+  const github = {rest: {git: {getTree: async () => ({data: {truncated: false, tree: [{type: 'blob', path: 'src/upload.test.js', size: 600}]}})}, repos: {
     getContent: async ({path, ref}) => {
       const text = content(path, ref); if (text === null) {
         const error = new Error(`Synthetic fixture has no requested source: ${path}`);

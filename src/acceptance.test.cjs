@@ -122,3 +122,71 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
   report.evidence[1] = {id: 'source', source: 'head', start: 3, end: 3, quote: ' '};
   assert.throws(() => validateReport(report, snapshot), /citation does not match/);
 });
+
+const {approvalHold, validateApproval, isTestPath} = require('./acceptance.cjs');
+
+function withTest(content = 'use upload;\n') {
+  const f = fixture();
+  f.snapshot.sources.test = {authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path: 'src/upload.test.rs', content};
+  return f;
+}
+
+test('CI approval needs a supplied test that imports each changed production file', () => {
+  const {report, snapshot} = withTest();
+  assert.equal(approvalHold(report, snapshot), null);
+  assert.equal(validateApproval(report, snapshot).decision, 'auto_approve');
+  const bare = fixture();
+  const held = validateApproval(bare.report, bare.snapshot);
+  assert.equal(held.decision, 'review_incomplete');
+  assert.match(held.hold, /no supplied test imports changed production code: src\/upload\.rs/);
+  for (const content of ['// upload is mentioned in a comment\n', 'describe("upload", () => {});\n', 'use uploader;\n', 'use upload_gateway;\n', 'test("loads from upload", () => {});\n', 'describe("import upload", () => {});\n']) {
+    const other = withTest(content);
+    assert.match(approvalHold(other.report, other.snapshot), /no supplied test imports/, content);
+  }
+  for (const line of ["import {accept} from './upload.js';", "const x = require('../upload');", 'from pkg.upload import accept', 'use crate::upload;']) {
+    const other = withTest(line + '\n');
+    assert.equal(approvalHold(other.report, other.snapshot), null, line);
+  }
+});
+
+test('a test for one changed file never covers a different changed file', () => {
+  assert.equal(isTestPath('internal/upload_test.go'), true);
+  const f = withTest('import {a} from "./feed-grid";\n');
+  f.snapshot.files.push({path: 'src/format.ts', status: 'modified', head_source: 'head'});
+  assert.match(approvalHold(f.report, f.snapshot), /src\/upload\.rs, src\/format\.ts|src\/upload\.rs/);
+  f.snapshot.files = [{path: 'src/feed-grid.tsx', status: 'modified'}, {path: 'src/ui/index.ts', status: 'added'}];
+  f.snapshot.sources.test.content = 'import {a} from "./feed-grid";\nimport {b} from "./ui";\n';
+  assert.equal(approvalHold(f.report, f.snapshot), null, 'an index module is named by its directory');
+  f.snapshot.files = [{path: 'src/format.ts', status: 'modified'}, {path: 'src/gone.ts', status: 'removed'}, {path: 'README.md', status: 'modified'},
+    {path: 'src/types.d.ts', status: 'modified'}, {path: 'pkg/server.go', status: 'modified'}, {path: 'vitest.config.ts', status: 'modified'}, {path: 'src/x.test.ts', status: 'modified'}];
+  assert.equal(approvalHold(f.report, f.snapshot), 'no supplied test imports changed production code: src/format.ts');
+});
+
+test('unresolved integrity or completeness evidence holds approval, and a hold never masks a stricter outcome', () => {
+  for (const name of ['test_integrity', 'review_completeness']) {
+    const {report, snapshot} = withTest();
+    report.gates.find(gate => gate.name === name).state = 'unresolved';
+    const held = validateApproval(report, snapshot);
+    assert.equal(held.decision, 'review_incomplete');
+    assert.equal(held.hold, `${name.replace('_', ' ')} is unresolved`);
+  }
+  const {report, snapshot} = fixture();
+  report.gates.find(gate => gate.name === 'scope_authority').state = 'violated';
+  assert.equal(validateApproval(report, snapshot).decision, 'repair_required');
+  const local = fixture();
+  local.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
+  assert.equal(validateReport(local.report, local.snapshot).decision, 'auto_approve', 'the pre-PR local stage keeps unresolved evidence advisory');
+  assert.equal(validateApproval(local.report, local.snapshot).decision, 'review_incomplete', 'hosted approval does not');
+  assert.ok(isTestPath('tests/unit/format.test.ts') && isTestPath('src/a/feed-grid.stories.tsx') && isTestPath('pkg/test_x.py') && isTestPath('x_test.go'));
+  assert.ok(!isTestPath('src/utils/format.ts'));
+});
+
+test('documentation, fixtures, configuration, lockfiles and workflows are never held for a missing test', () => {
+  const f = fixture();
+  f.snapshot.files = ['README.md', 'docs/guide.md', 'test/fixtures/sample.json', 'package-lock.json', 'tsconfig.json',
+    '.github/workflows/ci.yml', '.github/clouseau.md', 'config/app.yaml', 'Makefile', 'src/styles.css', 'src/schema.sql'].map(path => ({path, status: 'modified'}));
+  assert.equal(approvalHold(f.report, f.snapshot), null);
+  assert.equal(validateApproval(f.report, f.snapshot).decision, 'auto_approve');
+  f.snapshot.files.push({path: 'src/app.ts', status: 'modified'});
+  assert.match(approvalHold(f.report, f.snapshot), /src\/app\.ts$/);
+});
