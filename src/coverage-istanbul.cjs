@@ -90,4 +90,4 @@ function counters(report, sourceDirectory, cwd) {
   return counts;
 }
 
-module.exports = {counters};
+module.exports = {counters, candidates, productionName, EXCLUDED_DIRECTORIES};

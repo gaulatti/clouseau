@@ -6,6 +6,7 @@ const {fail, isObject, get, realPath, isInside, loadReport, emptyCounts} = requi
 const istanbul = require('./coverage-istanbul.cjs');
 const coveragepy = require('./coverage-coveragepy.cjs');
 const go = require('./coverage-go.cjs');
+const lcov = require('./coverage-lcov.cjs');
 
 function llvmCounters(report, sourceDirectory, cwd) {
   if (get(report, 'type') !== 'llvm.coverage.json.export') fail('Expected an LLVM coverage export');
@@ -37,14 +38,15 @@ function llvmCounters(report, sourceDirectory, cwd) {
   return counts;
 }
 
-// Go cover profiles are text; every other native report is JSON.
-const readReport = (format, filename) => format === 'go' ? fs.readFileSync(filename, 'utf8') : loadReport(filename);
+// Go cover profiles and LCOV are text; every other native report is JSON.
+const readReport = (format, filename) => format === 'go' || format === 'lcov' ? fs.readFileSync(filename, 'utf8') : loadReport(filename);
 
 function counters(report, sourceDirectory, format, cwd) {
   if (format === 'istanbul') return istanbul.counters(report, sourceDirectory, cwd);
   if (format === 'coveragepy') return coveragepy.counters(report, sourceDirectory, cwd);
   if (format === 'go') return go.counters(report, sourceDirectory, cwd);
-  if (format !== 'llvm') fail('Unknown coverage format; use llvm, istanbul, coveragepy or go');
+  if (format === 'lcov') return lcov.counters(report, sourceDirectory, cwd);
+  if (format !== 'llvm') fail('Unknown coverage format; use llvm, istanbul, coveragepy, lcov or go');
   return llvmCounters(report, sourceDirectory, cwd);
 }
 
@@ -149,7 +151,7 @@ function main(argv, {cwd, stdout, stderr}) {
       for (const [metric, [count, covered]] of Object.entries(counts)) stdout(`${metric}: ${covered}/${count}\n`);
       if (format === 'go') stdout('note: go lines are statements and go branches are basic blocks\n');
       enforce(counts);
-    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|go] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY]');
+    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|lcov|go] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY]');
     return 0;
   } catch (error) {
     stderr(`Coverage gate failed: ${error.message}\n`);
