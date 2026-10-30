@@ -194,24 +194,58 @@ test('bleecker layout: a fixtures-only change with an unresolved test gate is no
   const {f, approvalHold} = bleecker(['tests/fixtures/sample-feed-r1.json', 'tests/fixtures/helpers.ts', '__fixtures__/seed.js'], {});
   const snapshot = await collectSnapshot(f);
   assert.equal(approvalHold({gates: [{name: 'test_integrity', state: 'unresolved'}, {name: 'review_completeness', state: 'satisfied'}]}, snapshot), null);
-  assert.match(approvalHold({gates: [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'unresolved'}]}, snapshot), /review completeness/);
+  const completeness = {gates: [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'unresolved'}]};
+  assert.equal(approvalHold(completeness, snapshot), null, 'a vague unresolved completeness opinion without missing evidence holds nothing (issue 123)');
+  snapshot.omitted_sources = [{path: 'x', reason: 'not found at the head revision'}];
+  assert.match(approvalHold(completeness, snapshot), /review completeness/);
+  delete snapshot.omitted_sources;
+  assert.match(approvalHold({...completeness, coverage: {sources: [], dependencies: [{path: 'x', state: 'missing'}]}}, snapshot), /review completeness/);
 });
 
-test('bleecker layout: a requested file that does not exist is missing evidence, not an aborted review (issue 115)', async () => {
+test('bleecker layout: optional evidence that is missing, unreadable or over budget is omitted with a reason, never an aborted review (issues 115, 122)', async () => {
   const {f} = bleecker(['src/layout/feed-grid.tsx']);
   const snapshot = await collectSnapshot(f);
   const getContent = f.github.rest.repos.getContent;
+  const big = Buffer.from('x'.repeat(100)).toString('base64');
   f.github.rest.repos.getContent = async args => {
     if (args.path.includes('feed-grid.test')) throw Object.assign(new Error('Not Found'), {status: 404});
     if (args.path === 'boom') throw Object.assign(new Error('Server error'), {status: 500});
+    if (args.path === 'src') return {data: [{name: 'a'}]};
+    if (args.path === 'package-lock.json') return {data: {encoding: 'base64', content: big, size: 400000}};
+    if (args.path === 'logo.bin') return {data: {encoding: 'base64', content: Buffer.from('a\0b').toString('base64'), size: 3}};
+    if (args.path === 'latin.txt') return {data: {encoding: 'base64', content: Buffer.from([0xff, 0xfe]).toString('base64'), size: 2}};
+    if (args.path === 'big.ts') return {data: {encoding: 'base64', content: Buffer.from('y'.repeat(299000)).toString('base64'), size: 299000}};
     return getContent(args);
   };
   const before = snapshot.digest;
-  await additionalSources({...f, snapshot, paths: ['tests/unit/feed-grid.test.tsx']});
-  assert.deepEqual(snapshot.unavailable_sources, ['tests/unit/feed-grid.test.tsx']);
+  await additionalSources({...f, snapshot, paths: ['tests/unit/feed-grid.test.tsx', 'src', 'package-lock.json', 'logo.bin', 'latin.txt', '../etc/passwd']});
+  assert.deepEqual(snapshot.omitted_sources.map(item => item.path), ['tests/unit/feed-grid.test.tsx', 'src', 'package-lock.json', 'logo.bin', 'latin.txt', '../etc/passwd']);
+  assert.match(snapshot.omitted_sources[0].reason, /not found/);
+  assert.match(snapshot.omitted_sources[1].reason, /complete text/);
   assert.notEqual(snapshot.digest, before, 'the reviewer sees new information');
   await additionalSources({...f, snapshot, paths: ['tests/unit/feed-grid.test.tsx', 'src/real.ts']});
-  assert.deepEqual(snapshot.unavailable_sources, ['tests/unit/feed-grid.test.tsx']);
+  assert.equal(snapshot.omitted_sources.filter(item => item.path === 'tests/unit/feed-grid.test.tsx').length, 1);
   assert.ok(snapshot.sources[`${f.pr.head.sha}:src/real.ts`]);
   await assert.rejects(additionalSources({...f, snapshot, paths: ['boom']}), /Server error/);
+  snapshot.filler = 'z'.repeat(700000);
+  await additionalSources({...f, snapshot, paths: ['big.ts', 'big2.ts']});
+  assert.ok(snapshot.omitted_sources.some(item => item.path === 'big.ts' && /total evidence budget/.test(item.reason)), 'priority: what is already supplied stays, the addition is omitted');
+  assert.ok(!snapshot.sources[`${f.pr.head.sha}:big.ts`]);
+});
+
+test('a changed file that cannot be read in full still fails closed', async () => {
+  const f = fixture();
+  f.github.rest.repos.getContent = async () => ({data: {encoding: 'base64', content: 'AAAA', size: 400000}});
+  await assert.rejects(collectSnapshot(f), /unavailable within the evidence budget/);
+});
+
+test('a prefetched test that vanished between base and head is omitted, not fatal (base moved)', async () => {
+  const f = fixture();
+  const getContent = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => {
+    if (args.path === 'tests/upload.test.rs') throw Object.assign(new Error('Not Found'), {status: 404});
+    return getContent(args);
+  };
+  const snapshot = await collectSnapshot(f);
+  assert.deepEqual(snapshot.omitted_sources, [{path: 'tests/upload.test.rs', reason: 'not found at the head revision'}]);
 });

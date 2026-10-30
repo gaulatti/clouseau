@@ -2,7 +2,8 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {template, modelTemplate, modelEvidence, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
+const {template, modelTemplate, modelEvidence, inspect, combine, reviewChange, canonicalReferences, materialize, changedAnchor, investigateChange, validateInspection} = require('./acceptance-review.cjs');
+const {proofCatalog} = require('./acceptance-sources.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
 function withKey(run) {return async () => {
@@ -45,7 +46,17 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   assert.equal(materialize(facts, fresh).findings[0].factors.necessity.value, 0);
   assert.equal(materialize(facts, fresh).findings[0].path, 'src/upload.rs');
   const outside = structuredClone(facts); outside.findings[0].anchor.source = 'contract';
-  assert.throws(() => materialize(outside, fresh), /outside changed source/);
+  const reanchored = materialize(outside, fresh).findings[0];
+  assert.equal(reanchored.path, 'src/upload.rs', 'a finding anchored in supporting source is kept and re-anchored to the changed file');
+  assert.ok(reanchored.evidence.some(id => id.startsWith('clouseau-cause-')));
+  const unnamed = structuredClone(facts); unnamed.findings[0].anchor.source = 'missing-source';
+  assert.equal(materialize(unnamed, fresh).findings[0].path, 'src/upload.rs');
+  fresh.files[0].patch = '@@ -1,2 +1,2 @@\n-a\n+b'; fresh.files[0].head_source = 'head';
+  assert.deepEqual(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))), {source: 'head', start: 1, end: 3});
+  fresh.files[0].patch = '@@ -1 +900 @@\n+x';
+  assert.equal(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))).start, 1, 'a line outside the supplied spans uses the first span');
+  fresh.files[0].head_source = undefined; fresh.files[0].base_source = 'head';
+  assert.equal(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))).source, 'head');
   for (const mutate of [finding => {delete finding.anchor;}, finding => {finding.path = 'invented';}, finding => {finding.anchor.extra = true;}]) {
     const invalid = structuredClone(facts); mutate(invalid.findings[0]);
     assert.throws(() => materialize(invalid, fresh), /concrete changed-source anchor/);
@@ -292,11 +303,19 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
     const f = fixture(); await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(value)}));
   }
   const f = fixture(); f.snapshot.head_sha = 'head';
-  f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head;
+  f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head; require('./acceptance-sources.cjs').refresh(f.snapshot);
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('source').toString('base64')}})}}};
-  await assert.rejects(inspect({...f, github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: ['src/upload.rs']})}), /no new evidence/);
+  // A request that fetches nothing is told so, loses the right to ask again and must conclude.
+  const tools = []; let turn = 0;
+  const concluded = await inspect({...f, github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+    tools.push(JSON.parse(options.body).tools.map(item => item.function.name));
+    return ++turn === 1 ? response({request_sources: ['src/upload.rs']}) : response({...f.report, snapshot: f.snapshot.digest});
+  }});
+  assert.deepEqual(tools, [['acceptance_report', 'source_request'], ['acceptance_report']]);
+  assert.match(f.snapshot.evidence_notice, /no further source request is accepted/);
+  assert.equal(concluded.report.snapshot, f.snapshot.digest);
   let call = 0;
-  await assert.rejects(inspect({...fixture(), github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: [`src/new-${++call}.rs`]})}), /exhausted/);
+  await assert.rejects(inspect({...fixture(), github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: [`src/new-${++call}.rs`]})}), /invalid structured result/);
   assert.equal(call, 3);
 }));
 

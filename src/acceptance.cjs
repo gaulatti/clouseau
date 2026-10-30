@@ -104,12 +104,16 @@ function linked(snapshot, name) {
 // A test for one file never satisfies a different changed file.
 function approvalHold(report, snapshot) {
   const gate = name => report.gates.find(item => item.name === name).state;
-  // Nothing executable changed (documentation, data fixtures, configuration): there is no behaviour
-  // for a test to establish, so the test gate cannot hold approval. Completeness still can.
-  const executable = snapshot.files.some(file => isExecutablePath(file.path));
-  for (const name of executable ? ['test_integrity', 'review_completeness'] : ['review_completeness']) {
-    if (gate(name) === 'unresolved') return `${name.replace('_', ' ')} is unresolved`;
-  }
+  // The test gate matters when production code changed, or when a test change removes lines (an
+  // added assertion that duplicates coverage is harmless). Documentation, data and fixtures have
+  // no behaviour to test. A model's "unresolved" without a missing source behind it is an opinion:
+  // completeness holds only when the review records, or the controller omitted, missing evidence.
+  const executable = snapshot.files.filter(file => isExecutablePath(file.path));
+  const testMatters = executable.some(file => !isTestPath(file.path) || /^-(?!--)/m.test(file.patch));
+  const missing = (snapshot.omitted_sources || []).length > 0 ||
+    [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])].some(item => item.state === 'missing');
+  if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';
+  if (missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
   const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path)).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;

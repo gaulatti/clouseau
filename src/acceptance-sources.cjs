@@ -21,25 +21,33 @@ function safePath(value) {
     !value.split('/').some(part => !part || part === '.' || part === '..' || part === '.git');
 }
 
+const BUDGET = 900000;
+function evidenceSize(snapshot) {
+  const value = {...snapshot}; delete value.digest;
+  return JSON.stringify(value).length;
+}
+
 function refresh(snapshot) {
   const value = {...snapshot}; delete value.digest;
-  if (JSON.stringify(value).length > 900000) throw new Error('Complete review evidence exceeds the source budget');
+  if (JSON.stringify(value).length > BUDGET) throw new Error('Complete review evidence exceeds the source budget');
   snapshot.digest = digest(value);
   return snapshot;
 }
 
 async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
-  if (!safePath(filename)) throw new Error('Unsafe repository evidence path');
+  if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true});
   const id = `${ref}:${filename}`;
   if (snapshot.sources[id]) return id;
   const sourceRepo = ref === snapshot.head_sha ? snapshot.head_repository : repo;
   if (!sourceRepo) throw new Error('The immutable head repository is unavailable');
   const {data} = await github.rest.repos.getContent({...sourceRepo, path: filename, ref});
   if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > 300000) {
-    throw new Error('Complete textual source is unavailable within the evidence budget');
+    throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true});
   }
-  const content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
-  if (content.includes('\0') || content.length > 300000) throw new Error('Binary or oversized source is not reviewable');
+  let content;
+  try {content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));}
+  catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true});}
+  if (content.includes('\0') || content.length > 300000) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true});
   snapshot.sources[id] = {path: filename, ref, authority, kind, content};
   return id;
 }
@@ -51,6 +59,20 @@ async function readSource({github, repo, snapshot, filename, ref, authority = 'u
 function contributorClaim(body) {
   if (typeof body !== 'string') return body;
   return body.replace(/^#{1,6} +Summary by [^\n]*(?:\n(?!#{1,6} )[^\n]*)*/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Optional evidence (an existing test, a source a reviewer asked for) that is missing, not
+// textual, too large or beyond the evidence budget is omitted with a stated reason that the
+// reviewers see. Files that actually changed never take this path: they fail closed.
+async function readOptional({github, repo, snapshot, filename}) {
+  try {
+    const id = await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
+    if (evidenceSize(snapshot) > BUDGET) {delete snapshot.sources[id]; throw Object.assign(new Error('over budget'), {omitted: 'would exceed the total evidence budget'});}
+  } catch (error) {
+    const reason = error.omitted || (error.status === 404 ? 'not found at the head revision' : error.unavailable ? 'not available as complete text within the evidence budget' : null);
+    if (!reason) throw error;
+    snapshot.omitted_sources = [...(snapshot.omitted_sources || []).filter(item => item.path !== filename), {path: filename, reason}];
+  }
 }
 
 async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
@@ -99,7 +121,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
       item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
       if (entry.size > budget) break;
       budget -= entry.size;
-      await readSource({github, repo, snapshot, filename: entry.path, ref: pr.head.sha});
+      await readOptional({github, repo, snapshot, filename: entry.path});
     }
   }
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
@@ -123,15 +145,7 @@ async function additionalSources({github, repo, snapshot, paths}) {
   if (!Array.isArray(paths) || paths.length === 0 || paths.length > 8 || new Set(paths).size !== paths.length) {
     throw new Error('Additional evidence requires one to eight distinct repository paths');
   }
-  for (const filename of paths) {
-    try {await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});}
-    catch (error) {
-      // A path the reviewer guessed (for example a conventional test name) may not exist. That is
-      // missing evidence for that path, recorded for the reviewer, never a reason to abort the review.
-      if (error.status !== 404) throw error;
-      snapshot.unavailable_sources = [...new Set([...(snapshot.unavailable_sources || []), filename])];
-    }
-  }
+  for (const filename of paths) await readOptional({github, repo, snapshot, filename});
   return refresh(snapshot);
 }
 
