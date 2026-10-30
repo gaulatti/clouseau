@@ -31,3 +31,19 @@ test('the default environment is inspected without being changed', () => {
     if (original === undefined) delete process.env.FICTIONAL_PROVIDER_KEY; else process.env.FICTIONAL_PROVIDER_KEY = original;
   }
 });
+
+test('a rejected key names only the secret and never prints any key material, including fragments', () => {
+  const material = 'sk-Zq81Xv7Hp3Jd9Ww2';
+  for (const value of [`${material}\n`, `${material} `, ` ${material}`, `"${material}"`, `${material}é`, `${material}${'x'.repeat(600)}`]) {
+    let error;
+    try {assertProviderKey('DEEPSEEK_API_KEY', {DEEPSEEK_API_KEY: value});} catch (caught) {error = caught;}
+    assert.ok(error, 'the malformed key is refused');
+    assert.match(error.message, /^DEEPSEEK_API_KEY (contains|is wrapped|is longer)/);
+    for (let start = 0; start + 4 <= material.length; start++) {
+      assert.ok(!error.message.includes(material.slice(start, start + 4)), 'no four-character fragment of the key may appear');
+    }
+    assert.equal(JSON.stringify(error.cause_code), '"provider_key_invalid"');
+  }
+  assert.throws(() => assertProviderKey('DEEPSEEK_API_KEY', {DEEPSEEK_API_KEY: `${material}\n`}),
+    {message: 'DEEPSEEK_API_KEY contains whitespace or a line break'});
+});
