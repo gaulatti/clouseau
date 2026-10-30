@@ -68,9 +68,11 @@ const CODE = /\.(?:[cm]?[jt]sx?|py|rs|rb|php|vue|svelte)$/;
 const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|specs?|e2e|stories)\/|\.(?:test|spec|stories)\.[a-z0-9]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:go|py)$/i;
 const isTestPath = name => TEST_PATH.test(name);
 const FIXTURE_PATH = /(?:^|\/)(?:__fixtures__|fixtures?|__mocks__|mocks?|testdata|__snapshots__)\//i;
-// Executable source of any kind, tests included: weakening a test is a behaviour change to the suite.
-const isExecutablePath = name => CODE.test(name) && !FIXTURE_PATH.test(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
-const isCodePath = name => isExecutablePath(name) && !isTestPath(name);
+// Everything except documentation, data, configuration, lockfiles, workflows and fixtures can change
+// behaviour, in any language; tests are included because weakening one is a behaviour change to the suite.
+const INERT = /(?:^|\/)(?:\.github|docs?)\/|(?:^|\/)(?:LICENSE|NOTICE|CODEOWNERS|CHANGELOG|README)[^/]*$|(?:^|\/)\.[^/]*ignore$|\.(?:md|mdx|txt|rst|json|jsonc|ya?ml|toml|ini|lock|csv|tsv|svg|png|jpe?g|gif|ico|webp|pdf|snap)$|(?:^|\/)(?:package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/i;
+const isExecutablePath = name => !INERT.test(name) && !FIXTURE_PATH.test(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
+const isCodePath = name => CODE.test(name) && isExecutablePath(name) && !isTestPath(name);
 
 // A module is linked to a test only by an import-like line naming it. A word in
 // a test title or an unrelated assertion in the same change is not linkage.
