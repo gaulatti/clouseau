@@ -809,3 +809,170 @@ test('legacy controller callers cannot select private automatic writes without a
   await assert.rejects(policy.gate({github: f.github, context, core: {info() {}}, assessment: automatic}), /validated protocol-two acceptance record/);
   assert.equal(f.writes.length, 0);
 });
+
+test('verification state distinguishes an absent, queued and running PR run', async () => {
+  assert.deepEqual(await technicalRun(fixture({run: null}).github, repo, small), {pending: true, state: 'absent'});
+  for (const [status, state] of [['queued', 'queued'], ['waiting', 'queued'], ['in_progress', 'running']]) {
+    const f = fixture(); f.state.run.status = status;
+    assert.deepEqual(await technicalRun(f.github, repo, small), {pending: true, state});
+  }
+});
+
+// A single-slot pool: while the review job runs, the verification job queued
+// behind it never starts, so every poll observes the same queued run.
+function singleSlotDeadlock() {
+  const f = fixture(); f.state.run.status = 'queued'; f.state.run.conclusion = null;
+  const messages = []; const outputs = {}; let waits = 0;
+  return {f, messages, outputs, core: {info: message => messages.push(message), setOutput: (name, value) => {outputs[name] = value;}},
+    wait: async ms => {assert.equal(ms, 15000); waits++;}, waits: () => waits};
+}
+const awaiting = createPolicy(require('../test/fixtures/config.json'));
+const waitSupport = require('./verification-wait.cjs');
+const quiet = {info() {}, setOutput() {}};
+
+test('the queue grace is a validated, conservative configuration knob', () => {
+  assert.equal(waitSupport.graceSeconds({}), 900);
+  assert.equal(waitSupport.graceSeconds({verification_queue_grace_seconds: 60}), 60);
+  const base = require('../test/fixtures/config.json');
+  for (const value of [0, 60, 3600]) assert.doesNotThrow(() => createPolicy({...base, verification_queue_grace_seconds: value}));
+  for (const value of [-1, 3601, 1.5, '900', null]) {
+    assert.throws(() => createPolicy({...base, verification_queue_grace_seconds: value}), /verification queue grace/);
+  }
+});
+
+test('a review whose verification never starts ends pending after the grace instead of holding the only runner or failing', async () => {
+  const d = singleSlotDeadlock();
+  const result = await awaiting.awaitVerification({github: d.f.github, context, core: d.core, expectedHead: SHA, wait: d.wait});
+  assert.equal(result.pending, true);
+  assert.equal(d.outputs.verified, 'false');
+  assert.equal(d.waits(), 60, 'the default 15 minute grace is 60 polls, not the 120-poll deadline');
+  assert.match(d.messages.at(-1), /had not started.*without holding a runner.*made no decision.*reassessed automatically/s);
+  const quick = singleSlotDeadlock();
+  await awaiting.awaitVerification({github: quick.f.github, context, core: quick.core, expectedHead: SHA, wait: quick.wait, queuedGraceSeconds: 30});
+  assert.equal(quick.waits(), 2);
+  const none = singleSlotDeadlock();
+  await awaiting.awaitVerification({github: none.f.github, context, core: none.core, expectedHead: SHA, wait: none.wait, queuedGraceSeconds: 0});
+  assert.equal(none.waits(), 0, 'a zero grace releases the runner on the first idle check');
+  const configured = createPolicy({...require('../test/fixtures/config.json'), verification_queue_grace_seconds: 15});
+  const absent = {f: fixture({run: null}), outputs: {}, wait: async () => {}};
+  await configured.awaitVerification({github: absent.f.github, context, core: {info() {}, setOutput: (n, v) => {absent.outputs[n] = v;}}, expectedHead: SHA, wait: absent.wait});
+  assert.equal(absent.outputs.verified, 'false');
+});
+
+test('a read-only assessment whose verification never starts returns a pending decision, never an approval', async () => {
+  const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+    const d = singleSlotDeadlock();
+    const result = await awaiting.assessWhenReady({github: d.f.github, context, wait: d.wait, queuedGraceSeconds: 30});
+    assert.equal(result.decision, 'pending_technical');
+    assert.equal(result.verification, 'queued');
+    assert.match(result.reason, /reassessed automatically/);
+    assert.equal(d.waits(), 2);
+    assert.ok(!result.record_digest);
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
+test('verification that is genuinely running is awaited until it succeeds, and resets the queue grace', async () => {
+  const f = fixture(); f.state.run.status = 'queued';
+  const sequence = ['queued', 'queued', 'in_progress', 'in_progress', 'queued', 'completed'];
+  let index = 0; const messages = []; const outputs = {};
+  const result = await awaiting.awaitVerification({github: f.github, context,
+    core: {info: message => messages.push(message), setOutput: (name, value) => {outputs[name] = value;}},
+    expectedHead: SHA, queuedGraceSeconds: 30, wait: async () => {f.state.run.status = sequence[++index];}});
+  assert.match(result.url, /runs\/22/);
+  assert.equal(outputs.verified, 'true');
+  assert.ok(messages.some(message => /Verified PR CI/.test(message)));
+  assert.ok(messages.some(message => /No AI request has been made/.test(message)));
+});
+
+test('awaiting verification refuses failures, a changed PR, closed or draft PRs and an exhausted deadline', async () => {
+  const failed = fixture(); failed.state.run.conclusion = 'failure';
+  await assert.rejects(awaiting.awaitVerification({github: failed.github, context, core: quiet, expectedHead: SHA}), /concluded failure/);
+  const changed = fixture();
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context, core: quiet, expectedHead: BASE}), /changed while verification/);
+  const push = sha => ({...context, eventName: 'push', sha});
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context: push(BASE), core: quiet}), /changed while verification/);
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: push(SHA), core: quiet})).url);
+  // A comment or manual run executes on the default branch: its own sha is not the PR head.
+  const comment = {...context, eventName: 'issue_comment', sha: 'c'.repeat(40)};
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: comment, core: quiet})).url);
+  const moving = fixture(); moving.state.run.status = 'in_progress';
+  await assert.rejects(awaiting.awaitVerification({github: moving.github, context: comment, core: quiet,
+    wait: async () => {moving.state.pr.head.sha = BASE;}}), /changed while verification/);
+  for (const mutate of [pr => {pr.state = 'closed';}, pr => {pr.draft = true;}]) {
+    const f = fixture(); mutate(f.state.pr);
+    await assert.rejects(awaiting.awaitVerification({github: f.github, context, core: quiet, expectedHead: SHA}), /closed, became draft/);
+  }
+  const running = fixture(); running.state.run.status = 'in_progress';
+  await assert.rejects(awaiting.awaitVerification({github: running.github, context, core: quiet, expectedHead: SHA,
+    maxPolls: 2, wait: async () => {}}), /did not complete before the wait deadline/);
+  await assert.rejects(awaiting.awaitVerification({github: running.github, context, core: quiet, expectedHead: SHA, maxPolls: 0}), /deadline/);
+});
+
+test('the default sleep paces verification polling', async t => {
+  const f = fixture(); f.state.run.status = 'in_progress';
+  t.mock.method(global, 'setTimeout', callback => {f.state.run.status = 'completed'; callback(); return 0;});
+  assert.ok((await awaiting.awaitVerification({github: f.github, context, core: quiet, expectedHead: SHA})).url);
+});
+
+test('a held technical assessment reports its own reason on a private owner repository instead of a missing record', async () => {
+  for (const decision of ['blocked_technical', 'blocked_integrity']) {
+    const f = fixture(); f.state.pr.auto_merge = null;
+    const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+    f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+    f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+    f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+    await assert.rejects(policy.gate({github: f.github, context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+      nativeGate: true, assessment: {...automatic, decision, reason: 'fixture held reason'}}), error => error.message === 'fixture held reason');
+  }
+});
+
+// The verification run that a pending review was waiting for has completed.
+const verificationTrigger = (overrides = {}) => ({...context, eventName: 'workflow_run', payload: {workflow_run: {
+  event: 'pull_request', path: '.github/workflows/backend-ci.yml', head_sha: SHA, pull_requests: [{number: 8}], ...overrides}}});
+
+test('a completed verification run reassesses a review that ended pending, without any maintainer comment', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const f = reassessmentFixture(); f.state.run.conclusion = 'failure';
+  f.github.rest.repos.getCollaboratorPermissionLevel = async () => assert.fail('the trusted workflow event needs no actor permission');
+  await policy.requestReassessment({github: f.github, context: verificationTrigger(), core: {info() {}}, wait: async () => {}});
+  assert.deepEqual(f.writes.filter(w => w.name === 'rerun').map(w => w.args.run_id), [22]);
+  const forked = reassessmentFixture(); forked.state.run.conclusion = 'cancelled';
+  forked.github.rest.repos.listPullRequestsAssociatedWithCommit = async args => {
+    assert.equal(args.commit_sha, SHA);
+    return {data: [{number: 8, state: 'open', base: {ref: 'main'}}, {number: 9, state: 'closed', base: {ref: 'main'}}, {number: 10, state: 'open', base: {ref: 'other'}}]};
+  };
+  await policy.requestReassessment({github: forked.github, context: verificationTrigger({pull_requests: []}), core: {info() {}}, wait: async () => {}});
+  assert.equal(forked.writes.filter(w => w.name === 'rerun').length, 1);
+  // The pending review may still be ending when verification completes: wait for it.
+  const ending = reassessmentFixture(); ending.state.run.conclusion = 'failure'; ending.state.run.status = 'in_progress';
+  let waits = 0;
+  await policy.requestReassessment({github: ending.github, context: verificationTrigger(), core: {info() {}},
+    wait: async ms => {assert.equal(ms, 10000); if (++waits === 3) ending.state.run.status = 'completed';}});
+  assert.equal(waits, 3); assert.equal(ending.writes.filter(w => w.name === 'rerun').length, 1);
+});
+
+test('a completed verification run never reruns a succeeded, running, stale, unrelated or absent review', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const messages = [];
+  const core = {info: message => messages.push(message)};
+  const attempt = async (mutate, trigger = verificationTrigger()) => {
+    const f = reassessmentFixture(); f.state.run.conclusion = 'failure'; mutate(f, trigger);
+    await policy.requestReassessment({github: f.github, context: trigger, core, wait: async () => {}});
+    assert.equal(f.writes.length, 0);
+    return messages.at(-1);
+  };
+  assert.match(await attempt(f => {f.state.run.conclusion = 'success';}), /already succeeded/);
+  assert.match(await attempt(f => {f.state.run.status = 'in_progress';}), /still running/);
+  assert.match(await attempt(f => {f.state.run.head_sha = BASE;}), /No trusted PR metadata run/);
+  assert.match(await attempt(() => {}, verificationTrigger({event: 'push'})), /Not a PR verification run/);
+  assert.match(await attempt(() => {}, verificationTrigger({path: '.github/workflows/other.yml'})), /Not a PR verification run/);
+  assert.match(await attempt(() => {}, verificationTrigger({head_sha: BASE})), /no longer a ready PR head/);
+  assert.match(await attempt(f => {f.state.pr.state = 'closed';}), /no longer a ready PR head/);
+  assert.match(await attempt(f => {f.state.pr.draft = true;}), /no longer a ready PR head/);
+  assert.match(await attempt(f => {f.state.pr.base.ref = 'other';}), /no longer a ready PR head/);
+  assert.match(await attempt(() => {}, verificationTrigger({pull_requests: [{number: 8}, {number: 9}]})), /No single open PR/);
+  assert.match(await attempt(f => {
+    f.github.rest.repos.listPullRequestsAssociatedWithCommit = async () => ({data: []});
+  }, verificationTrigger({pull_requests: []})), /No single open PR/);
+});
