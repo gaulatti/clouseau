@@ -103,6 +103,85 @@ authenticated coding harness. CI configuration and provider credentials are not
 installed by bastille startup. The signature authenticates an enrolled
 workstation's evidence; it does not defend against a compromised workstation.
 
+## Waiting for verification
+
+The `pull_request_target` review run and the `pull_request` verification run are
+different workflow runs, so `needs:` cannot order them. A review job that polls
+for verification therefore holds a runner while it waits. On a runner pool with
+one slot the queued `Verify PR` job can never start behind it, and the review
+used to sit until its deadline (about 30 minutes) and fail without a decision.
+
+The review no longer holds a runner indefinitely, and no manual rerun is needed:
+
+1. Use the `await-verification` operation instead of an inline polling script
+   (`assess` with the default `wait-for-verification` applies the same rule).
+   While the exact-head verification run is `in_progress` the job keeps polling.
+   If no run exists or it is still queued longer than the **queue grace**, the
+   step ends cleanly with output `verified=false`, makes no decision and
+   creates no acceptance record. Later assessment steps are skipped with
+   `if: steps.<id>.outputs.verified == 'true'`. A failed or changed verification
+   still fails the step.
+2. `approve-and-merge` stays red (fail closed): a record-less run cannot approve
+   or merge, and its message is the run's own reason ("Waiting for
+   verification..."), never a missing protocol-two record.
+3. When the PR verification run completes, a `workflow_run` trigger starts the
+   `request-reassessment` operation, which reruns the exact-head
+   `pull_request_target` run (waiting for it to finish if it is still ending)
+   unless that run already succeeded. The rerun finds verification complete and
+   produces the record. Contributor tests are not rerun.
+
+Configure the grace in `.github/clouseau.json` (whole seconds, 0 to 3600,
+default 900):
+
+```json
+"verification_queue_grace_seconds": 900
+```
+
+The default is conservative so a slow runner pool is not mistaken for a
+deadlock. A single-slot pool never needs the whole grace; lower it (for example
+60) to release the slot sooner. With a larger pool nothing changes while
+verification is running or starting within the grace.
+
+Consumer workflow template (names are the consumer's own):
+
+```yaml
+on:
+  workflow_run:
+    workflows: ["Palazzo CI"]      # this workflow's name
+    types: [completed]
+jobs:
+  assess-intent:
+    steps:
+      # checkout main, then the frozen engine into .clouseau-ci, as for assess
+      - id: wait
+        uses: ./.clouseau-ci
+        with:
+          operation: await-verification
+          pull-request: ${{ steps.install.outputs.number }}
+      - if: steps.wait.outputs.verified == 'true'
+        uses: ./.clouseau-ci
+        with:
+          operation: assess   # or verify-local
+  request-reassessment:
+    if: >-
+      github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request'
+    needs: resolve-clouseau
+    permissions: {contents: read, pull-requests: read, actions: write}
+    # checkout main and the frozen engine, then operation: request-reassessment
+```
+
+The `workflow_run` event is a trusted run of the same workflow, so it needs no
+maintainer comment; the engine accepts only a `pull_request` run of the
+configured workflow whose head is still the ready PR's head. The shared contract
+tests `assertBoundedVerificationWait` (no inline `technicalRun` polling; later
+steps gated on `verified`) and `assertReassessmentOnVerification` (the trigger
+and job exist) encode this template. Where verification starts promptly the
+review never ends pending and the trigger finds the run already succeeded.
+
+A review run that produced no acceptance record (pending or failed
+verification, incomplete review, not ready) cannot approve or merge. Attempt-
+scoped record artifacts are never reused across reruns.
+
 ## Operations and boundaries
 
 In artifact mode, find `clouseau-engine-<run id>-<attempt>` for the full central

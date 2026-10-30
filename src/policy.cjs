@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
+const {queueTracker, graceSeconds, WAITING_REASON, POLL_MS} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
@@ -69,7 +70,7 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   if (!process.env.DEEPSEEK_API_KEY) return hold('AI assessment unavailable: DEEPSEEK_API_KEY is not configured');
   // Do not spend provider credits on a PR whose technical gate is not green.
   const technical = await technicalRun(github, repo, pr);
-  if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
+  if (technical.pending) return {...identity, decision: 'pending_technical', verification: technical.state, reason: 'Waiting for all tests and exact 100% coverage'};
   if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
 
   try {
@@ -110,38 +111,114 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   }
 }
 
-async function assessWhenReady({wait = sleep, maxPolls = 260, ...options}) {
+async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGraceSeconds = graceSeconds(config), ...options}) {
+  const stalled = queueTracker(queuedGraceSeconds);
   for (let attempt = 0; attempt < maxPolls; attempt++) {
     const result = await assess(options);
     if (result.decision !== 'pending_technical') return result;
-    await wait(15000);
+    if (stalled(result.verification)) return {...result, reason: WAITING_REASON};
+    await wait(POLL_MS);
   }
   throw new Error('Verification did not finish before the assessment deadline');
 }
 
+// The bounded replacement for a consumer's inline polling loop. It holds a
+// runner only while verification is running. Verification that has not started
+// within the queue grace ends the step cleanly with verified=false so later
+// steps are skipped and the run is reassessed when verification completes.
+async function awaitVerification({github, context, core, expectedHead, wait = sleep, maxPolls = 120, queuedGraceSeconds = graceSeconds(config)}) {
+  const pull_number = numberFor(context);
+  const stalled = queueTracker(queuedGraceSeconds);
+  // Only a push event's commit is the PR head; comment and manual events run on
+  // the default branch, so they bind to the head observed when the wait starts.
+  let expected = expectedHead || (context.eventName === 'push' ? context.sha : null);
+  for (let attempt = 0; attempt < maxPolls; attempt++) {
+    const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number});
+    expected ??= pr.head.sha;
+    if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
+      throw new Error('PR closed, became draft, or changed while verification was pending');
+    }
+    const result = await technicalRun(github, context.repo, pr);
+    if (result.failure) throw new Error(result.failure);
+    if (!result.pending) {
+      core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
+      core.setOutput('verified', 'true');
+      return result;
+    }
+    if (stalled(result.state)) {
+      core.info(WAITING_REASON);
+      core.setOutput('verified', 'false');
+      return result;
+    }
+    core.info('Waiting for independent unit/coverage and runtime checks. No AI request has been made.');
+    await wait(POLL_MS);
+  }
+  throw new Error('PR verification did not complete before the wait deadline');
+}
+
 async function requestReassessment({github, context, core, wait = sleep}) {
   const repo = context.repo;
-  const pull_number = numberFor(context);
-  const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
-  const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-  if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
-    throw new Error('Stale or malformed intent confirmation');
+  // A completed PR verification run reassesses a review that ended pending
+  // without holding a runner. The event is a trusted run of this workflow.
+  const fromVerification = context.eventName === 'workflow_run';
+  let pull_number, pr;
+  if (fromVerification) {
+    const finished = context.payload.workflow_run;
+    if (finished.event !== 'pull_request' || finished.path !== `.github/workflows/${WORKFLOW}`) {
+      core.info('Not a PR verification run of the configured workflow; no reassessment is needed.');
+      return;
+    }
+    const numbers = finished.pull_requests.length ? finished.pull_requests.map(pull => pull.number) :
+      (await github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: finished.head_sha})).data
+        .filter(pull => pull.state === 'open' && pull.base.ref === config.base_branch).map(pull => pull.number);
+    if (numbers.length !== 1) {
+      core.info('No single open PR is associated with this verification run; no reassessment is needed.');
+      return;
+    }
+    pull_number = numbers[0];
+    pr = (await github.rest.pulls.get({...repo, pull_number})).data;
+    if (pr.head.sha !== finished.head_sha || pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
+      core.info('The verified revision is no longer a ready PR head; no reassessment is needed.');
+      return;
+    }
+  } else {
+    pull_number = numberFor(context);
+    pr = (await github.rest.pulls.get({...repo, pull_number})).data;
+    const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
+    if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
+      throw new Error('Stale or malformed intent confirmation');
+    }
+    const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
+    if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
+    if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
   }
-  const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
-  if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
-  if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
   const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
     event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100});
   const runs = data.workflow_runs.filter(run => run.event === 'pull_request_target' && run.head_sha === pr.head.sha &&
     (run.pull_requests.some(pull => pull.number === pull_number) ||
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
   runs.sort((a, b) => b.id - a.id);
-  if (!runs.length) throw new Error('No trusted PR metadata run exists for this revision');
+  if (!runs.length) {
+    if (fromVerification) {
+      core.info('No trusted PR metadata run exists for this revision; its review will start normally.');
+      return;
+    }
+    throw new Error('No trusted PR metadata run exists for this revision');
+  }
   // Let an already-finishing gate consume the new comment or finish before rerun.
-  await wait(5000);
-  const {data: latest} = await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id});
+  // A verification completion can arrive while the pending review is still ending.
+  let latest;
+  for (let attempt = 0; attempt < (fromVerification ? 18 : 1); attempt++) {
+    await wait(fromVerification ? 10000 : 5000);
+    latest = (await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id})).data;
+    if (latest.status === 'completed') break;
+  }
   if (latest.status !== 'completed') {
     core.info('The trusted review is still running and will read the current intent confirmation.');
+    return;
+  }
+  if (fromVerification && latest.conclusion === 'success') {
+    core.info('The trusted review already succeeded; no reassessment is needed.');
     return;
   }
   await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
@@ -190,7 +267,8 @@ async function technicalRun(github, repo, pr, {receipt = false} = {}) {
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
   runs.sort((a, b) => b.id - a.id);
   const run = runs[0];
-  if (!run || run.status !== 'completed') return {pending: true};
+  if (!run) return {pending: true, state: 'absent'};
+  if (run.status !== 'completed') return {pending: true, state: run.status === 'in_progress' ? 'running' : 'queued'};
   if (run.conclusion !== 'success') return {failure: `PR verification concluded ${run.conclusion}`};
   const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
     {...repo, run_id: run.id, filter: 'latest', per_page: 100});
@@ -255,7 +333,10 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
   const initialProtection = await protection();
   const controllerManaged = initialProtection.controllerManaged === true;
-  if (controllerManaged && typeof verifyAcceptance !== 'function') throw new Error('Private owner merge requires a validated protocol-two acceptance record');
+  // A held assessment carries no record by design; report its own reason
+  // instead of the misleading missing-record error that would hide it.
+  const held = assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity';
+  if (controllerManaged && typeof verifyAcceptance !== 'function' && !held) throw new Error('Private owner merge requires a validated protocol-two acceptance record');
   // The native job is the required check. Additional GITHUB_TOKEN API checks
   // can attach to another run's suite; publish detail in this job's summary.
   const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
@@ -445,7 +526,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 
