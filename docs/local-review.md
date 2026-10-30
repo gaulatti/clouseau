@@ -40,7 +40,7 @@ Actions and contains no provider settings:
 }
 ```
 
-`llvm` is also supported. The shared parser requires complete, nonempty exact
+`llvm` and `lcov` (production sources only; `DA` lines and `BRDA` branches) are also supported. The shared parser requires complete, nonempty exact
 line/branch counters. Commands run as argument arrays, without shell expansion.
 The accepted base supplies the recipe; a change cannot weaken its own checks.
 The source checkout must be committed and clean before review. Verification
