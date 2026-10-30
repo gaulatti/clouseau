@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
-const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason} = require('./verification-wait.cjs');
+const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
@@ -115,8 +115,7 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
 // A hold that states the cause and the time to retry, shaped like an assessment so that the visible
 // review-incomplete notice names the rate limit. The next verification completion reassesses the PR.
 function rateLimited(context, hold) {
-  const head = context.payload?.pull_request?.head?.sha;
-  return {version: 2, number: numberFor(context), head_sha: head ?? '', decision: 'review_incomplete', cause: 'github_rate_limit',
+  return {version: 2, number: numberFor(context), head_sha: headShaOf(context), decision: 'review_incomplete', cause: 'github_rate_limit',
     reason: heldReason(hold), retry_after: new Date(hold.resetAt).toISOString()};
 }
 

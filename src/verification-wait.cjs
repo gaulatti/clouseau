@@ -61,19 +61,22 @@ class RateLimitHold extends Error {
 // the wait needed would exceed the remaining budget the call ends in a RateLimitHold stating when to retry.
 async function withRateLimit(call, {wait, now = Date.now, random = Math.random, maxAttempts = 8, maxWaitMs = 20 * 60000, report = () => {}}) {
   let waited = 0;
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0; ; ) {
     try {return await call();} catch (error) {
       const asked = rateLimitDelay(error, now());
       if (asked === null) throw error;
       const delay = Math.max(asked, Math.min(2 ** attempt * 1000, 60000)) + Math.floor(random() * 1000);
       if (attempt + 1 >= maxAttempts || waited + delay > maxWaitMs) throw new RateLimitHold(now() + Math.max(asked, delay));
       report(`GitHub API rate limit: waiting ${Math.ceil(delay / 1000)} s before retry ${attempt + 1}/${maxAttempts - 1}`);
-      waited += delay; await wait(delay);
+      waited += delay; attempt++; await wait(delay);
     }
   }
 }
 
+// The PR head named by the event payload, or empty when the event (a manual dispatch) carries none.
+const headShaOf = context => context.payload.pull_request?.head?.sha ?? '';
+
 const heldReason = hold => `Held: GitHub API rate limit, will retry after ${new Date(hold.resetAt).toISOString()}.`;
 
 module.exports = {DEFAULT_QUEUE_GRACE_SECONDS, MAX_QUEUE_GRACE_SECONDS, MAX_IDLE_POLL_MS, POLL_MS, WAITING_REASON, graceSeconds,
-  pollSchedule, rateLimitDelay, RateLimitHold, withRateLimit, heldReason};
+  pollSchedule, rateLimitDelay, RateLimitHold, withRateLimit, heldReason, headShaOf};

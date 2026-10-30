@@ -6,7 +6,7 @@ const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
-const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason} = require('./verification-wait.cjs');
+const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf} = require('./verification-wait.cjs');
 
 const RECORD = 'work/clouseau-acceptance.json';
 const policyDigest = () => digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8'));
@@ -206,7 +206,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         if (!(error instanceof RateLimitHold)) throw error;
         // The shared budget is exhausted until reset: an explicit, classified hold; the next verification
         // completion (or a re-run after the stated time) reassesses the PR.
-        return {version: 2, number: numberFor(options.context), head_sha: options.context.payload?.pull_request?.head?.sha ?? '',
+        return {version: 2, number: numberFor(options.context), head_sha: headShaOf(options.context),
           decision: 'review_incomplete', cause: 'github_rate_limit', reason: heldReason(error), retry_after: new Date(error.resetAt).toISOString()};
       }
       if (result.decision !== 'pending_technical') return result;

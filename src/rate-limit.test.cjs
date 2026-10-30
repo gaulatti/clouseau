@@ -5,7 +5,7 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {pollSchedule, rateLimitDelay, withRateLimit, RateLimitHold, heldReason} = require('./verification-wait.cjs');
+const {pollSchedule, rateLimitDelay, withRateLimit, RateLimitHold, heldReason, headShaOf} = require('./verification-wait.cjs');
 const {classify, body, NEXT_STEPS} = require('./incomplete.cjs');
 const {createPolicy} = require('./policy.cjs');
 
@@ -162,4 +162,13 @@ test('a raw rate-limit error that escapes the wrapper is classified as the same 
   assert.equal(without.cause, 'github_rate_limit');
   assert.match(without.reason, /^Held: GitHub API rate limit, will retry after 20\d\d-/);
   assert.equal(classify(http(403, {}, 'Resource not accessible by integration')).cause, 'evidence_incomplete');
+});
+
+test('the head named by the event is used, and a manual dispatch names none; other errors are never swallowed as rate limits', async () => {
+  assert.equal(headShaOf({payload: {pull_request: {head: {sha: SHA}}}}), SHA);
+  assert.equal(headShaOf({payload: {pull_request: {}}}), '');
+  assert.equal(headShaOf({payload: {}}), '');
+  const policy = createPolicy(config);
+  const broken = {rest: {pulls: {get: async () => {throw new Error('boom');}}}};
+  await assert.rejects(policy.assessWhenReady({github: broken, context, wait: async () => {}}), /boom/);
 });
