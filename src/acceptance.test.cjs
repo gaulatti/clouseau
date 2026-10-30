@@ -123,7 +123,7 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
   assert.throws(() => validateReport(report, snapshot), /citation does not match/);
 });
 
-const {approvalHold, validateApproval, isTestPath, resolveSpecifier, specifiersOf} = require('./acceptance.cjs');
+const {approvalHold, validateApproval, isTestPath, resolveSpecifier, specifiersOf, moduleStem} = require('./acceptance.cjs');
 
 function withTest(content = 'use upload;\n') {
   const f = fixture();
@@ -243,4 +243,10 @@ test('a test-only change is executable: unresolved test integrity still holds it
   assert.equal(approvalHold(f.report, f.snapshot), null);
   f.snapshot.files = [{path: 'tests/fixtures/sample.json', status: 'added'}, {path: 'tests/fixtures/helper.ts', status: 'added'}];
   assert.equal(approvalHold(f.report, f.snapshot), null);
+});
+
+test('a root-level index module is named by itself, a nested one by its directory', () => {
+  assert.equal(moduleStem('index.ts'), 'index');
+  assert.equal(moduleStem('src/ui/index.ts'), 'ui');
+  assert.equal(moduleStem('src/ui/button.tsx'), 'button');
 });

@@ -50,7 +50,6 @@ async function fetchText({github, repo, snapshot, filename, ref}) {
 }
 
 async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
-  if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true});
   const id = `${ref}:${filename}`;
   if (snapshot.sources[id]) return id;
   snapshot.sources[id] = {path: filename, ref, authority, kind, content: await fetchText({github, repo, snapshot, filename, ref})};

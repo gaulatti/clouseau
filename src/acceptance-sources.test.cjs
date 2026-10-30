@@ -282,3 +282,21 @@ test('bleecker layout (lab4): importers are found by content, through callers an
   assert.equal(approvalHold({gates}, snapshot), null, 'an added helper is covered through the changed caller a test imports');
   assert.ok(!Object.values(snapshot.sources).some(source => source.path === 'tests/unit/utils.test.ts'), 'content-found importers keep only their specifiers in the reviewers evidence');
 });
+
+test('content discovery of importers skips tests that vanished or are not text, and fails on a real error', async () => {
+  const names = ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'];
+  const run = async behaviours => {
+    const {f} = bleecker(['src/utils/helper.ts'], {});
+    f.github.tree = {truncated: false, tree: names.map(path => ({type: 'blob', path, size: 100}))};
+    f.github.rest.repos.getContent = async args => {
+      if (behaviours[args.path] === 404) throw Object.assign(new Error('Not Found'), {status: 404});
+      if (behaviours[args.path] === 'big') return {data: {encoding: 'base64', content: 'AAAA', size: 400000}};
+      if (behaviours[args.path] === 500) throw Object.assign(new Error('Server error'), {status: 500});
+      return {data: {encoding: 'base64', content: Buffer.from("import {a} from '../src/utils/helper';\n").toString('base64'), size: 40}};
+    };
+    return collectSnapshot(f);
+  };
+  const snapshot = await run({'tests/a.test.ts': 404, 'tests/b.test.ts': 'big'});
+  assert.deepEqual(snapshot.test_imports.map(item => item.path), ['tests/c.test.ts']);
+  await assert.rejects(run({'tests/b.test.ts': 500}), /Server error/);
+});

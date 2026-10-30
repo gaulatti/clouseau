@@ -193,6 +193,8 @@ function changedAnchor(file, catalog) {
   return {source: span.source, start: span.start, end: span.end};
 }
 
+const sameConcern = (a, b) => digest([a.path, a.cause, a.obligation]) === digest([b.path, b.cause, b.obligation]);
+
 // A concern raised in an earlier examination by this role stands unless the new report retains it
 // verbatim or resolves it with current-source counterevidence. Silence is not a resolution, and it is
 // not a reason to end the review as incomplete either: the controller carries the concern forward
@@ -201,7 +203,7 @@ function carryForward(report, drafts) {
   let count = 0;
   for (const draft of drafts) for (const finding of draft.findings) {
     const retained = report.findings.find(item => item.id === finding.id);
-    if (retained && retained.path === finding.path && retained.cause === finding.cause && retained.obligation === finding.obligation) continue;
+    if (retained && sameConcern(retained, finding)) continue;
     if (report.resolutions.some(item => item.id === finding.id)) continue;
     const carried = structuredClone(finding); const renamed = new Map();
     const rename = id => {
@@ -226,7 +228,7 @@ function validateInspection(report, snapshot, drafts = []) {
   validateFacts(report, view);
   for (const finding of drafts.flatMap(draft => draft.findings)) {
     const retained = report.findings.find(item => item.id === finding.id);
-    if (retained && retained.path === finding.path && retained.cause === finding.cause && retained.obligation === finding.obligation) continue;
+    if (retained && sameConcern(retained, finding)) continue;
     const resolution = report.resolutions.find(item => item.id === finding.id);
     if (!resolution) throw new Error('A prior investigation concern requires explicit current-source counterevidence');
   }
