@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, validateReport} = require('./acceptance.cjs');
+const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
 const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
@@ -46,7 +46,7 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
   for (const review of reviews) {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
-    review.scores = validateReport(review.report, view);
+    review.scores = validateApproval(review.report, view);
   }
   record.result.decision = combine(reviews);
   const state = reconcile(record.result, record.snapshot, record.previous.findings);
@@ -126,6 +126,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
           configDigest: digest(config), policyDigest: policyDigest()});
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
+        // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
+        // is reused only when hosted approval's affirmative-evidence rule also holds.
+        const hold = verified.record.result.reviews.map(review => approvalHold(review.report, verified.record.snapshot)).find(Boolean);
+        if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
+          reason: `Authenticated local review held: ${hold}.`};
         const controls = legacy.scopeReason(files, pr);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {

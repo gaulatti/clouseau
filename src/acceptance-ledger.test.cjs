@@ -288,3 +288,12 @@ test('overlapping citations from both roles keep every reference in the register
   assert.deepEqual(restored.findings, state.findings, 'persistent blocker history survives the compact display');
 });
 
+
+test('an approval hold is stated to the reader', () => {
+  const {result, snapshot} = setup();
+  result.reviews[0].scores = {...result.reviews[0].scores, decision: 'review_incomplete', hold: 'no supplied test imports changed production code: src/a.ts'};
+  result.reviews[1].scores = {...result.reviews[1].scores, decision: 'review_incomplete', hold: 'no supplied test imports changed production code: src/a.ts'};
+  result.decision = 'review_incomplete';
+  const text = render(result, snapshot, reconcile(result, snapshot));
+  assert.equal(text.split('**Approval held:** no supplied test imports changed production code: src/a.ts.').length, 2, 'stated once');
+});
