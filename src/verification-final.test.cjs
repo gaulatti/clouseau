@@ -94,7 +94,8 @@ test('the wait step publishes a precise incomplete assessment for a real failure
     return a.github;
   };
   const failed = job({steps: steps().map((step, index) => index === 1 ? {...step, conclusion: 'failure'} : step)});
-  await assert.rejects(policy.awaitVerification({github: make([[failed]]), context, core, expectedHead: SHA, wait: async () => {}}), /concluded failure/);
+  const done = await policy.awaitVerification({github: make([[failed]]), context, core, expectedHead: SHA, wait: async () => {}});
+  assert.match(done.failure, /concluded failure/); assert.equal(outputs.verified, 'false');
   const assessment = JSON.parse(outputs.assessment);
   assert.deepEqual({decision: assessment.decision, cause: assessment.cause, number: assessment.number, head: assessment.head_sha},
     {decision: 'review_incomplete', cause: 'verification_failed', number: 3, head: SHA});

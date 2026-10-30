@@ -112,7 +112,7 @@ test('the wait loop sends conditional requests and survives a rate limit, then h
   const flaky = {rest: {
     pulls: {get: async () => {if (thrown < 2) {thrown++; throw http(403, {'retry-after': '1'});} return {data: {number: 3, state: 'open', draft: false, head: {sha: SHA, ref: 'f', repo: {id: 1}}, base: {ref: 'main'}}};}},
     actions: {listWorkflowRuns: async () => ({headers: {}, data: {workflow_runs: [{id: 9, head_sha: SHA, status: 'completed', conclusion: 'failure', pull_requests: [{number: 3}], html_url: 'u'}]}})}}};
-  await assert.rejects(policy.awaitVerification({github: flaky, context, core, expectedHead: SHA, wait: async ms => flakyWaits.push(ms)}), /concluded failure/);
+  assert.match((await policy.awaitVerification({github: flaky, context, core, expectedHead: SHA, wait: async ms => flakyWaits.push(ms)})).failure, /concluded failure/);
   assert.equal(flakyWaits.length, 2, 'two rate limits were waited out before the real answer');
   // An exhausted budget ends in an explicit hold, not a crash.
   const spent = burst('queued');

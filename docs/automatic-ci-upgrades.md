@@ -198,7 +198,15 @@ exact-head `pull_request` run. A completed run whose job or step list is still b
 finalized (jobs in progress, steps without a conclusion, an empty list, a job list from a newer
 attempt than the run record) is re-read a bounded number of times and otherwise stays pending;
 it is never converted into a failure. A final failure names the run, job or step
-(`Required verification step "..." concluded skipped`) in the published incomplete assessment.
+(`Required verification step "..." concluded skipped`) in an incomplete assessment that
+`await-verification` publishes through the composite action's `assessment` output (it
+maps `steps.assess` or, for this operation, `steps.await`). The wait step then ends
+cleanly with `verified=false`: it does not fail, so the `assess-intent` job succeeds, hands
+the assessment to `approve-and-merge` through the job output
+`steps.assess.outputs.assessment || steps.wait.outputs.assessment`, and the gate posts the
+visible `clouseau-review-incomplete` comment naming the failed step and then holds (it
+cannot approve or merge). A consumer that does not list the wait step's output in the job
+output gets no notice; `assertBoundedVerificationWait` rejects that.
 
 A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-

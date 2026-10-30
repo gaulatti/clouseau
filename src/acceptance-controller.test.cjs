@@ -1165,3 +1165,30 @@ test('an exhausted GitHub API budget during the wait is an explicit hold that na
   assert.equal(f.state.calls, 0, 'no AI request was made');
   await assert.rejects(f.policy.assessWhenReady({github: {...f.github, rest: {...f.github.rest, pulls: {...f.github.rest.pulls, get: async () => {throw new Error('boom');}}}}, context: f.context, recordPath: f.recordPath, wait: async () => {}}), /boom/, 'other errors are not swallowed as rate limits');
 }));
+
+test('end to end: a finally failed required verification step produces a visible review-incomplete comment naming the step, and still cannot approve or merge', () => fixture(async f => {
+  const steps = require('../test/fixtures/config.json').verification.steps;
+  const jobs = f.github.rest.actions.listJobsForWorkflowRun;
+  f.github.rest.actions.listJobsForWorkflowRun = async args => {
+    const result = await jobs(args);
+    for (const job of result.data) job.steps = steps.map((name, index) => ({name, conclusion: index === 1 ? 'failure' : 'success'}));
+    return result;
+  };
+  // Step 1, the wait step of assess-intent: it publishes the assessment through its output and does not fail.
+  const outputs = {};
+  const core = {info() {}, setOutput: (name, value) => {outputs[name] = value;}};
+  const waited = await f.policy.awaitVerification({github: f.github, context: f.context, core, expectedHead: f.state.pr.head.sha, wait: async () => {}});
+  assert.match(waited.failure, new RegExp(`Required verification step "${steps[1]}" concluded failure`));
+  assert.equal(outputs.verified, 'false');
+  const assessment = JSON.parse(outputs.assessment);
+  assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, 'verification_failed');
+  assert.equal(assessment.head_sha, f.state.pr.head.sha); assert.equal(assessment.base_sha, f.state.pr.base.sha);
+  // Step 2, the write-capable job: the gate posts the notice from that assessment, then holds.
+  await assert.rejects(f.gate(assessment), /no acceptance record|cannot approve or merge/);
+  const notice = f.state.writes.find(item => item.name === 'create-ledger');
+  assert.ok(notice, 'a visible comment was posted');
+  assert.match(notice.args.body, /<!-- clouseau-review-incomplete -->/);
+  assert.ok(notice.args.body.includes(`Required verification step "${steps[1]}" concluded failure`), 'the comment names the failed step');
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  assert.equal(f.state.calls, 0, 'no AI request');
+}));
