@@ -20,6 +20,10 @@ function validateConfig(config) {
         strings(config.deployment?.paths) && config.deployment.paths.every(relative)))) {
     throw new Error('Invalid Clouseau configuration; see examples/colombo.json');
   }
+  const grace = config.verification_queue_grace_seconds;
+  if (grace !== undefined && !(Number.isInteger(grace) && grace >= 0 && grace <= require('./verification-wait.cjs').MAX_QUEUE_GRACE_SECONDS)) {
+    throw new Error('Invalid verification queue grace; use whole seconds from 0 to 3600');
+  }
   if (config.version === 2) {
     const review = config.acceptance;
     if (!review || !['deepseek-flash', 'deepseek-v4-pro'].includes(review.examiner) ||

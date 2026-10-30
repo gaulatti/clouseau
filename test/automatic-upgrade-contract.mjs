@@ -41,3 +41,40 @@ export function assertFrozenWorkflow(workflow, evaluate) {
   }
   assert.ok(count >= 2, 'multiple engine stages must be checked');
 }
+
+// A consumer's review job must not poll for verification inline: the loop holds
+// a runner while the verification job it waits on can be queued behind it. The
+// engine's await-verification operation applies the shared progress bound, and
+// every later engine step in that job must run only after it reports success.
+export function assertBoundedVerificationWait(workflow) {
+  let waits = 0;
+  for (const [name, job] of Object.entries(workflow.jobs)) {
+    const steps = job.steps || [];
+    for (const step of steps) {
+      assert.ok(!/technicalRun\s*\(/.test(step.with?.script || ''), `${name} polls for verification inline; use operation: await-verification`);
+    }
+    const index = steps.findIndex(step => step.uses === './.clouseau-ci' && step.with?.operation === 'await-verification');
+    if (index < 0) continue;
+    waits++;
+    const wait = steps[index];
+    assert.ok(wait.id, `${name} must identify its await-verification step`);
+    for (const later of steps.slice(index + 1).filter(step => step.uses === './.clouseau-ci' && ['assess', 'verify-local'].includes(step.with?.operation))) {
+      assert.match(String(later.if), new RegExp(`steps\\.${wait.id}\\.outputs\\.verified == 'true'`), `${name} must skip assessment until verification succeeded`);
+    }
+  }
+  return waits;
+}
+
+// A review that ended pending (verification not started within the queue grace)
+// holds no runner, so completion of the PR verification run must reassess it.
+export function assertReassessmentOnVerification(workflow) {
+  const trigger = workflow.on?.workflow_run;
+  assert.ok(trigger, 'the workflow must trigger on completed PR verification runs');
+  assert.ok(trigger.workflows?.length > 0 && trigger.types?.includes('completed'), 'workflow_run must name this workflow and the completed type');
+  const jobs = Object.entries(workflow.jobs).filter(([, job]) => job.steps?.some(step =>
+    step.uses === './.clouseau-ci' && step.with?.operation === 'request-reassessment'));
+  assert.ok(jobs.some(([, job]) => String(job.if).includes("github.event_name == 'workflow_run'") &&
+    String(job.if).includes("github.event.workflow_run.event == 'pull_request'") && job.permissions?.actions === 'write'),
+  'a request-reassessment job must run for workflow_run events with actions write');
+  return jobs.length;
+}
