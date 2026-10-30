@@ -856,8 +856,15 @@ test('awaiting verification refuses failures, a changed PR, closed or draft PRs 
   await assert.rejects(awaiting.awaitVerification({github: failed.github, context, core: {info() {}}, expectedHead: SHA}), /concluded failure/);
   const changed = fixture();
   await assert.rejects(awaiting.awaitVerification({github: changed.github, context, core: {info() {}}, expectedHead: BASE}), /changed while verification/);
-  await assert.rejects(awaiting.awaitVerification({github: changed.github, context: {...context, sha: BASE}, core: {info() {}}}), /changed while verification/);
-  assert.ok((await awaiting.awaitVerification({github: changed.github, context: {...context, sha: SHA}, core: {info() {}}})).url);
+  const push = sha => ({...context, eventName: 'push', sha});
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context: push(BASE), core: {info() {}}}), /changed while verification/);
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: push(SHA), core: {info() {}}})).url);
+  // A comment or manual run executes on the default branch: its own sha is not the PR head.
+  const comment = {...context, eventName: 'issue_comment', sha: 'c'.repeat(40)};
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: comment, core: {info() {}}})).url);
+  const moving = fixture(); moving.state.run.status = 'in_progress';
+  await assert.rejects(awaiting.awaitVerification({github: moving.github, context: comment, core: {info() {}},
+    wait: async () => {moving.state.pr.head.sha = BASE;}}), /changed while verification/);
   for (const mutate of [pr => {pr.state = 'closed';}, pr => {pr.draft = true;}]) {
     const f = fixture(); mutate(f.state.pr);
     await assert.rejects(awaiting.awaitVerification({github: f.github, context, core: {info() {}}, expectedHead: SHA}), /closed, became draft/);

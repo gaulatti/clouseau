@@ -128,9 +128,13 @@ async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGrace, ...op
 async function awaitVerification({github, context, core, expectedHead, wait = sleep, maxPolls = 120, queuedGrace}) {
   const pull_number = numberFor(context);
   const guard = stallGuard(queuedGrace);
+  // Only a push event's commit is the PR head; comment and manual events run on
+  // the default branch, so they bind to the head observed when the wait starts.
+  let expected = expectedHead || (context.eventName === 'push' ? context.sha : null);
   for (let attempt = 0; attempt < maxPolls; attempt++) {
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number});
-    if (pr.state !== 'open' || pr.draft || pr.head.sha !== (expectedHead || context.sha)) {
+    expected ??= pr.head.sha;
+    if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
       throw new Error('PR closed, became draft, or changed while verification was pending');
     }
     const result = await technicalRun(github, context.repo, pr);
