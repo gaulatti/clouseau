@@ -415,9 +415,8 @@ test('a reviewer answer without gates or dependencies is rejected by validation,
   const f = complete();
   const noGates = modelTemplate(f.snapshot); delete noGates.gates;
   assert.throws(() => validateFacts(materialize(noGates, f.snapshot), f.snapshot), /Invalid acceptance evidence/);
-  const noGatesCode = fixture(); noGatesCode.snapshot.files = [{path: 'README.md', status: 'modified'}];
-  const docs = modelTemplate(noGatesCode.snapshot); delete docs.gates;
-  assert.doesNotThrow(() => materialize(docs, noGatesCode.snapshot));
+  const docsOnly = complete(); const docs = modelTemplate(docsOnly.snapshot); delete docs.gates; docsOnly.snapshot.files = [{path: 'README.md', status: 'modified'}];
+  assert.doesNotThrow(() => materialize(docs, docsOnly.snapshot));
   const noDependencies = modelTemplate(f.snapshot); delete noDependencies.coverage.dependencies;
   noDependencies.coverage.sources.pop();
   noDependencies.gates.forEach(gate => {gate.state = 'satisfied';});
