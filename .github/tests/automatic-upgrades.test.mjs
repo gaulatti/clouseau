@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 import {parse} from 'yaml';
 import {data, Evaluator, Lexer, Parser} from '@actions/expressions';
-import {assertFrozenWorkflow, assertBoundedVerificationWait, assertReassessmentOnVerification} from '../../test/automatic-upgrade-contract.mjs';
+import {assertFrozenWorkflow, assertBoundedVerificationWait, assertReassessmentOnVerification, assertBaseReconciliation} from '../../test/automatic-upgrade-contract.mjs';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const action = parse(readFileSync(path.join(root, 'action.yml'), 'utf8'));
 const workflow = parse(readFileSync(path.join(root, '.github/workflows/ci.yml'), 'utf8'));
@@ -35,7 +35,7 @@ test('the actual job expressions keep the original engine after main advances an
 test('protected self review uses one frozen engine while candidate tests and explicit installation retain their own boundaries', () => {
   const resolver = workflow.jobs['resolve-clouseau'];
   assert.match(resolver.steps[0].uses, /^gaulatti\/clouseau\/scripts\/resolve@[a-f0-9]{40}$/);
-  for (const name of ['assess-intent', 'approve-and-merge', 'apply-repair', 'finalize-merge', 'request-reassessment']) {
+  for (const name of ['assess-intent', 'approve-and-merge', 'apply-repair', 'finalize-merge', 'request-reassessment', 'reconcile-base']) {
     const job = workflow.jobs[name];
     assert.ok([job.needs].flat().includes('resolve-clouseau'), name);
     assert.equal(job.steps.find(s => s.with?.repository === 'gaulatti/clouseau').with.ref, "${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}");
@@ -104,4 +104,26 @@ test('a pending review is reassessed when verification completes, and later step
   assert.throws(() => assertReassessmentOnVerification(unnamed), /completed type/);
   const unrouted = structuredClone(consumer); unrouted.jobs['request-reassessment'].permissions = {actions: 'read'};
   assert.throws(() => assertReassessmentOnVerification(unrouted), /workflow_run events/);
+});
+
+test('a push to the base branch reconciles approved PRs that a sibling merge left behind', () => {
+  assert.equal(assertBaseReconciliation(workflow), 1);
+  assert.match(action.inputs['update-token'].description, /reconcile-base/);
+  const step = action.runs.steps.find(s => s.if === "inputs.operation == 'reconcile-base'");
+  assert.match(step.with.script, /reconcileBase/);
+  assert.equal(step.env.CLOUSEAU_UPDATE_TOKEN, '${{ inputs.update-token }}');
+  const untriggered = structuredClone(workflow); delete untriggered.on.push;
+  assert.throws(() => assertBaseReconciliation(untriggered), /pushes to the base branch/);
+  const other = structuredClone(workflow); other.on.push.branches = ['release'];
+  assert.throws(() => assertBaseReconciliation(other), /include the main branch/);
+  const missing = structuredClone(workflow); delete missing.jobs['reconcile-base'];
+  assert.throws(() => assertBaseReconciliation(missing), /reconcile-base job must exist/);
+  const ungated = structuredClone(workflow); ungated.jobs['reconcile-base'].if = 'true';
+  assert.throws(() => assertBaseReconciliation(ungated), /only for pushes/);
+  const silent = structuredClone(workflow); delete silent.jobs['reconcile-base'].permissions.issues;
+  assert.throws(() => assertBaseReconciliation(silent), /issues write/);
+  const powerful = structuredClone(workflow); powerful.jobs['reconcile-base'].permissions.contents = 'write';
+  assert.throws(() => assertBaseReconciliation(powerful), /no contents or actions write/);
+  const racing = structuredClone(workflow); racing.jobs['reconcile-base'].concurrency['cancel-in-progress'] = true;
+  assert.throws(() => assertBaseReconciliation(racing), /queue, not cancel/);
 });

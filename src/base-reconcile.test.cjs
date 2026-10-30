@@ -1,0 +1,92 @@
+'use strict';
+const {test} = require('node:test');
+const assert = require('node:assert/strict');
+const {reconcileBase} = require('./base-reconcile.cjs');
+
+const repo = {owner: 'example', repo: 'product'};
+const tip = 'c'.repeat(40), old = 'b'.repeat(40);
+const sha = n => String(n).repeat(40).slice(0, 40);
+
+// Six simultaneously approved PRs, as in the bleecker layout; the first merged.
+function fixture(overrides = {}) {
+  const state = {comments: {}, updates: [], created: [], edited: [], behind: {}, reviews: {}, updateError: {}, ...overrides};
+  const pulls = [2, 3, 4, 5, 6, 7].map(number => ({number, draft: false, auto_merge: {enabled_by: {login: 'github-actions[bot]'}},
+    head: {sha: sha(number), repo: {full_name: 'example/product'}}, base: {ref: 'main'}}));
+  state.pulls = pulls;
+  const github = {rest: {
+    pulls: {list: async () => ({data: state.pulls}), listReviews: async args => ({data: state.reviews[args.pull_number] || []})},
+    repos: {
+      compareCommits: async args => ({data: {behind_by: state.behind[args.head] ?? 1, merge_base_commit: {sha: old}}}),
+      getBranch: async () => ({data: {commit: {sha: tip}}}),
+    },
+    issues: {
+      listComments: async args => ({data: state.comments[args.issue_number] || []}),
+      createComment: async args => state.created.push(args),
+      updateComment: async args => state.edited.push(args),
+    },
+  }, paginate: async (method, args) => (await method(args)).data};
+  const updateGithub = {rest: {pulls: {updateBranch: async args => {
+    if (state.updateError[args.pull_number]) throw Object.assign(new Error('refused'), {status: state.updateError[args.pull_number]});
+    state.updates.push(args);
+  }}}};
+  const logs = [];
+  const core = {info: line => logs.push(line)};
+  const context = {repo, eventName: 'push', payload: {ref: 'refs/heads/main'}};
+  return {state, github, updateGithub, core, context, logs};
+}
+const run = (f, extra = {}) => reconcileBase({github: f.github, updateGithub: f.updateGithub, context: f.context, core: f.core, baseBranch: 'main', ...extra});
+
+test('only a push to the base branch reconciles', async () => {
+  for (const context of [{repo, eventName: 'pull_request', payload: {ref: 'refs/heads/main'}}, {repo, eventName: 'push', payload: {ref: 'refs/heads/other'}}]) {
+    const f = fixture(); const outcome = await run(f, {context});
+    assert.deepEqual(outcome, {updated: [], noticed: []}); assert.equal(f.state.created.length, 0);
+  }
+});
+
+test('with an update credential one approved stale PR is updated at a time and every sibling gets a visible notice', async () => {
+  const f = fixture(); const outcome = await run(f);
+  assert.deepEqual(outcome, {updated: [2], noticed: [3, 4, 5, 6, 7]});
+  assert.deepEqual(f.state.updates, [{...repo, pull_number: 2, expected_head_sha: sha(2)}]);
+  assert.equal(f.state.created.length, 5);
+  assert.ok(f.state.created.every(item => item.body.includes('clouseau-needs-branch-update') && item.body.includes('updated after it merges')));
+  assert.deepEqual(f.state.created.map(item => item.issue_number), [3, 4, 5, 6, 7]);
+  await run(f);
+  assert.equal(f.state.updates.length, 2, 'the next push updates the next PR');
+});
+
+test('without a credential, a fork head or a refused update every stale approved PR is noticed and none is changed', async () => {
+  const none = fixture(); const outcome = await run(none, {updateGithub: null});
+  assert.deepEqual(outcome.updated, []); assert.equal(outcome.noticed.length, 6);
+  assert.ok(none.state.created.every(item => !item.body.includes('updated after it merges')));
+  const fork = fixture(); fork.state.pulls[0].head.repo = {full_name: 'someone/product'}; fork.state.pulls[1].head.repo = null;
+  assert.deepEqual((await run(fork)).updated, [4], 'forks and deleted head repositories are never updated');
+  const refused = fixture({updateError: {2: 422, 3: 'x'}});
+  const result = await run(refused);
+  assert.deepEqual(result, {updated: [4], noticed: [2, 3, 5, 6, 7]}, 'a conflict is noticed and the next PR is tried');
+  assert.ok(refused.logs.some(line => line.includes('PR 2') && line.includes('HTTP 422')));
+  assert.ok(refused.logs.some(line => line.includes('PR 3') && line.includes('HTTP unknown')));
+});
+
+test('only approved or auto-merge armed, ready, genuinely behind PRs are considered', async () => {
+  const f = fixture();
+  f.state.pulls[0].draft = true;
+  f.state.pulls[1].auto_merge = null;                 // 3: unapproved, no auto-merge
+  f.state.pulls[2].auto_merge = null;                 // 4: bot-approved on its head
+  f.state.reviews[4] = [{user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: sha(4)}];
+  f.state.pulls[3].auto_merge = null;                 // 5: approval for an older head
+  f.state.reviews[5] = [{user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: sha(9)}];
+  f.state.pulls[4].auto_merge = null;                 // 6: approval later dismissed
+  f.state.reviews[6] = [{user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: sha(6)},
+    {user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'DISMISSED', commit_id: sha(6)}, {user: {login: 'x'}, state: 'COMMENTED', commit_id: sha(6)}];
+  f.state.behind[sha(7)] = 0;                         // 7: already current
+  const outcome = await run(f, {updateGithub: null});
+  assert.deepEqual(outcome, {updated: [], noticed: [4]});
+});
+
+test('a repeated push replaces the same notice instead of adding another', async () => {
+  const f = fixture();
+  f.state.comments[3] = [{id: 77, user: {login: 'github-actions[bot]'}, body: `<!-- clouseau-needs-branch-update:${sha(3)}:${old} -->\nold`}];
+  await run(f, {updateGithub: null});
+  assert.deepEqual(f.state.edited.map(item => item.comment_id), [77]);
+  assert.equal(f.state.created.filter(item => item.issue_number === 3).length, 0);
+});

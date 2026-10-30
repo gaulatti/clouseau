@@ -40,3 +40,15 @@ test('a moved base fails closed with one explicit secret-free needs-branch-updat
   await surface({github, repo, pr, assessment: next, baseBranch: 'main'});
   assert.equal(created.length, 2, 'a new head receives its own notice');
 });
+
+test('a later base move for the same head updates the one notice in place and an optional note is appended', async () => {
+  const comments = [{id: 9, user: {login: 'github-actions[bot]'}, body: `<!-- ${MARKER}:${head}:${base} -->\nold`}];
+  const updated = [];
+  const github = {rest: {repos: {getBranch: async () => ({data: {commit: {sha: moved}}})},
+    issues: {listComments: async () => ({data: comments}), updateComment: async args => updated.push(args)}},
+  paginate: async (method, args) => (await method(args)).data};
+  await surface({github, repo: {owner: 'example', repo: 'product'}, pr, assessment, baseBranch: 'main', note: 'Queued behind PR 3.'});
+  assert.equal(updated.length, 1); assert.equal(updated[0].comment_id, 9);
+  assert.ok(updated[0].body.startsWith(`<!-- ${MARKER}:${head}:${moved} -->\n`));
+  assert.ok(updated[0].body.endsWith('Queued behind PR 3.'));
+});
