@@ -347,6 +347,27 @@ test('stale assessments are refused before any write', async () => {
   assert.equal(f.writes.length, 0);
 });
 
+test('a malformed AI credential is named and refused before any provider request', async () => {
+  const {github} = fixture();
+  const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fixture-key\n';
+  try {
+    const result = await assess({github, context, fetchImpl: () => assert.fail('must not call provider')});
+    assert.equal(result.decision, 'second_opinion');
+    assert.equal(result.reason, 'AI assessment unavailable: DEEPSEEK_API_KEY contains whitespace or a line break');
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
+test('an assessment whose base moved is refused with one needs-branch-update notice and no approval', async () => {
+  const f = fixture();
+  await assert.rejects(f.run({assessment: {...automatic, base_sha: SHA}}), /^Error: Needs branch update/);
+  assert.deepEqual(f.writes.map(item => item.name), ['comment']);
+  assert.match(f.writes[0].args.body, /clouseau-needs-branch-update/);
+  f.state.comments.push({user: {login: 'github-actions[bot]'}, body: f.writes[0].args.body});
+  await assert.rejects(f.run({assessment: {...automatic, base_sha: SHA}}), /Needs branch update/);
+  assert.equal(f.writes.length, 1, 'a rerun does not repeat the notice');
+  await assert.rejects(f.run({assessment: {...automatic, number: 9, base_sha: SHA}}), /Stale/, 'another PR is not a base move');
+});
+
 test('a PR changed during CI cannot receive an approval', async () => {
   const f = fixture();
   f.state.run.status = 'in_progress';

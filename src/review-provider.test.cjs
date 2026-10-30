@@ -168,3 +168,17 @@ test('Jev rejects missing keys, unbounded state, missing questions, wrong identi
     assert.equal(calls, 1);
   }
 }));
+
+test('malformed acceptance and grading provider keys are refused by name before any request', async () => {
+  const {requestJSON, requestJev} = require('./review-provider.cjs');
+  const deepseek = process.env.DEEPSEEK_API_KEY; const typesafe = process.env.TYPESAFE_API_KEY;
+  const fetchImpl = async () => assert.fail('a malformed credential must never reach the network');
+  try {
+    process.env.DEEPSEEK_API_KEY = 'fictional-key\n'; process.env.TYPESAFE_API_KEY = 'fictional key';
+    await assert.rejects(requestJSON({model: 'deepseek-flash', messages: [], fetchImpl}), /^Error: DEEPSEEK_API_KEY contains whitespace or a line break$/);
+    await assert.rejects(requestJev({state: {}, questions: {q: {}}, fetchImpl}), /^Error: TYPESAFE_API_KEY contains whitespace or a line break$/);
+  } finally {
+    if (deepseek === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = deepseek;
+    if (typesafe === undefined) delete process.env.TYPESAFE_API_KEY; else process.env.TYPESAFE_API_KEY = typesafe;
+  }
+});

@@ -5,6 +5,8 @@
 async function finalizePrivateOwner({github, repo, pr, assessment, baseBranch, verify}) {
   const exact = value => value.state === 'open' && !value.draft &&
     value.head.sha === assessment.head_sha && value.base.sha === assessment.base_sha && value.base.ref === baseBranch;
+  const branchUpdate = require('./branch-update.cjs');
+  if (branchUpdate.baseOnlyMoved(pr, assessment, baseBranch)) throw await branchUpdate.surface({github, repo, pr, assessment, baseBranch});
   if (!exact(pr) || !/^[a-f0-9]{40}$/.test(assessment.head_sha) || !/^[a-f0-9]{40}$/.test(assessment.base_sha)) {
     throw new Error('Private owner merge requires the exact open assessed head and base');
   }
@@ -35,6 +37,11 @@ async function finalizePrivateOwner({github, repo, pr, assessment, baseBranch, v
   await verify();
   const {data: current} = await github.rest.pulls.get({...repo, pull_number: pr.number});
   const {data: branch} = await github.rest.repos.getBranch({...repo, branch: baseBranch});
+  const headUnchanged = current.state === 'open' && !current.draft && current.head.sha === assessment.head_sha &&
+    current.base.ref === baseBranch && !current.auto_merge && branch.protected === false;
+  if (headUnchanged && (current.base.sha !== assessment.base_sha || branch.commit.sha !== assessment.base_sha)) {
+    throw await branchUpdate.surface({github, repo, pr: current, assessment, baseBranch});
+  }
   if (!exact(current) || current.auto_merge || branch.commit.sha !== assessment.base_sha || branch.protected !== false) {
     throw new Error('Private owner merge head, base or protection changed before the atomic write');
   }

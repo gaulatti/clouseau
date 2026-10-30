@@ -377,6 +377,21 @@ private plan, GitHub cannot prevent a trusted maintainer from ignoring a failed
 check. Manual mode continues to require manual merge.
 
 
+### Incomplete reviews are always visible
+
+Every `review_incomplete` assessment carries a fixed `cause` (for example
+`provider_key_missing`, `provider_key_invalid`, `provider_rejected`,
+`provider_unavailable`, `local_receipt_required`, `engine_mismatch` or
+`evidence_incomplete`). The `assess` step raises a warning annotation, and the
+`gate` creates (or updates in place) one `<!-- clouseau-review-incomplete -->`
+comment with the specific reason and a next step. Raw error text, provider
+responses and credentials are never forwarded: only fixed causes, HTTP status
+digits and variable names appear. Provider credentials are validated for shape
+(`DEEPSEEK_API_KEY`, `TYPESAFE_API_KEY`: no whitespace or line break, printable
+ASCII, not wrapped in quotation marks, at most 512 characters) before any
+request, by `check-provider` and by every review transport. A malformed value is
+refused, never trimmed or repaired; re-save the secret as the bare key.
+
 ### Controller-enforced owner merge on an unavailable private plan
 
 An accepted protocol-v2 `"merge_mode": "automatic"` explicitly selects strict
@@ -428,3 +443,25 @@ An ancestry merge is not deployment, live health or documentation publication
 proof, and a deployment contract remains separately authorized. Standalone
 `finalize` cannot authorize an unmerged private candidate: only the validated
 acceptance gate can perform this transaction.
+
+### The base moved after approval
+
+An assessment, any signed local receipt and the exact-head bot approval are
+bound to the head **and** the base they were produced against. When another PR
+merges first, the accepted base is stale. Clouseau never merges on that stale
+evidence and never weakens the exact-head requirement, including for protected
+controls. Instead, when only the base differs (same open PR, same assessed head),
+the `gate` (and the controller-enforced owner merge, at each re-check up to the
+atomic write) fails with `Needs branch update` and posts one idempotent
+`<!-- clouseau-needs-branch-update:<head>:<base> -->` comment naming the old and
+new base. Re-running the failed job cannot succeed because its assessment is
+bound to the old base.
+
+The next step is to update the PR branch ("Update branch", `gh pr update-branch`
+or a merge commit) with the author's own credentials. That push starts normal
+verification, a fresh independent review (and, where required, a fresh local
+review receipt for the new head) and then the merge. Clouseau does not update
+the branch itself: a push authenticated with the workflow `GITHUB_TOKEN` does not
+start the verification workflow, so the new head would have no tests, coverage
+or review evidence. A changed head is a new revision and is never reported as a
+base move.

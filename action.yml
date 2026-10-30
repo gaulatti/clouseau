@@ -171,6 +171,7 @@ runs:
               receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true'});
           } finally {transport.preserveDiagnostic({mode, core, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});}
           core.setOutput('assessment', JSON.stringify(assessment));
+          require(path.join(root, 'src/incomplete.cjs')).annotate({core, assessment});
           transport.publish({mode, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT, core});
     - name: Wait for PR verification without holding a stalled runner
       id: await

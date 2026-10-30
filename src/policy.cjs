@@ -67,7 +67,8 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
   const reason = scopeReason(files, pr);
   if (reason && reason !== REVIEW_CONTROL_REASON) return hold(reason);
-  if (!process.env.DEEPSEEK_API_KEY) return hold('AI assessment unavailable: DEEPSEEK_API_KEY is not configured');
+  const keyProblem = require('./provider-key.cjs').keyProblem(process.env.DEEPSEEK_API_KEY);
+  if (keyProblem) return hold(`AI assessment unavailable: DEEPSEEK_API_KEY ${keyProblem}`);
   // Do not spend provider credits on a PR whose technical gate is not green.
   const technical = await technicalRun(github, repo, pr);
   if (technical.pending) return {...identity, decision: 'pending_technical', verification: technical.state, reason: 'Waiting for all tests and exact 100% coverage'};
@@ -319,6 +320,9 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     return;
   }
   if (assessment.number !== pull_number || assessment.head_sha !== pr.head.sha || assessment.base_sha !== pr.base.sha) {
+    if (assessment.number === pull_number && require('./branch-update.cjs').baseOnlyMoved(pr, assessment, config.base_branch)) {
+      throw await require('./branch-update.cjs').surface({github, repo, pr, assessment, baseBranch: config.base_branch});
+    }
     throw new Error('Stale intent assessment: reassess the current PR revision');
   }
   if (context.eventName === 'issue_comment') {

@@ -156,7 +156,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
       }
       if (receiptOnly || config.local_review?.mode === 'required') {
-        return {...identity, decision: 'review_incomplete', reason: 'This repository requires an authenticated local Clouseau review receipt.'};
+        return {...identity, decision: 'review_incomplete', cause: 'local_receipt_required',
+          reason: 'This repository requires an authenticated local Clouseau review receipt.'};
       }
       const intentConfirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
       snapshot = await collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation});
@@ -190,9 +191,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
       const engineMismatch = error.message.startsWith('Invalid local review receipt: engine mismatch;');
-      return {...identity, decision: 'review_incomplete',
-        ...(engineMismatch ? {review_source: 'authenticated_local_rejected', provider_api_calls: 0} : {}),
-        reason: engineMismatch ? error.message : 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.'};
+      const {cause, reason} = engineMismatch ? {cause: 'engine_mismatch', reason: error.message} : require('./incomplete.cjs').classify(error);
+      return {...identity, decision: 'review_incomplete', cause,
+        ...(engineMismatch ? {review_source: 'authenticated_local_rejected', provider_api_calls: 0} : {}), reason};
     }
   }
 
@@ -211,6 +212,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const hold = reason => legacy.gate({github, context, core, ...options,
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) {
+      if (assessment.decision === 'review_incomplete') await require('./incomplete.cjs').post({github, context, assessment});
       return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
         'It is reassessed automatically when PR verification completes where the workflow has the verification trigger; otherwise re-run it ' +
         'once verification has completed, or push a new head if re-running does not produce a record.');
@@ -220,6 +222,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
+    const branchUpdate = require('./branch-update.cjs');
+    if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) {
+      throw await branchUpdate.surface({github, repo: context.repo, pr, assessment, baseBranch: config.base_branch});
+    }
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
     if (digest(technical) !== digest(record.technical)) throw new Error('Verification changed after acceptance investigation');
@@ -262,6 +268,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
         const {data: currentPr} = await github.rest.pulls.get({...context.repo, pull_number: pr.number});
+        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) {
+          throw await branchUpdate.surface({github, repo: context.repo, pr: currentPr, assessment, baseBranch: config.base_branch});
+        }
         if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
             currentRecord.local_receipt && currentRecord.local_author !== currentPr.user.login) throw new Error('Acceptance author or revision changed before private merge');
         if (currentRecord.local_receipt) {
