@@ -300,9 +300,16 @@ function judgeVerification(run, jobs) {
   if (verify.run_attempt > run.run_attempt) return waiting(`the job list is from attempt ${verify.run_attempt}, ahead of the run record (attempt ${run.run_attempt})`);
   if (['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(verify.status) || !verify.conclusion) return waiting(`job "${verify.name}" is ${verify.status}`);
   if (verify.conclusion !== 'success') return {final: true, failure: `Verification job "${verify.name}" concluded ${verify.conclusion}`};
+  // A job that reports success but whose step list is empty, or lists a step with no final conclusion, is
+  // demonstrably not settled. Once every listed step is final the list is complete, so a required step that
+  // is absent, skipped or unsuccessful is a definite, named failure rather than a reason to keep waiting.
+  const listed = verify.steps ?? [];
+  if (!listed.length) return waiting(`job "${verify.name}" lists no steps yet`);
+  const open = listed.find(step => !step.conclusion || !FINAL_STEP.has(step.conclusion));
+  if (open) return waiting(`step "${open.name}" has no final conclusion yet`);
   for (const name of VERIFY_STEPS) {
-    const step = (verify.steps ?? []).find(item => item.name === name);
-    if (!step || !step.conclusion || !FINAL_STEP.has(step.conclusion)) return waiting(`required step "${name}" has no final conclusion yet`);
+    const step = listed.find(item => item.name === name);
+    if (!step) return {final: true, failure: `Required verification step "${name}" was not found in job "${verify.name}"`};
     if (step.conclusion !== 'success') return {final: true, failure: `Required verification step "${name}" concluded ${step.conclusion}`};
   }
   return {final: true, verify};
