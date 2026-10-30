@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem} = require('./acceptance.cjs');
+const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, specifiersOf} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
@@ -34,10 +34,8 @@ function refresh(snapshot) {
   return snapshot;
 }
 
-async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
+async function fetchText({github, repo, snapshot, filename, ref}) {
   if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true});
-  const id = `${ref}:${filename}`;
-  if (snapshot.sources[id]) return id;
   const sourceRepo = ref === snapshot.head_sha ? snapshot.head_repository : repo;
   if (!sourceRepo) throw new Error('The immutable head repository is unavailable');
   const {data} = await github.rest.repos.getContent({...sourceRepo, path: filename, ref});
@@ -48,7 +46,14 @@ async function readSource({github, repo, snapshot, filename, ref, authority = 'u
   try {content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));}
   catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true});}
   if (content.includes('\0') || content.length > 300000) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true});
-  snapshot.sources[id] = {path: filename, ref, authority, kind, content};
+  return content;
+}
+
+async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
+  if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true});
+  const id = `${ref}:${filename}`;
+  if (snapshot.sources[id]) return id;
+  snapshot.sources[id] = {path: filename, ref, authority, kind, content: await fetchText({github, repo, snapshot, filename, ref})};
   return id;
 }
 
@@ -121,6 +126,26 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
       item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
       if (entry.size > budget) break;
       budget -= entry.size;
+      await readOptional({github, repo, snapshot, filename: entry.path});
+    }
+    // Tests rarely carry the module's name (utils.test.ts imports attention-color), so importers are
+    // also found by content: other small tests are read once and only their import specifiers are
+    // kept, which keeps the reviewers' evidence small. Barrels that re-export a changed module's
+    // directory are supplied in full so that a chain through them can be followed.
+    const supplied = new Set(Object.values(snapshot.sources).map(source => source.path));
+    const others = tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
+      !supplied.has(item.path) && item.size < 60000).slice(0, 60);
+    snapshot.test_imports = [];
+    for (const entry of others) {
+      let content;
+      try {content = await fetchText({github, repo, snapshot, filename: entry.path, ref: pr.head.sha});}
+      catch (error) {if (error.status === 404 || error.unavailable) continue; throw error;}
+      const specifiers = specifiersOf(content);
+      if (specifiers.length) snapshot.test_imports.push({path: entry.path, specifiers});
+    }
+    const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)index\.[cm]?[jt]sx?$/.test(item.path) &&
+      directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
       await readOptional({github, repo, snapshot, filename: entry.path});
     }
   }

@@ -1,5 +1,6 @@
 'use strict';
 
+const path = require('node:path');
 const {createHash} = require('node:crypto');
 
 const FACTORS = Object.freeze({
@@ -84,18 +85,57 @@ function moduleStem(name) {
 // A statement that imports, not a title or comment that merely contains the word.
 const IMPORT = /^\s*(?:(?:export\b.*\s)?from\b|import\b|use\b|pub\s+use\b|mod\b|require(?:_relative)?\b|include\b|load\b)|\b(?:require|import)\(/;
 
-// A JavaScript-style module specifier may follow a multi-line `import {\n a,\n} from '../../src/x'`,
-// so statements are matched on the whole source once comments are removed. Only an import/export
-// statement, or a declaration initialised by require()/import(), links a module; a quoted path
-// inside a test title or a comment does not.
-function linked(snapshot, name) {
+const JS_PATH = /\.[cm]?[jt]sx?$/;
+const EXTENSION = /\.[cm]?[jt]sx?$/;
+
+// Module specifiers of a JavaScript/TypeScript source, from whole statements once comments are
+// removed: `import ... from`, `export ... from`, side-effect `import`, and declarations initialised by
+// require()/import(). A quoted path in a test title or a comment is not an import.
+function specifiersOf(content) {
+  const text = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const pattern = /^\s*(?:(?:import|export)\b[^;'"`]*?\bfrom\s*|import\s*|(?:(?:const|let|var)\b[^;=]*=\s*)?(?:await\s+)?(?:require|import)\s*\(\s*)(['"`])([^'"`\n]+)\1/gm;
+  return [...text.matchAll(pattern)].map(match => match[2]);
+}
+
+// Known files a specifier can name: relative paths, `.js`-for-`.ts` suffixes, `/index`, and the
+// `@/`, `~/` and `src/` aliases (matched by path tail, since the alias map is not supplied).
+function resolveSpecifier(from, specifier, known) {
+  const bare = value => value.replace(EXTENSION, '');
+  const alias = /^(?:@|~)\//.test(specifier) || specifier.startsWith('src/');
+  if (!specifier.startsWith('.') && !alias) return [];
+  const target = (specifier.startsWith('.') ? bare(path.posix.normalize(path.posix.join(path.posix.dirname(from), specifier))) : bare(specifier.replace(/^(?:@|~)\//, ''))).replace(/\/index$/, '');
+  return known.filter(candidate => {
+    const stem = bare(candidate);
+    const full = stem.replace(/\/index$/, '');
+    return specifier.startsWith('.') ? full === target : full === target || full.endsWith(`/${target}`);
+  });
+}
+
+// Principled coverage: a changed JS/TS file is covered when a supplied test imports it directly, or
+// imports a supplied file (a changed caller, a barrel) that imports it, transitively. Only supplied
+// files can be intermediates; a file with no path from any test is not covered.
+function reachedByTests(snapshot) {
+  const sources = Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha && source.kind === 'source' && JS_PATH.test(source.path));
+  const known = [...new Set([...sources.map(source => source.path), ...snapshot.files.map(file => file.path)])];
+  const edges = new Map(sources.map(source => [source.path, specifiersOf(source.content)]));
+  const roots = [...sources.filter(source => isTestPath(source.path)).map(source => source.path), ...(snapshot.test_imports || []).map(item => item.path)];
+  for (const item of snapshot.test_imports || []) edges.set(item.path, item.specifiers);
+  const reached = new Set(); const queue = [...roots];
+  while (queue.length) {
+    const from = queue.shift();
+    for (const specifier of edges.get(from) || []) for (const target of resolveSpecifier(from, specifier, known)) {
+      if (!reached.has(target)) {reached.add(target); if (!isTestPath(target)) queue.push(target);}
+    }
+  }
+  return reached;
+}
+
+function linked(snapshot, name, reached) {
+  if (JS_PATH.test(name)) return reached.has(name);
   const stem = moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const token = new RegExp(`(?:^|[\\s'"\`/.:])${stem}(?=$|[\\s'"\`.;,)/])`);
-  const path = `['"\`][^'"\`\\n]*/${stem}(?:\\.[a-z]+)?(?:/index(?:\\.[a-z]+)?)?['"\`]`;
-  const specifier = new RegExp(`^\\s*(?:(?:import|export)\\b[^;'"\`]*?\\bfrom\\s*|import\\s*|(?:const|let|var)\\b[^;=]*=\\s*(?:await\\s*)?(?:require|import)\\s*\\(\\s*|(?:await\\s+)?(?:require|import)\\s*\\(\\s*)${path}`, 'm');
   return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' && isTestPath(source.path) &&
-    (specifier.test(source.content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')) ||
-      (!/\.[cm]?[jt]sx?$/.test(source.path) && source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)))));
+    !JS_PATH.test(source.path) && source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)));
 }
 
 // Approval needs affirmative, per-file behavioural evidence. An unresolved
@@ -113,8 +153,9 @@ function approvalHold(report, snapshot) {
   const missing = (snapshot.omitted_sources || []).length > 0 ||
     [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])].some(item => item.state === 'missing');
   if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';
-  if (missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
-  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path)).map(file => file.path);
+  if (executable.length && missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
+  const reached = reachedByTests(snapshot);
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !linked(snapshot, file.path, reached)).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;
 }
@@ -273,4 +314,4 @@ function validateApproval(report, snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};

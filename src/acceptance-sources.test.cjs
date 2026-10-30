@@ -182,7 +182,7 @@ test('bleecker layout: an unchanged multi-line-import test for a renamed local v
   assert.ok(snapshot.sources[`${f.pr.head.sha}:tests/unit/format.test.ts`], 'the importing test is in the snapshot the reviewers see');
   const gates = [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'satisfied'}];
   assert.equal(approvalHold({gates}, snapshot), null);
-  for (const specifier of ["'../../src/utils/format.js'", "'@/utils/format'", "'./format.ts'", '"../../src/utils/format/index"']) {
+  for (const specifier of ["'../../src/utils/format.js'", "'@/utils/format'", "'../../src/utils/format.ts'", '"../../src/utils/format/index"']) {
     for (const source of Object.values(snapshot.sources)) if (source.path === 'tests/unit/format.test.ts') source.content = `import {\n  a,\n} from ${specifier};\n`;
     assert.equal(approvalHold({gates}, snapshot), null, specifier);
   }
@@ -197,6 +197,8 @@ test('bleecker layout: a fixtures-only change with an unresolved test gate is no
   const completeness = {gates: [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'unresolved'}]};
   assert.equal(approvalHold(completeness, snapshot), null, 'a vague unresolved completeness opinion without missing evidence holds nothing (issue 123)');
   snapshot.omitted_sources = [{path: 'x', reason: 'not found at the head revision'}];
+  assert.equal(approvalHold(completeness, snapshot), null, 'a data-only change has nothing further to verify, however the reviewer words it (issue 123)');
+  snapshot.files.push({path: 'src/app.ts', status: 'modified'});
   assert.match(approvalHold(completeness, snapshot), /review completeness/);
   delete snapshot.omitted_sources;
   assert.match(approvalHold({...completeness, coverage: {sources: [], dependencies: [{path: 'x', state: 'missing'}]}}, snapshot), /review completeness/);
@@ -248,4 +250,35 @@ test('a prefetched test that vanished between base and head is omitted, not fata
   };
   const snapshot = await collectSnapshot(f);
   assert.deepEqual(snapshot.omitted_sources, [{path: 'tests/upload.test.rs', reason: 'not found at the head revision'}]);
+});
+
+
+test('bleecker layout (lab4): importers are found by content, through callers and barrels, and orphans stay held (issue 127)', async () => {
+  const contents = {
+    'tests/unit/utils.test.ts': "import { createAttentionColor } from '../../src/utils/attention-color';\n",
+    'tests/unit/navigation-feed.test.tsx': "import { FeedItem } from '../../src/components/feed-item';\n",
+    'tests/unit/barrel.test.ts': "import { Thing } from '../../src';\n",
+    'src/index.ts': "export * from './components/thing';\n",
+    'src/components/thing.tsx': 'export const Thing = 1;\n',
+  };
+  const gates = [{name: 'test_integrity', state: 'satisfied'}, {name: 'review_completeness', state: 'satisfied'}];
+  const cases = [
+    [['src/utils/attention-color.ts'], null],
+    [['src/components/feed-item.tsx'], null],
+    [['src/components/thing.tsx'], null],
+    [['src/utils/orphan.ts'], /orphan\.ts/],
+  ];
+  for (const [files, expected] of cases) {
+    const {f, approvalHold} = bleecker(files, contents);
+    const snapshot = await collectSnapshot(f);
+    const hold = approvalHold({gates}, snapshot);
+    if (expected) assert.match(hold, expected); else assert.equal(hold, null, files.join());
+  }
+  const {f, approvalHold} = bleecker(['src/utils/helper.ts', 'src/components/feed-item.tsx'], {
+    ...contents, 'src/components/feed-item.tsx': "import { resolveFallback } from '../utils/helper';\nexport const FeedItem = 1;\n"});
+  f.files[0].status = 'added';
+  const snapshot = await collectSnapshot(f);
+  assert.deepEqual(snapshot.test_imports.map(item => item.path).sort(), ['tests/unit/barrel.test.ts', 'tests/unit/navigation-feed.test.tsx', 'tests/unit/utils.test.ts']);
+  assert.equal(approvalHold({gates}, snapshot), null, 'an added helper is covered through the changed caller a test imports');
+  assert.ok(!Object.values(snapshot.sources).some(source => source.path === 'tests/unit/utils.test.ts'), 'content-found importers keep only their specifiers in the reviewers evidence');
 });
