@@ -206,3 +206,12 @@ test('only an import statement links a module: comments and quoted titles do not
     assert.match(stem(content), /no supplied test imports/, content);
   }
 });
+
+test('a test-only change is executable: unresolved test integrity still holds it, a fixture-only change does not', () => {
+  const f = fixture();
+  f.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
+  f.snapshot.files = [{path: 'tests/unit/format.test.ts', status: 'modified'}];
+  assert.equal(approvalHold(f.report, f.snapshot), 'test integrity is unresolved');
+  f.snapshot.files = [{path: 'tests/fixtures/sample.json', status: 'added'}, {path: 'tests/fixtures/helper.ts', status: 'added'}];
+  assert.equal(approvalHold(f.report, f.snapshot), null);
+});

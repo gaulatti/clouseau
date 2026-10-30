@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {GATES, MAX_CITATION_LINES, digest, validateFacts, validateApproval, isCodePath} = require('./acceptance.cjs');
+const {GATES, MAX_CITATION_LINES, digest, validateFacts, validateApproval, isExecutablePath} = require('./acceptance.cjs');
 const {additionalSources, proofCatalog} = require('./acceptance-sources.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 const {requestJSON} = require('./review-provider.cjs');
@@ -70,7 +70,7 @@ function materialize(facts, snapshot) {
   // A change with no executable code (documentation, fixtures, configuration, lockfiles,
   // workflows) has no behaviour for a test to assert. The model may answer the required
   // test gate with the invalid 'inapplicable'; that means not-required, i.e. satisfied.
-  if (!snapshot.files.some(file => isCodePath(file.path))) {
+  if (!snapshot.files.some(file => isExecutablePath(file.path))) {
     for (const gate of report.gates) if (gate.name === 'test_integrity' && gate.state === 'inapplicable') {
       gate.state = 'satisfied'; gate.reason = `${gate.reason} (No executable code changed, so no test is required.)`.slice(0, 2000);
     }

@@ -68,7 +68,9 @@ const CODE = /\.(?:[cm]?[jt]sx?|py|rs|rb|php|vue|svelte)$/;
 const TEST_PATH = /(?:^|\/)(?:__tests__|tests?|specs?|e2e|stories)\/|\.(?:test|spec|stories)\.[a-z0-9]+$|(?:^|\/)test_[^/]+\.py$|_test\.(?:go|py)$/i;
 const isTestPath = name => TEST_PATH.test(name);
 const FIXTURE_PATH = /(?:^|\/)(?:__fixtures__|fixtures?|__mocks__|mocks?|testdata|__snapshots__)\//i;
-const isCodePath = name => CODE.test(name) && !isTestPath(name) && !FIXTURE_PATH.test(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
+// Executable source of any kind, tests included: weakening a test is a behaviour change to the suite.
+const isExecutablePath = name => CODE.test(name) && !FIXTURE_PATH.test(name) && !/\.d\.ts$|\.config\.[a-z]+$/.test(name);
+const isCodePath = name => isExecutablePath(name) && !isTestPath(name);
 
 // A module is linked to a test only by an import-like line naming it. A word in
 // a test title or an unrelated assertion in the same change is not linkage.
@@ -102,7 +104,7 @@ function approvalHold(report, snapshot) {
   const gate = name => report.gates.find(item => item.name === name).state;
   // Nothing executable changed (documentation, data fixtures, configuration): there is no behaviour
   // for a test to establish, so the test gate cannot hold approval. Completeness still can.
-  const executable = snapshot.files.some(file => isCodePath(file.path));
+  const executable = snapshot.files.some(file => isExecutablePath(file.path));
   for (const name of executable ? ['test_integrity', 'review_completeness'] : ['review_completeness']) {
     if (gate(name) === 'unresolved') return `${name.replace('_', ' ')} is unresolved`;
   }
@@ -265,4 +267,4 @@ function validateApproval(report, snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
