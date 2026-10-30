@@ -123,7 +123,15 @@ async function additionalSources({github, repo, snapshot, paths}) {
   if (!Array.isArray(paths) || paths.length === 0 || paths.length > 8 || new Set(paths).size !== paths.length) {
     throw new Error('Additional evidence requires one to eight distinct repository paths');
   }
-  for (const filename of paths) await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
+  for (const filename of paths) {
+    try {await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});}
+    catch (error) {
+      // A path the reviewer guessed (for example a conventional test name) may not exist. That is
+      // missing evidence for that path, recorded for the reviewer, never a reason to abort the review.
+      if (error.status !== 404) throw error;
+      snapshot.unavailable_sources = [...new Set([...(snapshot.unavailable_sources || []), filename])];
+    }
+  }
   return refresh(snapshot);
 }
 

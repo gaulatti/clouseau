@@ -184,9 +184,41 @@ test('unresolved integrity or completeness evidence holds approval, and a hold n
 test('documentation, fixtures, configuration, lockfiles and workflows are never held for a missing test', () => {
   const f = fixture();
   f.snapshot.files = ['README.md', 'docs/guide.md', 'test/fixtures/sample.json', 'package-lock.json', 'tsconfig.json',
-    '.github/workflows/ci.yml', '.github/clouseau.md', 'config/app.yaml', 'Makefile', 'src/styles.css', 'src/schema.sql'].map(path => ({path, status: 'modified'}));
+    '.github/workflows/ci.yml', '.github/clouseau.md', '.github/CODEOWNERS', 'NOTICE.txt', 'LICENSE', 'config/app.yaml', 'CHANGELOG', 'assets/logo.svg', '.gitignore', 'vitest.config.ts', 'src/types.d.ts'].map(path => ({path, status: 'modified'}));
   assert.equal(approvalHold(f.report, f.snapshot), null);
   assert.equal(validateApproval(f.report, f.snapshot).decision, 'auto_approve');
   f.snapshot.files.push({path: 'src/app.ts', status: 'modified'});
   assert.match(approvalHold(f.report, f.snapshot), /src\/app\.ts$/);
+  f.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
+  f.snapshot.files = [{path: 'README.md', status: 'modified'}];
+  assert.equal(approvalHold(f.report, f.snapshot), null);
+  for (const path of ['src/docs/render.ts', '.github/scripts/x.js', 'src/noticeService.ts', 'src/licenseCheck.ts', 'README.ts', 'pkg/server.go', 'src/Main.java', 'scripts/deploy.sh', 'db/query.sql', 'src/styles.css', 'Makefile']) {
+    f.snapshot.files = [{path, status: 'modified'}];
+    assert.equal(approvalHold(f.report, f.snapshot), 'test integrity is unresolved', path);
+  }
+});
+
+test('only an import statement links a module: comments and quoted titles do not', () => {
+  const stem = (content, files = [{path: 'src/utils/format.ts', status: 'modified'}]) => {
+    const f = withTest(content); f.snapshot.sources.test.path = 'tests/unit/format.test.ts'; f.snapshot.files = files; return approvalHold(f.report, f.snapshot);
+  };
+  assert.equal(stem("import {\n  a,\n} from '../../src/utils/format';\n"), null);
+  assert.equal(stem("import '../../src/utils/format';\n"), null);
+  assert.equal(stem("export * from '../../src/utils/format';\n"), null);
+  assert.equal(stem("const { a } = require('../../src/utils/format');\n"), null);
+  assert.equal(stem("const m = await import('../../src/utils/format.js');\n"), null);
+  assert.equal(stem("require('../../src/utils/format');\n"), null);
+  for (const content of ["// import {a} from '../../src/utils/format';\n", "/* import {a} from '../../src/utils/format';\n*/\n",
+    "test('import {a} from \"../../src/utils/format\"', () => {});\n", "const s = 'x';\nfoo(require('../../src/utils/format'));\n"]) {
+    assert.match(stem(content), /no supplied test imports/, content);
+  }
+});
+
+test('a test-only change is executable: unresolved test integrity still holds it, a fixture-only change does not', () => {
+  const f = fixture();
+  f.report.gates.find(gate => gate.name === 'test_integrity').state = 'unresolved';
+  f.snapshot.files = [{path: 'tests/unit/format.test.ts', status: 'modified'}];
+  assert.equal(approvalHold(f.report, f.snapshot), 'test integrity is unresolved');
+  f.snapshot.files = [{path: 'tests/fixtures/sample.json', status: 'added'}, {path: 'tests/fixtures/helper.ts', status: 'added'}];
+  assert.equal(approvalHold(f.report, f.snapshot), null);
 });
