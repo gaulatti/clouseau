@@ -234,7 +234,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
     const reviewerSha = 'e'.repeat(40);
     const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: 'AGENTS.md', readme: 'README.md',
       acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
-      local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 172800, keys: [identity.public_identity]}};
+      local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity]}};
     if (central) {delete config.local_review.reviewer_digest; config.local_review.central_source = {...require('./central-version.cjs').SOURCE};}
     await repository(async f => {
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
@@ -243,6 +243,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
         installed: () => ({sha: reviewerSha, digest: 'e'.repeat(64), clean: true})};
       const result = await runReview(args, deps);
       assert.ok(result.receipt); assert.equal(result.decision, 'auto_approve');
+      const issued = JSON.parse(fs.readFileSync(result.receipt)).payload; assert.equal(issued.expires_at - issued.issued_at, 3600);
       const reused = await runReview({...args, identity: undefined}, {...deps,
         ask: async () => {throw new Error('A verified cached review must not call AI');}});
       assert.equal(reused.reused, true); assert.equal(reused.harness_invocations, 0);
@@ -318,7 +319,7 @@ test('a workstation with multiple enrolled identities must explicitly choose its
     const identities = [initializeIdentity(state, 'fixture-author'), initializeIdentity(state, 'another-author')];
     const config = {...require('../test/fixtures/config.json'), version: 2,
       acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
-      local_review: {mode: 'optional', reviewer_digest: 'e'.repeat(64), max_age_seconds: 172800,
+      local_review: {mode: 'optional', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600,
         keys: identities.map(item => item.public_identity)}};
     await repository(async f => {
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
