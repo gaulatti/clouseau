@@ -131,6 +131,8 @@ test('a push to the base branch reconciles approved PRs that a sibling merge lef
   assert.throws(() => assertBaseReconciliation(silent), /issues write/);
   const powerful = structuredClone(workflow); powerful.jobs['reconcile-base'].permissions.contents = 'write';
   assert.throws(() => assertBaseReconciliation(powerful), /no contents or actions write/);
+  const readOnlyPulls = structuredClone(workflow); readOnlyPulls.jobs['reconcile-base'].permissions['pull-requests'] = 'read';
+  assert.throws(() => assertBaseReconciliation(readOnlyPulls), /pull-requests write/);
   const racing = structuredClone(workflow); racing.jobs['reconcile-base'].concurrency['cancel-in-progress'] = true;
   assert.throws(() => assertBaseReconciliation(racing), /queue, not cancel/);
 });
@@ -139,7 +141,7 @@ test('the unattended path reconciles from a separate workflow_run of the review 
   const separate = {name: 'Clouseau reassess', on: {workflow_run: {workflows: ['Palazzo CI'], types: ['completed']}}, jobs: {
     'reconcile-base': {
       if: "github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request_target'",
-      permissions: {contents: 'read', 'pull-requests': 'read', issues: 'write'}, concurrency: {group: 'clouseau-reconcile-base', 'cancel-in-progress': false},
+      permissions: {contents: 'read', 'pull-requests': 'write', issues: 'write'}, concurrency: {group: 'clouseau-reconcile-base', 'cancel-in-progress': false},
       steps: [{uses: './.clouseau-ci', with: {operation: 'reconcile-base'}}]}}};
   assert.equal(assertBaseReconciliation(separate), 1);
   const selfWatching = structuredClone(separate); selfWatching.name = 'Palazzo CI';

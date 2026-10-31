@@ -125,3 +125,16 @@ test('assessment routing: pending and stale wait, a settled failed or step-missi
   }
   } finally {if (previousKey === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = previousKey;}
 });
+
+test('a failed verification run names the failed jobs and steps and links the job (issue 143)', async () => {
+  const bad = (name, stepNames, extra = {}) => ({id: 5, name, status: 'completed', conclusion: 'failure', run_attempt: 1,
+    html_url: `https://github.com/example/gateway/actions/runs/9/job/5`, steps: stepNames.map(step => ({name: step, status: 'completed', conclusion: 'failure'})).concat([{name: 'Post', status: 'completed', conclusion: 'success'}]), ...extra});
+  const outcome = await check([[bad('unit', ['Test application with complete source coverage']), job({name: 'package', conclusion: 'cancelled', steps: undefined, html_url: undefined}), job({name: 'lint', conclusion: 'success'})]], {conclusion: 'failure'});
+  assert.equal(outcome.result.failure, 'PR verification concluded failure: job "unit" step "Test application with complete source coverage" (https://github.com/example/gateway/actions/runs/9/job/5); job "package"');
+  const many = await check([[1, 2, 3, 4].map(i => bad(`job${i}`, ['a', 'b', 'c']))], {conclusion: 'failure'});
+  assert.equal((many.result.failure.match(/job "/g) || []).length, 3, 'at most three jobs');
+  assert.equal((many.result.failure.match(/step "/g) || []).length, 6, 'at most two steps each');
+  const notice = body({number: 1, head_sha: SHA, cause: 'verification_failed', reason: outcome.result.failure}, 'https://github.com/example/gateway/actions/runs/1');
+  assert.ok(notice.includes('job "unit" step "Test application with complete source coverage"'));
+  assert.ok(notice.includes('/actions/runs/9/job/5') && !/named above/.test(notice));
+});
