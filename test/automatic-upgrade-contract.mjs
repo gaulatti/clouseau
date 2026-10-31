@@ -108,6 +108,7 @@ export function assertBaseReconciliation(workflow, base = 'main', ownName = work
     const afterReview = run && condition.includes("github.event_name == 'workflow_run'") && condition.includes("github.event.workflow_run.event == 'pull_request_target'");
     assert.ok(pushOnly || afterReview, 'reconcile-base must run only for pushes to the base branch or completed pull_request_target review runs');
     assert.equal(job.permissions?.issues, 'write', 'reconcile-base posts the notice, so it needs issues write');
+    assert.equal(job.permissions?.['pull-requests'], 'write', 'commenting on a pull request needs pull-requests write as well as issues write (x-accepted-github-permissions: issues=write; pull_requests=write)');
     assert.ok(!['write'].includes(job.permissions?.contents) && !['write'].includes(job.permissions?.actions),
       'reconcile-base needs no contents or actions write: a GITHUB_TOKEN push cannot start verification');
     assert.ok(job.concurrency && job.concurrency['cancel-in-progress'] === false, 'reconcile-base runs must queue, not cancel');

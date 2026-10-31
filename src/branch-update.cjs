@@ -8,8 +8,9 @@ const MARKER = 'clouseau-needs-branch-update';
 // with the one safe next step. Clouseau cannot update the branch itself with
 // the workflow token because a push made with GITHUB_TOKEN does not start the
 // verification workflow, which would leave the new head without evidence.
-async function surface({github, repo, pr, assessment, baseBranch, note = ''}) {
-  const {data: branch} = await github.rest.repos.getBranch({...repo, branch: baseBranch});
+async function surface({github, repo, pr, assessment, baseBranch, note = '', tip = null}) {
+  // The reconciler reads the base tip once for all PRs; a single gate reads it for its own PR.
+  const branch = {commit: {sha: tip ?? (await github.rest.repos.getBranch({...repo, branch: baseBranch})).data.commit.sha}};
   const prefix = `<!-- ${MARKER}:${assessment.head_sha}:`;
   const marker = `${prefix}${branch.commit.sha} -->`;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number, per_page: 100});

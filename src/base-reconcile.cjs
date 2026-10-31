@@ -44,14 +44,17 @@ async function baseMoved({github, context, baseBranch}) {
 
 async function reconcileBase({github, updateGithub = null, context, core, baseBranch}) {
   const repo = context.repo;
-  const outcome = {updated: [], noticed: []};
+  const outcome = {updated: [], noticed: []}; const failed = [];
   if (!await baseMoved({github, context, baseBranch})) {
     core.info('The protected base branch did not move for this event; no base reconciliation is needed.');
     return outcome;
   }
   const pulls = await github.paginate(github.rest.pulls.list, {...repo, state: 'open', base: baseBranch, per_page: 100});
+  // One read of the base tip serves every PR; a PR whose recorded base is still the tip cannot be behind.
+  const tip = (await github.rest.repos.getBranch({...repo, branch: baseBranch})).data.commit.sha;
   const stale = [];
   for (const pr of pulls.filter(item => !item.draft).sort((a, b) => a.number - b.number)) {
+    if (pr.base.sha === tip) continue;
     if (!pr.auto_merge && !await approvedByBot(github, repo, pr)) continue;
     const {data: comparison} = await github.rest.repos.compareCommits({...repo, base: baseBranch, head: pr.head.sha});
     if (comparison.behind_by > 0) stale.push({pr, mergeBase: comparison.merge_base_commit.sha});
@@ -68,9 +71,20 @@ async function reconcileBase({github, updateGithub = null, context, core, baseBr
         core.info(`PR ${pr.number} could not be updated automatically (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}).`);
       }
     }
-    await branchUpdate.surface({github, repo, pr, baseBranch, assessment: {head_sha: pr.head.sha, base_sha: mergeBase},
-      note: updateGithub && sameRepository ? 'Another approved pull request is being updated first; this one is updated after it merges, or update it yourself.' : ''});
-    outcome.noticed.push(pr.number);
+    // A notice that cannot be written must not hide the others, and must not look like success: the failure
+    // names the permission (commenting on a pull request needs both issues: write and pull-requests: write).
+    try {
+      await branchUpdate.surface({github, repo, pr, baseBranch, tip, assessment: {head_sha: pr.head.sha, base_sha: mergeBase},
+        note: updateGithub && sameRepository ? 'Another approved pull request is being updated first; this one is updated after it merges, or update it yourself.' : ''});
+      outcome.noticed.push(pr.number);
+    } catch (error) {
+      core.info(`PR ${pr.number}: the branch-update notice could not be posted (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}).`);
+      failed.push({number: pr.number, status: Number.isInteger(error.status) ? error.status : null});
+    }
+  }
+  if (failed.length) {
+    throw new Error(`The branch-update notice could not be posted on PR ${failed.map(item => item.number).join(', ')} ` +
+      `(HTTP ${[...new Set(failed.map(item => item.status ?? 'unknown'))].join('/')}). Commenting on a pull request needs the job permissions issues: write and pull-requests: write.`);
   }
   core.info(`Base reconciliation: ${outcome.updated.length} updated, ${outcome.noticed.length} noticed.`);
   return outcome;

@@ -360,7 +360,15 @@ async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = 
   const run = runs[0];
   if (!run) return {pending: true, state: 'absent'};
   if (run.status !== 'completed') return {pending: true, state: run.status === 'in_progress' ? 'running' : 'queued'};
-  if (run.conclusion !== 'success') return {failure: `PR verification concluded ${run.conclusion}`};
+  if (run.conclusion !== 'success') {
+    // Name what failed, from the run's own jobs: job and step names and the job link, nothing else.
+    const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {...repo, run_id: run.id, filter: 'latest', per_page: 100});
+    const named = jobs.filter(job => ['failure', 'cancelled', 'timed_out'].includes(job.conclusion)).slice(0, 3).map(job => {
+      const steps = (job.steps ?? []).filter(step => ['failure', 'cancelled', 'timed_out'].includes(step.conclusion)).slice(0, 2).map(step => `step "${step.name}"`);
+      return `job "${job.name}"${steps.length ? ` ${steps.join(', ')}` : ''}${job.html_url ? ` (${job.html_url})` : ''}`;
+    });
+    return {failure: `PR verification concluded ${run.conclusion}${named.length ? `: ${named.join('; ')}` : ''}`};
+  }
   // The decision rests on the LATEST attempt of the completed run. A snapshot taken while jobs or steps are
   // still being finalized, or a job list that is ahead of or behind the run record, is not a failure: it is
   // re-read a bounded number of times and otherwise reported as still pending. Only a final, definite
