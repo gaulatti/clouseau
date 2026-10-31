@@ -165,3 +165,30 @@ test('the composite action exposes the wait step assessment, so a failed verific
   assert.match(action.outputs.assessment.value, /steps\.await\.outputs\.assessment/, 'await-verification publishes its assessment through the same composite output');
   assert.ok(action.runs.steps.some(step => step.id === 'await' && step.if === "inputs.operation == 'await-verification'"));
 });
+
+test('this repository reconciles bot merges from its own separate workflow_run file, never checking out pull request code', () => {
+  const file = parse(readFileSync(path.join(root, '.github/workflows/clouseau-reconcile.yml'), 'utf8'));
+  assert.equal(assertBaseReconciliation(file), 1, 'one reconcile-base job that satisfies the shared contract');
+  assert.deepEqual(file.on.workflow_run.workflows, [workflow.name], 'it watches the repository CI workflow, which is a different file than itself');
+  assert.notEqual(file.name, workflow.name);
+  assert.deepEqual(file.on.workflow_run.types, ['completed']);
+  assert.ok(file.on.schedule && file.on.workflow_dispatch !== undefined, 'a schedule and a manual dispatch back it up');
+  const cron = file.on.schedule[0].cron;
+  assert.match(cron, /^\d+,\d+ \* \* \* \*$/); assert.ok(!/^(0|30),/.test(cron) && !/,(0|30) /.test(cron), 'off the hour and half hour so schedules do not align');
+  const job = file.jobs['reconcile-base'];
+  assert.deepEqual(job.permissions, {contents: 'read', 'pull-requests': 'write', issues: 'write'});
+  assert.equal(job.concurrency['cancel-in-progress'], false);
+  assert.equal(job.needs, 'resolve-clouseau', 'it consumes the one pinned engine selection');
+  const engine = job.steps.find(step => step.with?.path === '.clouseau-ci');
+  assert.equal(engine.with.repository, 'gaulatti/clouseau');
+  assert.equal(engine.with.ref, "${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}");
+  assert.match(file.jobs['resolve-clouseau'].steps[0].uses, /^gaulatti\/clouseau\/scripts\/resolve@[a-f0-9]{40}$/);
+  assert.ok(!JSON.stringify(file).includes('update-token') && !JSON.stringify(file).includes('secrets.'), 'no update credential');
+  for (const [name, entry] of Object.entries(file.jobs)) for (const step of entry.steps || []) {
+    if (!String(step.uses || '').startsWith('actions/checkout@')) continue;
+    assert.equal(step.with['persist-credentials'], false, name);
+    assert.ok(step.with.ref === 'main' || /needs\.resolve-clouseau\.outputs\.sha/.test(step.with.ref), `${name} checks out only trusted main or the frozen engine`);
+    assert.ok(!/pull_request|head/.test(JSON.stringify(step.with)), `${name} never references pull request code`);
+  }
+  assert.ok(!/github\.event\.(pull_request|workflow_run\.(head_sha|head_branch|head_repository))/.test(JSON.stringify(Object.values(file.jobs).flatMap(entry => entry.steps || []))), 'no step uses event-supplied PR identity');
+});

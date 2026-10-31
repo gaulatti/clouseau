@@ -303,6 +303,8 @@ jobs:
     # checkout main and the frozen engine, then operation: reconcile-base (same inputs as above)
 ```
 
+This repository ships exactly this separate file for itself as `.github/workflows/clouseau-reconcile.yml` (watching `Clouseau CI`, no update token), so its own approved PRs also receive the notice after a bot merge.
+
 The shared contract test `assertBaseReconciliation` encodes both forms: a push trigger on
 the base branch, or a `workflow_run` trigger that watches a different workflow; the push-only or
 review-run-only job condition; issues write without contents or actions write; and queued (never

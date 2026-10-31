@@ -1,0 +1,67 @@
+name: Clouseau base reconciliation
+# Merges made by the bot with GITHUB_TOKEN raise no push event, so a push-triggered reconciliation never
+# runs on the unattended path. This workflow follows the completion of the review workflow ("Clouseau CI")
+# for a pull request and, when that pull request has been merged, finds every other approved pull request
+# that the merge left behind. It must be a separate file: a workflow is never started by its own completion.
+# Nothing is approved, merged or re-armed here. No update token is configured: a stale approved pull request
+# receives a clouseau-needs-branch-update notice. Only trusted main and the frozen engine are ever checked out;
+# pull request code is never checked out or executed.
+run-name: Reconcile base (${{ github.event_name }}${{ github.event.workflow_run.head_branch && format(' {0}', github.event.workflow_run.head_branch) || '' }})
+on:
+  workflow_run:
+    workflows: ["Clouseau CI"]
+    types: [completed]
+  # Covers an auto-merge that completes after the review run has ended, and recovers a missed event.
+  schedule:
+    - cron: '11,41 * * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  resolve-clouseau:
+    if: >-
+      github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request_target'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.engine.outputs.sha }}
+      digest: ${{ steps.engine.outputs.digest }}
+    steps:
+      - id: engine
+        uses: gaulatti/clouseau/scripts/resolve@fd655851419980f833ff13a94b0d6ff41a901cb2
+
+  reconcile-base:
+    if: >-
+      github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request_target')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Commenting on a pull request needs both issues: write and pull-requests: write.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    needs: resolve-clouseau
+    concurrency:
+      group: clouseau-reconcile-base
+      cancel-in-progress: false
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
+        with:
+          operation: reconcile-base
