@@ -7,6 +7,7 @@ const {validateInspection, combine} = require('./acceptance-review.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {centralSource, acceptsEngine} = require('./central-version.cjs');
+const {chunkedVerifier} = require('./chunked-record.cjs');
 
 const DOMAIN = 'clouseau.local-review.v1';
 const MAX_RECEIPT_BYTES = 3000000;
@@ -35,9 +36,12 @@ function validateTrust(trust) {
   return trust;
 }
 
-function reviewDecision(record) {
+// A record without `partition` takes the unchanged path below. A chunked record is verified by the chunked verifier
+// (new shape if present, else current); it only supplies the merged reviews, and the single derivation continues here.
+function reviewDecision(record, {chunked = null} = {}) {
   const {snapshot, result} = record;
-  requireReceipt(snapshot && result && snapshot.digest === refresh(structuredClone(snapshot)).digest,
+  const verifier = Object.hasOwn(record, 'partition') ? chunkedVerifier(record, chunked) : null;
+  requireReceipt(snapshot && result && snapshot.digest === (verifier ? verifier.snapshotDigest() : refresh(structuredClone(snapshot)).digest),
     'altered evidence snapshot');
   requireReceipt(result.snapshot === snapshot.digest && result.policy_digest === snapshot.policy_digest &&
     result.config_digest === snapshot.config_digest, 'review does not match evidence');
@@ -48,12 +52,13 @@ function reviewDecision(record) {
       typeof item.session === 'string' && item.session.length > 0 &&
       ['request_digest', 'response_digest', 'transport_digest'].every(name => /^[a-f0-9]{64}$/.test(item[name]))) &&
     // Grading runs only for findings, so a role without findings has no grading round to record.
-    ['examiner', 'challenger'].every(role => ['investigation', 'grading'].every(phase =>
-      (phase === 'grading' && !graded(role)) || result.usage.some(item => item.role === role && item.phase === phase))),
+    // A chunked record accounts for every unit and the integration pass inside its own verifier.
+    (verifier || ['examiner', 'challenger'].every(role => ['investigation', 'grading'].every(phase =>
+      (phase === 'grading' && !graded(role)) || result.usage.some(item => item.role === role && item.phase === phase)))),
     'complete independent harness execution records required');
   requireReceipt(Array.isArray(result.reviews) && result.reviews.length === 2 &&
     result.reviews.map(item => item.role).join(',') === 'examiner,challenger', 'two independent roles required');
-  const reviews = result.reviews.map(item => ({...item,
+  const reviews = verifier ? verifier.reviews() : result.reviews.map(item => ({...item,
     scores: validateReport(item.report, validateInspection(item.report, snapshot, item.drafts))}));
   const prior = record.local_previous?.findings || [];
   requireReceipt(digest(snapshot.prior_findings) === digest(prior), 'local finding history differs from the reviewed evidence');
@@ -65,8 +70,8 @@ function reviewDecision(record) {
 }
 
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), now = Date.now(), lifetime = 172800,
-  nonce = crypto.randomBytes(32).toString('hex')}) {
-  requireReceipt(reviewDecision(record).decision === 'auto_approve', 'only a passing review can be signed');
+  nonce = crypto.randomBytes(32).toString('hex'), chunked = null}) {
+  requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800, 'invalid runner revision, challenge or lifetime');
   const key = crypto.createPrivateKey(privateKey);
@@ -79,7 +84,7 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
 }
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null}) {
+  now = Date.now(), engine = null, chunked = null}) {
   validateTrust(trust);
   requireReceipt(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
@@ -109,7 +114,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     sha(p.reviewer_sha) && (!reviewerSha || p.reviewer_sha === reviewerSha) &&
     p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
     snapshot.policy_digest === policyDigest, 'repository, revisions, policy, configuration or record changed');
-  const result = reviewDecision(record);
+  const result = reviewDecision(record, {chunked});
   requireReceipt(result.decision === 'auto_approve', 'review did not pass');
   return {record, ...result};
 }
