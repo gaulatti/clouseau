@@ -177,6 +177,11 @@ test('this repository reconciles bot merges from its own separate workflow_run f
   assert.match(cron, /^\d+,\d+ \* \* \* \*$/); assert.ok(!/^(0|30),/.test(cron) && !/,(0|30) /.test(cron), 'off the hour and half hour so schedules do not align');
   const job = file.jobs['reconcile-base'];
   assert.deepEqual(job.permissions, {contents: 'read', 'pull-requests': 'write', issues: 'write'});
+  const explain = file.jobs.explain;
+  assert.deepEqual(explain.permissions, {}, 'the explanation job needs no token scope');
+  assert.equal(explain.if, undefined, 'it runs for every trigger, including those whose reconcile job is skipped');
+  assert.match(explain.steps[0].run, /GITHUB_STEP_SUMMARY/);
+  assert.ok(!explain.steps.some(step => String(step.uses || '').startsWith('actions/checkout')), 'and checks out nothing');
   assert.equal(job.concurrency['cancel-in-progress'], false);
   assert.equal(job.needs, 'resolve-clouseau', 'it consumes the one pinned engine selection');
   const engine = job.steps.find(step => step.with?.path === '.clouseau-ci');

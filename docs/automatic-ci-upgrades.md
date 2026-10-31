@@ -313,6 +313,15 @@ jobs:
 
 This repository ships exactly this separate file for itself as `.github/workflows/clouseau-reconcile.yml` (watching `Clouseau CI`, no update token), so its own approved PRs also receive the notice after a bot merge.
 
+The reconciler decides its scope from the trigger. A push, a schedule, a dispatch, or the completed review run
+of a **merged** PR re-checks every open PR. The completed review run of an **open** PR re-checks only that PR:
+in a batch the first merge usually happens while the others are still under review, and the later approvals
+have no merge event after them, so without this their notice would never be posted. Notices are idempotent
+(one comment per PR and head, edited in place when the base moves again). Every run states what it did, or why
+it did nothing, in its log and run summary (`Base reconciliation skipped: ...`, `Base reconciliation (...)`),
+and the template's `explain` job writes a summary line even when the `reconcile-base` job is skipped by its
+`if:` (the completed run was a `pull_request` run, not a `pull_request_target` review run).
+
 The shared contract test `assertBaseReconciliation` encodes both forms: a push trigger on
 the base branch, or a `workflow_run` trigger that watches a different workflow; the push-only or
 review-run-only job condition; issues write without contents or actions write; and queued (never
