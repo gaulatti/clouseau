@@ -277,7 +277,7 @@ jobs:
   reconcile-base:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: resolve-clouseau
-    permissions: {contents: read, pull-requests: read, issues: write}
+    permissions: {contents: read, pull-requests: write, issues: write}
     concurrency: {group: clouseau-reconcile-base, cancel-in-progress: false}
     # checkout main and the frozen engine, then:
     #   operation: reconcile-base
@@ -286,17 +286,19 @@ jobs:
 
 ```yaml
 # .github/workflows/clouseau-reassess.yml (bot merges; a different file than the workflow it watches)
+# Commenting on a pull request needs BOTH issues: write and pull-requests: write
+# (GitHub reports x-accepted-github-permissions: issues=write; pull_requests=write).
 on:
   workflow_run:
     workflows: ["Palazzo CI"]
     types: [completed]
-  schedule: [{cron: '*/30 * * * *'}]     # optional: auto-merges that finish after the review run
+  schedule: [{cron: '11,41 * * * *'}]    # optional, off the hour so schedules do not align: auto-merges that finish after the review run
 jobs:
   reconcile-base:
     if: >-
       github.event_name == 'schedule' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'pull_request_target')
-    permissions: {contents: read, pull-requests: read, issues: write}
+    permissions: {contents: read, pull-requests: write, issues: write}
     concurrency: {group: clouseau-reconcile-base, cancel-in-progress: false}
     # checkout main and the frozen engine, then operation: reconcile-base (same inputs as above)
 ```

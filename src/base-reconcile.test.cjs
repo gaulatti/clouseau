@@ -120,3 +120,43 @@ test('merges made by the bot with GITHUB_TOKEN raise no push event: a completed 
     const f = fixture(); assert.deepEqual((await run(f, {context: {repo, eventName, payload: {}}})).updated, [2]);
   }
 });
+
+// GitHub reports `x-accepted-github-permissions: issues=write; pull_requests=write` for commenting on a pull
+// request: both are needed, which is what the job in the lab (issues: write only) lacked (issue 142).
+function withPermissions(f, granted) {
+  const create = f.github.rest.issues.createComment;
+  f.github.rest.issues.createComment = async args => {
+    if (!(granted.includes('issues') && granted.includes('pull_requests'))) {
+      throw Object.assign(new Error('Resource not accessible by integration'), {status: 403});
+    }
+    return create(args);
+  };
+  return f;
+}
+
+test('end to end: stale approved PRs get the notice with issues and pull-requests write, and a missing permission is a named failure, not a silent skip', async () => {
+  const ok = withPermissions(fixture(), ['issues', 'pull_requests']);
+  const outcome = await run(ok, {updateGithub: null});
+  assert.deepEqual(outcome.noticed, [2, 3, 4, 5, 6, 7]);
+  assert.equal(ok.state.created.length, 6);
+  assert.ok(ok.state.created.every(item => /clouseau-needs-branch-update/.test(item.body)));
+  const denied = withPermissions(fixture(), ['issues']);
+  await assert.rejects(run(denied, {updateGithub: null}), error => {
+    assert.match(error.message, /could not be posted on PR 2, 3, 4, 5, 6, 7 \(HTTP 403\)/);
+    assert.match(error.message, /issues: write and pull-requests: write/);
+    return true;
+  });
+  assert.ok(denied.logs.some(line => /PR 2: the branch-update notice could not be posted \(HTTP 403\)/.test(line)));
+  const odd = fixture(); odd.github.rest.issues.createComment = async () => { throw new Error('network'); };
+  await assert.rejects(run(odd, {updateGithub: null}), /HTTP unknown/);
+});
+
+test('one read of the base tip serves every PR, and a PR whose recorded base is the tip is never compared', async () => {
+  const f = fixture(); let tips = 0, compares = 0;
+  const getBranch = f.github.rest.repos.getBranch; f.github.rest.repos.getBranch = async args => {tips++; return getBranch(args);};
+  const compare = f.github.rest.repos.compareCommits; f.github.rest.repos.compareCommits = async args => {compares++; return compare(args);};
+  f.state.pulls[0].base = {ref: 'main', sha: tip};
+  await run(f, {updateGithub: null});
+  assert.equal(tips, 1, 'one getBranch for six notices, not one per PR');
+  assert.equal(compares, 5, 'the up-to-date PR costs nothing');
+});
