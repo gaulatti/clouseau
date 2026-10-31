@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const {readPull} = require('./pull-read.cjs');
 const path = require('node:path');
 const {digest, validateApproval, approvalHold, specifiersOf, JS_PATH} = require('./acceptance.cjs');
 const {collectSnapshot, refresh, supplyTests} = require('./acceptance-sources.cjs');
@@ -129,7 +130,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
   async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false}) {
     const repo = context.repo;
     const number = numberFor(context);
-    const {data: pr} = await github.rest.pulls.get({...repo, pull_number: number});
+    const {data: pr} = await readPull(github, repo, number);
     const identity = {version: 2, number, head_sha: pr.head.sha, base_sha: pr.base.sha, ...(engine ? {engine} : {})};
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
     const technical = await legacy.technicalRun(github, repo, pr, {receipt: true});
@@ -274,7 +275,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const {body, pages} = verifiedRecord;
     await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
-    const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
+    const {data: pr} = await readPull(github, context.repo, numberFor(context));
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
     const branchUpdate = require('./branch-update.cjs');
     if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) {
@@ -321,7 +322,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       verifyAcceptance: async () => {
         const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
-        const {data: currentPr} = await github.rest.pulls.get({...context.repo, pull_number: pr.number});
+        const {data: currentPr} = await readPull(github, context.repo, pr.number);
         if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) {
           throw await branchUpdate.surface({github, repo: context.repo, pr: currentPr, assessment, baseBranch: config.base_branch});
         }

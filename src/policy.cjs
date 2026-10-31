@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const {readPull} = require('./pull-read.cjs');
 const {requestReview} = require('./provider.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
@@ -59,7 +60,7 @@ function assessmentResult(raw, sha) {
 async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
-  const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
+  const {data: pr} = await readPull(github, repo, pull_number);
   const identity = {number: pull_number, head_sha: pr.head.sha, base_sha: pr.base.sha};
   const hold = reason => ({...identity, decision: 'second_opinion', reason});
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
@@ -155,14 +156,23 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
     let result;
     try {
       ({data: pr} = await limited(() => conditionalGet(prCache, `${context.repo.owner}/${context.repo.repo}#${pull_number}`,
-        headers => github.rest.pulls.get({...context.repo, pull_number, ...(headers['if-none-match'] ? {headers} : {})}))));
+        headers => readPull(github, context.repo, pull_number, headers['if-none-match'] ? {headers} : {}))));
       expected ??= pr.head.sha;
       if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
         throw new Error('PR closed, became draft, or changed while verification was pending');
       }
       result = await limited(() => technicalRun(github, context.repo, pr, {wait}));
     } catch (error) {
-      if (!(error instanceof RateLimitHold)) throw error;
+      if (!(error instanceof RateLimitHold)) {
+        // Any HTTP error from GitHub ends the wait visibly, with the status and endpoint, never as a silent crash.
+        // The step's own control-flow errors (the PR closed or changed) carry no status and still fail closed.
+        if (!Number.isInteger(error.status)) throw error;
+        const reason = require('./incomplete.cjs').apiErrorReason(error);
+        core.info(reason);
+        publish(pr, {decision: 'review_incomplete', cause: 'github_api_error', reason});
+        core.setOutput('verified', 'false');
+        return {pending: true, state: 'api_error', status: error.status};
+      }
       core.info(heldReason(error));
       publish(pr, {decision: 'review_incomplete', cause: 'github_rate_limit', reason: heldReason(error), retry_after: new Date(error.resetAt).toISOString()});
       core.setOutput('verified', 'false');
@@ -221,14 +231,14 @@ async function reassess({github, context, core, wait, api}) {
       return;
     }
     pull_number = numbers[0];
-    pr = (await api(() => github.rest.pulls.get({...repo, pull_number}))).data;
+    pr = (await api(() => readPull(github, repo, pull_number))).data;
     if (pr.head.sha !== finished.head_sha || pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
       core.info('The verified revision is no longer a ready PR head; no reassessment is needed.');
       return;
     }
   } else {
     pull_number = numberFor(context);
-    pr = (await api(() => github.rest.pulls.get({...repo, pull_number}))).data;
+    pr = (await api(() => readPull(github, repo, pull_number))).data;
     const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
     if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
       throw new Error('Stale or malformed intent confirmation');
@@ -419,7 +429,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
-  const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+  const getPr = async () => (await readPull(github, repo, pull_number)).data;
   let pr = await getPr();
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
     core.info('PR is not ready for the protected base branch; no review or merge action is needed.');
@@ -586,7 +596,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   wait = sleep, mergePolls = 75, pr, files}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
-  const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+  const getPr = async () => (await readPull(github, repo, pull_number)).data;
   if (!pr) pr = await getPr();
   if (assessment.number !== pull_number || pr.head.sha !== assessment.head_sha || pr.base.ref !== config.base_branch) {
     throw new Error('PR changed before merge finalization');

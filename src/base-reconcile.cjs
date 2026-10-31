@@ -1,6 +1,7 @@
 'use strict';
 
 const branchUpdate = require('./branch-update.cjs');
+const {readPull} = require('./pull-read.cjs');
 
 // A move of the base branch is the only event that invalidates an
 // already-approved PR, and nothing else re-runs that PR's gate. Re-evaluate
@@ -36,7 +37,7 @@ async function baseMoved({github, context, baseBranch}) {
   const numbers = run.pull_requests?.length ? run.pull_requests.map(item => item.number) :
     (await github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: run.head_sha})).data.map(item => item.number);
   for (const pull_number of numbers) {
-    const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
+    const {data: pr} = await readPull(github, repo, pull_number);
     if (pr.merged && pr.base.ref === baseBranch) return true;
   }
   return false;

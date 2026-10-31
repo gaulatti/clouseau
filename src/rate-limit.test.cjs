@@ -162,7 +162,7 @@ test('a raw rate-limit error that escapes the wrapper is classified as the same 
   const without = classify(http(429));
   assert.equal(without.cause, 'github_rate_limit');
   assert.match(without.reason, /^Held: GitHub API rate limit, will retry after 20\d\d-/);
-  assert.equal(classify(http(403, {}, 'Resource not accessible by integration')).cause, 'evidence_incomplete');
+  assert.equal(classify(http(403, {}, 'Resource not accessible by integration')).cause, 'github_api_error', 'any other HTTP error is a named API hold');
 });
 
 test('the head named by the event is used, and a manual dispatch names none; other errors are never swallowed as rate limits', async () => {
