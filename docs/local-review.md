@@ -240,6 +240,17 @@ produces an approval receipt. This initial receipt path targets a new PR without
 an unresolved existing GitHub review ledger; it rejects an existing incompatible
 ledger rather than dropping its findings.
 
+## Evidence size
+
+Serialized local evidence is capped at 900,000 characters. To keep large changes inside the cap
+without dropping anything a reviewer judges, the local collector stores a file added whole once:
+its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
+the head source with every line prefixed `+` (consumers restore the identical patch). The pinned
+engine seed for workflow changes is optional context: seed files that would use the last 150,000
+characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
+Changed files, their base and head sources and contracts are never omitted; a change that exceeds
+the cap with only that evidence still fails closed.
+
 ## Enrolling a trusted runner
 
 Consumers with neither accepted recipe nor CI policy use the separate
