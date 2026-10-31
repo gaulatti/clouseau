@@ -82,6 +82,7 @@ test('any HTTP error in the wait is a visible hold naming status and endpoint, n
 test('classification and endpoint rendering tolerate odd errors', () => {
   assert.equal(classify(Object.assign(new Error('x'), {status: 422, request: {method: 'POST', url: 'https://api.github.com/repos/a/b/pulls?x=1'}})).reason,
     'GitHub API request failed: HTTP 422 POST a/b/pulls (x).');
+  assert.equal(apiErrorReason({status: 502}), 'GitHub API request failed: HTTP 502 GET an unknown endpoint.', 'no message at all');
   assert.equal(apiErrorReason({status: 500, message: ''}), 'GitHub API request failed: HTTP 500 GET an unknown endpoint.');
   assert.equal(apiErrorReason({status: 500, message: 'm', request: {url: 'not a url'}}), 'GitHub API request failed: HTTP 500 GET an unknown endpoint (m).');
   assert.equal(classify({status: 304}).cause, 'evidence_incomplete', 'a non-error status is not an API failure');
