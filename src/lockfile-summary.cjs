@@ -67,13 +67,16 @@ function classifyUrl(raw, name, version) {
   return {source: `url:${url.protocol}//${url.host}${url.pathname}`, credentials};
 }
 
+// A plain-HTTP location keeps its scheme so that dropping transport security never looks like an unchanged host.
 function hostOf(raw) {
-  try { return new URL(raw).host; } catch { return raw; }
+  try { const url = new URL(raw); return url.protocol === 'http:' ? `http://${url.host}` : url.host; } catch { return raw; }
 }
 
 function registryName(raw) {
-  try { const url = new URL(raw); return `${url.host}${url.pathname.replace(/\/$/, '')}`; } catch { return fail('invalid_structure'); }
+  try { return `${hostOf(raw)}${new URL(raw).pathname.replace(/\/$/, '')}`; } catch { return fail('invalid_structure'); }
 }
+
+const insecure = source => /^(?:registry-http:|(?:registry|index):http:\/\/)/.test(source);
 
 function entry(id, name, version, source, integrity, flags = []) {
   return {id, name, version, source, integrity: integrity || null, flags: [...new Set(flags)].sort()};
@@ -524,7 +527,7 @@ const byText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function addedTags(item, integrity) {
   const tags = [];
   if (!isRegistry(item.source)) tags.push('non-registry-source');
-  if (item.source.startsWith('registry-http')) tags.push('insecure-registry');
+  if (insecure(item.source)) tags.push('insecure-registry');
   if (integrity && isRegistry(item.source) && !item.integrity) tags.push('no-integrity');
   for (const flag of item.flags) if (RISKY_FLAGS.includes(flag.split(':')[0])) tags.push(`${flag.split(':')[0]}-added`);
   return tags;
@@ -536,6 +539,7 @@ function describe(before, after, integrity) {
   parts.push(versionChanged ? `version ${show(before.version)} -> ${show(after.version)}` : `version ${show(after.version)} (unchanged)`);
   if (before.source !== after.source) {
     tags.push('source-changed'); if (isRegistry(before.source) && !isRegistry(after.source)) tags.push('left-registry');
+    if (insecure(after.source) && !insecure(before.source)) tags.push('insecure-registry');
     parts.push(`source ${show(before.source)} -> ${show(after.source)}`);
   }
   if (before.integrity !== after.integrity) {

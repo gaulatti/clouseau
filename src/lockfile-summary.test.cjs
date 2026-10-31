@@ -367,3 +367,16 @@ test('a package added from a plain-HTTP registry is flagged', () => {
   const out = summarize('package-lock.json', '', lock.npmLock([{name: 'a', version: '1.0.0', resolved: 'http://registry.example.invalid/a/-/a-1.0.0.tgz'}]), 'added');
   assert.match(out, /^RISK\[insecure-registry\] ADDED a@1\.0\.0 source=registry-http:registry\.example\.invalid /m);
 });
+
+test('dropping transport security is visible in every format that names a registry', () => {
+  const flagged = text => assert.match(text, /^RISK\[[^\]]*insecure-registry/m);
+  const secure = lock.uvLock([{name: 'a', version: '1', source: '{ registry = "https://pypi.example.invalid/simple" }', sdist: 'https://files.example.invalid/a.tar.gz'}]);
+  const plain = lock.uvLock([{name: 'a', version: '1', source: '{ registry = "http://pypi.example.invalid/simple" }', sdist: 'http://files.example.invalid/a.tar.gz'}]);
+  const uv = summarize('uv.lock', secure, plain);
+  flagged(uv); assert.match(uv, /source-changed/); assert.match(uv, /registry:http:\/\/pypi\.example\.invalid\/simple; artifacts=http:\/\/files\.example\.invalid/);
+  flagged(summarize('Cargo.lock', '', CARGO('1.0.0', 'aa', '"sparse+http://index.example.invalid/"'), 'added'));
+  flagged(summarize('Gemfile.lock', '', GEMFILE('2.2.8', '', 'http://gems.example.invalid/'), 'added'));
+  const pipenv = JSON.stringify({_meta: {sources: [{name: 'private', url: 'http://pypi.example.invalid/simple'}]}, default: {a: {version: '==1', index: 'private', hashes: ['sha256:a']}}});
+  flagged(summarize('Pipfile.lock', '', pipenv, 'added'));
+  assert.doesNotMatch(summarize('uv.lock', '', secure, 'added'), /^RISK\[[^\]]*insecure/m);
+});
