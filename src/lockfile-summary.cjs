@@ -137,7 +137,7 @@ function parseComposer(text) {
       const parts = []; const flags = section === 'packages-dev' ? ['dev'] : [];
       if (isObject(item.dist)) {
         const found = classifyUrl(String(item.dist.url), item.name, item.version);
-        parts.push(`dist=${found.source}`); if (found.credentials) flags.push('url-credentials');
+        parts.push(`registry:${show(hostOf(String(item.dist.url)))}`); if (found.credentials) flags.push('url-credentials');
       }
       if (isObject(item.source)) parts.push(`src=${show(item.source.type)}:${show(item.source.url)}`);
       const raw = [item.dist?.shasum, item.dist?.reference, item.source?.reference].filter(Boolean).join('|');
@@ -512,7 +512,7 @@ function parseGoSum(text) {
   return uniqueEntries(text.replace(NEWLINES, '\n').split('\n').filter(line => line.trim()).map(line => {
     const found = /^(\S+) (\S+?)(\/go\.mod)? (h1:\S+)$/.exec(line);
     if (!found) fail('invalid_syntax');
-    return entry(`${found[1]}@${found[2]}${found[3] ?? ''}`, `${found[1]}${found[3] ? ' (go.mod)' : ''}`, found[2], 'module', found[4]);
+    return entry(`${found[1]}@${found[2]}${found[3] ?? ''}`, `${found[1]}${found[3] ? ' (go.mod)' : ''}`, found[2], 'registry:go-module-proxy', found[4]);
   }));
 }
 
@@ -536,11 +536,7 @@ const isLockfile = file => specFor(file) !== null;
 
 // ---------------------------------------------------------------- difference
 
-// Returns -1, 0 or 1, or null when the two values are not comparable release versions. Numeric and alphabetic runs
-// are separate tokens, so "2.32.0rc1" ends with a pre-release token and sorts below "2.32.0".
-function compareVersions(a, b) {
-  if (!/^v?\d/.test(a) || !/^v?\d/.test(b)) return null;
-  const left = a.replace(/^v/, '').match(/\d+|[A-Za-z]+/g); const right = b.replace(/^v/, '').match(/\d+|[A-Za-z]+/g);
+function compareTokens(left, right) {
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
     if (left[i] === right[i]) continue;
     if (/^\d+$/.test(left[i]) && /^\d+$/.test(right[i])) return Number(left[i]) < Number(right[i]) ? -1 : 1;
@@ -553,6 +549,20 @@ function compareVersions(a, b) {
   const extra = longer[Math.min(left.length, right.length)];
   const higher = /^\d/.test(extra) || /^(?:post|p|patch|sp)$/i.test(extra) ? 1 : -1;
   return (left.length > right.length ? 1 : -1) * higher;
+}
+
+// Returns -1, 0 or 1, or null when the two values are not comparable release versions. A "-" starts a pre-release
+// (also a numeric one such as a Go pseudo-version), which sorts below its release; numeric and alphabetic runs
+// are separate tokens, so "2.32.0rc1" sorts below "2.32.0" as well.
+function compareVersions(a, b) {
+  if (!/^v?\d/.test(a) || !/^v?\d/.test(b)) return null;
+  const parts = value => { const text = value.replace(/^v/, ''); const at = text.indexOf('-');
+    return {main: (at < 0 ? text : text.slice(0, at)).match(/\d+|[A-Za-z]+/g), pre: at < 0 ? null : (text.slice(at + 1).match(/\d+|[A-Za-z]+/g) || [])}; };
+  const left = parts(a); const right = parts(b);
+  const main = compareTokens(left.main, right.main);
+  if (main !== 0 || (left.pre === null && right.pre === null)) return main;
+  if (left.pre === null || right.pre === null) return left.pre === null ? 1 : -1;
+  return compareTokens(left.pre, right.pre);
 }
 
 const isRegistry = source => /^(?:registry|index)/.test(source);

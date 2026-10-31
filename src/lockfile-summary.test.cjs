@@ -127,7 +127,7 @@ test('composer.lock and Pipfile.lock expose sources, hashes and dev scope', () =
     dist: {type: 'zip', url: dist, reference: 'a'.repeat(40), shasum: ''}, ...extra}],
   'packages-dev': [{name: 'vendor/dev', version: '1.0.0', source: {type: 'git', url: 'https://github.com/vendor/dev.git', reference: 'b'.repeat(40)}}]});
   const out = summarize('composer.lock', composer('1.0.0', 'https://api.github.com/repos/vendor/pkg/zipball/a'), composer('1.0.0', 'https://evil.example.invalid/pkg.zip'));
-  assert.match(risk(out, 'source-changed').join('\n'), /vendor\/pkg: .*dist=url:https:\/\/api\.github\.com.* -> dist=url:https:\/\/evil\.example\.invalid\/pkg\.zip/);
+  assert.match(risk(out, 'source-changed').join('\n'), /vendor\/pkg: .*source registry:api\.github\.com; src=git.* -> registry:evil\.example\.invalid; src=git/);
   assert.equal(reason(() => summarize('composer.lock', '{"packages":{}}', '{}')), 'invalid_structure');
   assert.equal(reason(() => summarize('composer.lock', '{"packages":[],"packages-dev":1}', '{}')), 'invalid_structure');
   assert.equal(reason(() => summarize('composer.lock', '{"packages":[{"name":"a","version":"1"}]}', '{}')), 'invalid_structure');
@@ -257,7 +257,8 @@ test('go.sum: module hashes and go.mod hashes', () => {
 test('version comparison orders releases and pre-releases and refuses non-versions', () => {
   const order = [['1.0.0', '1.0.1', -1], ['2.0.0', '10.0.0', -1], ['1.0.0', '1.0.0', 0], ['1.0.0-beta', '1.0.0', -1], ['1.0.0', '1.0.0-beta', 1],
     ['1.0', '1.0.1', -1], ['1.0.1', '1.0', 1], ['v1.2.0', '1.2.1', -1], ['1.0.0-alpha', '1.0.0-beta', -1], ['1.0.0-beta', '1.0.0-alpha', 1],
-    ['2.32.0rc1', '2.32.0', -1], ['2.32.0', '2.32.0rc1', 1], ['1.0.post1', '1.0', 1], ['1.0', '1.0.post1', -1], ['2.32.0rc2', '2.32.0rc1', 1], ['2.0.1', '2.0rc1', 1], ['2.0rc1', '2.0.1', -1]];
+    ['2.32.0rc1', '2.32.0', -1], ['2.32.0', '2.32.0rc1', 1], ['1.0.post1', '1.0', 1], ['1.0', '1.0.post1', -1], ['2.32.0rc2', '2.32.0rc1', 1], ['2.0.1', '2.0rc1', 1], ['2.0rc1', '2.0.1', -1],
+    ['v1.2.4', 'v1.2.4-0.20240101000000-abcdef', 1], ['1.0.0-0', '1.0.0', -1], ['1.0.0-1', '1.0.0-2', -1], ['1.0.0-1', '1.0.0-1', 0], ['1.0.0-', '1.0.0-1', -1], ['1.0.0-rc.1', '1.0.0-rc.2', -1]];
   for (const [a, b, expected] of order) assert.equal(compareVersions(a, b), expected, `${a} ${b}`);
   assert.equal(compareVersions('abc', '1.0.0'), null);
   assert.equal(compareVersions('1.0.0', 'abc'), null);
@@ -332,7 +333,7 @@ test('workspace members, links and repeated package names are listed determinist
 test('credentials in composer, yarn and Pipfile sources are flagged and never shown', () => {
   const composer = JSON.stringify({packages: [{name: 'v/p', version: '1.0.0', dist: {url: 'https://u:p@evil.example.invalid/p.zip'}}]});
   const out = summarize('composer.lock', '', composer, 'added');
-  assert.match(out, /RISK\[non-registry-source,url-credentials-added\] ADDED v\/p@1\.0\.0 source=dist=url:https:\/\/evil\.example\.invalid\/p\.zip /);
+  assert.match(out, /RISK\[url-credentials-added\] ADDED v\/p@1\.0\.0 source=registry:evil\.example\.invalid /);
   const yarn = YARN_V1('7.0.0', 'https://u:p@evil.example.invalid/core.tgz');
   assert.match(summarize('yarn.lock', '', yarn, 'added'), /url-credentials-added\] ADDED @babel\/core@7\.0\.0 source=url:https:\/\/evil\.example\.invalid\/core\.tgz/);
   const pipenv = JSON.stringify({_meta: {}, default: {tool: {git: 'https://github.com/x/tool.git'}}});
