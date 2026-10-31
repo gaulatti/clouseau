@@ -398,13 +398,84 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     f.github.rest.pulls.listFiles = list;
   }
   if (central === true) {
-    const newer = createPolicy(trusted, {engine: {...engine, sha: 'd'.repeat(40)}});
-    const mismatch = await newer.assess({github: f.github, context: f.context, recordPath: f.recordPath,
-      fetchImpl: async () => {providerCalls++; throw new Error('No paid mismatch fallback');}});
-    assert.equal(mismatch.decision, 'review_incomplete');
-    assert.equal(mismatch.provider_api_calls, 0);
-    assert.equal(mismatch.review_source, 'authenticated_local_rejected');
-    assert.match(mismatch.reason, /engine mismatch.*refresh.*fresh CI run.*No paid fallback/);
+    const newerEngine = {...engine, sha: 'd'.repeat(40)};
+    const NOTICE = 'Local review receipt predates the current Clouseau engine; CI reviewed this change itself.';
+    const kept = fs.readFileSync(f.recordPath);
+    const writes = f.state.writes.length;
+    const callsBefore = f.state.calls;
+    const hostedReports = [];
+    const run = (policy, extra = {}) => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath,
+      report: line => hostedReports.push(line), fetchImpl: f.fetchImpl, ...extra});
+    // Required mode keeps its meaning: an ignored receipt is an absent receipt, never evidence and never a CI review.
+    const required = await run(createPolicy(trusted, {engine: newerEngine}),
+      {fetchImpl: async () => {throw new Error('required mode has no hosted review');}});
+    assert.equal(required.decision, 'review_incomplete');
+    assert.equal(required.cause, 'local_receipt_required');
+    assert.equal(required.provider_api_calls, undefined);
+    assert.equal(required.receipt_notice, NOTICE);
+    assert.ok(hostedReports.includes(NOTICE));
+    // Optional mode: the valid-but-older receipt is ignored and the normal CI review runs and approves on its own evidence.
+    const optionalConfig = {...trusted, local_review: {...trusted.local_review, mode: 'optional'}};
+    const newer = createPolicy(optionalConfig, {engine: newerEngine});
+    // The receipt a contributor signed earlier for this optional-mode configuration, by the previous engine.
+    const optionalRecord = structuredClone(record);
+    optionalRecord.snapshot.config_digest = digest(optionalConfig); refresh(optionalRecord.snapshot);
+    optionalRecord.result.snapshot = optionalRecord.snapshot.digest; optionalRecord.result.config_digest = optionalRecord.snapshot.config_digest;
+    for (const item of optionalRecord.result.reviews) item.report.snapshot = optionalRecord.snapshot.digest;
+    const optionalBundle = issueReceipt({record: optionalRecord, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+      keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
+    served = optionalBundle;
+    const hosted = await run(newer);
+    assert.equal(hosted.decision, 'auto_approve', hosted.reason);
+    assert.equal(hosted.receipt_notice, NOTICE);
+    assert.notEqual(hosted.review_source, 'authenticated_local');
+    assert.ok(f.state.calls > callsBefore, 'the hosted reviewer ran');
+    const hostedRecord = JSON.parse(fs.readFileSync(f.recordPath));
+    assert.ok(!hostedRecord.local_receipt_reference && !hostedRecord.local_receipt, 'the old receipt is not carried as evidence');
+    assert.ok(hostedReports.filter(line => line === NOTICE).length === 2);
+    await newer.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: hosted, nativeGate: true,
+      wait: async () => {}});
+    const posted = f.state.writes.slice(writes);
+    assert.equal(posted.filter(item => item.name === 'approve').length, 1);
+    assert.ok(posted.some(item => item.name === 'create-ledger' && item.args.body.includes(NOTICE)), 'the PR shows the one-line notice');
+    assert.ok(!posted.some(item => String(item.args?.body).includes('CI AI review calls: 0')));
+    // While CI is blocked an ignored receipt behaves exactly like an unstamped change.
+    for (const [pending, failed, decision] of [[true, false, 'pending_technical'], [false, true, 'blocked_technical']]) {
+      f.state.pending = pending; f.state.failed = failed;
+      const held = await run(newer);
+      assert.equal(held.decision, decision);
+      assert.equal(held.receipt_notice, NOTICE);
+      assert.equal(held.review_source, undefined);
+    }
+    f.state.pending = false; f.state.failed = false;
+    // Everything other than the engine remains a hard failure, with no notice and no hosted review.
+    const hardCalls = f.state.calls;
+    const hard = async (change, restore) => {
+      change();
+      const result = await run(newer, {fetchImpl: async () => {throw new Error('a hard failure cannot become a hosted review');}});
+      assert.equal(result.decision, 'review_incomplete');
+      assert.equal(result.receipt_notice, undefined);
+      assert.notEqual(result.cause, 'local_receipt_required');
+      restore();
+    };
+    const validSignature = optionalBundle.signature;
+    await hard(() => {optionalBundle.signature = `${validSignature[0] === 'a' ? 'b' : 'a'}${validSignature.slice(1)}`;}, () => {optionalBundle.signature = validSignature;});
+    const author = f.state.pr.user.login;
+    await hard(() => {f.state.pr.user.login = 'another-author';}, () => {f.state.pr.user.login = author;});
+    const head = f.state.pr.head.sha;
+    await hard(() => {f.state.pr.head.sha = 'e'.repeat(40);}, () => {f.state.pr.head.sha = head;});
+    const base = f.state.pr.base.sha;
+    await hard(() => {f.state.pr.base.sha = 'e'.repeat(40);}, () => {f.state.pr.base.sha = base;});
+    const expiredBundle = issueReceipt({record: optionalRecord, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+      keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha, now: Date.now() - 400000 * 1000});
+    await hard(() => {served = expiredBundle;}, () => {served = optionalBundle;});
+    const changedConfig = createPolicy({...optionalConfig, sensitive_paths: [...optionalConfig.sensitive_paths, 'docs/']}, {engine: newerEngine});
+    const configResult = await run(changedConfig, {fetchImpl: async () => {throw new Error('a hard failure cannot become a hosted review');}});
+    assert.equal(configResult.decision, 'review_incomplete');
+    assert.equal(configResult.receipt_notice, undefined);
+    assert.equal(f.state.calls, hardCalls);
+    served = bundle;
+    fs.writeFileSync(f.recordPath, kept);
   }
   const compact = JSON.parse(fs.readFileSync(f.recordPath));
   assert.equal(compact.local_receipt_reference, true);

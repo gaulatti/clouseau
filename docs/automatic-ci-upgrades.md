@@ -68,7 +68,10 @@ AI calls. Independent tests, exact 100% line and branch coverage, current source
 base, policy and configuration checks remain mandatory. Review-control changes require a separate, current-head owner purpose
 confirmation. The receipt supplies the scored review only; CI records and
 revalidates that separate authorization before approval. Missing receipts in optional mode use
-the ordinary CI AI reviewer. Invalid, expired, revoked or engine-mismatched
+the ordinary CI AI reviewer. A receipt that is valid except that its engine
+revision differs from the protected main resolved by the run is ignored (never
+accepted as evidence) and treated as missing, with a visible notice that CI
+reviewed the change itself. Invalid, expired, revoked or otherwise mismatched
 receipts block approval without an unexpected paid fallback. Refresh the public
 local installation, review the current committed source again, publish a fresh
 receipt, and start a fresh CI run. A central advance during that interval may
