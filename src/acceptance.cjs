@@ -94,7 +94,12 @@ const EXTENSION = /\.[cm]?[jt]sx?$/;
 function specifiersOf(content) {
   const text = content.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
   const pattern = /^\s*(?:(?:import|export)\b[^;'"`]*?\bfrom\s*|import\s*|(?:(?:const|let|var)\b[^;=]*=\s*)?(?:await\s+)?(?:require|import)\s*\(\s*)(['"`])([^'"`\n]+)\1/gm;
-  return [...text.matchAll(pattern)].map(match => match[2]);
+  const found = [...text.matchAll(pattern)].map(match => match[2]);
+  // A declaration may initialise several bindings: `const a = require('./a'), b = require('./b');`.
+  for (const declaration of text.matchAll(/^\s*(?:const|let|var)\b[^;]*;/gm)) {
+    for (const call of declaration[0].matchAll(/\b(?:require|import)\s*\(\s*(['"`])([^'"`\n]+)\1/g)) found.push(call[2]);
+  }
+  return [...new Set(found)];
 }
 
 // Known files a specifier can name: relative paths, `.js`-for-`.ts` suffixes, `/index`, and the
