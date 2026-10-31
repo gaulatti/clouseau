@@ -419,7 +419,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   const bind = record => ({...assessment, record_reference_digest: digest(record)});
   const where = {github: f.github, repo: f.context.repo};
   for (const broken of [{...compact, snapshot: verifiedRecord.snapshot}, {...compact, local_receipt: bundle},
-    {...compact, local_receipt_reference: 1}, {...compact, unexpected: true}, (({technical, ...rest}) => rest)(compact)]) {
+    {...compact, local_receipt_reference: 1}, {...compact, unexpected: true}, (({technical, ...rest}) => rest)(compact), (({discovery, ...rest}) => rest)(compact)]) {
     await assert.rejects(policy.rehydrate(broken, bind(broken), where), /Invalid compact local review record/);
     await assert.rejects(policy.rehydrate(broken, assessment, where), /Stale or altered/, 'an unbound shape is rejected first');
   }
@@ -1228,4 +1228,32 @@ test('a pending comment is also resolved when the next run ends without a record
   await assert.rejects(f.gate(failed), /cannot approve or merge/);
   assert.ok(f.state.writes.some(item => item.name === 'update-ledger' && item.args.comment_id === 98 && /Resolved/.test(item.args.body)), 'the stale pending comment was superseded');
   assert.ok(f.state.writes.some(item => item.name === 'create-ledger' && /clouseau-review-incomplete/.test(item.args.body)), 'and the incomplete notice was posted');
+}));
+
+test('a decision that the stored record does not reproduce is a visible incomplete notice naming both decisions, never an unhandled error', () => fixture(async f => {
+  const assessment = await f.assess();
+  assert.equal(assessment.decision, 'auto_approve');
+  const lying = {...assessment, decision: 'repair_required'};
+  await assert.rejects(f.gate(lying), /cannot approve or merge|no acceptance record|decision/i);
+  const notice = f.state.writes.find(item => item.name === 'create-ledger');
+  assert.ok(notice, 'a visible comment was posted');
+  assert.match(notice.args.body, /<!-- clouseau-review-incomplete -->/);
+  assert.ok(notice.args.body.includes('Decision mismatch between assessment and gate: the assessment reported repair_required, the stored record yields auto_approve.'));
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0, 'and nothing was approved');
+  // Other verification failures remain errors, not mismatches.
+  const forged = {...assessment, record_digest: 'f'.repeat(64)};
+  await assert.rejects(f.gate(forged), /Stale or altered/);
+}));
+
+test('a record that carries its stored importer discovery derives the same decision as the assessment (one function, one input)', () => fixture(async f => {
+  const assessment = await f.assess();
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const stored = {...record, discovery: {test_imports: [{path: 'src/upload.test.js', specifiers: ['./upload.js']}], sources: {}}};
+  const rebound = {...assessment, record_digest: digest(stored)};
+  assert.equal(verifyRecord(stored, rebound, config).state.unresolved.length, 0, 'the discovery is applied to the hold only and the decision is unchanged');
+  const sameEverywhere = verifyRecord(structuredClone(stored), rebound, config);
+  assert.deepEqual(sameEverywhere.state, verifyRecord(structuredClone(stored), rebound, config).state);
+  // The stored discovery is part of the digest: altering it is a stale or altered record, not a new decision.
+  const altered = structuredClone(stored); altered.discovery.test_imports = [];
+  assert.throws(() => verifyRecord(altered, rebound, config), /Stale or altered/);
 }));
