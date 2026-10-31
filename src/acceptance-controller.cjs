@@ -222,12 +222,15 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) {
       if (assessment.decision === 'review_incomplete') await require('./incomplete.cjs').post({github, context, assessment});
+      if (assessment.decision === 'pending_technical') await require('./incomplete.cjs').postPending({github, context, assessment});
+      else await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
       return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
         'It is reassessed automatically when PR verification completes where the workflow has the verification trigger; otherwise re-run it ' +
         'once verification has completed, or push a new head if re-running does not produce a record.');
     }
     const record = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
     const {body, pages} = verifyRecord(record, assessment, config, engine);
+    await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: numberFor(context)});
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');

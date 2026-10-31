@@ -84,10 +84,37 @@ async function post({github, context, assessment}) {
   else await github.rest.issues.createComment({...repo, issue_number, body: text});
 }
 
+const PENDING = '<!-- clouseau-review-pending -->';
+
+function pendingBody(assessment, runUrl) {
+  const reason = String(assessment.reason ?? '').replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500);
+  return `${PENDING}\n## Clouseau review pending\n\nRevision \`${String(assessment.head_sha).slice(0, 12)}\` is waiting for PR verification ` +
+    `(tests, exact coverage and package build, state: ${String(assessment.verification ?? 'unknown')}). No decision has been made and nothing is approved or merged. ` +
+    `The review runs again automatically when verification completes; no action is needed.\n\n${reason}\n\nWorkflow run: ${runUrl}`;
+}
+
+// One short comment per PR, updated in place; replaced by a resolution line once a decision exists.
+async function postPending({github, context, assessment}) {
+  const repo = context.repo; const issue_number = assessment.number;
+  const runUrl = `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
+  const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number, per_page: 100});
+  const existing = comments.find(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(`${PENDING}\n`));
+  const text = pendingBody(assessment, runUrl);
+  if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: text});
+  else await github.rest.issues.createComment({...repo, issue_number, body: text});
+}
+
+async function resolvePending({github, context, number}) {
+  const repo = context.repo;
+  const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
+  const existing = comments.find(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(`${PENDING}\n`) && !item.body.includes('Resolved'));
+  if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: `${PENDING}\n## Clouseau review pending\n\nResolved: this pending state has ended; see the latest Clouseau result.`});
+}
+
 function annotate({core, assessment}) {
   if (assessment.decision === 'review_incomplete') {
     core.warning(`Clouseau review incomplete (${assessment.cause || 'evidence_incomplete'}): ${assessment.reason}`);
   }
 }
 
-module.exports = {MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
+module.exports = {PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
