@@ -5,11 +5,16 @@ const {patchOf} = require('./acceptance.cjs');
 // CI recomputes nothing from the model: the patch the reviewers saw is compared with the
 // patch GitHub reports for the same pull request. The file list is the one already fetched for
 // the assessment, so this check costs no additional request.
+// Extended git header lines. The three path-bearing lines are matched exactly against the pull request's own
+// paths, so no free text can ride in them.
 const HEADER = [
-  /^diff --git .+$/, /^(?:old|new) mode [0-7]{6}$/, /^(?:new|deleted) file mode [0-7]{6}$/, /^similarity index [0-9]{1,3}%$/,
+  /^(?:old|new) mode [0-7]{6}$/, /^(?:new|deleted) file mode [0-7]{6}$/, /^similarity index [0-9]{1,3}%$/,
   /^dissimilarity index [0-9]{1,3}%$/, /^rename (?:from|to) .+$/, /^index [a-f0-9]{7,64}\.\.[a-f0-9]{7,64}(?: [0-7]{6})?$/,
-  /^--- .+$/, /^\+\+\+ .+$/,
 ];
+const headerLines = live => {
+  const old = live.previous_filename ?? live.filename;
+  return new Set([`diff --git a/${old} b/${live.filename}`, `--- a/${old}`, '--- /dev/null', `+++ b/${live.filename}`, '+++ /dev/null']);
+};
 
 class ReceiptPatchMismatch extends Error {
   constructor(path) {
@@ -26,7 +31,9 @@ function hostedForm(patch, live) {
   if (typeof patch !== 'string') return null;
   const lines = patch.split('\n');
   const start = lines.findIndex(line => line.startsWith('@@'));
-  if (start < 0 || !lines.slice(0, start).every(line => HEADER.some(rule => rule.test(line)))) return null;
+  const head = lines.slice(0, Math.max(start, 0)); const allowed = headerLines(live);
+  if (start < 0 || !head.every(line => allowed.has(line) || HEADER.some(rule => rule.test(line))) ||
+    new Set(head).size !== head.length) return null;
   const renamed = Object.fromEntries(lines.slice(0, start).map(line => /^rename (from|to) (.+)$/.exec(line)).filter(Boolean)
     .map(([, side, name]) => [side, name]));
   if (live.status === 'renamed' ? renamed.from !== live.previous_filename || renamed.to !== live.filename : Object.keys(renamed).length) return null;
