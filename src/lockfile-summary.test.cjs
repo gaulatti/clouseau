@@ -95,6 +95,7 @@ test('unsummarizable lockfiles fail closed with a fixed specific reason', () => 
   assert.equal(reason(npm('[]')), 'invalid_structure');
   assert.equal(reason(npm('{"lockfileVersion":1,"dependencies":{}}')), 'unsupported_version');
   assert.equal(reason(npm('{"lockfileVersion":3}')), 'invalid_structure');
+  assert.equal(reason(npm('{"lockfileVersion":2,"packages":{},"dependencies":{}}')), 'unsupported_version');
   assert.equal(reason(npm('{"lockfileVersion":3,"packages":{"node_modules/a":1}}')), 'invalid_structure');
   assert.equal(reason(npm('{"lockfileVersion":3,"packages":{"node_modules/a":{"version":1}}}')), 'invalid_structure');
   for (const key of Object.keys(REASONS)) assert.ok(REASONS[key]);

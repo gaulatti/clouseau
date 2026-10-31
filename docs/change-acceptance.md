@@ -325,7 +325,7 @@ Only package entries are compared. Other lockfile content (for example pnpm
 the manifests that declare it are normal source.
 
 A lockfile that cannot be summarized fails closed with a fixed reason: unsupported
-lockfile version (npm lockfileVersion 1, pnpm other than 6 and 9, Cargo other than 3
+lockfile version (npm lockfileVersion other than 3, pnpm other than 6 and 9, Cargo other than 3
 and 4, and so on), invalid syntax or structure, not UTF-8 text, larger than
 1,000,000 bytes, too many changes, or a rename between formats. The raw evidence
 behavior is unchanged for that file and the snapshot records

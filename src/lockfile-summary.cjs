@@ -101,7 +101,8 @@ function parseJson(text) {
 function parseNpm(text) {
   const lock = parseJson(text);
   if (!isObject(lock)) fail('invalid_structure');
-  if (![2, 3].includes(lock.lockfileVersion)) fail('unsupported_version');
+  // Version 2 also carries a legacy `dependencies` tree that old npm installs from; only version 3 has one source of truth.
+  if (lock.lockfileVersion !== 3) fail('unsupported_version');
   if (!isObject(lock.packages)) fail('invalid_structure');
   const entries = [];
   for (const [key, value] of Object.entries(lock.packages)) {
