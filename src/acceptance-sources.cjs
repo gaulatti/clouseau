@@ -35,7 +35,7 @@ function refresh(snapshot) {
     const failed = (snapshot.lockfile_failures || []).filter(item => item.path);
     const paths = new Set(failed.map(item => item.path));
     const rest = {...value, sources: Object.fromEntries(Object.entries(value.sources).filter(([, source]) => !paths.has(source.path))),
-      files: value.files.filter(file => !paths.has(file.path))};
+      files: value.files?.filter(file => !paths.has(file.path))};
     throw failed.length && JSON.stringify(rest).length <= BUDGET ? lockfileError(failed[0].path, failed[0].reason) : new Error('Complete review evidence exceeds the source budget');
   }
   snapshot.digest = digest(value);
