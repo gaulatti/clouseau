@@ -19,11 +19,14 @@ const NEXT_STEPS = Object.freeze({
   changed_file_unreadable: 'A changed file cannot be read as complete text within the review limits. Split it out of this change or review it manually.',
   lockfile_unsummarizable: 'A changed dependency lockfile could not be summarized and its raw text does not fit the review limits. Regenerate it with a supported lockfile version, split it out of this change, or review it manually.',
   changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
+  receipt_patch_mismatch: 'The signed review saw a diff that differs from the pull request diff GitHub reports for the named file. Run the local Clouseau review again on this exact head and update the receipt marker.',
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
   verification_failed: 'Open the failing job linked in the reason (when it names one), fix the failing step, and push; the review is reassessed when verification passes.',
   github_api_error: 'GitHub rejected an API request this review needs (status and endpoint are in the reason). Re-run the failed jobs; if it repeats, the PR or repository state it describes must change.',
   github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
+  chunked_record_invalid: 'The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head.',
+  record_too_large: 'The chunked review record is too large to sign within the receipt limit. Split the change into smaller reviews.',
   evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
 });
@@ -48,6 +51,8 @@ function classify(error) {
     return {cause: rejected ? 'provider_rejected' : 'provider_unavailable',
       reason: `${provider[1]} provider ${rejected ? 'rejected the credential' : 'was unavailable'} (HTTP ${provider[2]}).`};
   }
+  if (error?.code === 'RECEIPT_PATCH_MISMATCH') return {cause: 'receipt_patch_mismatch', reason: `The signed local review patch for ${error.path} differs from the pull request diff reported by GitHub (or the file or status is missing).`};
+  if (error?.code === 'CHUNKED_RECORD') return {cause: error.cause_code, reason: error.message};
   if (error?.code === 'RATE_LIMIT') return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(error.resetAt).toISOString()}.`};
   // A raw rate-limit response that escaped the retrying wrapper is the same hold, never a crash.
   const asked = rateLimitDelay(error);

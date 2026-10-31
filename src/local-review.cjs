@@ -13,6 +13,7 @@ const policy = () => fs.readFileSync(path.join(__dirname, '../policy/change-acce
 const reviewContext = Object.freeze({stage: 'local_pre_pr', decision_scope: 'review_reuse_only',
   verification_source: 'verification', independent_ci_required: true, merge_authority: false});
 const stageInstructions = 'This is a pre-PR local change assessment, not the CI merge gate. ' +
+  'A file entry with patch_body=head_source was added whole: its patch holds only the header and its body is exactly that file\'s head source, every line prefixed with +. ' +
   'Run both local AI roles regardless of coverage percentage or availability. ' +
   'The trusted verification source records actual local command outcomes and observed coverage, including failed commands, partial counters and unavailable, invalid or unverified coverage data. ' +
   'Do not infer that a nonzero command failed only because of coverage, or claim unverified execution and counts passed. ' +

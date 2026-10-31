@@ -10,6 +10,7 @@ const {template, modelTemplate} = require('./acceptance-review.cjs');
 const {digest} = require('./acceptance.cjs');
 const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
+const {hostedFiles} = require('../test/hosted-files.cjs');
 const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: '.github/clouseau.md', readme: 'README.md', acceptance: {
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
@@ -143,7 +144,7 @@ async function fixture(run) {
     const write = name => endpoint(name, async args => {state.writes.push({name, args}); return {data: {id: 100 + state.writes.length}};});
     github.rest.pulls = {
       get: async () => ({data: structuredClone(state.pr)}),
-      listFiles: endpoint('files', async () => ({data: [{filename: 'src/upload.test.js', status: 'modified', patch: '+meaningful tests'}]})),
+      listFiles: endpoint('files', async () => ({data: hostedFiles(snapshot)})),
       listReviews: endpoint('reviews', async () => ({data: state.reviews})),
       createReview: write('approve'), requestReviewers: write('request-review'),
     };

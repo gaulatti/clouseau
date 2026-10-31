@@ -230,3 +230,62 @@ test('a git failure while reading a lockfile blob is not mistaken for a lockfile
   };
   try { assert.throws(() => collectLocal({...f, request: 'a', technical: {}}), /git exploded/); } finally { cp.execFileSync = real; }
 }, directory => fs.writeFileSync(path.join(directory, 'go.sum'), '')));
+
+// The shape of the Alcantara song-similarity change that stopped at "Complete review evidence exceeds the
+// source budget": 30 files (17 added, 13 modified, one of them a workflow carrying a Clouseau pin), about
+// 150 KB of diff, 48 KB of contracts and an 11 KB verification record. Source sizes follow the real files.
+test('a large, mostly new change with a pinned workflow fits the evidence budget with every changed file complete', () => repository(f => {
+  const {evidenceSize, BUDGET, refresh} = require('./acceptance-sources.cjs');
+  const {patchOf} = require('./acceptance.cjs');
+  const text = (size, seed) => {
+    let out = ''; for (let i = 0; out.length < size; i++) out += `export const value${seed}_${i} = compute(${i}, '${seed}', { retries: ${i % 7}, label: "item-${i}" });\n`;
+    return out.slice(0, size - 1) + '\n';
+  };
+  const pin = 'a'.repeat(40);
+  const added = [2300, 19000, 24000, 9000, 10000, 12000, 7000, 4000, 5000, 2000, 8000, 2000, 250, 1900, 6000, 3000];
+  const modified = [63000, 45000, 23000, 20000, 15000, 12000, 10000, 9000, 8000, 7000, 6000, 5000];
+  const write = (name, content) => { fs.mkdirSync(path.dirname(path.join(f.directory, name)), {recursive: true}); fs.writeFileSync(path.join(f.directory, name), content); };
+  const commit = message => { git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', message]); };
+  modified.forEach((size, i) => write(`backend/m${i}.ts`, text(size, `m${i}`)));
+  write('AGENTS.md', text(26000, 'agents')); write('README.md', text(22000, 'readme'));
+  write('.github/workflows/ci.yml', `steps:\n  - uses: gaulatti/clouseau/scripts/resolve@${pin}\n    image: postgres:17\n`);
+  commit('chore: base');
+  const base = git(f.directory, ['rev-parse', 'HEAD']).trim();
+  modified.forEach((size, i) => write(`backend/m${i}.ts`, text(size, `m${i}`).replace('value', 'changed')));
+  write('.github/workflows/ci.yml', `steps:\n  - uses: gaulatti/clouseau/scripts/resolve@${pin}\n    image: pgvector\n`);
+  added.forEach((size, i) => write(`backend/a${i}.ts`, text(size, `a${i}`)));
+  write('backend/no-newline.ts', 'export const last = 1;');
+  write('backend/empty.ts', '');
+  commit('feat: add similarity');
+  const files = git(f.directory, ['diff', '--name-only', base, 'HEAD']).trim().split('\n');
+  assert.ok(files.length >= 30);
+  const technical = {pad: 'x'.repeat(11000)};
+  // The same change collected the way the engine did before: whole patches and an unbounded seed.
+  const collected = collectLocal({directory: f.directory, base, request: 'Add song similarity.', technical, reviewerSha: pin});
+  const snapshot = collected.snapshot;
+  assert.ok(evidenceSize(snapshot) <= BUDGET);
+  const elided = snapshot.files.filter(file => file.patch_body === 'head_source');
+  assert.equal(elided.length, added.length + 1);
+  const restored = elided.reduce((sum, file) => sum + patchOf(snapshot, file).length - file.patch.length, 0);
+  assert.ok(evidenceSize(snapshot) + restored > BUDGET - 150000, 'without the compact patches this change leaves no room for the seed');
+  // Every changed file keeps its patch, head source and base source: nothing a reviewer judges is dropped.
+  for (const file of snapshot.files) {
+    assert.ok(file.patch.length > 0);
+    if (file.status !== 'removed') assert.ok(snapshot.sources[file.head_source].content.length >= 0);
+    if (file.status !== 'added') assert.ok(snapshot.sources[file.base_source].content.length > 0);
+  }
+  const empty = snapshot.files.find(file => file.path === 'backend/empty.ts');
+  assert.equal(empty.patch_body, undefined);
+  const lone = snapshot.files.find(file => file.path === 'backend/no-newline.ts');
+  assert.equal(lone.patch_body, 'head_source');
+  assert.equal(patchOf(snapshot, lone), git(f.directory, ['diff', '--no-ext-diff', '--no-textconv', base, 'HEAD', '--', 'backend/no-newline.ts']));
+  const whole = snapshot.files.find(file => file.path === 'backend/a0.ts');
+  assert.equal(patchOf(snapshot, whole), git(f.directory, ['diff', '--no-ext-diff', '--no-textconv', base, 'HEAD', '--', 'backend/a0.ts']));
+  const modifiedFile = snapshot.files.find(file => file.path === 'backend/m0.ts');
+  assert.equal(patchOf(snapshot, modifiedFile), modifiedFile.patch);
+  // The optional engine seed beyond the reserve is stated as omitted instead of failing the review.
+  assert.ok(snapshot.omitted_sources.length > 0);
+  assert.ok(snapshot.omitted_sources.every(item => item.path.startsWith('.clouseau-ci/') && /evidence budget/.test(item.reason)));
+  // A reviewer's later request still fits the room that was kept.
+  return collected.addSources(['backend/a1.ts']).then(() => refresh(snapshot));
+}));

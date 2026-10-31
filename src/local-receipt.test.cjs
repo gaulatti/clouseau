@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust, reviewDecision, marker, loadReceipt, verifySources} = require('./local-receipt.cjs');
 const {digest} = require('./acceptance.cjs');
+const {hostedFiles} = require('../test/hosted-files.cjs');
 const crypto = require('node:crypto');
 
 test('signed passing local receipt is verified and graded without a provider', async () => {
@@ -135,7 +136,7 @@ test('trust, decision and authority validation rejects forged passing flags', as
 
 test('CI independently compares all signed sources and inventory against immutable GitHub content', async () => {
   const f = await fixture();
-  const files = [{filename: 'src/upload.test.js', status: 'modified'}];
+  const files = hostedFiles(f.snapshot);
   const pr = {changed_files: 1, base: {sha: f.snapshot.base_sha}, head: {sha: f.snapshot.head_sha,
     repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}};
   const options = {github: f.github, repo: f.repo, pr, files, snapshot: f.snapshot,
@@ -164,6 +165,7 @@ test('CI independently compares all signed sources and inventory against immutab
   await assert.rejects(verifySources({...options, snapshot: request}), /untrusted/);
   const renamed = structuredClone(f.snapshot);
   renamed.files[0].status = 'renamed';
+  renamed.files[0].patch = `rename from ${files[0].filename}\nrename to ${files[0].filename}\n${renamed.files[0].patch}`;
   await verifySources({...options, snapshot: renamed, files: [{...files[0], status: 'renamed', previous_filename: files[0].filename}]});
   for (const status of ['added', 'removed']) {
     const changed = structuredClone(f.snapshot); changed.files[0].status = status;
@@ -218,7 +220,7 @@ test('signed engine source requests are checked against accepted engine bytes an
   const source = {path: '.clouseau-ci/src/config.cjs', ref: f.issue.reviewerSha, authority: 'untrusted', kind: 'source',
     content: require('node:fs').readFileSync(require('node:path').join(__dirname, 'config.cjs'), 'utf8')};
   snapshot.sources.engine = source;
-  const files = [{filename: 'src/upload.test.js', status: 'modified'}];
+  const files = hostedFiles(snapshot);
   const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
     repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
     files, reviewerSha: f.issue.reviewerSha};
@@ -246,7 +248,7 @@ test('historical bootstrap evidence is verified from the fixed public repository
   };
   const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
     repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
-    files: [{filename: 'src/upload.test.js', status: 'modified'}], reviewerSha: f.issue.reviewerSha};
+    files: hostedFiles(snapshot), reviewerSha: f.issue.reviewerSha};
   await verifySources(options);
   assert.equal(options.reviewerSha, f.issue.reviewerSha);
   snapshot.sources.bootstrap = {...source, ref: 'd'.repeat(40)};
@@ -284,7 +286,7 @@ test('CI recomputes the derived lockfile summary from the exact base and head by
     const repo = {owner: 'example', repo: 'local-fixture'};
     const pr = {changed_files: snapshot.files.length, base: {sha: snapshot.base_sha},
       head: {sha: snapshot.head_sha, repo: {owner: {login: 'example'}, name: 'local-fixture'}}};
-    const files = snapshot.files.map(file => ({filename: file.path, status: file.status}));
+    const files = require('../test/hosted-files.cjs').hostedFiles(snapshot).map(file => /(?:package-lock\.json|Pipfile\.lock|go\.sum)$/.test(file.filename) ? {...file, patch: undefined} : file);
     const options = {github, repo, pr, files, snapshot, config: {readme: 'README.md', repository_policy: 'AGENTS.md'}};
     await verifySources(options);
     const [id, source] = Object.entries(snapshot.sources).find(([, item]) => item.kind === 'lockfile-summary' && item.path === 'package-lock.json');
@@ -298,7 +300,7 @@ test('CI recomputes the derived lockfile summary from the exact base and head by
     await assert.rejects(verifySources({...options, snapshot: retargeted}), /not bound to a changed lockfile/);
     await assert.rejects(verifySources({...options, snapshot: mutate((copy, item) => { item.path = 'src/handler.js'; })}), /not bound/);
     await assert.rejects(verifySources({...options, snapshot: mutate((copy, item) => { item.path = 'elsewhere/package-lock.json'; })}), /not bound/);
-    await assert.rejects(verifySources({...options, snapshot: mutate(copy => { copy.files.find(file => file.path === 'package-lock.json').lockfile = false; })}), /not bound/);
+    await assert.rejects(verifySources({...options, snapshot: mutate(copy => { copy.files.find(file => file.path === 'package-lock.json').lockfile = false; })}), /not bound|incomplete/);
     // The live repository changed under the signed evidence.
     live[`${snapshot.head_sha}:package-lock.json`] = {data: {encoding: 'base64', content: Buffer.from(lockfixture.npmBase()).toString('base64'), size: 10}};
     await assert.rejects(verifySources(options), /differs from the repository lockfiles/);
@@ -325,7 +327,7 @@ test('CI recomputes the derived lockfile summary from the exact base and head by
     await assert.rejects(verifySources({...options, snapshot: gone}), /omitted or substituted/);
     await assert.rejects(verifySources({...options, snapshot: rebind(item => { item.head_source = undefined; })}), /omitted or substituted/);
     await assert.rejects(verifySources({...options, snapshot: rebind(item => { item.path = 'src/handler.js'; })}), /omitted or substituted|inventory|status/);
-    await assert.rejects(verifySources({...options, snapshot: rebind((item, copy) => { copy.files.find(file => file.path === 'src/handler.js').lockfile = true; })}), /omitted or substituted|not bound/);
+    await assert.rejects(verifySources({...options, snapshot: rebind((item, copy) => { copy.files.find(file => file.path === 'src/handler.js').lockfile = true; })}), /omitted or substituted|not bound|receipt_patch_mismatch/);
   }, directory => {
     fs.writeFileSync(path.join(directory, 'package-lock.json'), lockfixture.npmBase());
     fs.writeFileSync(path.join(directory, 'go.sum'), 'example.com/mod v1.0.0 h1:abc=\n');

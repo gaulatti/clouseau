@@ -65,7 +65,7 @@ async function fixture(run, options = {}) {
           changed_files: record.snapshot.files.length, head: {sha: f.head, ref: 'install/clouseau',
             repo: {id: 42, full_name: f.manifest.repository, owner: {login: 'fixture-owner'}, name: 'bootstrap-fixture'}},
           base: {sha: f.base, ref: 'main'}},
-        files: record.snapshot.files.map(file => ({filename: file.path, status: file.status})),
+        files: require('./hosted-files.cjs').hostedFiles(record.snapshot),
         runs: [{id: 51, run_attempt: 1, head_sha: f.head, head_branch: 'install/clouseau', head_repository: {id: 42},
           pull_requests: [{number: 7}], event: 'pull_request', status: 'completed', conclusion: 'success',
           html_url: `https://github.com/${f.manifest.repository}/actions/runs/51`}],

@@ -240,6 +240,17 @@ produces an approval receipt. This initial receipt path targets a new PR without
 an unresolved existing GitHub review ledger; it rejects an existing incompatible
 ledger rather than dropping its findings.
 
+## Evidence size
+
+Serialized local evidence is capped at 900,000 characters. To keep large changes inside the cap
+without dropping anything a reviewer judges, the local collector stores a file added whole once:
+its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
+the head source with every line prefixed `+` (consumers restore the identical patch). The pinned
+engine seed for workflow changes is optional context: seed files that would use the last 150,000
+characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
+Changed files, their base and head sources and contracts are never omitted; a change that exceeds
+the cap with only that evidence still fails closed.
+
 ## Enrolling a trusted runner
 
 Consumers with neither accepted recipe nor CI policy use the separate
@@ -355,6 +366,26 @@ even while independent CI is pending or failed. That result remains
 or approval/merge write. Unstamped PRs retain the CI provider route after
 technical verification.
 
+### Reviewed diff verification
+
+CI also verifies the diff text the reviewers saw. It reuses the changed-file list
+already fetched for the assessment (the pull request files endpoint, paginated;
+no extra request per file) and compares each file's repository-supplied `patch`
+with the signed `snapshot.files[].patch`. The local collector stores `git diff`
+output, so the comparison reduces it to GitHub's form: the git extended header
+(`diff --git`, mode, similarity, rename, `index`, `---`, `+++` lines) is removed
+and the final newline dropped; every remaining byte of the hunks must equal what
+GitHub reports. A header line that is not one of those git lines, or a rename
+that is not the pull request's rename, is a mismatch. Whitespace-only differences
+are mismatches. The file list and each file's status must match exactly: no extra
+file, none missing.
+
+Any disagreement stops reuse with the incomplete reason `receipt_patch_mismatch`,
+which names the file (never diff content) and tells the author to review again on
+the exact head. GitHub supplies no `patch` for very large or binary changes. The
+hosted collector already refuses those (`changed_files_incomplete`), and receipts
+for such changes are refused the same way rather than verified with a weaker rule.
+
 Only after actual CI tests and exact coverage pass may the controller emit an
 approval assessment. It revalidates the receipt at the write gate and uses the
 existing native approval, merge-authority and protection checks. Missing, stale,
@@ -441,3 +472,32 @@ artifact's metadata. It checks the exact blob identity, byte count and Git objec
 hash before the normal signature, source, policy and engine verification.
 Unavailable, oversized or substituted content holds approval without AI fallback;
 this transport does not grant trust or change receipt compatibility.
+
+## Review partition (dry run, not yet used by review)
+
+`src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
+whose complete evidence exceeds the 900,000-character snapshot budget in bounded units. It is deterministic
+and model-free, and nothing in `clouseau review` calls it yet: reviews behave exactly as before.
+
+Changed files are sorted by new path (UTF-8 bytes) and grouped into atoms: a file stays with its `.test`,
+`.spec` and `.stories` siblings, and a rename is one entry keyed by its new path. A file costs
+`ceil(1.03 * (base bytes + head bytes + patch characters))`, where the patch size is the stored one (a file added whole keeps only its patch header, its body lives once in the head source). Atoms are packed next-fit, in path order, into
+units of at most `unit_ceiling` (C = 450,000); an atom above C becomes its own unit. The plan digest covers the
+scheme, parameters, unit membership and costs, so it is the same for any input order. Every changed path is
+owned by exactly one unit (checked by `checkOwnership`).
+
+The plan is refused, never truncated, with `file_over_bound` (a changed file over the 300,000-byte per-file
+bound), `unit_exceeds_budget` (an atom above the 900,000 budget minus 100,000 shared context),
+`too_many_units` (more than 8), `unpartitionable_path` or `unpartitionable_binary`. A file with a
+`derived_size` (a lockfile replaced by a summary CI can recompute) costs that summary instead of its sources.
+
+Print a plan for a table of changed files (`{files: [{path, previous?, base_size, head_size, patch_chars,
+derived_size?}]}`; `test/fixtures/alcantara-02618a9.json` is the measured table of alcantara commit 02618a9,
+which gives 4 units at C = 450,000 with stored sizes, 5 when every added file also counts its full patch):
+
+```
+scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000] [--max-units 8]
+```
+
+The parameters are fixed in code for now; reading them from protected configuration is part of wiring the
+partition into review.

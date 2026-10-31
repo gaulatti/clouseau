@@ -180,6 +180,17 @@ function importSpecifiers(statement) {
   return found;
 }
 
+// A file added whole carries its text twice, in the patch and in its head source. The local
+// collector stores the patch header only and marks the body as the head source; this restores the
+// exact patch, so every consumer sees the same bytes whichever form was stored.
+function patchOf(snapshot, file) {
+  if (file.patch_body !== 'head_source') return file.patch;
+  const lines = snapshot.sources[file.head_source].content.split('\n');
+  const final = lines[lines.length - 1] === '';
+  if (final) lines.pop();
+  return `${file.patch}${lines.map(line => `+${line}`).join('\n')}\n${final ? '' : '\\ No newline at end of file\n'}`;
+}
+
 function nonBehavioural(patch) {
   if (typeof patch !== 'string') return false;
   // Contiguous runs of one sign are one edit. A multi-line block comment is dropped only when the run
@@ -220,13 +231,13 @@ function approvalHold(report, snapshot) {
   // no behaviour to test. A model's "unresolved" without a missing source behind it is an opinion:
   // completeness holds only when the review records, or the controller omitted, missing evidence.
   const executable = snapshot.files.filter(file => isExecutablePath(file.path));
-  const testMatters = executable.some(file => (!isTestPath(file.path) && !nonBehavioural(file.patch)) || (isTestPath(file.path) && /^-(?!--)/m.test(file.patch)));
+  const testMatters = executable.some(file => (!isTestPath(file.path) && !nonBehavioural(patchOf(snapshot, file))) || (isTestPath(file.path) && /^-(?!--)/m.test(patchOf(snapshot, file))));
   const missing = (snapshot.omitted_sources || []).length > 0 ||
     [...(report.coverage?.sources || []), ...(report.coverage?.dependencies || [])].some(item => item.state === 'missing');
   if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';
   if (executable.length && missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
   const reached = reachedByTests(snapshot);
-  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !nonBehavioural(file.patch) && !linked(snapshot, file.path, reached)).map(file => file.path);
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !nonBehavioural(patchOf(snapshot, file)) && !linked(snapshot, file.path, reached)).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;
 }
@@ -385,4 +396,4 @@ function validateApproval(report, snapshot, holdSnapshot = snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {JS_PATH, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {patchOf, JS_PATH, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
