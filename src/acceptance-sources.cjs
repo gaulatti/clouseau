@@ -31,9 +31,12 @@ function evidenceSize(snapshot) {
 function refresh(snapshot) {
   const value = {...snapshot}; delete value.digest;
   if (JSON.stringify(value).length > BUDGET) {
-    // A lockfile that could not be summarized is the specific reason when the raw evidence no longer fits.
-    const failed = snapshot.lockfile_failures?.[0];
-    throw failed ? lockfileError(failed.path, failed.reason) : new Error('Complete review evidence exceeds the source budget');
+    // A lockfile that could not be summarized is the specific reason only when its raw evidence is what overflows.
+    const failed = (snapshot.lockfile_failures || []).filter(item => item.path);
+    const paths = new Set(failed.map(item => item.path));
+    const rest = {...value, sources: Object.fromEntries(Object.entries(value.sources).filter(([, source]) => !paths.has(source.path))),
+      files: value.files.filter(file => !paths.has(file.path))};
+    throw failed.length && JSON.stringify(rest).length <= BUDGET ? lockfileError(failed[0].path, failed[0].reason) : new Error('Complete review evidence exceeds the source budget');
   }
   snapshot.digest = digest(value);
   return snapshot;

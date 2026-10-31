@@ -450,11 +450,18 @@ test('a lockfile that cannot be summarized keeps its raw evidence and records th
   await assert.rejects(collectSnapshot(unrelated), /history unavailable/);
 });
 
-test('when raw evidence is over the budget after an unsummarizable lockfile, the lockfile reason is reported', async () => {
+test('only raw lockfile evidence that causes the overflow is reported as a lockfile problem', async () => {
+  const raw = `version = 2\n${'#'.repeat(290000)}\n`;
+  const files = Array.from({length: 3}, (_, i) => lockfileChange(`m${i}/Cargo.lock`));
+  const contents = {...PLAIN};
+  for (const file of files) { contents[`base:${file.filename}`] = raw; contents[`head:${file.filename}`] = raw; }
+  const error = await collectSnapshot(lockfileFixture(files, contents)).catch(item => item);
+  assert.deepEqual(error.lockfile, {path: 'm0/Cargo.lock', reason: 'unsupported_version'});
+  // A tiny unsupported lockfile next to an unrelated overflow keeps the generic budget cause.
   const f = lockfileFixture([lockfileChange('Cargo.lock')], {...PLAIN, 'base:Cargo.lock': 'version = 2\n', 'head:Cargo.lock': 'version = 2\n'});
   const snapshot = await collectSnapshot(f);
   snapshot.claims.description = 'z'.repeat(1000000);
-  assert.throws(() => refresh(snapshot), error => error.lockfile?.reason === 'unsupported_version');
+  assert.throws(() => refresh(snapshot), error => error.lockfile === undefined && /source budget/.test(error.message));
   delete snapshot.lockfile_failures;
   assert.throws(() => refresh(snapshot), /source budget/);
 });

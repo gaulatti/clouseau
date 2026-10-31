@@ -196,7 +196,7 @@ function parsePnpm(text) {
     if (!target || !line.trim()) continue;
     if (line.includes('\t')) fail('invalid_syntax');
     if (/^ {2}\S/.test(line)) {
-      const header = /^ {2}(\S.*):$/.exec(line);
+      const header = /^ {2}(\S.*?):(?: \{\})?$/.exec(line);
       if (!header) fail('invalid_syntax');
       current = {key: unquote(header[1]).replace(/^\//, ''), props: Object.create(null)}; target.push(current);
     } else {

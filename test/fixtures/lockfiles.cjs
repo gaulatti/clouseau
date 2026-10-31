@@ -55,7 +55,7 @@ const pnpmBase = () => pnpmLock([
   {key: 'tiny-dep@1.0.0', resolution: resolutionOf('tiny-dep@1.0.0')},
   {key: 'git-dep@https://codeload.github.com/example/git-dep/tar.gz/aaaa', resolution: "{tarball: 'https://codeload.github.com/example/git-dep/tar.gz/aaaa'}"},
   {key: 'local-dep@file:../local-dep', resolution: '{directory: ../local-dep, type: directory}'},
-], "  react@18.3.1:\n    dependencies:\n      loose-envify: 1.4.0\n\n  esbuild@0.21.5:\n    optionalDependencies:\n      '@esbuild/darwin-arm64': 0.21.5\n");
+], "  react@18.3.1:\n    dependencies:\n      loose-envify: 1.4.0\n\n  esbuild@0.21.5:\n    optionalDependencies:\n      '@esbuild/darwin-arm64': 0.21.5\n\n  ms@2.1.3: {}\n\n  '@types/node@20.11.0': {}\n");
 
 const pnpmHead = () => pnpmLock([
   {key: 'react@18.3.1', resolution: `{integrity: ${sri('react@18.3.1 swapped')}}`, extra: '    engines: {node: ">=0.10.0"}\n'},
@@ -67,7 +67,7 @@ const pnpmHead = () => pnpmLock([
   {key: 'git-dep@https://codeload.github.com/example/git-dep/tar.gz/aaaa', resolution: "{tarball: 'https://codeload.github.com/example/git-dep/tar.gz/aaaa'}"},
   {key: 'local-dep@file:../local-dep', resolution: '{directory: ../local-dep, type: directory}'},
   {key: 'ms@2.1.3', resolution: resolutionOf('ms@2.1.3')},
-], "  react@18.3.1:\n    dependencies:\n      loose-envify: 1.4.0\n\n  esbuild@0.21.5:\n    optionalDependencies:\n      '@esbuild/darwin-arm64': 0.21.5\n");
+], "  react@18.3.1:\n    dependencies:\n      loose-envify: 1.4.0\n\n  esbuild@0.21.5:\n    optionalDependencies:\n      '@esbuild/darwin-arm64': 0.21.5\n\n  ms@2.1.3: {}\n\n  '@types/node@20.11.0': {}\n");
 
 function uvLock(packages) {
   const blocks = packages.map(item => {
