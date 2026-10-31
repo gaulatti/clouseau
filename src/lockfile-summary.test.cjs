@@ -421,3 +421,14 @@ test('a Pipfile index on the same host but another path is a different source', 
   assert.match(out, /^RISK\[source-changed\] CHANGED a: .*projects\/1\/packages.* -> index:git\.example\.invalid\/api\/v4\/projects\/2/m);
   assert.equal(reason(() => summarize('Pipfile.lock', pipenv('not a url', '==1'), '')), 'invalid_structure');
 });
+
+test('ordinary go.sum and composer changes are not flagged, while local composer code is', () => {
+  const sum = hash => `example.com/mod v1.0.0 h1:${hash}=\n`;
+  assert.doesNotMatch(summarize('go.sum', sum('aa'), `${sum('aa')}example.com/other v1.0.0 h1:bb=\n`), /^RISK\[/m);
+  const composer = (version, url, type = 'zip') => JSON.stringify({packages: [{name: 'v/p', version, dist: {type, url}}]});
+  const bump = summarize('composer.lock', composer('1.0.0', 'https://api.github.com/repos/v/p/zipball/aaa'), composer('1.1.0', 'https://api.github.com/repos/v/p/zipball/bbb'));
+  assert.doesNotMatch(bump, /^RISK\[/m);
+  assert.match(bump, /^CHANGED v\/p: version 1\.0\.0 -> 1\.1\.0/m);
+  assert.match(summarize('composer.lock', '', composer('dev-main', '../local/p', 'path'), 'added'), /^RISK\[non-registry-source\] ADDED v\/p@dev-main source=file:\.\.\/local\/p /m);
+  assert.match(summarize('composer.lock', '', composer('1.0.0', '../local/p'), 'added'), /^RISK\[non-registry-source\] ADDED v\/p@1\.0\.0 source=file:/m);
+});

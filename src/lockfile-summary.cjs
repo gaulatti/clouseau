@@ -137,7 +137,9 @@ function parseComposer(text) {
       const parts = []; const flags = section === 'packages-dev' ? ['dev'] : [];
       if (isObject(item.dist)) {
         const found = classifyUrl(String(item.dist.url), item.name, item.version);
-        parts.push(`registry:${show(hostOf(String(item.dist.url)))}`); if (found.credentials) flags.push('url-credentials');
+        // A path repository or a URL that is not http(s) is local code, not a registry download.
+        parts.push(item.dist.type === 'path' || !/^https?:\/\//.test(String(item.dist.url)) ? `file:${show(item.dist.url)}` : `registry:${show(hostOf(String(item.dist.url)))}`);
+        if (found.credentials) flags.push('url-credentials');
       }
       if (isObject(item.source)) parts.push(`src=${show(item.source.type)}:${show(item.source.url)}`);
       const raw = [item.dist?.shasum, item.dist?.reference, item.source?.reference].filter(Boolean).join('|');
