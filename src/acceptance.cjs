@@ -121,9 +121,9 @@ function resolveSpecifier(from, specifier, known) {
 // files can be intermediates; a file with no path from any test is not covered.
 function reachedByTests(snapshot) {
   const sources = Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha && source.kind === 'source' && JS_PATH.test(source.path));
-  const known = [...new Set([...sources.map(source => source.path), ...snapshot.files.map(file => file.path)])];
+  const known = [...new Set([...sources.map(source => source.path), ...snapshot.files.map(file => file.path), ...(snapshot.test_imports || []).map(item => item.path)])];
   const edges = new Map(sources.map(source => [source.path, specifiersOf(source.content)]));
-  const roots = [...sources.filter(source => isTestPath(source.path)).map(source => source.path), ...(snapshot.test_imports || []).map(item => item.path)];
+  const roots = [...sources.filter(source => isTestPath(source.path)).map(source => source.path), ...(snapshot.test_imports || []).filter(item => isTestPath(item.path)).map(item => item.path)];
   for (const item of snapshot.test_imports || []) edges.set(item.path, item.specifiers);
   const reached = new Map();
   for (const root of new Set(roots)) {
@@ -379,10 +379,10 @@ function validateReport(report, snapshot) {
 }
 
 // Hosted CI decision: the scores plus the controller's affirmative-evidence hold.
-function validateApproval(report, snapshot) {
+function validateApproval(report, snapshot, holdSnapshot = snapshot) {
   const scores = validateReport(report, snapshot);
-  const hold = approvalHold(report, snapshot);
+  const hold = approvalHold(report, holdSnapshot);
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {JS_PATH, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};

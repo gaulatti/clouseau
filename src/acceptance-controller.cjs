@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const {readPull} = require('./pull-read.cjs');
 const path = require('node:path');
-const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
+const {digest, validateApproval, approvalHold, specifiersOf, JS_PATH} = require('./acceptance.cjs');
 const {collectSnapshot, refresh, supplyTests} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
@@ -23,12 +23,35 @@ function decided(result, controls) {
 }
 
 // The local snapshot holds only what the local reviewer fetched. Importers are found with the same discovery the
-// hosted review uses, so a signed receipt is held by exactly the same rule as hosted CI. The signed record is not altered.
-async function receiptHold({github, repo, snapshot, reviews}) {
+// hosted review uses, and what it found is stored IN the record (`discovery`), so the assessment, the gate, the
+// finalizer and every other path derive the decision from the same inputs: the snapshot plus its discovery. The
+// signed receipt itself is not altered.
+async function discoverImporters({github, repo, snapshot}) {
   const discovered = structuredClone(snapshot);
   await supplyTests({github, repo, snapshot: discovered, files: discovered.files.map(file => ({filename: file.path, status: file.status})),
     baseSha: discovered.base_sha, headSha: discovered.head_sha});
-  return reviews.map(review => approvalHold(review.report, discovered)).find(Boolean);
+  const added = Object.entries(discovered.sources).filter(([id]) => !Object.hasOwn(snapshot.sources, id));
+  // Files that are imported or import are carried as their specifiers; only a non-JS test, whose linkage reads its text, is carried whole.
+  const edges = added.filter(([, source]) => JS_PATH.test(source.path)).map(([, source]) => ({path: source.path, specifiers: specifiersOf(source.content)}));
+  return {test_imports: [...(discovered.test_imports ?? []), ...edges],
+    sources: Object.fromEntries(added.filter(([, source]) => !JS_PATH.test(source.path)))};
+}
+
+function withDiscovery(snapshot, discovery) {
+  return {...snapshot, test_imports: [...(snapshot.test_imports ?? []), ...discovery.test_imports], sources: {...snapshot.sources, ...discovery.sources}};
+}
+
+async function receiptHold({github, repo, snapshot, reviews}) {
+  const discovery = await discoverImporters({github, repo, snapshot});
+  return {discovery, hold: reviews.map(review => approvalHold(review.report, withDiscovery(snapshot, discovery))).find(Boolean)};
+}
+
+// The one place that turns a stored record into a decision, and what a disagreement looks like.
+class DecisionMismatch extends Error {
+  constructor(assessed, derived) {
+    super('Acceptance decision differs from the deterministic record');
+    this.code = 'DECISION_MISMATCH'; this.assessed = assessed; this.derived = derived;
+  }
 }
 
 function verifyRecord(record, assessment, config, engine = null) {
@@ -56,22 +79,23 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
   for (const review of reviews) {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
-    review.scores = validateApproval(review.report, view);
+    review.scores = validateApproval(review.report, view, record.discovery ? withDiscovery(view, record.discovery) : view);
   }
   record.result.decision = combine(reviews);
   const state = reconcile(record.result, record.snapshot, record.previous.findings);
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(record.result.decision)) record.result.decision = 'review_incomplete';
-  if (assessment.decision !== decided(record.result, record.controls || Boolean(record.local_authorization))) throw new Error('Acceptance decision differs from the deterministic record');
+  const derived = decided(record.result, record.controls || Boolean(record.local_authorization));
+  if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
   return {state, ...publication({...record.result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
-function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle}) {
-  return {...verified, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical,
+function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle, discovery}) {
+  return {...verified, discovery, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical,
     local_author: author, local_artifact: artifact, local_receipt: bundle};
 }
 
-const COMPACT_KEYS = ['local_artifact', 'local_author', 'local_receipt_reference', 'previous', 'technical', 'version'];
+const COMPACT_KEYS = ['discovery', 'local_artifact', 'local_author', 'local_receipt_reference', 'previous', 'technical', 'version'];
 
 function createAcceptancePolicy(config, legacy, engine = null) {
   if (config.local_review?.central_source && !require('./central-version.cjs').acceptsEngine(config.local_review, engine)) {
@@ -100,7 +124,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest()});
     return localRecord(verified.record, {engine: record.engine, authorization: record.local_authorization,
       previous: record.previous, technical: record.technical, author: record.local_author,
-      artifact: record.local_artifact, bundle});
+      artifact: record.local_artifact, bundle, discovery: record.discovery});
   }
 
   async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false}) {
@@ -138,7 +162,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
         // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
         // is reused only when hosted approval's affirmative-evidence rule also holds.
-        const hold = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.record.result.reviews});
+        const {discovery, hold} = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.record.result.reviews});
         if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
           reason: `Authenticated local review held: ${hold}.`};
         const controls = legacy.scopeReason(files, pr);
@@ -152,12 +176,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             reason: `Authenticated local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
         const record = localRecord(verified.record, {engine, authorization, previous, technical, author: pr.user.login,
-          artifact: receiptRef, bundle});
+          artifact: receiptRef, bundle, discovery});
         // The signed bundle already lives at an immutable reference. Transport
         // only the run-specific facts; the write boundary rehydrates and
         // independently re-verifies the complete record from that reference.
         const compact = {version: 2, local_receipt_reference: true, local_artifact: receiptRef,
-          local_author: pr.user.login, previous, technical, ...(engine ? {engine} : {}),
+          local_author: pr.user.login, previous, technical, discovery, ...(engine ? {engine} : {}),
           ...(authorization ? {local_authorization: authorization} : {})};
         fs.writeFileSync(recordPath, JSON.stringify(compact, null, 2) + '\n');
         if (report) report('Authenticated local Clouseau review verified. CI AI calls: 0.');
@@ -239,7 +263,16 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         'once verification has completed, or push a new head if re-running does not produce a record.');
     }
     const record = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
-    const {body, pages} = verifyRecord(record, assessment, config, engine);
+    let verifiedRecord;
+    try {verifiedRecord = verifyRecord(record, assessment, config, engine);} catch (error) {
+      if (error.code !== 'DECISION_MISMATCH') throw error;
+      // Never an unhandled error: the PR shows both decisions (decision names only, no record content).
+      const reason = `Decision mismatch between assessment and gate: the assessment reported ${error.assessed}, the stored record yields ${error.derived}.`;
+      const incomplete = {...assessment, decision: 'review_incomplete', cause: 'decision_mismatch', reason};
+      await require('./incomplete.cjs').post({github, context, assessment: incomplete});
+      return hold(reason);
+    }
+    const {body, pages} = verifiedRecord;
     await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await readPull(github, context.repo, numberFor(context));
@@ -326,4 +359,4 @@ function createAcceptancePolicy(config, legacy, engine = null) {
   return {...legacy, assess, assessWhenReady, gate, finalize, rehydrate};
 }
 
-module.exports = {RECORD, policyDigest, numberFor, decided, verifyRecord, receiptHold, createAcceptancePolicy};
+module.exports = {RECORD, policyDigest, numberFor, decided, verifyRecord, receiptHold, discoverImporters, withDiscovery, DecisionMismatch, createAcceptancePolicy};
