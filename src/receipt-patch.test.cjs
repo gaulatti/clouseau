@@ -120,3 +120,23 @@ test('a file added whole in the compact signed form verifies against the hosted 
   mismatch(() => verifyPatches({snapshot: compact(content, {patch_body: 'other'}), files: [live('src/n.js', 'added', hosted)]}), 'src/n.js');
   mismatch(() => verifyPatches({snapshot: compact(content, {head_source: 'absent'}), files: [live('src/n.js', 'added', hosted)]}), 'src/n.js');
 });
+
+test('a verified chunked record holding a file added whole keeps its patch verification', async () => {
+  const {chunkedFixture} = require('../test/chunked-fixture.cjs');
+  const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
+  const compact = snapshot => {
+    const file = snapshot.files.find(item => item.path === 'README.md');
+    const lines = snapshot.sources[file.head_source].content.split('\n'); if (lines.at(-1) === '') lines.pop();
+    Object.assign(file, {status: 'added', patch: `@@ -0,0 +1,${lines.length} @@\n`, patch_body: 'head_source'});
+    delete file.base_source;
+  };
+  const f = await chunkedFixture({mutate: compact});
+  const {record} = verifyReceipt(issueReceipt(f.issue), f.expected);
+  assert.equal(record.snapshot.files.find(item => item.path === 'README.md').patch_body, 'head_source');
+  const files = hostedFiles(record.snapshot);
+  assert.ok(files.every(file => file.patch.length > 0));
+  verifyPatches({snapshot: record.snapshot, files});
+  const forged = structuredClone(record.snapshot);
+  forged.sources[forged.files.find(item => item.path === 'README.md').head_source].content += 'extra line\n';
+  mismatch(() => verifyPatches({snapshot: forged, files}), 'README.md');
+});
