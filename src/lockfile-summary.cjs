@@ -269,7 +269,7 @@ function parseYarn(text) {
       if (Object.hasOwn(block.fields, field[1])) fail('invalid_syntax');
       block.fields[field[1]] = unquote(field[2]); nested = false;
     } else if (block && /^ {2}[A-Za-z]+:$/.test(line)) nested = true;
-    else if (!nested || !/^ {4}\S/.test(line)) fail('invalid_syntax');
+    else if (!nested || !/^ {4,}\S/.test(line)) fail('invalid_syntax');
   }
   const entries = [];
   for (const item of blocks.filter(candidate => candidate.header !== '__metadata')) {
