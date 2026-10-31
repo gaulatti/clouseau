@@ -104,3 +104,19 @@ test('the visible incomplete notice names the file with a specific next step and
   assert.ok(notice.includes('src/ab.js') && notice.includes(NEXT_STEPS.receipt_patch_mismatch));
   assert.ok(!notice.includes('tampered'));
 });
+
+test('a file added whole in the compact signed form verifies against the hosted patch and nothing else', () => {
+  const content = 'const a = 1;\nconst b = 2;\n';
+  const header = 'diff --git a/src/n.js b/src/n.js\nnew file mode 100644\nindex 0000000..89abcde\n--- /dev/null\n+++ b/src/n.js\n@@ -0,0 +1,2 @@\n';
+  const hosted = '@@ -0,0 +1,2 @@\n+const a = 1;\n+const b = 2;';
+  const compact = (source = content, extra = {}) => ({sources: {head: {content: source}},
+    files: [{path: 'src/n.js', status: 'added', patch: header, patch_body: 'head_source', head_source: 'head', ...extra}]});
+  verifyPatches({snapshot: compact(), files: [live('src/n.js', 'added', hosted)]});
+  verifyPatches({snapshot: compact('const a = 1;', {patch: header.replace('+1,2', '+1')}),
+    files: [live('src/n.js', 'added', '@@ -0,0 +1 @@\n+const a = 1;\n\\ No newline at end of file')]});
+  // The body differs from the head source, from GitHub's patch, or the marker has no source behind it.
+  mismatch(() => verifyPatches({snapshot: compact('const a = 1;\nconst b = 3;\n'), files: [live('src/n.js', 'added', hosted)]}), 'src/n.js');
+  mismatch(() => verifyPatches({snapshot: compact(), files: [live('src/n.js', 'added', hosted.replace('= 2', '= 9'))]}), 'src/n.js');
+  mismatch(() => verifyPatches({snapshot: compact(content, {patch_body: 'other'}), files: [live('src/n.js', 'added', hosted)]}), 'src/n.js');
+  mismatch(() => verifyPatches({snapshot: compact(content, {head_source: 'absent'}), files: [live('src/n.js', 'added', hosted)]}), 'src/n.js');
+});

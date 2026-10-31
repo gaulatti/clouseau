@@ -1,5 +1,7 @@
 'use strict';
 
+const {patchOf} = require('./acceptance.cjs');
+
 // CI recomputes nothing from the model: the patch the reviewers saw is compared with the
 // patch GitHub reports for the same pull request. The file list is the one already fetched for
 // the assessment, so this check costs no additional request.
@@ -31,6 +33,12 @@ function hostedForm(patch, live) {
   return lines.slice(start).join('\n').replace(/\n$/, '');
 }
 
+// A file added whole is stored as its header plus a marker that the body is its head source; the
+// restored text is what the reviewers saw. A marker without that source restores nothing.
+function signedPatch(snapshot, item) {
+  try {return patchOf(snapshot, item);} catch {return null;}
+}
+
 function verifyPatches({snapshot, files}) {
   // GitHub supplies no patch for very large or binary changes; the hosted collector refuses those and so does this.
   if (files.some(file => typeof file.patch !== 'string' || !file.patch)) throw new Error('Changed-file evidence is incomplete');
@@ -38,7 +46,7 @@ function verifyPatches({snapshot, files}) {
   for (const file of snapshot.files) if (!files.some(live => live.filename === file.path)) throw new ReceiptPatchMismatch(file.path);
   for (const live of files) {
     const item = signed.get(live.filename);
-    if (!item || item.status !== live.status || hostedForm(item.patch, live) !== live.patch) throw new ReceiptPatchMismatch(live.filename);
+    if (!item || item.status !== live.status || hostedForm(signedPatch(snapshot, item), live) !== live.patch) throw new ReceiptPatchMismatch(live.filename);
   }
 }
 
