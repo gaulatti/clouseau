@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust, reviewDecision, marker, loadReceipt, verifySources} = require('./local-receipt.cjs');
 const {digest} = require('./acceptance.cjs');
+const {hostedFiles} = require('../test/hosted-files.cjs');
 const crypto = require('node:crypto');
 
 test('signed passing local receipt is verified and graded without a provider', async () => {
@@ -135,7 +136,7 @@ test('trust, decision and authority validation rejects forged passing flags', as
 
 test('CI independently compares all signed sources and inventory against immutable GitHub content', async () => {
   const f = await fixture();
-  const files = [{filename: 'src/upload.test.js', status: 'modified'}];
+  const files = hostedFiles(f.snapshot);
   const pr = {changed_files: 1, base: {sha: f.snapshot.base_sha}, head: {sha: f.snapshot.head_sha,
     repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}};
   const options = {github: f.github, repo: f.repo, pr, files, snapshot: f.snapshot,
@@ -164,6 +165,7 @@ test('CI independently compares all signed sources and inventory against immutab
   await assert.rejects(verifySources({...options, snapshot: request}), /untrusted/);
   const renamed = structuredClone(f.snapshot);
   renamed.files[0].status = 'renamed';
+  renamed.files[0].patch = `rename from ${files[0].filename}\nrename to ${files[0].filename}\n${renamed.files[0].patch}`;
   await verifySources({...options, snapshot: renamed, files: [{...files[0], status: 'renamed', previous_filename: files[0].filename}]});
   for (const status of ['added', 'removed']) {
     const changed = structuredClone(f.snapshot); changed.files[0].status = status;
@@ -218,7 +220,7 @@ test('signed engine source requests are checked against accepted engine bytes an
   const source = {path: '.clouseau-ci/src/config.cjs', ref: f.issue.reviewerSha, authority: 'untrusted', kind: 'source',
     content: require('node:fs').readFileSync(require('node:path').join(__dirname, 'config.cjs'), 'utf8')};
   snapshot.sources.engine = source;
-  const files = [{filename: 'src/upload.test.js', status: 'modified'}];
+  const files = hostedFiles(snapshot);
   const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
     repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
     files, reviewerSha: f.issue.reviewerSha};
@@ -246,7 +248,7 @@ test('historical bootstrap evidence is verified from the fixed public repository
   };
   const options = {github: f.github, repo: f.repo, pr: {changed_files: 1, base: {sha: snapshot.base_sha}, head: {sha: snapshot.head_sha,
     repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}}, snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'},
-    files: [{filename: 'src/upload.test.js', status: 'modified'}], reviewerSha: f.issue.reviewerSha};
+    files: hostedFiles(snapshot), reviewerSha: f.issue.reviewerSha};
   await verifySources(options);
   assert.equal(options.reviewerSha, f.issue.reviewerSha);
   snapshot.sources.bootstrap = {...source, ref: 'd'.repeat(40)};
