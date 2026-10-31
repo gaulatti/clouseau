@@ -450,3 +450,32 @@ artifact's metadata. It checks the exact blob identity, byte count and Git objec
 hash before the normal signature, source, policy and engine verification.
 Unavailable, oversized or substituted content holds approval without AI fallback;
 this transport does not grant trust or change receipt compatibility.
+
+## Review partition (dry run, not yet used by review)
+
+`src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
+whose complete evidence exceeds the 900,000-character snapshot budget in bounded units. It is deterministic
+and model-free, and nothing in `clouseau review` calls it yet: reviews behave exactly as before.
+
+Changed files are sorted by new path (UTF-8 bytes) and grouped into atoms: a file stays with its `.test`,
+`.spec` and `.stories` siblings, and a rename is one entry keyed by its new path. A file costs
+`ceil(1.03 * (base bytes + head bytes + patch characters))`. Atoms are packed next-fit, in path order, into
+units of at most `unit_ceiling` (C = 450,000); an atom above C becomes its own unit. The plan digest covers the
+scheme, parameters, unit membership and costs, so it is the same for any input order. Every changed path is
+owned by exactly one unit (checked by `checkOwnership`).
+
+The plan is refused, never truncated, with `file_over_bound` (a changed file over the 300,000-byte per-file
+bound), `unit_exceeds_budget` (an atom above the 900,000 budget minus 100,000 shared context),
+`too_many_units` (more than 8), `unpartitionable_path` or `unpartitionable_binary`. A file with a
+`derived_size` (a lockfile replaced by a summary CI can recompute) costs that summary instead of its sources.
+
+Print a plan for a table of changed files (`{files: [{path, previous?, base_size, head_size, patch_chars,
+derived_size?}]}`; `test/fixtures/alcantara-02618a9.json` is the measured table of alcantara commit 02618a9,
+which gives 5 units at C = 450,000):
+
+```
+scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000] [--max-units 8]
+```
+
+The parameters are fixed in code for now; reading them from protected configuration is part of wiring the
+partition into review.

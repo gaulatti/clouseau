@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+'use strict';
+// Dry-run review partition: prints the plan for a changed-file table. See src/review-partition.cjs.
+process.exitCode = require('../src/review-partition.cjs').main(process.argv.slice(2));
