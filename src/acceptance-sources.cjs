@@ -193,4 +193,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {BUDGET, evidenceSize, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};

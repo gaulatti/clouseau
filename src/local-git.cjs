@@ -3,8 +3,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
-const {digest} = require('./acceptance.cjs');
-const {safePath, refresh} = require('./acceptance-sources.cjs');
+const {digest, patchOf} = require('./acceptance.cjs');
+const {safePath, refresh, evidenceSize, BUDGET} = require('./acceptance-sources.cjs');
+
+// Room kept free of the optional engine seed for sources a reviewer asks for later.
+const SEED_RESERVE = 150000;
 const {coverageParts} = require('./coverage-plan.cjs');
 
 function git(directory, args, input) {
@@ -95,12 +98,21 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
         ['log', '-3', '--format=%H %s', baseSha, '--', file.previous_filename]).trim()});
     }
     if (file.status !== 'removed') item.head_source = source(file.filename, head);
+    // A whole added file is its patch body: keep the header and let the head source carry the text once.
+    const compact = {...item, patch: item.patch.slice(0, item.patch.indexOf('\n', item.patch.indexOf('\n@@ ') + 1) + 1), patch_body: 'head_source'};
+    if (file.status === 'added' && item.patch.includes('\n@@ ') && patchOf({sources: snapshot.sources}, compact) === item.patch) Object.assign(item, compact);
     snapshot.files.push(item);
   }
   // The seed lists files every pinned engine revision might hold; a revision
   // that never had one simply has no such evidence, and a request can still ask.
   for (const filename of require('./central-version.cjs').engineContext(snapshot)) {
-    try {source(filename, head);} catch (error) {if (error.code !== 'ENGINE_PATH_ABSENT') throw error;}
+    let id;
+    try {id = source(filename, head);} catch (error) {if (error.code !== 'ENGINE_PATH_ABSENT') throw error; continue;}
+    // The seed is optional context: beyond the reserve it is omitted with a stated reason, never a failed review.
+    if (evidenceSize(snapshot) > BUDGET - SEED_RESERVE) {
+      delete snapshot.sources[id];
+      snapshot.omitted_sources = [...(snapshot.omitted_sources || []), {path: filename, reason: 'would exceed the evidence budget reserved for requested sources'}];
+    }
   }
   refresh(snapshot);
   const addSources = async paths => {
