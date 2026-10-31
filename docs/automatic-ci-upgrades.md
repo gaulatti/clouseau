@@ -220,6 +220,14 @@ a review that ended after about two minutes with no comment had been stopped by 
 bounded backoff; if the budget is still exhausted it fails with `Reassessment held: ... Re-run this
 job after that time`, never an unhandled HttpError.
 
+Any other HTTP error from GitHub during the wait also ends visibly: the wait publishes a
+`review_incomplete` assessment with cause `github_api_error` and the reason
+`GitHub API request failed: HTTP <status> <method> <owner>/<repo>/<path> (<message>)` (no host, query
+or credential), which the gate posts as the `clouseau-review-incomplete` comment. A PR read that GitHub
+refuses with "too many files changed" (a small PR on a branch far behind a busy base: GitHub cannot
+compute the diff statistics for `GET /pulls/{n}`) is served from the pull-request list instead, and the
+PR's own changed-file count comes from the paginated files endpoint; no base-versus-head comparison is used.
+
 A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-
 scoped record artifacts are never reused across reruns.

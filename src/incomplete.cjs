@@ -20,6 +20,7 @@ const NEXT_STEPS = Object.freeze({
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
   verification_failed: 'Open the failing job linked in the reason (when it names one), fix the failing step, and push; the review is reassessed when verification passes.',
+  github_api_error: 'GitHub rejected an API request this review needs (status and endpoint are in the reason). Re-run the failed jobs; if it repeats, the PR or repository state it describes must change.',
   github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
   evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
@@ -27,6 +28,16 @@ const NEXT_STEPS = Object.freeze({
 
 // Map an investigation failure to a fixed, secret-free cause and reason. Raw
 // error text is never forwarded: it can carry provider or repository content.
+// An HTTP error from GitHub, described by status, method and endpoint path (no host, query or credentials).
+function apiErrorReason(error) {
+  const where = (() => {
+    try {return new URL(error.request.url).pathname.replace(/^\/repos\//, '').slice(0, 120);} catch {return 'an unknown endpoint';}
+  })();
+  const method = String(error.request?.method ?? 'GET').toUpperCase();
+  const detail = String(error.message ?? '').replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 100);
+  return `GitHub API request failed: HTTP ${error.status} ${method} ${where}${detail ? ` (${detail})` : ''}.`;
+}
+
 function classify(error) {
   if (error?.code === 'PROVIDER_KEY') return {cause: error.cause_code, reason: error.message};
   const provider = /^(Acceptance|Jev) provider unavailable: HTTP ([0-9]{3})$/.exec(error?.message ?? '');
@@ -43,6 +54,7 @@ function classify(error) {
     const at = reset === undefined ? Date.now() + Math.max(asked, 900000) : Number(reset) * 1000;
     return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(at).toISOString()}.`};
   }
+  if (Number.isInteger(error?.status) && error.status >= 400) return {cause: 'github_api_error', reason: apiErrorReason(error)};
   const message = error?.message ?? '';
   // Every known failure of the AI step maps to a fixed cause that names the missing or failing item.
   // Only our own constant messages (and a repository path) are forwarded, never provider or source text.
@@ -117,4 +129,4 @@ function annotate({core, assessment}) {
   }
 }
 
-module.exports = {PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
+module.exports = {apiErrorReason, PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
