@@ -177,7 +177,7 @@ test('grades attach to the merged findings exactly once and must match their rec
   rejects(badAnswer, f.chunked, /examiner grade f0_\w+ failed validation: Invalid semantic rubric answer/);
   // A change with no findings has no grading round.
   const none = await chunkedFixture();
-  delete none.record.result.reviews[0].grading;
+  delete none.record.result.reviews[0].grading; delete none.record.result.reviews[1].drafts;
   assert.equal(reviewDecision(none.record, {chunked: none.chunked}).decision, 'auto_approve');
 });
 

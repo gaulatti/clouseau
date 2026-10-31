@@ -96,7 +96,6 @@ function rehydrateQuotes(report, snapshot) {
 // Wrap the existing validators so their (controller-constant) messages become a visible, specific reason.
 function checked(subject, run) {
   try {return run();} catch (error) {
-    if (error instanceof ChunkedRecordError) throw error;
     return invalid(`${subject} failed validation: ${String(error.message).slice(0, 160)}`);
   }
 }
