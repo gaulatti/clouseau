@@ -380,3 +380,8 @@ test('dropping transport security is visible in every format that names a regist
   flagged(summarize('Pipfile.lock', '', pipenv, 'added'));
   assert.doesNotMatch(summarize('uv.lock', '', secure, 'added'), /^RISK\[[^\]]*insecure/m);
 });
+
+test('top-level pnpm keys that name inherited properties are ignored, never trusted', () => {
+  const text = "lockfileVersion: '9.0'\nconstructor:\n  x: y\n__proto__:\n  z: 1\ntoString: 1\n";
+  assert.match(summarize('pnpm-lock.yaml', '', text, 'added'), /head: 0 entries/);
+});

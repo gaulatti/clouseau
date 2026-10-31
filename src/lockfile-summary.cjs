@@ -195,7 +195,7 @@ function parsePnpm(text) {
   const sections = {packages: [], snapshots: []};
   let target = null; let current = null;
   for (const line of lines) {
-    if (/^\S/.test(line)) { target = sections[line.replace(/:\s*$/, '')] ?? null; current = null; continue; }
+    if (/^\S/.test(line)) { const section = line.replace(/:\s*$/, ''); target = Object.hasOwn(sections, section) ? sections[section] : null; current = null; continue; }
     if (!target || !line.trim()) continue;
     if (line.includes('\t')) fail('invalid_syntax');
     if (/^ {2}\S/.test(line)) {
