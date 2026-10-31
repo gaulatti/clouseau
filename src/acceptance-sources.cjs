@@ -79,6 +79,60 @@ async function readOptional({github, repo, snapshot, filename}) {
   }
 }
 
+// Supplies what pins the changed code: tests that name a changed module, importers found by content, and barrels.
+// `files` are {filename, status}. The hosted review and the check of a signed local receipt use this one
+// discovery, so neither applies a weaker or a stronger rule.
+async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
+  // Existing tests are not part of the change, so a reviewer cannot see what pins a changed
+  // module unless the controller supplies them. Tests whose path names a changed production
+  // module are read at the head revision; a model's later source_request may add the rest.
+  const code = files.filter(file => file.status !== 'removed' && isCodePath(file.filename));
+  if (code.length) {
+    const {data: tree} = await github.rest.git.getTree({...repo, tree_sha: baseSha, recursive: 'true'});
+    if (tree.truncated) throw new Error('Repository tree is too large to locate the existing tests');
+    const changed = new Set(files.map(file => file.filename));
+    let budget = 150000;
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
+      item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
+      if (entry.size > budget) break;
+      budget -= entry.size;
+      await readOptional({github, repo, snapshot, filename: entry.path});
+    }
+    // Tests rarely carry the module's name (utils.test.ts imports attention-color), so importers are
+    // also found by content: other small tests are read once and only their import specifiers are
+    // kept, which keeps the reviewers' evidence small. Barrels that re-export a changed module's
+    // directory are supplied in full so that a chain through them can be followed.
+    const supplied = new Set(Object.values(snapshot.sources).map(source => source.path));
+    // Real tests first, then Storybook fixtures. Each file read costs a request from the shared budget, so the
+    // scan is lazy: it stops as soon as every changed code file is covered, reads real tests before stories,
+    // and is bounded; the extent is stated to the reviewers.
+    const story = item => /\.stories\.|(?:^|\/)stories\//.test(item.path);
+    const others = tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
+      !supplied.has(item.path) && item.size < 60000).sort((a, b) => Number(story(a)) - Number(story(b)));
+    snapshot.test_imports = []; let scanned = 0;
+    const uncovered = () => Object.values(coveringTests(snapshot)).some(list => !list.length);
+    for (const group of [others.filter(item => !story(item)), others.filter(story)]) {
+      for (let offset = 0; offset < group.length && scanned < 100 && uncovered(); offset += 10) {
+        const batch = group.slice(offset, offset + Math.min(10, 100 - scanned));
+        scanned += batch.length;
+        const found = await Promise.all(batch.map(async entry => {
+          try {return {path: entry.path, specifiers: specifiersOf(await fetchText({github, repo, snapshot, filename: entry.path, ref: headSha}))};}
+          catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
+        }));
+        snapshot.test_imports.push(...found.filter(item => item && item.specifiers.length));
+      }
+    }
+    snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned};
+    const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)index\.[cm]?[jt]sx?$/.test(item.path) &&
+      directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
+      await readOptional({github, repo, snapshot, filename: entry.path});
+    }
+  }
+  snapshot.covering_tests = coveringTests(snapshot);
+  return snapshot;
+}
+
 async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
     !safePath(file.filename) || !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
@@ -112,53 +166,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     if (file.status !== 'removed') item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha});
     snapshot.files.push(item);
   }
-  // Existing tests are not part of the change, so a reviewer cannot see what pins a changed
-  // module unless the controller supplies them. Tests whose path names a changed production
-  // module are read at the head revision; a model's later source_request may add the rest.
-  const code = files.filter(file => file.status !== 'removed' && isCodePath(file.filename));
-  if (code.length) {
-    const {data: tree} = await github.rest.git.getTree({...repo, tree_sha: pr.base.sha, recursive: 'true'});
-    if (tree.truncated) throw new Error('Repository tree is too large to locate the existing tests');
-    const changed = new Set(files.map(file => file.filename));
-    let budget = 150000;
-    for (const entry of tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
-      item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
-      if (entry.size > budget) break;
-      budget -= entry.size;
-      await readOptional({github, repo, snapshot, filename: entry.path});
-    }
-    // Tests rarely carry the module's name (utils.test.ts imports attention-color), so importers are
-    // also found by content: other small tests are read once and only their import specifiers are
-    // kept, which keeps the reviewers' evidence small. Barrels that re-export a changed module's
-    // directory are supplied in full so that a chain through them can be followed.
-    const supplied = new Set(Object.values(snapshot.sources).map(source => source.path));
-    // Real tests first, then Storybook fixtures. Each file read costs a request from the shared budget, so the
-    // scan is lazy: it stops as soon as every changed code file is covered, reads real tests before stories,
-    // and is bounded; the extent is stated to the reviewers.
-    const story = item => /\.stories\.|(?:^|\/)stories\//.test(item.path);
-    const others = tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
-      !supplied.has(item.path) && item.size < 60000).sort((a, b) => Number(story(a)) - Number(story(b)));
-    snapshot.test_imports = []; let scanned = 0;
-    const uncovered = () => Object.values(coveringTests(snapshot)).some(list => !list.length);
-    for (const group of [others.filter(item => !story(item)), others.filter(story)]) {
-      for (let offset = 0; offset < group.length && scanned < 100 && uncovered(); offset += 10) {
-        const batch = group.slice(offset, offset + Math.min(10, 100 - scanned));
-        scanned += batch.length;
-        const found = await Promise.all(batch.map(async entry => {
-          try {return {path: entry.path, specifiers: specifiersOf(await fetchText({github, repo, snapshot, filename: entry.path, ref: pr.head.sha}))};}
-          catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
-        }));
-        snapshot.test_imports.push(...found.filter(item => item && item.specifiers.length));
-      }
-    }
-    snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned};
-    const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
-    for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)index\.[cm]?[jt]sx?$/.test(item.path) &&
-      directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
-      await readOptional({github, repo, snapshot, filename: entry.path});
-    }
-  }
-  snapshot.covering_tests = coveringTests(snapshot);
+  await supplyTests({github, repo, snapshot, files, baseSha: pr.base.sha, headSha: pr.head.sha});
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
     repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
       closingIssuesReferences(first:10) { nodes { number title body url author { login } } pageInfo { hasNextPage } }
@@ -185,4 +193,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
