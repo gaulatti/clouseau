@@ -137,7 +137,7 @@ test('composer.lock and Pipfile.lock expose sources, hashes and dev scope', () =
   const swapped = summarize('Pipfile.lock', pipenv('2.31.0'), pipenv('2.31.0', {hashes: ['sha256:c']}));
   assert.match(risk(swapped, 'integrity-changed-same-version').join('\n'), /requests/);
   const moved = summarize('Pipfile.lock', pipenv('2.31.0'), pipenv('2.31.0', {index: 'evil', git: 'https://github.com/x/requests.git', ref: 'abc'}));
-  assert.match(risk(moved, 'left-registry').join('\n'), /requests: .*index:pypi\.org -> git:https:\/\/github\.com\/x\/requests\.git#abc/);
+  assert.match(risk(moved, 'left-registry').join('\n'), /requests: .*index:pypi\.org\/simple -> git:https:\/\/github\.com\/x\/requests\.git#abc/);
   assert.match(summarize('Pipfile.lock', '{"_meta":{},"default":{}}', pipenv('1.0.0'), 'modified'), /ADDED pytest@8\.0\.0 source=index:private integrity=none flags=dev/);
   assert.equal(reason(() => summarize('Pipfile.lock', '{}', '{}')), 'invalid_structure');
   assert.equal(reason(() => summarize('Pipfile.lock', '{"_meta":{},"default":{},"develop":[]}', '{}')), 'invalid_structure');
@@ -257,7 +257,7 @@ test('go.sum: module hashes and go.mod hashes', () => {
 test('version comparison orders releases and pre-releases and refuses non-versions', () => {
   const order = [['1.0.0', '1.0.1', -1], ['2.0.0', '10.0.0', -1], ['1.0.0', '1.0.0', 0], ['1.0.0-beta', '1.0.0', -1], ['1.0.0', '1.0.0-beta', 1],
     ['1.0', '1.0.1', -1], ['1.0.1', '1.0', 1], ['v1.2.0', '1.2.1', -1], ['1.0.0-alpha', '1.0.0-beta', -1], ['1.0.0-beta', '1.0.0-alpha', 1],
-    ['2.32.0rc1', '2.32.0', -1], ['2.32.0', '2.32.0rc1', 1], ['1.0.post1', '1.0', 1], ['1.0', '1.0.post1', -1], ['2.32.0rc2', '2.32.0rc1', 1]];
+    ['2.32.0rc1', '2.32.0', -1], ['2.32.0', '2.32.0rc1', 1], ['1.0.post1', '1.0', 1], ['1.0', '1.0.post1', -1], ['2.32.0rc2', '2.32.0rc1', 1], ['2.0.1', '2.0rc1', 1], ['2.0rc1', '2.0.1', -1]];
   for (const [a, b, expected] of order) assert.equal(compareVersions(a, b), expected, `${a} ${b}`);
   assert.equal(compareVersions('abc', '1.0.0'), null);
   assert.equal(compareVersions('1.0.0', 'abc'), null);
@@ -410,6 +410,13 @@ test('layouts the parsers would skip fail closed instead of hiding an entry', ()
 
 test('a Pipfile package without an index uses the first declared source', () => {
   const pipenv = (sources, extra = {}) => JSON.stringify({_meta: {sources}, default: {a: {version: '==1', hashes: ['sha256:a'], ...extra}}});
-  assert.match(summarize('Pipfile.lock', '', pipenv([{name: 'corp', url: 'http://corp.example.invalid/simple'}]), 'added'), /source=index:http:\/\/corp\.example\.invalid /);
+  assert.match(summarize('Pipfile.lock', '', pipenv([{name: 'corp', url: 'http://corp.example.invalid/simple'}]), 'added'), /source=index:http:\/\/corp\.example\.invalid\/simple /);
   assert.match(summarize('Pipfile.lock', '', pipenv([]), 'added'), /source=index:pypi /);
+});
+
+test('a Pipfile index on the same host but another path is a different source', () => {
+  const pipenv = (url, version) => JSON.stringify({_meta: {sources: [{name: 'corp', url}]}, default: {a: {version, index: 'corp', hashes: ['sha256:a']}}});
+  const out = summarize('Pipfile.lock', pipenv('https://git.example.invalid/api/v4/projects/1/packages/pypi/simple', '==1'), pipenv('https://git.example.invalid/api/v4/projects/2/packages/pypi/simple', '==2'));
+  assert.match(out, /^RISK\[source-changed\] CHANGED a: .*projects\/1\/packages.* -> index:git\.example\.invalid\/api\/v4\/projects\/2/m);
+  assert.equal(reason(() => summarize('Pipfile.lock', pipenv('not a url', '==1'), '')), 'invalid_structure');
 });
