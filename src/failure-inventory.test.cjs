@@ -39,6 +39,8 @@ test('every failure path of the AI step ends in a classified hold that names the
   const unreadable = sources(); unreadable.github.rest.repos.getContent = async () => ({data: {content: 'AAAA', encoding: 'base64', size: 400000}});
   const patchless = sources(); delete patchless.files[0].patch;
   const tree = sources(); tree.github.rest.git.getTree = async () => ({data: {truncated: true, tree: []}});
+  const lockfile = sources(); lockfile.files[0] = {filename: 'Cargo.lock', status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b'};
+  lockfile.github.rest.repos.getContent = async args => ({data: args.path === 'Cargo.lock' ? {content: Buffer.from('version = 1\n').toString('base64'), encoding: 'base64', size: 400000} : {content: Buffer.from('x\n').toString('base64'), encoding: 'base64', size: 2}});
   const exhausted = fixture(); exhausted.snapshot.head_sha = 'head';
   const paths = fixture();
   const cases = [
@@ -50,6 +52,7 @@ test('every failure path of the AI step ends in a classified hold that names the
     ['unit paths', async () => { const facts = modelTemplate(paths.snapshot); facts.units[0].paths = []; return materialize(facts, paths.snapshot); }, 'review_output_invalid', /cannot bind/],
     ['evidence budget', () => collectSnapshot(budget).then(snapshot => refresh({...snapshot, claims: {description: 'z'.repeat(1000000)}})), 'evidence_budget', /900 KB/],
     ['unreadable changed file', () => collectSnapshot(unreadable), 'changed_file_unreadable', /src\/app\.ts|README\.md|p\.md/],
+    ['unsummarizable lockfile', () => collectSnapshot(lockfile), 'lockfile_unsummarizable', /Cargo\.lock cannot be summarized \(its text is larger than 1000000 bytes|Cargo\.lock cannot be summarized/],
     ['missing patch', () => collectSnapshot(patchless), 'changed_files_incomplete', /patch for every changed file/],
     ['tree truncated', () => collectSnapshot(tree), 'tree_truncated', /repository tree/],
     ['source investigation exhausted', () => inspect({...exhausted, role: 'examiner', model: 'deepseek-flash', wait, fetchImpl: async () => reply({choices: [{finish_reason: 'tool_calls',

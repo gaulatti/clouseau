@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const {LockfileError, MAX_BYTES, LOCKFILE_PATCH, isLockfile, lockfileEvidence, lockfileError} = require('./lockfile-summary.cjs');
 const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, specifiersOf, coveringTests} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
@@ -29,24 +30,44 @@ function evidenceSize(snapshot) {
 
 function refresh(snapshot) {
   const value = {...snapshot}; delete value.digest;
-  if (JSON.stringify(value).length > BUDGET) throw new Error('Complete review evidence exceeds the source budget');
+  if (JSON.stringify(value).length > BUDGET) {
+    // A lockfile that could not be summarized is the specific reason when the raw evidence no longer fits.
+    const failed = snapshot.lockfile_failures?.[0];
+    throw failed ? lockfileError(failed.path, failed.reason) : new Error('Complete review evidence exceeds the source budget');
+  }
   snapshot.digest = digest(value);
   return snapshot;
 }
 
-async function fetchText({github, repo, snapshot, filename, ref}) {
+async function fetchText({github, repo, snapshot, filename, ref, limit = 300000}) {
   if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true, path: String(filename)});
   const sourceRepo = ref === snapshot.head_sha ? snapshot.head_repository : repo;
   if (!sourceRepo) throw new Error('The immutable head repository is unavailable');
   const {data} = await github.rest.repos.getContent({...sourceRepo, path: filename, ref});
-  if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > 300000) {
-    throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true, path: filename});
+  if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > limit) {
+    throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true, path: filename, reason: 'size'});
   }
   let content;
   try {content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));}
-  catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true, path: filename});}
-  if (content.includes('\0') || content.length > 300000) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true, path: filename});
+  catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true, path: filename, reason: 'text'});}
+  if (content.includes('\0') || content.length > limit) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true, path: filename, reason: 'text'});
   return content;
+}
+
+// The derived dependency summary replaces a lockfile's raw text and patch. When the lockfile cannot be
+// summarized completely the result names the specific reason and the caller keeps the raw evidence.
+async function summarizeChangedLockfile({github, repo, snapshot, file, baseSha, headSha}) {
+  try {
+    const baseText = file.status === 'added' ? null :
+      await fetchText({github, repo, snapshot, filename: file.previous_filename || file.filename, ref: baseSha, limit: MAX_BYTES});
+    const headText = file.status === 'removed' ? null :
+      await fetchText({github, repo, snapshot, filename: file.filename, ref: headSha, limit: MAX_BYTES});
+    return lockfileEvidence({file, baseSha, headSha, baseText, headText});
+  } catch (error) {
+    const reason = error instanceof LockfileError ? error.reason : error.unavailable ? (error.reason === 'size' ? 'too_large' : 'not_text') : null;
+    if (!reason) throw error;
+    return {reason};
+  }
 }
 
 async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
@@ -135,7 +156,7 @@ async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
 
 async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
-    !safePath(file.filename) || !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
+    !safePath(file.filename) || (!file.patch && !isLockfile(file.filename)) || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     throw new Error('Changed-file evidence is incomplete');
   }
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
@@ -157,13 +178,33 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
   }
   for (const file of files) {
     const item = {path: file.filename, status: file.status, patch: file.patch};
-    if (file.status !== 'added') {
-      const filename = file.previous_filename || file.filename;
-      item.base_source = await readSource({github, repo, snapshot, filename, ref: pr.base.sha});
-      const {data} = await github.rest.repos.listCommits({...repo, path: filename, sha: pr.base.sha, per_page: 3});
-      snapshot.history.push({path: filename, commits: data.map(commit => ({sha: commit.sha, message: commit.commit.message}))});
+    const lockfile = isLockfile(file.filename) ?
+      await summarizeChangedLockfile({github, repo, snapshot, file, baseSha: pr.base.sha, headSha: pr.head.sha}) : null;
+    if (lockfile?.reason) {
+      snapshot.lockfile_failures = [...(snapshot.lockfile_failures || []), {path: file.filename, reason: lockfile.reason}];
+      if (!file.patch) throw lockfileError(file.filename, lockfile.reason);
     }
-    if (file.status !== 'removed') item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha});
+    if (lockfile?.id) {
+      snapshot.sources[lockfile.id] = lockfile.source;
+      Object.assign(item, {patch: LOCKFILE_PATCH, lockfile: true});
+    }
+    try {
+      if (file.status !== 'added') {
+        const filename = file.previous_filename || file.filename;
+        if (lockfile?.id) item.base_source = lockfile.id;
+        else item.base_source = await readSource({github, repo, snapshot, filename, ref: pr.base.sha});
+        const {data} = await github.rest.repos.listCommits({...repo, path: filename, sha: pr.base.sha, per_page: 3});
+        snapshot.history.push({path: filename, commits: data.map(commit => ({sha: commit.sha, message: commit.commit.message}))});
+      }
+      if (file.status !== 'removed') {
+        if (lockfile?.id) item.head_source = lockfile.id;
+        else item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha});
+      }
+    } catch (error) {
+      // The raw lockfile is the fallback evidence; when it does not fit either, say why the lockfile failed.
+      if (error.unavailable && lockfile?.reason) throw lockfileError(file.filename, lockfile.reason);
+      throw error;
+    }
     snapshot.files.push(item);
   }
   await supplyTests({github, repo, snapshot, files, baseSha: pr.base.sha, headSha: pr.head.sha});
@@ -193,4 +234,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {fetchText, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};

@@ -6,9 +6,18 @@ const cp = require('node:child_process');
 const {digest} = require('./acceptance.cjs');
 const {safePath, refresh} = require('./acceptance-sources.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
+const {MAX_BYTES, LOCKFILE_PATCH, LockfileError, isLockfile, lockfileEvidence, lockfileError} = require('./lockfile-summary.cjs');
 
 function git(directory, args, input) {
   return cp.execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', input, maxBuffer: 2000000});
+}
+
+// Exact blob bytes, decoded as strict UTF-8 like the hosted review does, so both compute one summary.
+function lockfileText(directory, ref, filename) {
+  let bytes;
+  try { bytes = cp.execFileSync('git', ['-C', directory, 'show', `${ref}:${filename}`], {maxBuffer: MAX_BYTES + 1}); }
+  catch (error) { if (error.code === 'ENOBUFS') throw new LockfileError('too_large'); throw error; }
+  try { return new TextDecoder('utf-8', {fatal: true}).decode(bytes); } catch { throw new LockfileError('not_text'); }
 }
 
 function readLocalConfig(value) {
@@ -87,14 +96,33 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
   snapshot.sources['local-request'] = {authority: 'untrusted', kind: 'requirement', path: 'local-request',
     ref: digest(request), content: request};
   for (const file of changed) {
-    const item = {path: file.filename, status: file.status,
-      patch: git(directory, ['diff', '--no-ext-diff', '--no-textconv', baseSha, head, '--', file.previous_filename, file.filename])};
-    if (file.status !== 'added') {
-      item.base_source = source(file.previous_filename, baseSha);
-      snapshot.history.push({path: file.filename, commits: git(directory,
-        ['log', '-3', '--format=%H %s', baseSha, '--', file.previous_filename]).trim()});
+    let lockfile = null;
+    if (isLockfile(file.filename)) {
+      try {
+        lockfile = lockfileEvidence({file, baseSha, headSha: head,
+          baseText: file.status === 'added' ? null : lockfileText(directory, baseSha, file.previous_filename),
+          headText: file.status === 'removed' ? null : lockfileText(directory, head, file.filename)});
+      } catch (error) {
+        if (!(error instanceof LockfileError)) throw error;
+        snapshot.lockfile_failures = [...(snapshot.lockfile_failures || []), {path: file.filename, reason: error.reason}];
+      }
     }
-    if (file.status !== 'removed') item.head_source = source(file.filename, head);
+    const item = {path: file.filename, status: file.status, patch: LOCKFILE_PATCH};
+    if (lockfile) { snapshot.sources[lockfile.id] = lockfile.source; item.lockfile = true; }
+    try {
+      if (!lockfile) item.patch = git(directory, ['diff', '--no-ext-diff', '--no-textconv', baseSha, head, '--', file.previous_filename, file.filename]);
+      if (file.status !== 'added') {
+        item.base_source = lockfile ? lockfile.id : source(file.previous_filename, baseSha);
+        snapshot.history.push({path: file.filename, commits: git(directory,
+          ['log', '-3', '--format=%H %s', baseSha, '--', file.previous_filename]).trim()});
+      }
+      if (file.status !== 'removed') item.head_source = lockfile ? lockfile.id : source(file.filename, head);
+    } catch (error) {
+      // The raw lockfile is the fallback evidence; when it does not fit either, say why the lockfile failed.
+      const failure = snapshot.lockfile_failures?.find(item => item.path === file.filename);
+      if (failure && (error.code === 'ENOBUFS' || error.message === 'Binary or oversized local evidence')) throw lockfileError(file.filename, failure.reason);
+      throw error;
+    }
     snapshot.files.push(item);
   }
   // The seed lists files every pinned engine revision might hold; a revision

@@ -1,6 +1,7 @@
 'use strict';
 
 const {rateLimitDelay} = require('./verification-wait.cjs');
+const {REASONS} = require('./lockfile-summary.cjs');
 const MARKER = '<!-- clouseau-review-incomplete -->';
 const GENERIC = 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.';
 
@@ -16,6 +17,7 @@ const NEXT_STEPS = Object.freeze({
   provider_incomplete: 'The reviewer model did not finish its answer within the bounded budget. Re-run the failed jobs.',
   evidence_budget: 'Split the change so that the changed files fit the review evidence budget, then push a new revision.',
   changed_file_unreadable: 'A changed file cannot be read as complete text within the review limits. Split it out of this change or review it manually.',
+  lockfile_unsummarizable: 'A changed dependency lockfile could not be summarized and its raw text does not fit the review limits. Regenerate it with a supported lockfile version, split it out of this change, or review it manually.',
   changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
@@ -58,6 +60,9 @@ function classify(error) {
   const message = error?.message ?? '';
   // Every known failure of the AI step maps to a fixed cause that names the missing or failing item.
   // Only our own constant messages (and a repository path) are forwarded, never provider or source text.
+  if (error?.lockfile) {
+    return {cause: 'lockfile_unsummarizable', reason: `Dependency lockfile ${String(error.lockfile.path).slice(0, 200)} cannot be summarized (${REASONS[error.lockfile.reason]}) and its raw text does not fit the review limits.`};
+  }
   if (error?.unavailable) return {cause: 'changed_file_unreadable', reason: `Changed file ${String(error.path ?? 'unknown').slice(0, 200)} cannot be read as complete text within the review limits (not found, binary, invalid text or over 300 KB).`};
   if (/^Acceptance provider returned an invalid structured result$|^Acceptance provider returned malformed JSON$/.test(message)) {
     return {cause: 'review_output_invalid', reason: 'The reviewer model returned an unusable answer (invalid tool call or malformed JSON) on 3 consecutive attempts with the same prompt.'};

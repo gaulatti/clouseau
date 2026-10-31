@@ -2,7 +2,8 @@
 
 const crypto = require('node:crypto');
 const {digest, validateReport} = require('./acceptance.cjs');
-const {refresh, safePath} = require('./acceptance-sources.cjs');
+const {refresh, safePath, fetchText} = require('./acceptance-sources.cjs');
+const {MAX_BYTES, LockfileError, isLockfile, lockfileEvidence} = require('./lockfile-summary.cjs');
 const {validateInspection, combine} = require('./acceptance-review.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
@@ -154,6 +155,26 @@ async function loadReceipt({github, repo, ref}) {
   return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
 }
 
+// A derived dependency summary is never trusted as signed: it is recomputed from the exact base and head
+// lockfile bytes at the live revisions, and must equal the signed source byte for byte.
+async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, files}) {
+  const live = files.find(item => item.filename === source.path);
+  const item = snapshot.files.find(candidate => candidate.path === source.path);
+  requireReceipt(live && item && item.lockfile === true && isLockfile(source.path) && source.authority === 'derived', 'derived lockfile evidence is not bound to a changed lockfile');
+  const view = {head_sha: pr.head.sha, head_repository: {owner: pr.head.repo.owner.login, repo: pr.head.repo.name}};
+  let expected;
+  try {
+    const baseText = live.status === 'added' ? null :
+      await fetchText({github, repo, snapshot: view, filename: live.previous_filename || live.filename, ref: pr.base.sha, limit: MAX_BYTES});
+    const headText = live.status === 'removed' ? null : await fetchText({github, repo, snapshot: view, filename: live.filename, ref: pr.head.sha, limit: MAX_BYTES});
+    expected = lockfileEvidence({file: live, baseSha: pr.base.sha, headSha: pr.head.sha, baseText, headText});
+  } catch (error) {
+    if (error instanceof LockfileError || error.unavailable) fail('derived lockfile evidence cannot be recomputed');
+    throw error;
+  }
+  requireReceipt(expected.id === id && digest(expected.source) === digest(source), 'derived lockfile evidence differs from the repository lockfiles');
+}
+
 async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha, installation = null}) {
   requireReceipt(files.length === pr.changed_files && files.length > 0 &&
     digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs');
@@ -181,6 +202,10 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     if (id === 'local-request') {
       requireReceipt(source.authority === 'untrusted' && source.kind === 'requirement' &&
         source.ref === digest(source.content), 'local request is not sealed untrusted evidence');
+      continue;
+    }
+    if (source.kind === 'lockfile-summary') {
+      await verifyLockfileSummary({github, repo, pr, snapshot, id, source, files});
       continue;
     }
     if (source.path.startsWith('.clouseau-ci/')) {
@@ -218,6 +243,13 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
   }
   for (const file of snapshot.files) {
     const live = files.find(item => item.filename === file.path);
+    if (file.lockfile === true) {
+      const derived = [file.base_source, file.head_source].filter(Boolean);
+      requireReceipt(isLockfile(file.path) && derived.length === (file.status === 'added' || file.status === 'removed' ? 1 : 2) &&
+        derived.every(id => snapshot.sources[id]?.kind === 'lockfile-summary' && snapshot.sources[id].path === file.path && id === derived[0]) &&
+        (file.status === 'added' ? !file.base_source : file.status === 'removed' ? !file.head_source : true), 'changed-file evidence omitted or substituted');
+      continue;
+    }
     for (const side of ['base', 'head']) {
       if ((side === 'base' && file.status === 'added') || (side === 'head' && file.status === 'removed')) continue;
       const source = snapshot.sources[file[`${side}_source`]];
