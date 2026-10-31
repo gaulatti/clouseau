@@ -253,7 +253,8 @@ test('go.sum: module hashes and go.mod hashes', () => {
 
 test('version comparison orders releases and pre-releases and refuses non-versions', () => {
   const order = [['1.0.0', '1.0.1', -1], ['2.0.0', '10.0.0', -1], ['1.0.0', '1.0.0', 0], ['1.0.0-beta', '1.0.0', -1], ['1.0.0', '1.0.0-beta', 1],
-    ['1.0', '1.0.1', -1], ['1.0.1', '1.0', 1], ['v1.2.0', '1.2.1', -1], ['1.0.0-alpha', '1.0.0-beta', -1], ['1.0.0-beta', '1.0.0-alpha', 1]];
+    ['1.0', '1.0.1', -1], ['1.0.1', '1.0', 1], ['v1.2.0', '1.2.1', -1], ['1.0.0-alpha', '1.0.0-beta', -1], ['1.0.0-beta', '1.0.0-alpha', 1],
+    ['2.32.0rc1', '2.32.0', -1], ['2.32.0', '2.32.0rc1', 1], ['1.0.post1', '1.0', 1], ['1.0', '1.0.post1', -1], ['2.32.0rc2', '2.32.0rc1', 1]];
   for (const [a, b, expected] of order) assert.equal(compareVersions(a, b), expected, `${a} ${b}`);
   assert.equal(compareVersions('abc', '1.0.0'), null);
   assert.equal(compareVersions('1.0.0', 'abc'), null);
@@ -354,4 +355,15 @@ test('pnpm peer-dependency variants of one version are compared separately and d
   const out = summarize('pnpm-lock.yaml', variants(same, same), variants('{tarball: https://evil.example.invalid/foo.tgz}', same));
   assert.match(out, /^RISK\[[^\]]*source-changed[^\]]*\] CHANGED foo: version 1\.0\.0 \(unchanged\); source registry:default -> url:https:\/\/evil\.example\.invalid\/foo\.tgz/m);
   assert.equal(reason(() => summarize('pnpm-lock.yaml', variants(same, '{integrity: sha512-bbb}').replace('react@18.0.0', 'react@17.0.0'), variants(same, same))), 'invalid_structure');
+});
+
+test('a downgrade to a pre-release of the same version is flagged for Python lockfiles', () => {
+  const out = summarize('uv.lock', lock.uvLock([{name: 'requests', version: '2.32.0', sdist: 'https://files.pythonhosted.org/r.tar.gz'}]),
+    lock.uvLock([{name: 'requests', version: '2.32.0rc1', sdist: 'https://files.pythonhosted.org/r.tar.gz'}]));
+  assert.match(out, /^RISK\[downgrade\] CHANGED requests: version 2\.32\.0 -> 2\.32\.0rc1/m);
+});
+
+test('a package added from a plain-HTTP registry is flagged', () => {
+  const out = summarize('package-lock.json', '', lock.npmLock([{name: 'a', version: '1.0.0', resolved: 'http://registry.example.invalid/a/-/a-1.0.0.tgz'}]), 'added');
+  assert.match(out, /^RISK\[insecure-registry\] ADDED a@1\.0\.0 source=registry-http:registry\.example\.invalid /m);
 });

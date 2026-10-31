@@ -499,10 +499,11 @@ const isLockfile = file => specFor(file) !== null;
 
 // ---------------------------------------------------------------- difference
 
-// Returns -1, 0 or 1, or null when the two values are not comparable release versions.
+// Returns -1, 0 or 1, or null when the two values are not comparable release versions. Numeric and alphabetic runs
+// are separate tokens, so "2.32.0rc1" ends with a pre-release token and sorts below "2.32.0".
 function compareVersions(a, b) {
   if (!/^v?\d/.test(a) || !/^v?\d/.test(b)) return null;
-  const left = a.replace(/^v/, '').split(/[.\-+_]/); const right = b.replace(/^v/, '').split(/[.\-+_]/);
+  const left = a.replace(/^v/, '').match(/\d+|[A-Za-z]+/g); const right = b.replace(/^v/, '').match(/\d+|[A-Za-z]+/g);
   for (let i = 0; i < Math.min(left.length, right.length); i++) {
     if (left[i] === right[i]) continue;
     if (/^\d+$/.test(left[i]) && /^\d+$/.test(right[i])) return Number(left[i]) < Number(right[i]) ? -1 : 1;
@@ -510,7 +511,8 @@ function compareVersions(a, b) {
   }
   if (left.length === right.length) return 0;
   const longer = left.length > right.length ? left : right;
-  const higher = /^\d/.test(longer[Math.min(left.length, right.length)]) ? 1 : -1;
+  const extra = longer[Math.min(left.length, right.length)];
+  const higher = /^\d/.test(extra) || /^(?:post|p|patch|sp)$/i.test(extra) ? 1 : -1;
   return (left.length > right.length ? 1 : -1) * higher;
 }
 
@@ -522,6 +524,7 @@ const byText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
 function addedTags(item, integrity) {
   const tags = [];
   if (!isRegistry(item.source)) tags.push('non-registry-source');
+  if (item.source.startsWith('registry-http')) tags.push('insecure-registry');
   if (integrity && isRegistry(item.source) && !item.integrity) tags.push('no-integrity');
   for (const flag of item.flags) if (RISKY_FLAGS.includes(flag.split(':')[0])) tags.push(`${flag.split(':')[0]}-added`);
   return tags;
@@ -613,7 +616,7 @@ function summarizeLockfile({path: file, previousPath = file, status, baseText, h
     `base: ${baseText === null ? 'absent' : `${base.length} entries, sha256 ${sha256(baseText)}`}`,
     `head: ${headText === null ? 'absent' : `${head.length} entries, sha256 ${sha256(headText)}`}`,
     `changes: ${counts('added')} added, ${counts('removed')} removed, ${counts('changed')} changed; ${tiers[0].length} flagged RISK, ${tiers[1].length} other added/removed/changed, ${tiers[2].length} version-only updates`,
-    'RISK tags: source-changed, left-registry, integrity-changed-same-version, integrity-removed, no-integrity, non-registry-source, install-script-added, url-credentials-added, alias-added, downgrade',
+    'RISK tags: source-changed, left-registry, integrity-changed-same-version, integrity-removed, no-integrity, non-registry-source, insecure-registry, install-script-added, url-credentials-added, alias-added, downgrade',
   ];
   const body = [];
   for (const [title, list] of [['## Flagged for review', tiers[0]], ['## Other added, removed and changed packages', tiers[1]]]) {

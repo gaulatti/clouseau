@@ -299,10 +299,13 @@ alias, credentials in a URL). A dependency swap is never hidden. These carry a
 | Integrity changed while the version did not | `integrity-changed-same-version` |
 | Integrity dropped | `integrity-removed` |
 | Registry package without integrity in a format that records it | `no-integrity` |
+| Package added from a plain-HTTP registry | `insecure-registry` |
 | Install script newly flagged (also on a new package) | `install-script-added` |
 | Version went down | `downgrade` |
 | Name aliasing a different package | `alias-added` |
 | Credentials embedded in a URL (never shown) | `url-credentials-added` |
+
+Install-script flags exist only where the format records them (npm `hasInstallScript`, pnpm `requiresBuild`).
 
 Added and removed packages are listed after the flagged ones. Plain version bumps
 from an unchanged source come last; if they exceed the bound the summary ends with
