@@ -364,6 +364,26 @@ even while independent CI is pending or failed. That result remains
 or approval/merge write. Unstamped PRs retain the CI provider route after
 technical verification.
 
+### Reviewed diff verification
+
+CI also verifies the diff text the reviewers saw. It reuses the changed-file list
+already fetched for the assessment (the pull request files endpoint, paginated;
+no extra request per file) and compares each file's repository-supplied `patch`
+with the signed `snapshot.files[].patch`. The local collector stores `git diff`
+output, so the comparison reduces it to GitHub's form: the git extended header
+(`diff --git`, mode, similarity, rename, `index`, `---`, `+++` lines) is removed
+and the final newline dropped; every remaining byte of the hunks must equal what
+GitHub reports. A header line that is not one of those git lines, or a rename
+that is not the pull request's rename, is a mismatch. Whitespace-only differences
+are mismatches. The file list and each file's status must match exactly: no extra
+file, none missing.
+
+Any disagreement stops reuse with the incomplete reason `receipt_patch_mismatch`,
+which names the file (never diff content) and tells the author to review again on
+the exact head. GitHub supplies no `patch` for very large or binary changes. The
+hosted collector already refuses those (`changed_files_incomplete`), and receipts
+for such changes are refused the same way rather than verified with a weaker rule.
+
 Only after actual CI tests and exact coverage pass may the controller emit an
 approval assessment. It revalidates the receipt at the write gate and uses the
 existing native approval, merge-authority and protection checks. Missing, stale,

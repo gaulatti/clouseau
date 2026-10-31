@@ -178,6 +178,7 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs');
   requireReceipt(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
     item.path === file.filename && item.status === file.status)), 'changed-file status differs');
+  require('./receipt-patch.cjs').verifyPatches({snapshot, files});
   requireReceipt(snapshot.tickets.length === 0 &&
     snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements');
   for (const filename of [config.readme, config.repository_policy]) {
