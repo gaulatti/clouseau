@@ -194,6 +194,13 @@ function materialize(facts, snapshot) {
     const entry = {id: `clouseau-cause-${index}`, ...finding.anchor};
     report.evidence.push(...proof(entry)); finding.evidence = [...new Set([...finding.evidence, entry.id])];
     finding.path = file.path; delete finding.anchor;
+    // A repair outside the initial envelope (for example a new test or story file) is not allowed, but it is
+    // not a reason to discard the whole review: the finding stands and its repair is clamped to the changed
+    // paths, falling back to the finding's own file.
+    if (Array.isArray(finding.repair_paths)) {
+      const inside = [...new Set(finding.repair_paths.filter(name => snapshot.paths.includes(name)))];
+      finding.repair_paths = inside.length ? inside : [file.path];
+    }
     expand(finding.factors, false);
   }
   return canonicalReferences(report, spans);

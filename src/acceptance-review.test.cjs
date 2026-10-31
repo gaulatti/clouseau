@@ -395,3 +395,20 @@ test('an earlier concern that the next examination neither retains nor resolves 
   const resolved = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(closed)});
   assert.equal(resolved.report.findings.length, 0);
 }));
+
+test('a repair outside the initial envelope is clamped to the changed paths instead of aborting the review (issue 144)', () => {
+  const {snapshot} = fixture();
+  const facts = (repairPaths) => {
+    const sample = template(snapshot);
+    const concern = finding();
+    concern.anchor = {source: 'head', start: 1, end: 1}; delete concern.path;
+    concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
+    concern.repair_paths = repairPaths;
+    sample.findings.push(concern);
+    return sample;
+  };
+  assert.deepEqual(materialize(facts(['src/upload.rs', 'src/new-story.stories.tsx', 'src/upload.rs']), snapshot).findings[0].repair_paths, ['src/upload.rs']);
+  assert.deepEqual(materialize(facts(['tests/new-test.ts']), snapshot).findings[0].repair_paths, ['src/upload.rs'], 'only outside paths: the finding\'s own file');
+  assert.deepEqual(materialize(facts([]), snapshot).findings[0].repair_paths, ['src/upload.rs']);
+  assert.deepEqual(materialize(facts(undefined), snapshot).findings[0].repair_paths, undefined, 'a missing list is left to validation');
+});

@@ -314,8 +314,12 @@ test('bleecker layout (lab5): extracted helper, private rename and type-only imp
   const extracted = await collectSnapshot(helper.f);
   assert.deepEqual(extracted.covering_tests, {'src/utils/normalize-hue.ts': ['tests/unit/utils.test.ts'], 'src/utils/attention-color.ts': ['tests/unit/utils.test.ts']});
   assert.equal(helper.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, extracted), null);
-  assert.deepEqual(extracted.importer_scan, {tests_found: 251, tests_scanned: 200}, 'real tests are scanned before Storybook fixtures; the extent is stated');
+  assert.deepEqual(extracted.importer_scan, {tests_found: 251, tests_scanned: 1}, 'real tests are scanned before Storybook fixtures and the scan stops once everything is covered: 1 request, not 200');
   assert.ok(extracted.test_imports.some(item => item.path === 'tests/unit/utils.test.ts'), 'utils.test.ts sorts after 250 stories by path but is scanned first');
+  // An orphan keeps the scan going, but it is bounded at 100 reads in total.
+  const orphanScan = bleecker(['src/utils/orphan.ts'], contents);
+  const scanned = await collectSnapshot(orphanScan.f);
+  assert.deepEqual(scanned.importer_scan, {tests_found: 251, tests_scanned: 100});
   // P-REN-1: private rename inside attention-color.ts; its test has a different name.
   const rename = bleecker(['src/utils/attention-color.ts'], contents);
   assert.equal(rename.approvalHold({gates: [{...gates[0], state: 'satisfied'}, gates[1]]}, await collectSnapshot(rename.f)), null);
