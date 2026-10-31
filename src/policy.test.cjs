@@ -964,9 +964,11 @@ test('a completed verification run reassesses a review that ended pending, witho
   assert.equal(forked.writes.filter(w => w.name === 'rerun').length, 1);
   // The pending review may still be ending when verification completes: wait for it.
   const ending = reassessmentFixture(); ending.state.run.conclusion = 'failure'; ending.state.run.status = 'in_progress';
-  let waits = 0;
+  const gaps = [];
   await policy.requestReassessment({github: ending.github, context: verificationTrigger(), core: {info() {}},
-    wait: async ms => {assert.equal(ms, 10000); if (++waits === 3) ending.state.run.status = 'completed';}});
+    wait: async ms => {gaps.push(ms); if (gaps.length === 3) ending.state.run.status = 'completed';}});
+  assert.deepEqual(gaps, [10000, 20000, 40000], 'growing gaps: three requests, not a poll every 10 s');
+  const waits = gaps.length;
   assert.equal(waits, 3); assert.equal(ending.writes.filter(w => w.name === 'rerun').length, 1);
 });
 

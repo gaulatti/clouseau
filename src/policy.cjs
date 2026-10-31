@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const {requestReview} = require('./provider.cjs');
-const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf} = require('./verification-wait.cjs');
+const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
@@ -144,6 +144,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
   // the default branch, so they bind to the head observed when the wait starts.
   let expected = expectedHead || (context.eventName === 'push' ? context.sha : null);
   const limited = call => withRateLimit(call, {wait, report: message => core.info(message)});
+  const prCache = new Map();
   // Every way the wait can end without a green verification publishes an assessment, so the write-capable job
   // can post a visible notice (pending, rate-limited or failed) and hold instead of failing silently.
   const payloadPr = context.payload.pull_request;
@@ -153,7 +154,8 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
   for (let attempt = 0; attempt < maxPolls; attempt++) {
     let result;
     try {
-      ({data: pr} = await limited(() => github.rest.pulls.get({...context.repo, pull_number})));
+      ({data: pr} = await limited(() => conditionalGet(prCache, `${context.repo.owner}/${context.repo.repo}#${pull_number}`,
+        headers => github.rest.pulls.get({...context.repo, pull_number, ...(headers['if-none-match'] ? {headers} : {})}))));
       expected ??= pr.head.sha;
       if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
         throw new Error('PR closed, became draft, or changed while verification was pending');
@@ -250,10 +252,14 @@ async function reassess({github, context, core, wait, api}) {
   }
   // Let an already-finishing gate consume the new comment or finish before rerun.
   // A verification completion can arrive while the pending review is still ending.
-  let latest;
-  for (let attempt = 0; attempt < (fromVerification ? 18 : 1); attempt++) {
-    await wait(fromVerification ? 10000 : 5000);
-    latest = (await api(() => github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id}))).data;
+  // A finishing review is awaited with growing gaps (10, 20, 40, 80, 160, 240 s) and conditional requests, so a
+  // verification completion costs a handful of requests per PR instead of one every 10 s.
+  const gaps = fromVerification ? [10000, 20000, 40000, 80000, 160000, 240000] : [5000];
+  const runCache = new Map(); let latest;
+  for (const gap of gaps) {
+    await wait(gap);
+    latest = (await api(() => conditionalGet(runCache, `run#${runs[0].id}`,
+      headers => github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id, ...(headers['if-none-match'] ? {headers} : {})})))).data;
     if (latest.status === 'completed') break;
   }
   if (latest.status !== 'completed') {
@@ -344,16 +350,8 @@ function judgeVerification(run, jobs) {
 
 async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = {}) {
   // A conditional request: an unchanged answer is HTTP 304, which does not count against the primary limit.
-  const key = `${repo.owner}/${repo.repo}@${pr.head.sha}`; const cached = etags.get(key);
-  let listed;
-  try {
-    listed = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
-      event: 'pull_request', head_sha: pr.head.sha, per_page: 100, ...(cached ? {headers: {'if-none-match': cached.etag}} : {})});
-  } catch (error) {
-    if (error.status !== 304 || !cached) throw error;
-    listed = {data: cached.data, headers: {}};
-  }
-  if (listed.headers?.etag) etags.set(key, {etag: listed.headers.etag, data: listed.data});
+  const listed = await conditionalGet(etags, `${repo.owner}/${repo.repo}@${pr.head.sha}`, headers => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
+    event: 'pull_request', head_sha: pr.head.sha, per_page: 100, ...(headers['if-none-match'] ? {headers} : {})}));
   const {data} = listed;
   const runs = data.workflow_runs.filter(run => run.head_sha === pr.head.sha &&
     (run.pull_requests.some(pull => pull.number === pr.number) ||

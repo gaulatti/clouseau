@@ -132,20 +132,26 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     // kept, which keeps the reviewers' evidence small. Barrels that re-export a changed module's
     // directory are supplied in full so that a chain through them can be followed.
     const supplied = new Set(Object.values(snapshot.sources).map(source => source.path));
-    // Real tests first, then Storybook fixtures; bounded, with the scan's extent stated to the reviewers.
-    const priority = item => /\.stories\.|(?:^|\/)stories\//.test(item.path) ? 1 : 0;
+    // Real tests first, then Storybook fixtures. Each file read costs a request from the shared budget, so the
+    // scan is lazy: it stops as soon as every changed code file is covered, reads real tests before stories,
+    // and is bounded; the extent is stated to the reviewers.
+    const story = item => /\.stories\.|(?:^|\/)stories\//.test(item.path);
     const others = tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
-      !supplied.has(item.path) && item.size < 60000).sort((a, b) => priority(a) - priority(b));
-    const scanned = others.slice(0, 200);
-    snapshot.test_imports = [];
-    for (let offset = 0; offset < scanned.length; offset += 10) {
-      const batch = await Promise.all(scanned.slice(offset, offset + 10).map(async entry => {
-        try {return {path: entry.path, specifiers: specifiersOf(await fetchText({github, repo, snapshot, filename: entry.path, ref: pr.head.sha}))};}
-        catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
-      }));
-      snapshot.test_imports.push(...batch.filter(item => item && item.specifiers.length));
+      !supplied.has(item.path) && item.size < 60000).sort((a, b) => Number(story(a)) - Number(story(b)));
+    snapshot.test_imports = []; let scanned = 0;
+    const uncovered = () => Object.values(coveringTests(snapshot)).some(list => !list.length);
+    for (const group of [others.filter(item => !story(item)), others.filter(story)]) {
+      for (let offset = 0; offset < group.length && scanned < 100 && uncovered(); offset += 10) {
+        const batch = group.slice(offset, offset + Math.min(10, 100 - scanned));
+        scanned += batch.length;
+        const found = await Promise.all(batch.map(async entry => {
+          try {return {path: entry.path, specifiers: specifiersOf(await fetchText({github, repo, snapshot, filename: entry.path, ref: pr.head.sha}))};}
+          catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
+        }));
+        snapshot.test_imports.push(...found.filter(item => item && item.specifiers.length));
+      }
     }
-    snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned.length};
+    snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned};
     const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
     for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)index\.[cm]?[jt]sx?$/.test(item.path) &&
       directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {

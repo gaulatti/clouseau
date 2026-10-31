@@ -75,7 +75,20 @@ async function withRateLimit(call, options, attempt = 0, waited = 0) {
 // The PR head named by the event payload, or empty when the event (a manual dispatch) carries none.
 const headShaOf = context => context.payload.pull_request?.head?.sha ?? '';
 
+// A conditional GET: an unchanged answer is HTTP 304, which is served from the cache and does not count against
+// the primary rate limit. `request` receives extra headers (an If-None-Match when a cached answer exists).
+async function conditionalGet(cache, key, request) {
+  const cached = cache.get(key);
+  let response;
+  try {response = await request(cached ? {'if-none-match': cached.etag} : {});} catch (error) {
+    if (error.status !== 304 || !cached) throw error;
+    return {data: cached.data, headers: {}};
+  }
+  if (response.headers?.etag) cache.set(key, {etag: response.headers.etag, data: response.data});
+  return response;
+}
+
 const heldReason = hold => `Held: GitHub API rate limit, will retry after ${new Date(hold.resetAt).toISOString()}.`;
 
 module.exports = {DEFAULT_QUEUE_GRACE_SECONDS, MAX_QUEUE_GRACE_SECONDS, MAX_IDLE_POLL_MS, POLL_MS, WAITING_REASON, graceSeconds,
-  pollSchedule, rateLimitDelay, RateLimitHold, withRateLimit, heldReason, headShaOf};
+  pollSchedule, rateLimitDelay, RateLimitHold, withRateLimit, heldReason, headShaOf, conditionalGet};
