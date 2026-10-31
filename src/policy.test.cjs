@@ -919,9 +919,12 @@ test('awaiting verification refuses failures, a changed PR, closed or draft PRs 
     await assert.rejects(awaiting.awaitVerification({github: f.github, context, core: quiet, expectedHead: SHA}), /closed, became draft/);
   }
   const running = fixture(); running.state.run.status = 'in_progress';
-  await assert.rejects(awaiting.awaitVerification({github: running.github, context, core: quiet, expectedHead: SHA,
-    maxPolls: 2, wait: async () => {}}), /did not complete before the wait deadline/);
-  await assert.rejects(awaiting.awaitVerification({github: running.github, context, core: quiet, expectedHead: SHA, maxPolls: 0}), /deadline/);
+  const budget = {};
+  const exhausted = await awaiting.awaitVerification({github: running.github, context, core: {info() {}, setOutput: (n, v) => {budget[n] = v;}}, expectedHead: SHA,
+    maxPolls: 2, wait: async () => {}});
+  assert.deepEqual({pending: exhausted.pending, state: exhausted.state, verified: budget.verified}, {pending: true, state: 'deadline', verified: 'false'}, 'a still-running verification is visibly pending, not a silent failure');
+  assert.equal(JSON.parse(budget.assessment).decision, 'pending_technical');
+  assert.equal((await awaiting.awaitVerification({github: running.github, context, core: quiet, expectedHead: SHA, maxPolls: 0})).state, 'deadline');
 });
 
 test('the default sleep paces verification polling', async t => {

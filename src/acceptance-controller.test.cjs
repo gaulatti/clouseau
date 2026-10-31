@@ -1192,3 +1192,20 @@ test('end to end: a finally failed required verification step produces a visible
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
   assert.equal(f.state.calls, 0, 'no AI request');
 }));
+
+test('a pending verification gets a short visible comment from the gate, and a later decision resolves it', () => fixture(async f => {
+  const pending = {version: 2, number: 3, head_sha: f.state.pr.head.sha, base_sha: f.state.pr.base.sha, decision: 'pending_technical', verification: 'queued',
+    reason: 'Waiting for verification: PR verification had not started within the queue grace.'};
+  await assert.rejects(f.gate(pending), /cannot approve or merge/);
+  const notice = f.state.writes.find(item => item.name === 'create-ledger');
+  assert.ok(notice.args.body.startsWith('<!-- clouseau-review-pending -->\n'));
+  assert.match(notice.args.body, /waiting for PR verification/);
+  assert.match(notice.args.body, /runs again automatically when verification completes/);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  // The existing comment is updated in place, not duplicated.
+  f.state.comments.push({id: 77, user: {login: 'github-actions[bot]'}, body: notice.args.body});
+  f.state.writes.length = 0;
+  await assert.rejects(f.gate({...pending, verification: 'running'}), /cannot approve or merge/);
+  assert.equal(f.state.writes.filter(item => item.name === 'create-ledger').length, 0);
+  assert.match(f.state.writes.find(item => item.name === 'update-ledger').args.body, /state: running/);
+}));

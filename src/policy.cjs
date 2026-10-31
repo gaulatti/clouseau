@@ -144,8 +144,14 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
   // the default branch, so they bind to the head observed when the wait starts.
   let expected = expectedHead || (context.eventName === 'push' ? context.sha : null);
   const limited = call => withRateLimit(call, {wait, report: message => core.info(message)});
+  // Every way the wait can end without a green verification publishes an assessment, so the write-capable job
+  // can post a visible notice (pending, rate-limited or failed) and hold instead of failing silently.
+  const payloadPr = context.payload.pull_request;
+  const publish = (pr, extra) => core.setOutput('assessment', JSON.stringify({version: 2, number: pull_number,
+    head_sha: pr?.head.sha ?? expected ?? payloadPr?.head?.sha ?? '', base_sha: pr?.base.sha ?? payloadPr?.base?.sha ?? '', ...extra}));
+  let pr;
   for (let attempt = 0; attempt < maxPolls; attempt++) {
-    let pr; let result;
+    let result;
     try {
       ({data: pr} = await limited(() => github.rest.pulls.get({...context.repo, pull_number})));
       expected ??= pr.head.sha;
@@ -156,6 +162,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
     } catch (error) {
       if (!(error instanceof RateLimitHold)) throw error;
       core.info(heldReason(error));
+      publish(pr, {decision: 'review_incomplete', cause: 'github_rate_limit', reason: heldReason(error), retry_after: new Date(error.resetAt).toISOString()});
       core.setOutput('verified', 'false');
       return {pending: true, state: 'rate_limited', retry_after: new Date(error.resetAt).toISOString()};
     }
@@ -165,8 +172,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
       // composite output, posts the visible review-incomplete notice and then holds, so nothing can approve
       // or merge. (A failed step would not reliably expose its outputs to the consuming job.)
       core.info(result.failure);
-      core.setOutput('assessment', JSON.stringify({version: 2, number: pull_number, head_sha: pr.head.sha, base_sha: pr.base.sha, decision: 'review_incomplete',
-        cause: 'verification_failed', reason: result.failure}));
+      publish(pr, {decision: 'review_incomplete', cause: 'verification_failed', reason: result.failure});
       core.setOutput('verified', 'false');
       return result;
     }
@@ -178,16 +184,22 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
     const {stalled, delay} = schedule(result.state);
     if (stalled) {
       core.info(WAITING_REASON);
+      publish(pr, {decision: 'pending_technical', verification: result.state, reason: WAITING_REASON});
       core.setOutput('verified', 'false');
       return result;
     }
     core.info('Waiting for independent unit/coverage and runtime checks. No AI request has been made.');
     await wait(delay);
   }
-  throw new Error('PR verification did not complete before the wait deadline');
+  // Verification is still running after the whole wait budget: pending, visibly, not a silent failure.
+  const deadline = 'PR verification was still running when the wait budget ended; the review runs again when it completes.';
+  core.info(deadline);
+  publish(pr, {decision: 'pending_technical', verification: 'running', reason: deadline});
+  core.setOutput('verified', 'false');
+  return {pending: true, state: 'deadline'};
 }
 
-async function requestReassessment({github, context, core, wait = sleep}) {
+async function reassess({github, context, core, wait, api}) {
   const repo = context.repo;
   // A completed PR verification run reassesses a review that ended pending
   // without holding a runner. The event is a trusted run of this workflow.
@@ -200,31 +212,31 @@ async function requestReassessment({github, context, core, wait = sleep}) {
       return;
     }
     const numbers = finished.pull_requests.length ? finished.pull_requests.map(pull => pull.number) :
-      (await github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: finished.head_sha})).data
+      (await api(() => github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: finished.head_sha}))).data
         .filter(pull => pull.state === 'open' && pull.base.ref === config.base_branch).map(pull => pull.number);
     if (numbers.length !== 1) {
       core.info('No single open PR is associated with this verification run; no reassessment is needed.');
       return;
     }
     pull_number = numbers[0];
-    pr = (await github.rest.pulls.get({...repo, pull_number})).data;
+    pr = (await api(() => github.rest.pulls.get({...repo, pull_number}))).data;
     if (pr.head.sha !== finished.head_sha || pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
       core.info('The verified revision is no longer a ready PR head; no reassessment is needed.');
       return;
     }
   } else {
     pull_number = numberFor(context);
-    pr = (await github.rest.pulls.get({...repo, pull_number})).data;
+    pr = (await api(() => github.rest.pulls.get({...repo, pull_number}))).data;
     const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
     if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
       throw new Error('Stale or malformed intent confirmation');
     }
-    const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
+    const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
     if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
   }
-  const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
-    event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100});
+  const {data} = await api(() => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
+    event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100}));
   const runs = data.workflow_runs.filter(run => run.event === 'pull_request_target' && run.head_sha === pr.head.sha &&
     (run.pull_requests.some(pull => pull.number === pull_number) ||
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
@@ -241,7 +253,7 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   let latest;
   for (let attempt = 0; attempt < (fromVerification ? 18 : 1); attempt++) {
     await wait(fromVerification ? 10000 : 5000);
-    latest = (await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id})).data;
+    latest = (await api(() => github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id}))).data;
     if (latest.status === 'completed') break;
   }
   if (latest.status !== 'completed') {
@@ -252,8 +264,19 @@ async function requestReassessment({github, context, core, wait = sleep}) {
     core.info('The trusted review already succeeded; no reassessment is needed.');
     return;
   }
-  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
+  await api(() => github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id}));
   core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
+}
+
+// Reassessment is itself an API consumer and runs exactly when many PRs finish together, so it retries
+// rate-limited calls with the shared bounded backoff. If the budget stays exhausted it fails with an explicit
+// message naming when to re-run, instead of an unhandled HttpError.
+async function requestReassessment({github, context, core, wait = sleep}) {
+  const api = call => withRateLimit(call, {wait, report: message => core.info(message)});
+  try {return await reassess({github, context, core, wait, api});} catch (error) {
+    if (!(error instanceof RateLimitHold)) throw error;
+    throw new Error(`Reassessment held: ${heldReason(error)} Re-run this job after that time; contributor tests are not rerun.`);
+  }
 }
 
 async function purposeConfirmation(github, repo, pr, comments) {

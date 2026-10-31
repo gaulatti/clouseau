@@ -208,6 +208,18 @@ visible `clouseau-review-incomplete` comment naming the failed step and then hol
 cannot approve or merge). A consumer that does not list the wait step's output in the job
 output gets no notice; `assertBoundedVerificationWait` rejects that.
 
+Every other way the wait can end without a green verification is also visible. `await-verification`
+publishes the same kind of assessment, so the gate posts a comment and holds: a verification still
+queued or running when the queue grace (default 900 s, measured in waited time, not polls) or the
+wait budget ends is `pending_technical`, shown as one short, idempotent `clouseau-review-pending`
+comment ("waiting for PR verification; the review runs again automatically when it completes",
+replaced by a resolution line once a decision exists); an exhausted GitHub API budget is
+`review_incomplete` with cause `github_rate_limit` and the retry time. The wait does not end early:
+a review that ended after about two minutes with no comment had been stopped by a rate-limit hold
+(the budget is shared by every open PR), not by the grace. The reassessment trigger uses the same
+bounded backoff; if the budget is still exhausted it fails with `Reassessment held: ... Re-run this
+job after that time`, never an unhandled HttpError.
+
 A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-
 scoped record artifacts are never reused across reruns.
