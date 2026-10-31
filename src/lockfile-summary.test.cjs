@@ -153,6 +153,8 @@ test('yarn classic and berry lockfiles', () => {
   assert.match(risk(classic, 'integrity-changed-same-version').join('\n'), /@babel\/core/);
   const berry = summarize('yarn.lock', YARN_BERRY('4.17.21', 'lodash@npm:4.17.21', 'aaa'), YARN_BERRY('4.17.21', 'lodash@https://evil.example.invalid/lodash.tgz', 'bbb'));
   assert.match(risk(berry, 'left-registry').join('\n'), /lodash: .*registry:npm -> other:https:\/\/evil\.example\.invalid\/lodash\.tgz/);
+  const scoped = '__metadata:\n  version: 6\n\n"@scope/pkg@npm:^1.0.0, @scope/pkg@npm:^1.1.0":\n  version: 1.1.0\n  resolution: "@scope/pkg@npm:1.1.0"\n  checksum: abc\n';
+  assert.match(summarize('yarn.lock', '', scoped, 'added'), /^ADDED @scope\/pkg@1\.1\.0 source=registry:npm /m);
   assert.match(summarize('yarn.lock', '', YARN_BERRY('4.17.21', 'lodash@npm:4.17.21', 'aaa'), 'added'), /ADDED app@0\.0\.0-use\.local source=workspace/);
   assert.equal(reason(() => summarize('yarn.lock', 'nothing', 'nothing')), 'unsupported_version');
   assert.equal(reason(() => summarize('yarn.lock', '# yarn lockfile v1\n\nbroken:\n  resolved "x"\n', '')), 'invalid_structure');

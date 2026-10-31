@@ -244,7 +244,8 @@ function parseYarn(text) {
   }
   const entries = [];
   for (const item of blocks.filter(candidate => candidate.header !== '__metadata')) {
-    const first = unquote(item.header.split(', ')[0]);
+    // Classic lockfiles quote each descriptor, berry quotes the whole comma-joined header once.
+    const first = item.header.split(', ')[0].replaceAll('"', '');
     const at = first.indexOf('@', 1);
     const version = item.fields.version;
     if (at < 1 || !isText(version)) fail('invalid_structure');
