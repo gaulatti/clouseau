@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {approvalHold, specifiersOf, resolveSpecifier, isTestPath, coveringTests} = require('./acceptance.cjs');
 const {supplyTests} = require('./acceptance-sources.cjs');
-const {receiptHold} = require('./acceptance-controller.cjs');
+const {receiptHold, withDiscovery} = require('./acceptance-controller.cjs');
 
 const root = path.join(__dirname, '..');
 const HEAD = 'a'.repeat(40), BASE = 'b'.repeat(40);
@@ -87,11 +87,32 @@ test('the controller check of a signed local receipt uses that discovery, for ev
   const changed = ['src/acceptance-controller.cjs', 'src/base-reconcile.cjs'];
   const snapshot = localSnapshot(changed); const before = JSON.stringify(snapshot);
   const reviews = [{report: gates}, {report: gates}];
-  assert.equal(await receiptHold({github, repo, snapshot, reviews}), undefined, 'both roles pass: nothing holds the receipt');
+  const passing = await receiptHold({github, repo, snapshot, reviews});
+  assert.equal(passing.hold, undefined, 'both roles pass: nothing holds the receipt');
+  assert.ok(passing.discovery.test_imports.length > 0, 'and the discovery is returned to be stored in the record');
   assert.equal(JSON.stringify(snapshot), before, 'the signed snapshot is untouched');
   const orphan = localSnapshot(['src/incomplete.cjs']);
   orphan.files[0].path = 'src/zz-orphan-module.cjs'; orphan.sources['head:src/incomplete.cjs'].path = 'src/zz-orphan-module.cjs';
-  assert.match(await receiptHold({github, repo, snapshot: orphan, reviews}), /no supplied test imports changed production code: src\/zz-orphan-module\.cjs/);
+  assert.match((await receiptHold({github, repo, snapshot: orphan, reviews})).hold, /no supplied test imports changed production code: src\/zz-orphan-module\.cjs/);
   const unresolved = {gates: [{name: 'test_integrity', state: 'unresolved'}, {name: 'review_completeness', state: 'satisfied'}]};
-  assert.equal(await receiptHold({github, repo, snapshot, reviews: [{report: gates}, {report: unresolved}]}), 'test integrity is unresolved', 'the second role can hold it');
+  assert.equal((await receiptHold({github, repo, snapshot, reviews: [{report: gates}, {report: unresolved}]})).hold, 'test integrity is unresolved', 'the second role can hold it');
+});
+
+test('assessment and gate derive the same hold from the same stored inputs, and a lost discovery fails closed', async () => {
+  const changed = ['src/acceptance-controller.cjs', 'src/base-reconcile.cjs'];
+  const snapshot = localSnapshot(changed);
+  const reviews = [{report: gates}, {report: gates}];
+  const assessed = await receiptHold({github, repo, snapshot, reviews});
+  // The gate sees the discovery only as stored in the record (JSON), never the repository.
+  const stored = JSON.parse(JSON.stringify(assessed.discovery));
+  const derivedAtGate = reviews.map(review => approvalHold(review.report, withDiscovery(snapshot, stored))).find(Boolean);
+  assert.equal(derivedAtGate, assessed.hold, 'one function, one input, one answer');
+  assert.equal(derivedAtGate, undefined);
+  // A record whose discovery was dropped or emptied can no longer prove coverage: it holds, so the gate disagrees with an
+  // 'auto_approve' assessment and refuses (a visible decision mismatch), never approving.
+  for (const lost of [{test_imports: [], sources: {}}]) {
+    const lostHold = reviews.map(review => approvalHold(review.report, withDiscovery(snapshot, lost))).find(Boolean);
+    assert.match(lostHold, /no supplied test imports changed production code/);
+  }
+  assert.match(reviews.map(review => approvalHold(review.report, snapshot)).find(Boolean), /no supplied test imports/, 'and no discovery at all holds');
 });
