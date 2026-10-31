@@ -65,3 +65,20 @@ jobs:
       - uses: ./.clouseau-ci
         with:
           operation: reconcile-base
+
+  explain:
+    # Always runs, so that a run whose reconcile job is skipped still says why in its summary.
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    env:
+      TRIGGER: ${{ github.event_name }}
+      COMPLETED_EVENT: ${{ github.event.workflow_run.event }}
+    steps:
+      - name: Explain what this run does
+        run: |
+          if [ "$TRIGGER" = workflow_run ] && [ "$COMPLETED_EVENT" != pull_request_target ]; then
+            echo "Base reconciliation skipped: the completed run was a $COMPLETED_EVENT run, not a pull_request_target review run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Base reconciliation requested by a $TRIGGER trigger; the reconcile-base job summary states what it checked." >> "$GITHUB_STEP_SUMMARY"
+          fi

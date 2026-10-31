@@ -23,34 +23,50 @@ async function approvedByBot(github, repo, pr) {
   return Boolean(approval && approval.user.type === 'Bot' && approval.state === 'APPROVED' && approval.commit_id === pr.head.sha);
 }
 
-// A merge made with the workflow GITHUB_TOKEN (the unattended path) creates no push event, so a push is
-// not the only trigger. The base also moved when the review workflow completes for a PR that has been
-// merged (`workflow_run`, in a separate workflow file), and a schedule or manual dispatch reconciles
-// unconditionally, which also covers auto-merges that complete after the review run ended.
-async function baseMoved({github, context, baseBranch}) {
+// What this event asks of the reconciler. A merge made with the workflow GITHUB_TOKEN (the unattended path) creates no
+// push event, so a push is not the only trigger. Scope `all` re-checks every open PR: the base certainly moved (a push
+// to it, a schedule or dispatch, or the completed review run of a PR that is now merged). Scope `one` checks only the
+// PR whose review run just completed: the base may already have moved before that PR was approved (the usual order in
+// a batch, where the first merge happens while the others are still being reviewed), and no merge event follows, so
+// without this the late approvals would never receive their notice. Anything else says why nothing is to be done.
+async function trigger({github, context, baseBranch}) {
   const repo = context.repo;
-  if (context.eventName === 'push') return context.payload.ref === `refs/heads/${baseBranch}`;
-  if (['schedule', 'workflow_dispatch'].includes(context.eventName)) return true;
-  if (context.eventName !== 'workflow_run') return false;
+  if (context.eventName === 'push') {
+    return context.payload.ref === `refs/heads/${baseBranch}` ? {scope: 'all', why: 'a push to the base branch'} :
+      {scope: 'none', why: `a push to ${String(context.payload.ref).replace(/^refs\/heads\//, '')}, not the base branch`};
+  }
+  if (['schedule', 'workflow_dispatch'].includes(context.eventName)) return {scope: 'all', why: `a ${context.eventName} run`};
+  if (context.eventName !== 'workflow_run') return {scope: 'none', why: `a ${context.eventName} event does not move the base`};
   const run = context.payload.workflow_run;
-  if (run.event !== 'pull_request_target') return false;
+  if (run.event !== 'pull_request_target') return {scope: 'none', why: `the completed run was a ${run.event} run, not a pull_request_target review run`};
   const numbers = run.pull_requests?.length ? run.pull_requests.map(item => item.number) :
     (await github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: run.head_sha})).data.map(item => item.number);
+  let open = null;
   for (const pull_number of numbers) {
     const {data: pr} = await readPull(github, repo, pull_number);
-    if (pr.merged && pr.base.ref === baseBranch) return true;
+    if (pr.base.ref !== baseBranch) continue;
+    if (pr.merged) return {scope: 'all', why: `the review run of merged PR ${pr.number}`};
+    if (pr.state === 'open' && !pr.draft && !open) open = pr;
   }
-  return false;
+  return open ? {scope: 'one', pr: open, why: `the review run of open PR ${open.number}`} :
+    {scope: 'none', why: 'the completed review run belongs to no open or merged PR on the base branch'};
+}
+
+// A line in the log and in the run summary, so that a run that does nothing explains itself.
+function explain(core, text) {
+  core.info(text);
+  if (core.summary) core.summary.addRaw(`${text}\n`, true).write();
 }
 
 async function reconcileBase({github, updateGithub = null, context, core, baseBranch}) {
   const repo = context.repo;
   const outcome = {updated: [], noticed: []}; const failed = [];
-  if (!await baseMoved({github, context, baseBranch})) {
-    core.info('The protected base branch did not move for this event; no base reconciliation is needed.');
+  const asked = await trigger({github, context, baseBranch});
+  if (asked.scope === 'none') {
+    explain(core, `Base reconciliation skipped: ${asked.why}; the protected base branch did not move for this event.`);
     return outcome;
   }
-  const pulls = await github.paginate(github.rest.pulls.list, {...repo, state: 'open', base: baseBranch, per_page: 100});
+  const pulls = asked.scope === 'one' ? [asked.pr] : await github.paginate(github.rest.pulls.list, {...repo, state: 'open', base: baseBranch, per_page: 100});
   // One read of the base tip serves every PR; a PR whose recorded base is still the tip cannot be behind.
   const tip = (await github.rest.repos.getBranch({...repo, branch: baseBranch})).data.commit.sha;
   const stale = [];
@@ -87,8 +103,8 @@ async function reconcileBase({github, updateGithub = null, context, core, baseBr
     throw new Error(`The branch-update notice could not be posted on PR ${failed.map(item => item.number).join(', ')} ` +
       `(HTTP ${[...new Set(failed.map(item => item.status ?? 'unknown'))].join('/')}). Commenting on a pull request needs the job permissions issues: write and pull-requests: write.`);
   }
-  core.info(`Base reconciliation: ${outcome.updated.length} updated, ${outcome.noticed.length} noticed.`);
+  explain(core, `Base reconciliation (${asked.why}, ${asked.scope === 'one' ? 'that PR only' : `${pulls.length} open PRs`}): ${outcome.updated.length} updated, ${outcome.noticed.length} noticed.`);
   return outcome;
 }
 
-module.exports = {reconcileBase, approvedByBot, baseMoved};
+module.exports = {reconcileBase, approvedByBot, trigger};
