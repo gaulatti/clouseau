@@ -21,6 +21,15 @@ function decided(result, controls) {
   return controls && result.decision === 'auto_approve' ? 'owner_decision' : result.decision;
 }
 
+// The local snapshot holds only what the local reviewer fetched. Importers are found with the same discovery the
+// hosted review uses, so a signed receipt is held by exactly the same rule as hosted CI. The signed record is not altered.
+async function receiptHold({github, repo, snapshot, reviews}) {
+  const discovered = structuredClone(snapshot);
+  await supplyTests({github, repo, snapshot: discovered, files: discovered.files.map(file => ({filename: file.path, status: file.status})),
+    baseSha: discovered.base_sha, headSha: discovered.head_sha});
+  return reviews.map(review => approvalHold(review.report, discovered)).find(Boolean);
+}
+
 function verifyRecord(record, assessment, config, engine = null) {
   if (engine && (digest(record.engine) !== digest(engine) || digest(assessment.engine) !== digest(engine))) {
     throw new Error('Acceptance record belongs to a different frozen engine');
@@ -128,12 +137,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
         // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
         // is reused only when hosted approval's affirmative-evidence rule also holds.
-        // The local snapshot holds only what the local reviewer fetched. Importers are found with the same
-        // discovery the hosted review uses, so the receipt is held by exactly the same rule.
-        const discovered = structuredClone(verified.record.snapshot);
-        await supplyTests({github, repo, snapshot: discovered, files: discovered.files.map(file => ({filename: file.path, status: file.status})),
-          baseSha: discovered.base_sha, headSha: discovered.head_sha});
-        const hold = verified.record.result.reviews.map(review => approvalHold(review.report, discovered)).find(Boolean);
+        const hold = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.record.result.reviews});
         if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
           reason: `Authenticated local review held: ${hold}.`};
         const controls = legacy.scopeReason(files, pr);
@@ -321,4 +325,4 @@ function createAcceptancePolicy(config, legacy, engine = null) {
   return {...legacy, assess, assessWhenReady, gate, finalize, rehydrate};
 }
 
-module.exports = {RECORD, policyDigest, numberFor, decided, verifyRecord, createAcceptancePolicy};
+module.exports = {RECORD, policyDigest, numberFor, decided, verifyRecord, receiptHold, createAcceptancePolicy};

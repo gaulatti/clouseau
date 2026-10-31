@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {approvalHold, specifiersOf, resolveSpecifier, isTestPath, coveringTests} = require('./acceptance.cjs');
 const {supplyTests} = require('./acceptance-sources.cjs');
+const {receiptHold} = require('./acceptance-controller.cjs');
 
 const root = path.join(__dirname, '..');
 const HEAD = 'a'.repeat(40), BASE = 'b'.repeat(40);
@@ -80,4 +81,17 @@ test('const t = require("./title")', () => {});
   }
   for (const name of ['src/a.test.cjs', 'src/a.spec.mjs', 'test/helper.cjs', 'tests/unit/a.ts', 'src/__tests__/a.js', 'src/a.stories.tsx', 'pkg/test_a.py', 'a_test.go']) assert.ok(isTestPath(name), name);
   for (const name of ['src/a.cjs', 'src/contest.cjs', 'src/latest/a.cjs']) assert.ok(!isTestPath(name), name);
+});
+
+test('the controller check of a signed local receipt uses that discovery, for every role, without altering the record', async () => {
+  const changed = ['src/acceptance-controller.cjs', 'src/base-reconcile.cjs'];
+  const snapshot = localSnapshot(changed); const before = JSON.stringify(snapshot);
+  const reviews = [{report: gates}, {report: gates}];
+  assert.equal(await receiptHold({github, repo, snapshot, reviews}), undefined, 'both roles pass: nothing holds the receipt');
+  assert.equal(JSON.stringify(snapshot), before, 'the signed snapshot is untouched');
+  const orphan = localSnapshot(['src/incomplete.cjs']);
+  orphan.files[0].path = 'src/zz-orphan-module.cjs'; orphan.sources['head:src/incomplete.cjs'].path = 'src/zz-orphan-module.cjs';
+  assert.match(await receiptHold({github, repo, snapshot: orphan, reviews}), /no supplied test imports changed production code: src\/zz-orphan-module\.cjs/);
+  const unresolved = {gates: [{name: 'test_integrity', state: 'unresolved'}, {name: 'review_completeness', state: 'satisfied'}]};
+  assert.equal(await receiptHold({github, repo, snapshot, reviews: [{report: gates}, {report: unresolved}]}), 'test integrity is unresolved', 'the second role can hold it');
 });
