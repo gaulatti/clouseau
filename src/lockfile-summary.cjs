@@ -192,20 +192,35 @@ function parsePnpm(text) {
   const declared = lines.map(line => /^lockfileVersion:\s*['"]?(\d+)/.exec(line)).find(Boolean);
   if (!declared) fail('invalid_structure');
   if (![6, 9].includes(Number(declared[1]))) fail('unsupported_version');
-  const sections = {packages: [], snapshots: []};
+  // Only the canonical layout pnpm writes is accepted. A layout this parser would skip fails closed instead,
+  // because a skipped entry would hide its resolved source from the reviewers.
+  const sections = {packages: [], snapshots: []}; const seen = new Set();
   let target = null; let current = null;
   for (const line of lines) {
-    if (/^\S/.test(line)) { const section = line.replace(/:\s*$/, ''); target = Object.hasOwn(sections, section) ? sections[section] : null; current = null; continue; }
-    if (!target || !line.trim()) continue;
+    if (!line.trim() || /^\s*#/.test(line)) continue;
     if (line.includes('\t')) fail('invalid_syntax');
-    if (/^ {2}\S/.test(line)) {
+    if (/^\S/.test(line)) {
+      const top = /^([A-Za-z][A-Za-z0-9]*):(?: .*)?$/.exec(line);
+      if (!top) fail('invalid_syntax');
+      target = null; current = null;
+      if (Object.hasOwn(sections, top[1])) {
+        if (seen.has(top[1]) || !/^[a-z]+:(?: \{\})?$/.test(line)) fail('invalid_syntax');
+        seen.add(top[1]);
+        target = line.endsWith('{}') ? null : sections[top[1]];
+      }
+      continue;
+    }
+    if (!target) continue;
+    const indent = line.length - line.trimStart().length;
+    if (indent === 2) {
       const header = /^ {2}(\S.*?):(?: \{\})?$/.exec(line);
       if (!header) fail('invalid_syntax');
       current = {key: unquote(header[1]).replace(/^\//, ''), props: Object.create(null)}; target.push(current);
-    } else {
-      const prop = /^ {4}([A-Za-z]+):\s*(.*)$/.exec(line);
-      if (prop && current) current.props[prop[1]] = prop[2];
-    }
+    } else if (indent === 4) {
+      const prop = /^ {4}([A-Za-z]+):(?: (.*))?$/.exec(line);
+      if (!prop || !current || Object.hasOwn(current.props, prop[1])) fail('invalid_syntax');
+      current.props[prop[1]] = prop[2] ?? '';
+    } else if (indent < 6 || !current) fail('invalid_syntax');
   }
   const built = new Map();
   for (const item of sections.snapshots) {
@@ -239,12 +254,22 @@ function parseYarn(text) {
   const lines = text.replace(NEWLINES, '\n').split('\n');
   const berry = lines.includes('__metadata:');
   if (!berry && !lines.includes('# yarn lockfile v1')) fail('unsupported_version');
-  const blocks = []; let block = null;
+  // Only the canonical layout yarn writes is accepted; any other line fails closed rather than being skipped.
+  const blocks = []; let block = null; let nested = false;
   for (const line of lines) {
-    const header = /^([^\s#].*):$/.exec(line);
-    if (header) { block = {header: header[1], fields: Object.create(null)}; blocks.push(block); continue; }
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    if (/^\S/.test(line)) {
+      const header = /^([^\s#].*):$/.exec(line);
+      if (!header) fail('invalid_syntax');
+      block = {header: header[1], fields: Object.create(null)}; blocks.push(block); nested = false;
+      continue;
+    }
     const field = /^ {2}([A-Za-z]+):? (.*)$/.exec(line);
-    if (field && block) block.fields[field[1]] = unquote(field[2]);
+    if (field && block) {
+      if (Object.hasOwn(block.fields, field[1])) fail('invalid_syntax');
+      block.fields[field[1]] = unquote(field[2]); nested = false;
+    } else if (block && /^ {2}[A-Za-z]+:$/.test(line)) nested = true;
+    else if (!nested || !/^ {4}\S/.test(line)) fail('invalid_syntax');
   }
   const entries = [];
   for (const item of blocks.filter(candidate => candidate.header !== '__metadata')) {
@@ -450,7 +475,11 @@ function parseGemfile(text) {
   const sections = []; let section = null;
   for (const line of text.replace(NEWLINES, '\n').split('\n')) {
     if (/^[A-Z]/.test(line)) { section = {name: line.trim(), lines: []}; sections.push(section); }
-    else if (section && line.trim()) section.lines.push(line);
+    else if (section && line.trim()) {
+      // Nothing but the canonical bundler layout is skipped; an unknown line fails closed.
+      if (!/^(?: {2}[a-z]+:(?: .*)?| {4,}\S.*)$/.test(line) && !['PLATFORMS', 'DEPENDENCIES', 'RUBY VERSION', 'BUNDLED WITH', 'CHECKSUMS'].includes(section.name)) fail('invalid_syntax');
+      section.lines.push(line);
+    }
   }
   const checksums = new Map();
   for (const line of sections.filter(item => item.name === 'CHECKSUMS').flatMap(item => item.lines)) {

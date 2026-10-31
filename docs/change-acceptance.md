@@ -315,6 +315,11 @@ removed packages cannot be listed within 3,000 lines and 250,000 characters, the
 lockfile is not summarized. Moving a package within the tree without changing its
 version, source, integrity or flags is not a change.
 
+Only the canonical layout each tool writes is accepted: a line a parser would skip
+(a flow-style `packages: {...}`, a different indentation, duplicated sections or
+fields, comments after a section key) fails closed as invalid syntax, because a skipped
+entry would hide its resolved source.
+
 Only package entries are compared. Other lockfile content (for example pnpm
 `importers`, `overrides` or patched-dependency hashes) is not part of the summary;
 the manifests that declare it are normal source.

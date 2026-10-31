@@ -173,7 +173,7 @@ test('pnpm parser failures are specific', () => {
   assert.equal(reason(() => summarize('pnpm-lock.yaml', "lockfileVersion: '9.0'\npackages:\n  a@1.0.0:\n    resolution: {integrity x}\n", '')), 'invalid_syntax');
   assert.equal(reason(() => summarize('pnpm-lock.yaml', "lockfileVersion: '9.0'\npackages:\n  nover:\n    resolution: {integrity: x}\n", '')), 'invalid_structure');
   assert.equal(reason(() => summarize('pnpm-lock.yaml', "lockfileVersion: '9.0'\npackages:\n  a@1.0.0:\n    engines: {node: 1}\n", '')), 'invalid_syntax');
-  const v6 = "lockfileVersion: '6.0'\r\n\r\npackages:\r\n\r\n  /a@1.0.0(b@2.0.0):\r\n    resolution: {integrity: sha512-x, tarball: 'https://user:pw@x.example.invalid/a.tgz'}\r\n    dev: true\r\n    requiresBuild: true\r\n    optional: true\r\n    note\r\n\r\n    deeper:\r\n      x: 1\r\n";
+  const v6 = "lockfileVersion: '6.0'\r\n\r\npackages:\r\n\r\n  /a@1.0.0(b@2.0.0):\r\n    resolution: {integrity: sha512-x, tarball: 'https://user:pw@x.example.invalid/a.tgz'}\r\n    dev: true\r\n    requiresBuild: true\r\n    optional: true\r\n    peerDependencies:\r\n      react: ^18.0.0\r\n    deeper:\r\n      x: 1\r\n";
   const out = summarize('pnpm-lock.yaml', '', v6, 'added');
   assert.match(out, /ADDED a@1\.0\.0 source=url:https:\/\/x\.example\.invalid\/a\.tgz .*flags=dev,install-script,optional,url-credentials/);
   assert.doesNotMatch(out, /pw/);
@@ -382,6 +382,25 @@ test('dropping transport security is visible in every format that names a regist
 });
 
 test('top-level pnpm keys that name inherited properties are ignored, never trusted', () => {
-  const text = "lockfileVersion: '9.0'\nconstructor:\n  x: y\n__proto__:\n  z: 1\ntoString: 1\n";
+  const text = "lockfileVersion: '9.0'\nconstructor:\n  x: y\nhasOwnProperty:\n  z: 1\ntoString: 1\n";
   assert.match(summarize('pnpm-lock.yaml', '', text, 'added'), /head: 0 entries/);
+});
+
+test('layouts the parsers would skip fail closed instead of hiding an entry', () => {
+  const head = "lockfileVersion: '9.0'\n";
+  const failing = {
+    'pnpm-lock.yaml': [`${head}packages: {a@1.0.0: {resolution: {tarball: https://evil.example.invalid/a.tgz}}}\n`, `${head}packages: # comment\n  a@1.0.0:\n    resolution: {integrity: x}\n`,
+      `${head}packages:\n    a@1.0.0:\n      resolution: {integrity: x}\n`, `${head}packages:\n  a@1.0.0:\n    resolution: {integrity: x}\npackages:\n  b@1.0.0:\n    resolution: {integrity: y}\n`,
+      `${head}packages:\n  a@1.0.0:\n   resolution: {integrity: x}\n`, `${head}packages:\n  a@1.0.0:\n    resolution: {integrity: x}\n    resolution: {tarball: https://evil.example.invalid/a.tgz}\n`,
+      `${head}packages:\n    resolution: {integrity: x}\n`, `${head}---\npackages:\n  a@1.0.0:\n    resolution: {integrity: x}\n`, `${head}packages:\n  a@1.0.0:\n    resolution: {integrity: x}\n      \n  b@1.0.0:\n resolution: x\n`,
+      `${head}snapshots: {a: 1}\n`, `${head}packages:\n      deep: 1\n`, `${head}packages:\n  a@1.0.0:\n    resolution: {integrity: x}\n\tb: 1\n`],
+    'yarn.lock': ['# yarn lockfile v1\n\nfoo: bar\n', '# yarn lockfile v1\n  version "1"\n', '# yarn lockfile v1\n\na@^1:\n  version "1"\n  version "2"\n',
+      '# yarn lockfile v1\n\na@^1:\n  version "1"\n    stray "x"\n', '# yarn lockfile v1\n\na@^1:\n  version "1"\n weird\n', '# yarn lockfile v1\n\na@^1:\n  dependencies:\n  stray\n'],
+    'Gemfile.lock': ['GEM\n  remote: https://rubygems.org/\n  specs:\n   rack (1.0)\n', 'GEM\n  remote: https://rubygems.org/\n weird\n'],
+  };
+  for (const [name, texts] of Object.entries(failing)) {
+    for (const text of texts) assert.equal(reason(() => summarize(name, text, text)), 'invalid_syntax', `${name}: ${text}`);
+  }
+  const accepted = "lockfileVersion: '9.0'\n# comment\nsettings:\n  autoInstallPeers: true\n\npackages:\n  # note\n  a@1.0.0:\n    resolution: {integrity: x}\n    peerDependencies:\n      react: ^18.0.0\n\nsnapshots: {}\n";
+  assert.match(summarize('pnpm-lock.yaml', '', accepted, 'added'), /ADDED a@1\.0\.0/);
 });
