@@ -223,6 +223,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     if (!assessment.record_digest) {
       if (assessment.decision === 'review_incomplete') await require('./incomplete.cjs').post({github, context, assessment});
       if (assessment.decision === 'pending_technical') await require('./incomplete.cjs').postPending({github, context, assessment});
+      else await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
       return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
         'It is reassessed automatically when PR verification completes where the workflow has the verification trigger; otherwise re-run it ' +
         'once verification has completed, or push a new head if re-running does not produce a record.');

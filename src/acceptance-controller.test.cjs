@@ -1217,6 +1217,15 @@ test('a real decision resolves the pending comment: the gate wiring is exercised
   await f.gate(assessment);
   const resolved = f.state.writes.find(item => item.name === 'update-ledger' && item.args.comment_id === 99);
   assert.ok(resolved, 'the pending comment was edited');
-  assert.match(resolved.args.body, /Resolved: verification finished and the review has run/);
+  assert.match(resolved.args.body, /Resolved: this pending state has ended/);
   assert.ok(f.state.writes.some(item => item.name === 'approve'), 'and the decision itself proceeded');
+}));
+
+test('a pending comment is also resolved when the next run ends without a record (failure, rate limit)', () => fixture(async f => {
+  f.state.comments.push({id: 98, user: {login: 'github-actions[bot]'}, body: '<!-- clouseau-review-pending -->\n## Clouseau review pending\n\nwaiting'});
+  const failed = {version: 2, number: 3, head_sha: f.state.pr.head.sha, base_sha: f.state.pr.base.sha, decision: 'review_incomplete', cause: 'verification_failed',
+    reason: 'Required verification step "X" concluded failure'};
+  await assert.rejects(f.gate(failed), /cannot approve or merge/);
+  assert.ok(f.state.writes.some(item => item.name === 'update-ledger' && item.args.comment_id === 98 && /Resolved/.test(item.args.body)), 'the stale pending comment was superseded');
+  assert.ok(f.state.writes.some(item => item.name === 'create-ledger' && /clouseau-review-incomplete/.test(item.args.body)), 'and the incomplete notice was posted');
 }));

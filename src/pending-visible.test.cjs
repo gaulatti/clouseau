@@ -75,7 +75,7 @@ test('the pending comment is short, idempotent, and replaced by a resolution onc
   assert.ok(pendingBody({head_sha: SHA}, 'u').includes('state: unknown'));
   assert.ok(pendingBody({head_sha: SHA, verification: 'queued'}, 'u').includes('automatically when verification completes'));
   await resolvePending({github, context: ctx, number: 3});
-  assert.match(comments[0].body, /Resolved: verification finished/);
+  assert.match(comments[0].body, /Resolved: this pending state has ended/);
   const edits = updated.length;
   await resolvePending({github, context: ctx, number: 3});
   assert.equal(updated.length, edits, 'an already resolved comment is left alone');

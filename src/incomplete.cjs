@@ -108,7 +108,7 @@ async function resolvePending({github, context, number}) {
   const repo = context.repo;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
   const existing = comments.find(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(`${PENDING}\n`) && !item.body.includes('Resolved'));
-  if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: `${PENDING}\n## Clouseau review pending\n\nResolved: verification finished and the review has run.`});
+  if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: `${PENDING}\n## Clouseau review pending\n\nResolved: this pending state has ended; see the latest Clouseau result.`});
 }
 
 function annotate({core, assessment}) {
