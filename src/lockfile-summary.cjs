@@ -410,7 +410,8 @@ function parseUv(text) {
 
 function parsePoetry(text) {
   const root = parseToml(text);
-  if (!isObject(root.metadata) || !isText(root.metadata['lock-version'])) fail('unsupported_version');
+  // Before lock-version 2 the hashes live in [metadata.files], which a package-level summary would silently ignore.
+  if (!isObject(root.metadata) || !/^2\./.test(root.metadata['lock-version'])) fail('unsupported_version');
   return uniqueEntries(packages(root).map(item => {
     if (!isText(item.version) || (item.source !== undefined && !(isObject(item.source) && isText(item.source.type) && isText(item.source.url)))) fail('invalid_structure');
     let source = 'registry:pypi';

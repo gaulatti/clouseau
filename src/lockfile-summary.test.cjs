@@ -192,6 +192,8 @@ test('poetry.lock: registry, git and index sources and hashes', () => {
   assert.match(risk(out, 'integrity-changed-same-version').join('\n'), /requests/);
   assert.match(summarize('poetry.lock', '', POETRY('2.31.0', 'sha256:aa', legacy), 'added'), /ADDED requests@2\.31\.0 source=index:private\.example\.invalid\/simple .*flags=optional/);
   assert.equal(reason(() => summarize('poetry.lock', '[[package]]\nname = "a"\n', '')), 'unsupported_version');
+  assert.equal(reason(() => summarize('poetry.lock', '[metadata]\nlock-version = "1.1"\n[metadata.files]\na = []\n', '')), 'unsupported_version');
+  assert.equal(reason(() => summarize('poetry.lock', '[metadata]\nlock-version = 2\n', '')), 'unsupported_version');
   assert.equal(reason(() => summarize('poetry.lock', '[metadata]\nlock-version = "2.0"\n[[package]]\nname = "a"\n', '')), 'invalid_structure');
   assert.equal(reason(() => summarize('poetry.lock', '[metadata]\nlock-version = "2.0"\n[[package]]\nname = "a"\nversion = "1"\nsource = 1\n', '')), 'invalid_structure');
   assert.match(summarize('poetry.lock', '', '[metadata]\nlock-version = "2.0"\n[[package]]\nname = "a"\nversion = "1"\nfiles = "none"\n', 'added'), /ADDED a@1 source=registry:pypi integrity=none/);
