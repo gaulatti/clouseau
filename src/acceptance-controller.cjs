@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {digest, validateApproval, approvalHold} = require('./acceptance.cjs');
-const {collectSnapshot, refresh} = require('./acceptance-sources.cjs');
+const {collectSnapshot, refresh, supplyTests} = require('./acceptance-sources.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf} = require('./verification-wait.cjs');
@@ -128,7 +128,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
         // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
         // is reused only when hosted approval's affirmative-evidence rule also holds.
-        const hold = verified.record.result.reviews.map(review => approvalHold(review.report, verified.record.snapshot)).find(Boolean);
+        // The local snapshot holds only what the local reviewer fetched. Importers are found with the same
+        // discovery the hosted review uses, so the receipt is held by exactly the same rule.
+        const discovered = structuredClone(verified.record.snapshot);
+        await supplyTests({github, repo, snapshot: discovered, files: discovered.files.map(file => ({filename: file.path, status: file.status})),
+          baseSha: discovered.base_sha, headSha: discovered.head_sha});
+        const hold = verified.record.result.reviews.map(review => approvalHold(review.report, discovered)).find(Boolean);
         if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
           reason: `Authenticated local review held: ${hold}.`};
         const controls = legacy.scopeReason(files, pr);
