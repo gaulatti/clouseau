@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {GATES, MAX_CITATION_LINES, digest, validateFacts, validateApproval, isExecutablePath} = require('./acceptance.cjs');
+const {patchOf, GATES, MAX_CITATION_LINES, digest, validateFacts, validateApproval, isExecutablePath} = require('./acceptance.cjs');
 const {additionalSources, proofCatalog, refresh} = require('./acceptance-sources.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 const {requestJSON} = require('./review-provider.cjs');
