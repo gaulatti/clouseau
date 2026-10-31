@@ -258,3 +258,21 @@ test('thin drafts of a unit and of the merged review are rehydrated before valid
   assert.equal(verified.reviews[0].drafts.length, 1);
   assert.ok(verified.reviews[0].drafts[0].evidence.every(entry => typeof entry.quote === 'string'));
 });
+
+test('a file added whole is stored compactly and still verifies and counts toward the size guard', async () => {
+  const {patchOf} = require('./acceptance.cjs');
+  const compact = snapshot => {
+    const file = snapshot.files.find(item => item.path === 'README.md');
+    const lines = snapshot.sources[file.head_source].content.split('\n'); if (lines.at(-1) === '') lines.pop();
+    Object.assign(file, {status: 'added', patch: `@@ -0,0 +1,${lines.length} @@\n`, patch_body: 'head_source'});
+    delete file.base_source;
+  };
+  const f = await chunkedFixture({mutate: compact});
+  const file = f.snapshot.files.find(item => item.path === 'README.md');
+  assert.ok(patchOf(f.snapshot, file).length > file.patch.length);
+  assert.ok(f.views.some(view => view.files.some(item => item.patch_body === 'head_source')));
+  assert.equal(verifyReceipt(issueReceipt(f.issue), f.expected).decision, 'auto_approve');
+  // The guard measures the stored, compact record.
+  assert.equal(assertRecordSize(f.record), Buffer.byteLength(JSON.stringify(f.record)));
+  assert.ok(!JSON.stringify(f.record).includes(patchOf(f.snapshot, file).slice(file.patch.length, file.patch.length + 40).replaceAll('\n', '\\n')));
+});

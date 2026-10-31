@@ -77,9 +77,9 @@ function unitReport(view, {finding = false} = {}) {
   return completed;
 }
 
-async function chunkedFixture({params = PARAMS, groups, finding = false} = {}) {
+async function chunkedFixture({params = PARAMS, groups, finding = false, mutate = () => {}} = {}) {
   const {snapshot} = await prepareCase(CASES[1]);
-  Object.assign(snapshot, {number: 0, prior_findings: []}); refresh(snapshot);
+  Object.assign(snapshot, {number: 0, prior_findings: []}); mutate(snapshot); refresh(snapshot);
   const plan = groups ? planOf(snapshot, params, groups) : hooks.partition({snapshot, params});
   const views = plan.units.map(unit => unitView(snapshot, unit));
   const usage = []; let calls = 0;
