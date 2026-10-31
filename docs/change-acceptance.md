@@ -271,6 +271,69 @@ compatibility, or verification consequences. Product scope and proportionality
 are still enforced by the independent product scores and scope gate.
 
 
+## Dependency lockfiles are reviewed as derived summaries
+
+A generated lockfile can be hundreds of kilobytes and would otherwise exhaust the
+300,000-character source bound or the 900,000-character evidence budget on its own.
+When a changed file's name is a known lockfile (`package-lock.json`,
+`npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`,
+`Cargo.lock`, `Gemfile.lock`, `go.sum`, `composer.lock`, `Pipfile.lock`; the one
+table is `LOCKFILES` in `src/lockfile-summary.cjs`), neither its raw base/head text
+nor its patch enters the snapshot. The snapshot carries one first-class source
+instead, `kind: lockfile-summary`, `authority: derived`, which reviewers cite
+exactly like any other source. `package.json`, manifests and every other file stay
+normal source.
+
+The summary is a parsed set difference between the exact base and head bytes. It is
+pure (text in, text out; nothing is executed, fetched or read), deterministic
+and sorted, and covered by the snapshot digest. Each package is described by its
+version, source (registry host, git, URL, file or workspace), the presence and a
+fingerprint of its integrity hash, and flags (install script, dev, optional,
+alias, credentials in a URL). A dependency swap is never hidden. These carry a
+`RISK[...]` tag and are listed first, in full:
+
+| Case | Tag |
+| --- | --- |
+| Resolved URL, registry host or artifact host changed | `source-changed` |
+| Package moved from a registry to git, URL, file or a path | `left-registry`, `non-registry-source` |
+| Integrity changed while the version did not | `integrity-changed-same-version` |
+| Integrity dropped | `integrity-removed` |
+| Registry package without integrity in a format that records it | `no-integrity` |
+| Install script newly flagged (also on a new package) | `install-script-added` |
+| Version went down | `downgrade` |
+| Name aliasing a different package | `alias-added` |
+| Credentials embedded in a URL (never shown) | `url-credentials-added` |
+
+Added and removed packages are listed after the flagged ones. Plain version bumps
+from an unchanged source come last; if they exceed the bound the summary ends with
+an explicit `... N more version-only updates not listed here` line, and the header
+counts every category. Nothing else is ever truncated: when flagged, added or
+removed packages cannot be listed within 3,000 lines and 250,000 characters, the
+lockfile is not summarized. Moving a package within the tree without changing its
+version, source, integrity or flags is not a change.
+
+Only package entries are compared. Other lockfile content (for example pnpm
+`importers`, `overrides` or patched-dependency hashes) is not part of the summary;
+the manifests that declare it are normal source.
+
+A lockfile that cannot be summarized fails closed with a fixed reason: unsupported
+lockfile version (npm lockfileVersion 1, pnpm other than 6 and 9, Cargo other than 3
+and 4, and so on), invalid syntax or structure, not UTF-8 text, larger than
+1,000,000 bytes, too many changes, or a rename between formats. The raw evidence
+behavior is unchanged for that file and the snapshot records
+`lockfile_failures`. If the raw text then does not fit (over 300,000 characters or
+the evidence budget) the review is `review_incomplete` with cause
+`lockfile_unsummarizable`, naming the file and the specific reason instead of the
+generic budget message. A newly added or deleted lockfile is summarized too.
+When GitHub omits the patch of a very large lockfile, the summary needs none.
+
+The hosted review, the local review and the verification of a signed local
+receipt run the same function on the same bytes. CI never trusts a signed summary:
+`verifySources` fetches the base and head lockfiles at the live revisions,
+recomputes the summary and requires it, and the file's binding to it, to equal the
+signed evidence exactly, so a derived item cannot differ from what the
+repository contains. Summaries of the same bytes are identical everywhere.
+
 ## Review convergence and completeness
 
 New snapshots carry `review_manifest_version: 1`. Both the local harness and CI

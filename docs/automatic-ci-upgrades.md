@@ -87,7 +87,9 @@ dependencies up front, including their actual pinned bootstrap and the legacy
 action/configuration/policy/receipt files read during migration. Wiki dependencies
 are included only when the changed workflow invokes them. Changed project files
 and contracts are still complete. Serialized evidence remains capped at 900,000
-characters, as enforced by the existing collector. Incomplete local reviews
+characters, as enforced by the existing collector. Changed dependency lockfiles
+count as a bounded derived summary, not as raw text (see
+`docs/change-acceptance.md`). Incomplete local reviews
 retain the delivered snapshot and journal,
 and the error identifies their private local evidence directory.
 The final allowed local source batch is delivered before the report turn; it is
