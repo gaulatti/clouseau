@@ -1209,3 +1209,14 @@ test('a pending verification gets a short visible comment from the gate, and a l
   assert.equal(f.state.writes.filter(item => item.name === 'create-ledger').length, 0);
   assert.match(f.state.writes.find(item => item.name === 'update-ledger').args.body, /state: running/);
 }));
+
+test('a real decision resolves the pending comment: the gate wiring is exercised on a record run', () => fixture(async f => {
+  const assessment = await f.assess();
+  assert.ok(assessment.record_digest);
+  f.state.comments.push({id: 99, user: {login: 'github-actions[bot]'}, body: '<!-- clouseau-review-pending -->\n## Clouseau review pending\n\nwaiting'});
+  await f.gate(assessment);
+  const resolved = f.state.writes.find(item => item.name === 'update-ledger' && item.args.comment_id === 99);
+  assert.ok(resolved, 'the pending comment was edited');
+  assert.match(resolved.args.body, /Resolved: verification finished and the review has run/);
+  assert.ok(f.state.writes.some(item => item.name === 'approve'), 'and the decision itself proceeded');
+}));
