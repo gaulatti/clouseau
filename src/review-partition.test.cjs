@@ -173,22 +173,29 @@ test('the ownership check rejects duplicate, missing and unknown paths', () => {
   refusal('unknown_owned_path', () => checkOwnership(forged([['a.ts'], ['b.ts', 'c.ts']]), ['a.ts', 'b.ts']));
 });
 
-test('golden plan for the measured alcantara commit 02618a9: 5 units at C=450K', () => {
+test('golden plans for the measured alcantara commit 02618a9: stored (compact) sizes give 4 units, full patches 5, at C=450K', () => {
   assert.equal(table.files.length, 85);
   assert.equal(table.files.reduce((sum, entry) => sum + entry.base_size + entry.head_size, 0), 2308455);
+  // Stored size: a file added whole keeps only its patch header, the body lives once in head_source.
   const plan = partition(table.files);
   assert.deepEqual(plan.units.map(unit => [unit.id, unit.owned.length, unit.cost]),
-    [['u0', 29, 432125], ['u1', 12, 405463], ['u2', 15, 437478], ['u3', 9, 445610], ['u4', 20, 390158]]);
-  assert.equal(plan.plan_digest, 'c418017fbfce04bcc4df90b8eab2eeefe9941a6ee8f743fd00405c180e04fa94');
+    [['u0', 36, 426133], ['u1', 23, 441731], ['u2', 12, 444415], ['u3', 14, 177150]]);
+  assert.equal(plan.plan_digest, '7feb057f2590af239b9cb5aa6a15bdc6c35281afb6d44acc2a289c60b1c631ff');
   assert.equal(plan.units.reduce((sum, unit) => sum + unit.owned.length, 0), 85);
   assert.ok(plan.units.every(unit => unit.cost <= DEFAULTS.unit_ceiling));
   assert.equal(checkOwnership(plan, table.files.map(entry => entry.path)), true);
   assert.equal(partition(shuffled(table.files, random(7))).plan_digest, plan.plan_digest);
+  // Before compact storage every added file counted its full patch as well: the design's 5 units.
+  const full = table.files.map(entry => ({...entry, patch_chars: entry.full_patch_chars ?? entry.patch_chars}));
+  const old = partition(full);
+  assert.deepEqual(old.units.map(unit => [unit.id, unit.owned.length, unit.cost]),
+    [['u0', 29, 432125], ['u1', 12, 405463], ['u2', 15, 437478], ['u3', 9, 445610], ['u4', 20, 390158]]);
+  assert.equal(old.plan_digest, 'c418017fbfce04bcc4df90b8eab2eeefe9941a6ee8f743fd00405c180e04fa94');
   // Without the derived summary the 538K lockfile is a file over the bound; with C=300K the plan grows.
   const raw = table.files.map(({derived_size, ...entry}) => entry);
   refusal('file_over_bound', () => partition(raw));
-  assert.equal(partition(table.files, {unit_ceiling: 300000}).units.length, 8);
-  refusal('too_many_units', () => partition(table.files, {unit_ceiling: 200000}));
+  assert.equal(partition(table.files, {unit_ceiling: 300000}).units.length, 6);
+  refusal('too_many_units', () => partition(table.files, {unit_ceiling: 150000, max_units: 6}));
 });
 
 test('the dry run prints the plan, the refusal, and rejects bad arguments', () => {
@@ -199,13 +206,13 @@ test('the dry run prints the plan, the refusal, and rejects bad arguments', () =
   };
   const ok = run(['table.json'], table.files);
   assert.equal(ok.code, 0);
-  assert.ok(ok.text.startsWith(`${SCHEME} c418017f`));
-  assert.match(ok.text, /^5 units, 85 files, ceiling 450000$/m);
-  assert.match(ok.text, /^u4 {2}cost 390158 {2}20 files$/m);
-  assert.equal(run(['table.json', '--ceiling', '300000'], table.files).text.split('\n')[1], '8 units, 85 files, ceiling 300000');
+  assert.ok(ok.text.startsWith(`${SCHEME} 7feb057f`));
+  assert.match(ok.text, /^4 units, 85 files, ceiling 450000$/m);
+  assert.match(ok.text, /^u3 {2}cost 177150 {2}14 files$/m);
+  assert.equal(run(['table.json', '--ceiling', '300000'], table.files).text.split('\n')[1], '6 units, 85 files, ceiling 300000');
   const refused = run(['table.json', '--max-units', '2'], table.files);
   assert.equal(refused.code, 2);
-  assert.match(refused.text, /^refused too_many_units: 5 units exceed the limit of 2\n$/);
+  assert.match(refused.text, /^refused too_many_units: 4 units exceed the limit of 2\n$/);
   assert.throws(() => run(['table.json', '--bogus', '1'], []), /unknown option --bogus/);
   assert.throws(() => run([], []), /usage: partition-plan/);
   assert.throws(() => run(['table.json', '--ceiling', '0'], []), /invalid partition parameter/);
@@ -218,5 +225,5 @@ test('the dry run reads the table from disk and writes to stdout by default', ()
   try {
     assert.equal(main([path.join(__dirname, '../test/fixtures/alcantara-02618a9.json')]), 0);
   } finally { process.stdout.write = original; }
-  assert.match(written.join(''), /^clouseau-partition\/1 c418017f/);
+  assert.match(written.join(''), /^clouseau-partition\/1 7feb057f/);
 });

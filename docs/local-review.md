@@ -459,7 +459,7 @@ and model-free, and nothing in `clouseau review` calls it yet: reviews behave ex
 
 Changed files are sorted by new path (UTF-8 bytes) and grouped into atoms: a file stays with its `.test`,
 `.spec` and `.stories` siblings, and a rename is one entry keyed by its new path. A file costs
-`ceil(1.03 * (base bytes + head bytes + patch characters))`. Atoms are packed next-fit, in path order, into
+`ceil(1.03 * (base bytes + head bytes + patch characters))`, where the patch size is the stored one (a file added whole keeps only its patch header, its body lives once in the head source). Atoms are packed next-fit, in path order, into
 units of at most `unit_ceiling` (C = 450,000); an atom above C becomes its own unit. The plan digest covers the
 scheme, parameters, unit membership and costs, so it is the same for any input order. Every changed path is
 owned by exactly one unit (checked by `checkOwnership`).
@@ -471,7 +471,7 @@ bound), `unit_exceeds_budget` (an atom above the 900,000 budget minus 100,000 sh
 
 Print a plan for a table of changed files (`{files: [{path, previous?, base_size, head_size, patch_chars,
 derived_size?}]}`; `test/fixtures/alcantara-02618a9.json` is the measured table of alcantara commit 02618a9,
-which gives 5 units at C = 450,000):
+which gives 4 units at C = 450,000 with stored sizes, 5 when every added file also counts its full patch):
 
 ```
 scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000] [--max-units 8]
