@@ -347,3 +347,11 @@ test('several copies of one package version relocate without a reported change',
   const out = summarize('package-lock.json', doc(['node_modules/p/node_modules/a', 'node_modules/q/node_modules/a']), doc(['node_modules/r/node_modules/a', 'node_modules/s/node_modules/a']));
   assert.match(out, /changes: 0 added, 0 removed, 0 changed/);
 });
+
+test('pnpm peer-dependency variants of one version are compared separately and duplicates fail closed', () => {
+  const variants = (first, second) => `lockfileVersion: '6.0'\n\npackages:\n\n  /foo@1.0.0(react@17.0.0):\n    resolution: ${first}\n\n  /foo@1.0.0(react@18.0.0):\n    resolution: ${second}\n`;
+  const same = '{integrity: sha512-aaa}';
+  const out = summarize('pnpm-lock.yaml', variants(same, same), variants('{tarball: https://evil.example.invalid/foo.tgz}', same));
+  assert.match(out, /^RISK\[[^\]]*source-changed[^\]]*\] CHANGED foo: version 1\.0\.0 \(unchanged\); source registry:default -> url:https:\/\/evil\.example\.invalid\/foo\.tgz/m);
+  assert.equal(reason(() => summarize('pnpm-lock.yaml', variants(same, '{integrity: sha512-bbb}').replace('react@18.0.0', 'react@17.0.0'), variants(same, same))), 'invalid_structure');
+});

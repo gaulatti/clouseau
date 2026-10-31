@@ -209,7 +209,7 @@ function parsePnpm(text) {
     const key = item.key.replace(/\(.*$/, '');
     built.set(key, [...(built.get(key) || []), ...['requiresBuild', 'optional'].filter(name => item.props[name] === 'true')]);
   }
-  return sections.packages.map(item => {
+  return uniqueEntries(sections.packages.map(item => {
     const key = item.key.replace(/\(.*$/, '');
     const at = key.indexOf('@', 1);
     if (at < 1) fail('invalid_structure');
@@ -225,8 +225,9 @@ function parsePnpm(text) {
       source = found.source; if (found.credentials) flags.push('url-credentials');
     } else if (resolution.commit) source = `git:${show(resolution.repo ?? '')}#${show(resolution.commit)}`;
     else if (resolution.directory) source = `file:${show(resolution.directory)}`;
-    return entry(key, name, version, source, resolution.integrity, flags);
-  });
+    // Peer-dependency variants of one version are separate packages and stay separate entries.
+    return entry(item.key, name, version, source, resolution.integrity, flags);
+  }));
 }
 
 // ---------------------------------------------------------------- yarn (classic and berry)
