@@ -407,3 +407,9 @@ test('layouts the parsers would skip fail closed instead of hiding an entry', ()
   const accepted = "lockfileVersion: '9.0'\n# comment\nsettings:\n  autoInstallPeers: true\n\npackages:\n  # note\n  a@1.0.0:\n    resolution: {integrity: x}\n    peerDependencies:\n      react: ^18.0.0\n\nsnapshots: {}\n";
   assert.match(summarize('pnpm-lock.yaml', '', accepted, 'added'), /ADDED a@1\.0\.0/);
 });
+
+test('a Pipfile package without an index uses the first declared source', () => {
+  const pipenv = (sources, extra = {}) => JSON.stringify({_meta: {sources}, default: {a: {version: '==1', hashes: ['sha256:a'], ...extra}}});
+  assert.match(summarize('Pipfile.lock', '', pipenv([{name: 'corp', url: 'http://corp.example.invalid/simple'}]), 'added'), /source=index:http:\/\/corp\.example\.invalid /);
+  assert.match(summarize('Pipfile.lock', '', pipenv([]), 'added'), /source=index:pypi /);
+});

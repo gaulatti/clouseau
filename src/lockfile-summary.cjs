@@ -160,7 +160,11 @@ function parsePipfile(text) {
       let source;
       if (typeof value.git === 'string') source = `git:${show(value.git)}#${show(value.ref ?? '')}`;
       else if (typeof value.file === 'string' || typeof value.path === 'string') source = `file:${show(value.file ?? value.path)}`;
-      else source = `index:${show(indexes.has(value.index) ? hostOf(indexes.get(value.index)) : value.index ?? 'pypi')}`;
+      else {
+        // Pipenv installs a package without an index from the first declared source.
+        const index = value.index ?? [...indexes.keys()][0] ?? 'pypi';
+        source = `index:${show(indexes.has(index) ? hostOf(indexes.get(index)) : index)}`;
+      }
       const hashes = Array.isArray(value.hashes) ? [...value.hashes].map(String).sort().join(',') : '';
       entries.push(entry(`${section}:${name}`, name, String(value.version ?? value.ref ?? '-').replace(/^==/, ''), source, hashes, flags));
     }

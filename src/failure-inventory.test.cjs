@@ -52,7 +52,7 @@ test('every failure path of the AI step ends in a classified hold that names the
     ['unit paths', async () => { const facts = modelTemplate(paths.snapshot); facts.units[0].paths = []; return materialize(facts, paths.snapshot); }, 'review_output_invalid', /cannot bind/],
     ['evidence budget', () => collectSnapshot(budget).then(snapshot => refresh({...snapshot, claims: {description: 'z'.repeat(1000000)}})), 'evidence_budget', /900 KB/],
     ['unreadable changed file', () => collectSnapshot(unreadable), 'changed_file_unreadable', /src\/app\.ts|README\.md|p\.md/],
-    ['unsummarizable lockfile', () => collectSnapshot(lockfile), 'lockfile_unsummarizable', /Cargo\.lock cannot be summarized \(its text is larger than 1000000 bytes|Cargo\.lock cannot be summarized/],
+    ['unsummarizable lockfile', () => collectSnapshot(lockfile), 'lockfile_unsummarizable', /Cargo\.lock cannot be summarized/],
     ['missing patch', () => collectSnapshot(patchless), 'changed_files_incomplete', /patch for every changed file/],
     ['tree truncated', () => collectSnapshot(tree), 'tree_truncated', /repository tree/],
     ['source investigation exhausted', () => inspect({...exhausted, role: 'examiner', model: 'deepseek-flash', wait, fetchImpl: async () => reply({choices: [{finish_reason: 'tool_calls',
