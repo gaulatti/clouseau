@@ -17,6 +17,7 @@ const NEXT_STEPS = Object.freeze({
   evidence_budget: 'Split the change so that the changed files fit the review evidence budget, then push a new revision.',
   changed_file_unreadable: 'A changed file cannot be read as complete text within the review limits. Split it out of this change or review it manually.',
   changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
+  receipt_patch_mismatch: 'The signed review saw a diff that differs from the pull request diff GitHub reports for the named file. Run the local Clouseau review again on this exact head and update the receipt marker.',
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
   verification_failed: 'Open the failing job linked in the reason (when it names one), fix the failing step, and push; the review is reassessed when verification passes.',
@@ -46,6 +47,7 @@ function classify(error) {
     return {cause: rejected ? 'provider_rejected' : 'provider_unavailable',
       reason: `${provider[1]} provider ${rejected ? 'rejected the credential' : 'was unavailable'} (HTTP ${provider[2]}).`};
   }
+  if (error?.code === 'RECEIPT_PATCH_MISMATCH') return {cause: 'receipt_patch_mismatch', reason: `The signed local review patch for ${error.path} differs from the pull request diff reported by GitHub (or the file or status is missing).`};
   if (error?.code === 'RATE_LIMIT') return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(error.resetAt).toISOString()}.`};
   // A raw rate-limit response that escaped the retrying wrapper is the same hold, never a crash.
   const asked = rateLimitDelay(error);
