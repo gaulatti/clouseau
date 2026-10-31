@@ -27,9 +27,9 @@ function evidenceSize(snapshot) {
   return JSON.stringify(value).length;
 }
 
-function refresh(snapshot) {
+function refresh(snapshot, cap = BUDGET) {
   const value = {...snapshot}; delete value.digest;
-  if (JSON.stringify(value).length > BUDGET) throw new Error('Complete review evidence exceeds the source budget');
+  if (JSON.stringify(value).length > cap) throw new Error('Complete review evidence exceeds the source budget');
   snapshot.digest = digest(value);
   return snapshot;
 }
