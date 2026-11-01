@@ -146,7 +146,25 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     };
     try {
       const receipts = require('./local-receipt.cjs');
-      const receiptRef = receipts.marker(pr.body);
+      let receiptRef = receipts.marker(pr.body);
+      let bundle = null;
+      let verified = null;
+      if (receiptRef) {
+        bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
+        try {
+          verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
+            repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
+            configDigest: digest(config), policyDigest: policyDigest()});
+        } catch (error) {
+          // Only after signature, trust, issuer, author, expiry and payload checks passed: a receipt from another
+          // engine is ignored (never accepted) and CI reviews the change itself.
+          if (error.code !== 'ENGINE_MISMATCH') throw error;
+          receiptRef = null;
+          const {RECEIPT_NOTICE} = require('./incomplete.cjs');
+          identity.receipt_notice = RECEIPT_NOTICE;
+          if (report) report(RECEIPT_NOTICE);
+        }
+      }
       // A signed local quality review is reusable even when independent CI
       // cannot yet authorize acceptance. Unstamped changes retain the existing
       // technical precondition before any paid investigation.
@@ -155,10 +173,6 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
       if (receiptRef) {
-        const bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
-        const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
-          repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
-          configDigest: digest(config), policyDigest: policyDigest()});
         await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
         // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
         // is reused only when hosted approval's affirmative-evidence rule also holds.
@@ -224,10 +238,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     } catch (error) {
       diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
-      const engineMismatch = error.message.startsWith('Invalid local review receipt: engine mismatch;');
-      const {cause, reason} = engineMismatch ? {cause: 'engine_mismatch', reason: error.message} : require('./incomplete.cjs').classify(error);
-      return {...identity, decision: 'review_incomplete', cause,
-        ...(engineMismatch ? {review_source: 'authenticated_local_rejected', provider_api_calls: 0} : {}), reason};
+      const {cause, reason} = require('./incomplete.cjs').classify(error);
+      return {...identity, decision: 'review_incomplete', cause, reason};
     }
   }
 
@@ -304,6 +316,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       links.push(`[Evidence ${index + 1}/${pages.length}](https://github.com/${record.snapshot.repository}/pull/${pr.number}#issuecomment-${response.data.id})`);
     }
     let published = links.length ? `${body}\n\nComplete factor inputs and evidence citations: ${links.join(' · ')}` : body;
+    if (assessment.receipt_notice) published += `\n\n${assessment.receipt_notice}`;
     if (record.local_receipt) published += `\n\nAuthenticated local review: ` +
       `[signed evidence](https://github.com/${record.snapshot.repository}/blob/${record.local_artifact}/clouseau-review.json). ` +
       'CI verified the signature, source, scores and passing tests/coverage. **CI AI review calls: 0.**';

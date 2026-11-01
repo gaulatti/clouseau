@@ -419,8 +419,14 @@ contain review evidence, never the signing identity.
 
 Automatic central-source installations retain signer enrollment in protected base
 configuration and authorize protected Clouseau main instead of a recurring
-reviewer digest. An engine mismatch blocks without a paid fallback: refresh,
-review again and start a fresh workflow. The selected commit and digest are in
+reviewer digest. A receipt that is valid in every respect except that it
+was produced by an older engine revision than the protected main CI resolved is
+ignored, never accepted as evidence: CI treats it as absent, reviews the change
+itself through the ordinary hosted path and shows the one-line notice that the
+receipt predates the current engine. Signature, trust, issuer, author, expiry,
+head and base, policy, configuration and record failures stay hard failures.
+(A repository in `required` mode still has no receipt, so it reports
+`local_receipt_required`.) Refresh and review again to reuse the local review. The selected commit and digest are in
 the run summary and engine artifact.
 
 Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public

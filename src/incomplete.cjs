@@ -11,7 +11,6 @@ const NEXT_STEPS = Object.freeze({
   provider_rejected: 'The provider refused the credential. Replace the secret with a valid, active key, then re-run the failed jobs.',
   provider_unavailable: 'The provider did not answer successfully. Re-run the failed jobs later; no change to this PR is needed.',
   local_receipt_required: 'Run the local Clouseau review on this exact head and put its receipt marker in the PR description.',
-  engine_mismatch: 'Re-run the local Clouseau review with the current frozen engine, then update the receipt marker.',
   review_output_invalid: 'The reviewer model answered in an invalid form on every bounded attempt. Re-run the failed jobs; if it repeats, report it with the assessment diagnostic.',
   provider_incomplete: 'The reviewer model did not finish its answer within the bounded budget. Re-run the failed jobs.',
   evidence_budget: 'Split the change so that the changed files fit the review evidence budget, then push a new revision.',
@@ -81,13 +80,17 @@ function classify(error) {
   return {cause: 'evidence_incomplete', reason: GENERIC};
 }
 
+// The one-line, fixed notice that an older-engine local receipt was ignored; never forwards other text.
+const RECEIPT_NOTICE = 'Local review receipt predates the current Clouseau engine; CI reviewed this change itself.';
+const noticeLine = assessment => assessment.receipt_notice === RECEIPT_NOTICE ? `\n\n${RECEIPT_NOTICE}` : '';
+
 function body(assessment, runUrl) {
   const step = NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete;
   const reason = String(assessment.reason).replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500);
   return `${MARKER}\n## Clouseau review incomplete\n\n` +
     `Revision \`${String(assessment.head_sha).slice(0, 12)}\` was not approved or merged because no review decision could be reached.\n\n` +
     `**Reason:** ${reason}\n\n**Next step:** ${step}\n\n` +
-    `Workflow run: ${runUrl}\n\nThis notice contains no secret values.`;
+    `Workflow run: ${runUrl}${noticeLine(assessment)}\n\nThis notice contains no secret values.`;
 }
 
 async function post({github, context, assessment}) {
@@ -107,7 +110,7 @@ function pendingBody(assessment, runUrl) {
   const reason = String(assessment.reason ?? '').replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500);
   return `${PENDING}\n## Clouseau review pending\n\nRevision \`${String(assessment.head_sha).slice(0, 12)}\` is waiting for PR verification ` +
     `(tests, exact coverage and package build, state: ${String(assessment.verification ?? 'unknown')}). No decision has been made and nothing is approved or merged. ` +
-    `The review runs again automatically when verification completes; no action is needed.\n\n${reason}\n\nWorkflow run: ${runUrl}`;
+    `The review runs again automatically when verification completes; no action is needed.\n\n${reason}${noticeLine(assessment)}\n\nWorkflow run: ${runUrl}`;
 }
 
 // One short comment per PR, updated in place; replaced by a resolution line once a decision exists.
@@ -134,4 +137,4 @@ function annotate({core, assessment}) {
   }
 }
 
-module.exports = {apiErrorReason, PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
+module.exports = {RECEIPT_NOTICE, apiErrorReason, PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
