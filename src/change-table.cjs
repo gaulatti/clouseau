@@ -14,7 +14,7 @@ const weight = text => Math.max(text.length, Math.ceil(escaped(text) / 1.03));
 // The raw size (escaped characters) a segment may have so that the planner's cost for it stays within the unit ceiling.
 function segmentLimit(overrides = {}) {
   const params = parameters(overrides);
-  return Math.floor((params.unit_ceiling - params.file_overhead) / 1.03);
+  return Math.max(1, Math.floor((params.unit_ceiling - params.file_overhead) / 1.03));
 }
 
 function changeTable(snapshot, overrides = {}) {

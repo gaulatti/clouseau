@@ -21,8 +21,10 @@ accepts (no merged report or scores stored); `reviews` carry the merged reports 
 * Integration: each seam gets one disposition (`checked`, `finding`, `missing`); anything but `checked` leaves
   `review_completeness` unresolved (an integration finding cannot yet be a scored finding). Seams shard under
   `integration_cap`. `mergeWithIntegration` is the pure merge a verifier hook recomputes.
-* Typed gaps for the integrator: `file_exceeds_unit` (a unit that cannot fit alone: segmenting the file is not
-  implemented), `integration_input_too_large`, `seam_too_large`, `prompt_too_large`, and `record_too_large`.
+* A file too large for one unit is split into segments by the planner (`docs/local-review.md`); the runner carries each
+  unit's `parts` and gives `unitView` the segment limit derived from the protected `C` and `S`. A record above one
+  receipt is signed in parts (`docs/chunked-record.md`), so neither is a refusal any more.
+* Typed gaps for the integrator: `integration_input_too_large`, `seam_too_large` and `prompt_too_large`.
   Integrity refusals: `chunk_config_invalid`, `plan_invalid`, `seams_invalid`, `integration_invalid`, `partition_invalid`.
 * Not supported while concurrent: the agent-session exchange numbers sessions by call order, so wiring must key
   agent sessions by `task.unit`, `task.role` and `task.phase`.
