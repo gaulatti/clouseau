@@ -213,7 +213,7 @@ function manySeams(count, weight) {
 }
 const summariesOf = plan => plan.units.map(unit => unitSummary(unit.id, summaryReport()));
 
-test('integration input: manifest and summaries are in every shard; seams are packed next-fit within the cap', () => {
+test('integration input: everything fits one shard when it can; the whole change is covered once, in order', () => {
   const {snapshot, plan} = manySeams(6, 400);
   const seams = seamsOf({snapshot, plan});
   assert.equal(seams.length, 6);
@@ -222,30 +222,37 @@ test('integration input: manifest and summaries are in every shard; seams are pa
   assert.deepEqual([whole[0].shard, whole[0].of, whole[0].role], [0, 1, 'examiner']);
   assert.equal(whole[0].manifest.length, 12);
   assert.deepEqual(whole[0].manifest[0], {path: 'a/f0.ts', status: 'modified', unit: 'u0'});
+  assert.deepEqual(whole[0].units.map(item => item.unit), ['u0', 'u1']);
   assert.match(whole[0].untrusted, /untrusted/);
-  const size = JSON.stringify(whole[0]).length;
-  const cap = Math.floor(size * 0.7);
-  const shards = integrationInputs({role: 'challenger', snapshot, plan, seams, summaries: summariesOf(plan)}, {integrationCap: cap});
-  assert.ok(shards.length > 1);
-  assert.deepEqual(shards.flatMap(shard => shard.seams.map(seam => seam.id)), seams.map(seam => seam.id));
-  shards.forEach((shard, index) => {
-    assert.ok(JSON.stringify(shard).length <= cap, `shard ${index}`);
-    assert.deepEqual([shard.shard, shard.of], [index, shards.length]);
-    assert.equal(shard.manifest.length, 12);
-  });
 });
 
-test('integration input: no seams still yields one obliged pass; an oversized seam or fixed part is refused, never cut', () => {
-  const {snapshot, plan} = manySeams(2, 400);
+test('integration input scales by adding shards, never by refusing or cutting', () => {
+  const {snapshot, plan} = manySeams(6, 400);
   const seams = seamsOf({snapshot, plan});
+  const summaries = summariesOf(plan);
+  const size = JSON.stringify(integrationInputs({role: 'examiner', snapshot, plan, seams, summaries})[0]).length;
+  const cap = Math.floor(size * 0.4);
+  const shards = integrationInputs({role: 'challenger', snapshot, plan, seams, summaries}, {integrationCap: cap});
+  assert.ok(shards.length > 2);
+  assert.deepEqual(shards.flatMap(shard => shard.seams.map(seam => seam.id)), seams.map(seam => seam.id));
+  assert.equal(shards.flatMap(shard => shard.manifest).length, 12);
+  assert.deepEqual(shards.flatMap(shard => shard.units.map(item => item.unit)), ['u0', 'u1']);
+  shards.forEach((shard, index) => {
+    assert.deepEqual([shard.shard, shard.of], [index, shards.length]);
+    assert.ok(JSON.stringify(shard).length <= cap || shard.seams.length + shard.units.length + shard.manifest.length === 1, `shard ${index}`);
+  });
+  // A cap smaller than any item still shards: one item per shard.
+  const tiny = integrationInputs({role: 'examiner', snapshot, plan, seams, summaries}, {integrationCap: 10});
+  assert.equal(tiny.length, 12 + 2 + 6);
+});
+
+test('integration input: no seams still yields one obliged pass', () => {
+  const {snapshot, plan} = manySeams(2, 400);
   const none = integrationInputs({role: 'examiner', snapshot, plan, seams: [], summaries: summariesOf(plan)});
   assert.equal(none.length, 1);
   assert.deepEqual(none[0].seams, []);
-  const base = JSON.stringify(none[0]).length;
-  assert.throws(() => integrationInputs({role: 'examiner', snapshot, plan, seams, summaries: summariesOf(plan)}, {integrationCap: base + 50}),
-    error => error.code === 'integration_too_large' && error.seam === seams[0].id && /does not fit/.test(error.message));
-  assert.throws(() => integrationInputs({role: 'examiner', snapshot, plan, seams: [], summaries: summariesOf(plan)}, {integrationCap: base - 100}),
-    error => error.code === 'integration_too_large' && error.seam === undefined && /manifest and unit summaries/.test(error.message));
+  const empty = integrationInputs({role: 'examiner', snapshot: {files: []}, plan, seams: [], summaries: []});
+  assert.equal(empty.length, 1);
 });
 
 // Dispositions

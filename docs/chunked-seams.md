@@ -26,13 +26,14 @@ is not detected; that limit is accepted in the design.
 
 `integrationInputs` builds one input per shard for one role: the change manifest, that role's unit summaries (`unitSummary`
 forwards only titles, finding text, gate states and accounting, each bounded, labelled untrusted) and a share of the seams.
-Seams are packed next-fit within `integrationCap` (250,000 characters). A seam, or a manifest plus summaries, that cannot fit
-is refused as `integration_too_large`; nothing is truncated.
+Manifest rows, summaries and seams are packed next-fit into as many shards as `integrationCap` (250,000 characters) needs.
+A larger change gets more shards: size never causes a refusal and nothing is cut (an item that alone exceeds the cap gets a
+shard of its own). Refusals are for integrity failures only.
 
 `dispositionSeams` validates the pass's answers (`checked`, `finding` naming a raised finding, `missing`); a seam with no
 answer is `missing`. `holdMissingSeams` records each missing seam as a `missing` coverage dependency and sets
 `review_completeness` to `unresolved`, which the existing `approvalHold` turns into a hold. A report without a coverage
 register cannot carry that record and is refused (`seam_hold_unrepresentable`) rather than silently approved.
 
-Refusal codes: `limit_invalid`, `unowned_path`, `integration_too_large`, `seam_answer_invalid`, `seam_unknown`,
+Refusal codes: `limit_invalid`, `unowned_path`, `seam_answer_invalid`, `seam_unknown`,
 `seam_duplicate`, `seam_finding_unknown`, `seam_hold_unrepresentable`.
