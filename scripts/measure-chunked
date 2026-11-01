@@ -1,0 +1,5 @@
+#!/usr/bin/env node
+'use strict';
+// Measures a chunked review plan for a changed-file table without any AI: unit count, per-unit sizes and the record size.
+// Usage: measure-chunked [TABLE.json] [--ceiling N] [--shared N] [--cap N] [--max-units N]. See test/chunked-measure.cjs.
+process.exitCode = require('../test/chunked-measure.cjs').main(process.argv.slice(2));
