@@ -18,8 +18,9 @@
 
 const {digest, JS_PATH, isTestPath, specifiersOf, resolveSpecifier, patchOf} = require('./acceptance.cjs');
 const {atomKey} = require('./review-partition.cjs');
+const {importerLines, calleeLines, removedLines, excerptOf} = require('./seam-excerpts.cjs');
 
-const DEFAULTS = Object.freeze({excerptCap: 20000, integrationCap: 250000, textCap: 2000});
+const DEFAULTS = Object.freeze({excerptCap: 2000, integrationCap: 250000, textCap: 2000});
 const KINDS = Object.freeze(['import', 'export_consumer', 'removed_import', 'test_subject']);
 const STATES = Object.freeze(['checked', 'finding', 'missing']);
 
@@ -77,7 +78,8 @@ const mentions = (content, name) => name === 'default' || new RegExp(`(?<![\\w$]
 // The owning unit of every path; a file split into segments has several, and its first in plan order stands for it.
 const firstOwners = plan => new Map(plan.units.flatMap(unit => unit.owned.map(path => [path, unit.id])).reverse());
 
-// Seams between units: [{id, kind, a: {path, unit}, b: {path, unit}, exports?, excerpts}] in a stable order.
+// Seams between units: [{id, kind, a: {path, unit}, b: {path, unit}, exports?, excerpts}] in a stable order. Each excerpt is
+// {path, unit, status, added, removed, lines, truncated}: the lines that make the edge, never the whole hunk.
 // `a` is the file whose unit must look at `b` (importer, test); `b` is the file the other unit changed.
 function seamsOf({snapshot, plan}, options = {}) {
   const {excerptCap} = limits(options);
@@ -91,14 +93,13 @@ function seamsOf({snapshot, plan}, options = {}) {
   const dead = new Map(snapshot.files.filter(file => file.status === 'removed' || previous(file) !== file.path).map(file => [previous(file), file]));
   const end = path => ({path, unit: owner.get(path)});
   const found = new Map();
-  const add = (kind, from, to, extra = {}) => {
+  // `lines` are the candidate excerpt lines of both ends: only the lines that make the edge (seam-excerpts.cjs).
+  const add = (kind, from, to, extra, lines) => {
     if (owner.get(from.path) === owner.get(to.path)) return;
     const a = end(from.path); const b = end(to.path);
     const id = `s${digest({kind, a, b}).slice(0, 12)}`;
-    const excerpts = [from, to].map(file => {
-      const patch = patchOf(snapshot, file);
-      return {path: file.path, unit: owner.get(file.path), status: file.status, patch: patch.slice(0, excerptCap), truncated: patch.length > excerptCap};
-    });
+    const excerpts = [[from, lines[0]], [to, lines[1]]].map(([file, candidates]) =>
+      excerptOf({snapshot, file, unit: owner.get(file.path), candidates, excerptCap}));
     found.set(id, {id, kind, a, b, ...extra, excerpts});
   };
 
@@ -108,9 +109,10 @@ function seamsOf({snapshot, plan}, options = {}) {
       for (const target of resolveSpecifier(file.path, specifier, live).filter(path => path !== file.path)) {
         const callee = byPath.get(target);
         const consumed = exportsOf(patchOf(snapshot, callee)).filter(name => mentions(content, name));
-        add(consumed.length ? 'export_consumer' : 'import', file, callee, consumed.length ? {exports: consumed} : {});
+        add(consumed.length ? 'export_consumer' : 'import', file, callee, consumed.length ? {exports: consumed} : {},
+          [importerLines(content, specifier, consumed), consumed.length ? calleeLines(patchOf(snapshot, callee), consumed) : []]);
       }
-      for (const target of resolveSpecifier(file.path, specifier, [...dead.keys()])) add('removed_import', file, dead.get(target));
+      for (const target of resolveSpecifier(file.path, specifier, [...dead.keys()])) add('removed_import', file, dead.get(target), {}, [importerLines(content, specifier, []), []]);
     }
   }
 
@@ -121,7 +123,9 @@ function seamsOf({snapshot, plan}, options = {}) {
     const imported = JS_PATH.test(test.path)
       ? specifiersOf(snapshot.sources[id].content).flatMap(specifier => resolveSpecifier(test.path, specifier, subjects.map(file => file.path)))
       : [];
-    for (const subject of subjects.filter(file => stemOf(file.path) === stemOf(test.path) || imported.includes(file.path))) add('test_subject', test, subject);
+    for (const subject of subjects.filter(file => stemOf(file.path) === stemOf(test.path) || imported.includes(file.path))) {
+      add('test_subject', test, subject, {}, [removedLines(patchOf(snapshot, test)), calleeLines(patchOf(snapshot, subject), [])]);
+    }
   }
   return [...found.values()].sort((x, y) => compare(`${x.a.path}\0${x.b.path}\0${x.kind}`, `${y.a.path}\0${y.b.path}\0${y.kind}`));
 }

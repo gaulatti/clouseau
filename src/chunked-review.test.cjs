@@ -148,7 +148,30 @@ test('a plan of more units than the old ceiling still runs, one session at a tim
   const out = await chunkedReview({snapshot, plan, ask: h.ask, chunked: {params: {...PARAMS, cap: 10, max_units: 2}, concurrency: 1}});
   assert.equal(h.state.peak, 1);
   assert.equal(out.result.decision, 'auto_approve');
-  assert.equal(h.state.calls.filter(call => call.includes('integration')).length, 2, 'the integration pass runs even with no seams');
+  assert.equal(h.state.calls.filter(call => call.includes('integration')).length, 0, 'no seams, no integration session');
+  assert.deepEqual(out.result.reviews.map(review => review.integration), [[], []], 'the record says so: nothing was integrated');
+  assert.deepEqual(out.seams, []);
+});
+
+test('seams are ranked, only the most relevant go to the integration pass, and the rest are recorded as missing', async () => {
+  const snapshot = combined();
+  const plan = planOf(snapshot);
+  const seen = [];
+  const h = harness(snapshot, plan, {integration: packet => {seen.push(packet.seams.map(item => item.id)); return {dispositions: packet.seams.map(item => ({seam: item.id, state: 'checked', reason: 'ok'}))};}});
+  const seams = [{...seam('s5'), kind: 'import'}, {...seam('s4'), kind: 'test_subject'}, {...seam('s3'), kind: 'export_consumer', exports: ['a']},
+    {...seam('s2'), kind: 'export_consumer', exports: ['a', 'b']}, {...seam('s1'), kind: 'removed_import'}];
+  const out = await run(snapshot, plan, h, {seams});
+  assert.deepEqual(seen, [['s1', 's2', 's3', 's4', 's5'], ['s1', 's2', 's3', 's4', 's5']], 'most relevant first');
+  const limited = harness(snapshot, plan);
+  const cut = await chunkedReview({snapshot, plan, seams, ask: limited.ask, chunked: {params: PARAMS, integration_max_seams: 2, integration_call_seams: 1}});
+  assert.equal(limited.state.calls.filter(call => call.includes('integration')).length, 4, 'two seams, one per session, for each role');
+  const entries = cut.result.reviews[0].integration;
+  assert.deepEqual(entries.map(entry => entry.seams), [['s1'], ['s2'], ['s3', 's4', 's5']]);
+  assert.equal(entries[2].unreviewed, true);
+  assert.ok(entries[2].dispositions.every(item => item.state === 'missing' && /beyond the 2 most relevant/.test(item.reason)));
+  const gate = cut.reviews[0].report.gates.find(item => item.name === 'review_completeness');
+  assert.equal(gate.state, 'unresolved', 'a seam nobody examined holds approval');
+  assert.ok(out.reviews.every(review => review.report.gates.find(item => item.name === 'review_completeness').state !== 'unresolved'));
 });
 
 test('seams are sharded under the integration cap and any seam not checked leaves completeness unresolved', async () => {
@@ -169,17 +192,18 @@ test('a resumed review never samples a finished call again', async () => {
   const snapshot = combined();
   const plan = planOf(snapshot);
   const journal = memoryJournal();
+  const seams = [seam('s1')];
   const first = harness(snapshot, plan, {hook: (task, n) => {if (n === 7) throw new Error('crash');}});
-  await assert.rejects(run(snapshot, plan, first, {journal, scope: 'engine-1'}), /crash/);
+  await assert.rejects(run(snapshot, plan, first, {journal, scope: 'engine-1', seams}), /crash/);
   const finished = first.state.calls.length - 1;
   assert.ok(finished >= 6);
   const second = harness(snapshot, plan);
-  const out = await run(snapshot, plan, second, {journal, scope: 'engine-1'});
+  const out = await run(snapshot, plan, second, {journal, scope: 'engine-1', seams});
   assert.equal(out.result.decision, 'auto_approve');
   const total = plan.units.length * 2 + 2;
   assert.ok(second.state.calls.length <= total - 6, 'finished sessions were replayed from the journal');
   const other = harness(snapshot, plan);
-  await run(snapshot, plan, other, {journal, scope: 'engine-2'});
+  await run(snapshot, plan, other, {journal, scope: 'engine-2', seams});
   assert.equal(other.state.calls.length, total, 'another scope shares nothing');
 });
 
@@ -196,7 +220,7 @@ test('a response that fails its own check is not remembered', async () => {
 });
 
 test('protected limits are validated and nothing else can change them', () => {
-  assert.deepEqual(runnerLimits({params: PARAMS}), {concurrency: 2, unit_deadline_ms: 300000, integration_cap: 250000, params: PARAMS});
+  assert.deepEqual(runnerLimits({params: PARAMS}), {concurrency: 2, unit_deadline_ms: 300000, integration_cap: 250000, integration_call_seams: 60, integration_max_seams: 400, params: PARAMS});
   for (const chunked of [null, [], 'x', {}, {params: PARAMS, extra: 1}, {params: PARAMS, concurrency: 0}, {params: PARAMS, concurrency: 9},
     {params: PARAMS, unit_deadline_ms: 1.5}, {params: {C: 1}}]) {
     assert.throws(() => runnerLimits(chunked), error => error.code === 'chunk_config_invalid');
@@ -276,7 +300,7 @@ test('a missed deadline names the unit and proposes smaller units; an integratio
   await assert.rejects(chunkedReview({snapshot, plan, ask: slowUnit.ask, chunked: {params: {...PARAMS, C: 9}, unit_deadline_ms: 20}}),
     error => error.code === 'unit_deadline' && /^u\d$/.test(error.unit) &&error.retry_ceiling === 4);
   const slowIntegration = harness(snapshot, plan, {hook: task => (task.phase === 'integration' ? never : undefined)});
-  await assert.rejects(chunkedReview({snapshot, plan, ask: slowIntegration.ask, chunked: {params: PARAMS, unit_deadline_ms: 20}}),
+  await assert.rejects(chunkedReview({snapshot, plan, seams: [seam('s1')], ask: slowIntegration.ask, chunked: {params: PARAMS, unit_deadline_ms: 20}}),
     error => error.code === 'integration_deadline' && typeof error.role === 'string');
 });
 
@@ -293,10 +317,10 @@ test('integration input that cannot fit the cap is typed, and so is a single sea
   const snapshot = combined();
   const plan = planOf(snapshot);
   const h = harness(snapshot, plan);
-  await refused(chunkedReview({snapshot, plan, ask: h.ask, chunked: {params: PARAMS, integration_cap: 10}}), 'integration_input_too_large');
+  await refused(chunkedReview({snapshot, plan, ask: h.ask, seams: [seam('s0')], chunked: {params: PARAMS, integration_cap: 10}}), 'integration_input_too_large');
   const probe = harness(snapshot, plan);
   let fixed = 0;
-  await chunkedReview({snapshot, plan, ask: probe.ask, chunked: {params: PARAMS}});
+  await chunkedReview({snapshot, plan, ask: probe.ask, seams: [seam('s0')], chunked: {params: PARAMS}});
   const packet = JSON.parse(probe.state.tasks.find(task => task.phase === 'integration').prompt.split('\n').at(-1));
   fixed = JSON.stringify({...packet, seams: []}).length;
   await assert.rejects(chunkedReview({snapshot, plan, ask: h.ask, seams: [seam('wide', 500)], chunked: {params: PARAMS, integration_cap: fixed + 100}}),

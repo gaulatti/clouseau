@@ -33,6 +33,12 @@ not CI model keys or a new credential service.
    reviewer. The initial manifest and receipt always bind one exact engine SHA
    and digest, including in central-source mode. Commit and push the complete
    candidate. Store the literal accepted requirement outside the checkout.
+   Keep the accepted base branch (`main`) free of `.clouseau-local.json` and
+   `.github/clouseau.json`: push the candidate on its own branch (for example
+   `install/clouseau`) and open the PR from it. The full commit SHA to pin in
+   the workflows (`gaulatti/clouseau/scripts/resolve@SHA`, and
+   `FULL_REVIEWED_RELEASE_SHA` below) is the `reviewer_sha` printed by
+   `clouseau installation-engine`.
 4. Prepare a new manifest outside the checkout:
 
    ```sh
@@ -79,6 +85,25 @@ clouseau installation-review --directory /path/to/project \
   --grant-comment NATIVE_COMMENT_ID --harness codex
 ```
 
+`--harness codex|claude` runs a headless harness. Inside an AI coding harness,
+pass `--agent claude|codex|opencode` instead (not both), exactly as for
+`clouseau review`: the command prints an `awaiting_agent` request (exit status 3),
+a fresh subagent answers it with `clouseau respond --agent-request FILE --answer
+FILE --session ID`, and repeating the identical command continues. The real
+verification runs once and the exchange costs one installation attempt however
+many commands it spans. The signed manifest binds the engine revision, so the
+exchange continues only on that revision; if Clouseau main advances, prepare a
+new manifest. A mistyped `--harness`, `--agent` or option fails before anything is
+recorded.
+
+`--harness` is `codex` or `claude`; this command does not accept the `--agent`
+form of `clouseau review` (it launches the harness itself, also from inside an
+AI session). Use a correct harness name: a mistyped one still records an
+attempt, after which the unchanged head is refused with `this unchanged
+revision already has a negative review; repair it before reassessment`. Commit
+a change, then prepare and authorize a new manifest. A branch has at most three
+attempts.
+
 This runs actual verification and native measurement, records their real
 outcomes, then performs immutable source collection, independent
 examiner/challenger review and deterministic scoring. Partial coverage, a failing
@@ -104,7 +129,8 @@ clouseau installation-publish --directory /path/to/project \
 
 Publication uses the existing separate immutable Git artifact/tag route.
 Include the returned `clouseau-installation-review:v1` marker in the initial
-ready PR body. The PR must be internal, authored by the authorized native actor
+ready PR body (if the PR already exists, edit its body, then re-run the
+`initial-trust` job). The PR must be internal, authored by the authorized native actor
 and have automatic merge disabled. Ordinary receipt verification rejects this
 receipt and marker, which is the ordinary rule for any receipt that does not verify: it is ignored and
 the normal hosted review checks run (see [local review](local-review.md#a-receipt-that-does-not-verify-is-ignored)).
@@ -151,7 +177,11 @@ jobs:
           --pull-request "${{ github.event.pull_request.number }}"
 ```
 
-Use the same frozen engine as the grant. Run this job in a **different workflow**
+Use the same frozen engine as the grant. Guard the job with
+`if: contains(github.event.pull_request.body, 'clouseau-installation-review:v1')`
+under `initial-trust:`; unguarded, it runs on every later PR and fails with
+`Invalid initial installation: one installation-only receipt marker is
+required`. Run this job in a **different workflow**
 from configured verification: it waits for that complete verification run and
 must not wait on itself. It makes zero model requests, receives no provider key
 or write permission, and cannot discard an existing review ledger. Repository settings are the
