@@ -148,7 +148,7 @@ test('publishing stores the envelope and every part as files of one commit, byte
     git(work, 'remote', 'add', 'origin', bare);
     fs.writeFileSync(path.join(work, 'f.txt'), 'x\n'); git(work, 'add', '.'); git(work, 'commit', '-q', '-m', 'one');
     const head = git(work, 'rev-parse', 'HEAD').trim();
-    const record = {snapshot: {head_sha: head}, padding: 'é'.repeat(3000)};
+    const record = {snapshot: {head_sha: head, base_sha: head, paths: ['f.txt']}, padding: 'é'.repeat(3000)};
     const {root, parts} = splitRecord(record, 2000);
     const bundle = {payload: {nonce: 'f'.repeat(64), record: root}, signature: 'sig', parts: parts.map(part => part.toString('base64'))};
     const receipt = path.join(state, 'receipt.json'); fs.writeFileSync(receipt, JSON.stringify(bundle));
