@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const {chunkedFixture, hooks, planOf, PARAMS} = require('../test/chunked-fixture.cjs');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, reviewDecision} = require('./local-receipt.cjs');
-const {ChunkedRecordError, RECORD_LIMIT, parseParams, snapshotDigest, assertRecordSize, elideQuotes, rehydrateQuotes, SCHEME} = require('./chunked-record.cjs');
+const {ChunkedRecordError, RECORD_LIMIT, parseParams, snapshotDigest, elideQuotes, rehydrateQuotes, SCHEME} = require('./chunked-record.cjs');
 const {classify, body, NEXT_STEPS} = require('./incomplete.cjs');
 const {digest} = require('./acceptance.cjs');
 
@@ -60,25 +60,24 @@ test('a partitioned record is refused when the verifier is not enabled for chunk
 
 test('protected parameters are validated and are the only source of the partition parameters', async () => {
   assert.deepEqual(parseParams(PARAMS), PARAMS);
-  for (const bad of [null, 'x', {}, {...PARAMS, extra: 1}, {...PARAMS, C: 0}, {...PARAMS, S: 1.5}, {...PARAMS, cap: 3000001}, {...PARAMS, max_units: -1}]) {
+  // The earlier bounds still load from protected configuration and bound nothing.
+  assert.deepEqual(parseParams({...PARAMS, cap: 1, max_units: 1}), PARAMS);
+  for (const bad of [null, 'x', {}, {...PARAMS, extra: 1}, {...PARAMS, C: 0}, {...PARAMS, S: 1.5}, {...PARAMS, cap: 0}, {...PARAMS, max_units: -1}]) {
     assert.throws(() => parseParams(bad), /protected chunk parameters/);
   }
   const f = await chunkedFixture();
   rejects(f.record, {params: {...PARAMS, C: 1}, hooks}, /partition parameters differ from the protected configuration/);
   const forged = clone(f.record); forged.partition.params.C = 1;
   rejects(forged, f.chunked, /partition parameters differ from the protected configuration/);
-  rejects(f.record, {params: {...PARAMS, max_units: 1}, hooks}, /more than the protected 1 units/);
-  rejects(f.record, {params: {...PARAMS, cap: PARAMS.cap + 1}, hooks}, /partition parameters differ/);
+  assert.equal(reviewDecision(f.record, {chunked: {params: {...PARAMS, cap: 1, max_units: 1}, hooks}}).decision, 'auto_approve');
 });
 
-test('combined evidence above the protected snapshot cap is refused', async () => {
+test('combined evidence has no size cap: the snapshot digest is recomputed whatever its size', async () => {
   const f = await chunkedFixture();
-  assert.throws(() => snapshotDigest(f.snapshot, 1000), error => error.cause_code === 'chunked_record_invalid' && /snapshot cap/.test(error.message));
-  assert.equal(snapshotDigest(f.snapshot, 2400000), f.snapshot.digest);
-  const tiny = {...PARAMS, cap: 500};
-  const tinyPlan = planOf(f.snapshot, tiny, [['README.md'], ['src/upload.test.js']]);
-  const sized = clone(f.record); sized.partition = tinyPlan;
-  rejects(sized, {params: tiny, hooks: {...hooks, partition: () => tinyPlan}}, /exceeds the protected snapshot cap/);
+  assert.equal(snapshotDigest(f.snapshot), f.snapshot.digest);
+  const large = clone(f.snapshot);
+  large.sources.padding = {path: 'padding', ref: 'x', authority: 'untrusted', kind: 'source', content: 'x'.repeat(5000000)};
+  assert.equal(snapshotDigest(large), digest((({digest: _, ...value}) => value)(large)));
 });
 
 test('an altered or non-partition-shaped plan is refused', async () => {
@@ -90,7 +89,7 @@ test('an altered or non-partition-shaped plan is refused', async () => {
   assert.equal(f.plan.scheme, SCHEME);
   for (const units of [[], 'units']) {
     const record = clone(f.record); record.partition.units = units;
-    rejects(record, f.chunked, /no units or more than/);
+    rejects(record, f.chunked, /partition has no units/);
   }
   const forged = clone(f.record); forged.partition.plan_digest = 'f'.repeat(64);
   rejects(forged, f.chunked, /forged partition/);
@@ -118,6 +117,24 @@ test('every changed path must be owned by exactly one unit with known context', 
   rejects(edit(plan => {plan.units[0].context_ids = ['no-such-source'];}), f.chunked, /unknown or repeated context sources/);
   const source = Object.keys(f.snapshot.sources)[0];
   rejects(edit(plan => {plan.units[0].context_ids = [source, source];}), f.chunked, /unknown or repeated context sources/);
+});
+
+test('a file split into segments is owned once per segment, each segment exactly once', async () => {
+  const f = await chunkedFixture();
+  const edit = change => {const record = clone(f.record); change(record.partition); return record;};
+  const split = (first, second) => plan => {
+    plan.units[0].parts = {'README.md': first}; plan.units[1].owned.push('README.md'); plan.units[1].parts = {'README.md': second};
+  };
+  // A complete split passes the ownership check and is stopped later, by the recomputed view digest.
+  rejects(edit(split({index: 0, count: 2}, {index: 1, count: 2})), f.chunked, /view digest of unit u1 differs/);
+  rejects(edit(split({index: 0, count: 2}, {index: 0, count: 2})), f.chunked, /"README.md" is not covered by each of its segments exactly once/);
+  rejects(edit(split({index: 0, count: 2}, {index: 1, count: 3})), f.chunked, /not covered by each of its segments exactly once/);
+  rejects(edit(split({index: 0, count: 3}, {index: 1, count: 3})), f.chunked, /not covered by each of its segments exactly once/);
+  rejects(edit(plan => {plan.units[0].parts = {'README.md': {index: 0, count: 2}};}), f.chunked, /"README.md" is not covered by each of its segments exactly once/);
+  rejects(edit(plan => {plan.units[1].owned.push('README.md'); plan.units[1].parts = {'README.md': {index: 1, count: 2}};}), f.chunked, /duplicate ownership/);
+  for (const parts of ['x', [], {'src/other.js': {index: 0, count: 1}}, {'README.md': {index: 1, count: 1}}, {'README.md': {index: 0.5, count: 1}}, {'README.md': null}]) {
+    rejects(edit(plan => {plan.units[0].parts = parts;}), f.chunked, /names a malformed segment/);
+  }
 });
 
 test('an altered unit view digest is refused before anything is trusted', async () => {
@@ -204,18 +221,18 @@ test('signed evidence, review binding and the decision still come from the uncha
   assert.throws(() => reviewDecision({partition: f.plan}, {chunked: f.chunked}), /./);
 });
 
-test('the signer and the verifier refuse an oversize record with an explicit record_too_large hold', async () => {
+test('a record above the single-receipt limit is signed as a multi-part receipt and verifies', async () => {
   const f = await chunkedFixture();
-  assert.ok(assertRecordSize(f.record) < RECORD_LIMIT);
-  assert.throws(() => assertRecordSize(f.record, 100), error => error.cause_code === 'record_too_large' && /above the 100 byte signing limit/.test(error.message));
+  assert.equal(issueReceipt(f.issue).parts, undefined, 'a record that fits one receipt is signed as before');
   f.record.padding = 'x'.repeat(RECORD_LIMIT);
-  rejects(f.record, f.chunked, /record_too_large: the record is \d+ bytes, above the 2850000 byte signing limit/, 'record_too_large');
-  assert.throws(() => issueReceipt(f.issue), error => error.code === 'CHUNKED_RECORD' && error.cause_code === 'record_too_large');
-  // The refusal is classified into a visible, specific hold with its own next step.
-  const classified = classify(new ChunkedRecordError('record_too_large', 'record_too_large: the record is 3000000 bytes'));
-  assert.equal(classified.cause, 'record_too_large');
-  const notice = body({number: 1, head_sha: 'a'.repeat(40), ...classified}, 'https://github.com/o/r/actions/runs/1');
-  assert.ok(notice.includes('record_too_large: the record is 3000000 bytes') && notice.includes(NEXT_STEPS.record_too_large));
+  const bundle = issueReceipt(f.issue);
+  assert.ok(bundle.parts.length >= 2);
+  assert.equal(bundle.payload.record.scheme, 'clouseau-receipt-parts/1');
+  assert.equal(bundle.payload.record_digest, digest(f.record));
+  const verified = verifyReceipt(bundle, f.expected);
+  assert.equal(verified.decision, 'auto_approve');
+  assert.equal(digest(verified.record), digest(f.record));
+  // The classification of a chunked record problem stays visible, with its own next step.
   const other = classify(new ChunkedRecordError('chunked_record_invalid', 'duplicate ownership'));
   assert.ok(body({number: 1, head_sha: 'a'.repeat(40), ...other}, 'https://github.com/o/r/actions/runs/1').includes(NEXT_STEPS.chunked_record_invalid));
 });
@@ -259,7 +276,7 @@ test('thin drafts of a unit and of the merged review are rehydrated before valid
   assert.ok(verified.reviews[0].drafts[0].evidence.every(entry => typeof entry.quote === 'string'));
 });
 
-test('a file added whole is stored compactly and still verifies and counts toward the size guard', async () => {
+test('a file added whole is stored compactly and still verifies', async () => {
   const {patchOf} = require('./acceptance.cjs');
   const compact = snapshot => {
     const file = snapshot.files.find(item => item.path === 'README.md');
@@ -272,7 +289,5 @@ test('a file added whole is stored compactly and still verifies and counts towar
   assert.ok(patchOf(f.snapshot, file).length > file.patch.length);
   assert.ok(f.views.some(view => view.files.some(item => item.patch_body === 'head_source')));
   assert.equal(verifyReceipt(issueReceipt(f.issue), f.expected).decision, 'auto_approve');
-  // The guard measures the stored, compact record.
-  assert.equal(assertRecordSize(f.record), Buffer.byteLength(JSON.stringify(f.record)));
   assert.ok(!JSON.stringify(f.record).includes(patchOf(f.snapshot, file).slice(file.patch.length, file.patch.length + 40).replaceAll('\n', '\\n')));
 });

@@ -23,6 +23,9 @@ function safePath(value) {
 }
 
 const BUDGET = 900000;
+// The combined snapshot of a chunked review (design: chunked review) has no size cap: it is reviewed in bounded unit
+// views, and its record is stored as a multi-part receipt. Only the views are capped, by `BUDGET`.
+const UNBOUNDED = Number.MAX_SAFE_INTEGER;
 function evidenceSize(snapshot) {
   const value = {...snapshot}; delete value.digest;
   return JSON.stringify(value).length;
@@ -238,4 +241,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {BUDGET, evidenceSize, fetchText, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {BUDGET, UNBOUNDED, evidenceSize, fetchText, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};

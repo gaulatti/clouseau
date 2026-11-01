@@ -13,18 +13,19 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const {digest} = require('../src/acceptance.cjs');
-const {refresh} = require('../src/acceptance-sources.cjs');
+const {refresh, UNBOUNDED} = require('../src/acceptance-sources.cjs');
 const {modelTemplate, materialize} = require('../src/acceptance-review.cjs');
 const {localEvidence} = require('../src/local-review.cjs');
 const {lockfileEvidence, LOCKFILE_PATCH} = require('../src/lockfile-summary.cjs');
 const {PartitionRefusal, partition} = require('../src/review-partition.cjs');
+const {changeTable, segmentLimit} = require('../src/change-table.cjs');
 const {unitView, mergeUnitReports} = require('../src/review-units.cjs');
 const {SCHEME, RECORD_LIMIT, ChunkedRecordError, elideQuotes} = require('../src/chunked-record.cjs');
 const {issueReceipt, verifyReceipt} = require('../src/local-receipt.cjs');
 const {engineDigest} = require('../src/local-version.cjs');
 const lock = require('./fixtures/lockfiles.cjs');
 
-const PARAMS = Object.freeze({C: 450000, S: 100000, cap: 2400000, max_units: 8});
+const PARAMS = Object.freeze({C: 450000, S: 100000});
 const CODEX_LIMIT = 1048576;
 const RECEIPT_LIMIT = 3000000;
 // The stage text and instructions around the evidence in a unit prompt; PR 4 owns the exact prompt, this is an upper bound.
@@ -33,14 +34,6 @@ const ROLES = ['examiner', 'challenger'];
 const BASE = 'b'.repeat(40);
 const HEAD = 'a'.repeat(40);
 const TABLE = path.join(__dirname, 'fixtures/alcantara-02618a9.json');
-
-class MeasureRefusal extends Error {
-  constructor(code, message) {
-    super(`${code}: ${message}`);
-    this.name = 'MeasureRefusal';
-    this.code = code;
-  }
-}
 
 // Deterministic code-shaped filler of exactly `size` characters ending in a newline, about 34 characters per line like source.
 function filler(seed, size, mark = '') {
@@ -84,7 +77,7 @@ function pnpmLockfiles(baseSize, headSize) {
   return {base, head: lock.largePnpm(Math.round(headSize / entry), 150)};
 }
 
-function combinedSnapshot(table, {cap = PARAMS.cap, imports = true} = {}) {
+function combinedSnapshot(table, {imports = true} = {}) {
   const entries = [...table.files].sort((a, b) => (a.path < b.path ? -1 : 1));
   const code = entries.filter(file => file.derived_size === undefined && CODE.test(file.path) && file.head_size >= 1000).map(file => file.path);
   const snapshot = {version: 2, review_manifest_version: 1, repository: 'example/alcantara-shaped', number: 0, base_sha: BASE, head_sha: HEAD,
@@ -132,32 +125,22 @@ function combinedSnapshot(table, {cap = PARAMS.cap, imports = true} = {}) {
     }
     snapshot.files.push(item);
   }
-  try {
-    return refresh(snapshot, cap);
-  } catch (error) {
-    throw new MeasureRefusal('combined_snapshot_too_large', error.message);
-  }
-}
-
-// The planner's input, read from the STORED snapshot: a compact added file counts its header, a lockfile its summary.
-function changeTable(snapshot) {
-  const length = id => snapshot.sources[id].content.length;
-  return snapshot.files.map(file => ({path: file.path, previous: file.base_source && snapshot.sources[file.base_source].path !== file.path ? snapshot.sources[file.base_source].path : null,
-    base_size: file.base_source ? length(file.base_source) : 0, head_size: file.head_source ? length(file.head_source) : 0,
-    patch_chars: file.patch.length, ...(file.lockfile ? {derived_size: length(file.head_source)} : {})}));
+  return refresh(snapshot, UNBOUNDED);
 }
 
 // Recompute hooks for the chunked verifier, built from the real planner, `unitView` and `mergeUnitReports`. Seams belong to
 // another change and are empty here.
 function hooksFor(params) {
-  const options = {unit_ceiling: params.C, shared: params.S, max_units: params.max_units};
-  const specsOf = snapshot => partition(changeTable(snapshot), options).units.map(({id, owned}) => ({id, owned, context_ids: []}));
-  const viewOf = (snapshot, unit) => unitView(snapshot, {id: unit.id, owned: unit.owned, context_ids: unit.context_ids}, {units: specsOf(snapshot)});
+  const options = {unit_ceiling: params.C, shared: params.S};
+  const planOf = snapshot => partition(changeTable(snapshot, options), options);
+  const specsOf = snapshot => planOf(snapshot).units.map(({id, owned, parts}) => ({id, owned, context_ids: [], ...(parts ? {parts} : {})}));
+  const viewOf = (snapshot, unit) => unitView(snapshot, {id: unit.id, owned: unit.owned, context_ids: unit.context_ids, ...(unit.parts ? {parts: unit.parts} : {})},
+    {units: specsOf(snapshot), segmentLimit: segmentLimit(options)});
   return {
     partition: ({snapshot}) => {
-      const plan = partition(changeTable(snapshot), options);
+      const plan = planOf(snapshot);
       const specs = specsOf(snapshot);
-      return {scheme: plan.scheme, params: {C: params.C, S: params.S, cap: params.cap},
+      return {scheme: plan.scheme, params: {C: params.C, S: params.S},
         units: plan.units.map((unit, index) => ({...specs[index], view_digest: viewOf(snapshot, specs[index]).digest, cost: unit.cost})),
         plan_digest: plan.plan_digest};
     },
@@ -217,7 +200,7 @@ function signAndVerify(record, snapshot, chunked) {
 
 const sum = (items, measure) => items.reduce((total, item) => total + measure(item), 0);
 
-// Sizes of one unit view: the evidence JSON (what the snapshot cap bounds), the shared context, the manifest, the foreign
+// Sizes of one unit view: the evidence JSON (what the unit budget bounds), the shared context, the manifest, the foreign
 // hunks and the estimated prompt (policy, frame, evidence, template).
 function unitSizes(view, unit, policy) {
   const mine = new Set(view.files.flatMap(file => [file.base_source, file.head_source]));
@@ -232,14 +215,16 @@ function unitSizes(view, unit, policy) {
 
 function measure(table, overrides = {}) {
   const params = {...PARAMS, ...overrides};
-  const snapshot = combinedSnapshot(table, {cap: params.cap});
+  const snapshot = combinedSnapshot(table);
   const {record, plan, views, hooks} = buildRecord(snapshot, params);
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
   const {bundle} = signAndVerify(record, snapshot, {params, hooks});
   const value = {...snapshot}; delete value.digest;
   return {params, plan_digest: plan.plan_digest, files: snapshot.files.length, combined_chars: JSON.stringify(value).length,
     units: plan.units.map((unit, index) => unitSizes(views[index], unit, policy)), calls: record.result.usage.length,
-    record_bytes: Buffer.byteLength(JSON.stringify(record)), record_limit: RECORD_LIMIT, receipt_bytes: Buffer.byteLength(JSON.stringify(bundle)),
+    record_bytes: Buffer.byteLength(JSON.stringify(record)), record_limit: RECORD_LIMIT, receipt_files: 1 + (bundle.parts?.length ?? 0),
+    receipt_bytes: Buffer.byteLength(JSON.stringify({payload: bundle.payload, signature: bundle.signature})) +
+      (bundle.parts ?? []).reduce((total, part) => total + Buffer.from(part, 'base64').length, 0),
     receipt_limit: RECEIPT_LIMIT, prompt_limit: CODEX_LIMIT, verified: true};
 }
 
@@ -248,8 +233,8 @@ const pad = (value, width) => String(value).padStart(width);
 function render(report) {
   const {params} = report;
   const lines = [`${SCHEME} ${report.plan_digest}`,
-    `${report.units.length} units, ${report.files} files, C ${params.C}, S ${params.S}, max units ${params.max_units}`,
-    `combined snapshot ${report.combined_chars} of ${params.cap} chars`,
+    `${report.units.length} units, ${report.files} files, C ${params.C}, S ${params.S}`,
+    `combined snapshot ${report.combined_chars} chars (no cap; units are bounded)`,
     `${'unit'.padEnd(5)}${pad('files', 6)}${pad('cost', 9)}${pad('view', 9)}${pad('owned', 9)}${pad('shared', 9)}${pad('manifest', 10)}${pad('foreign', 9)}${pad('prompt', 9)}`];
   for (const unit of report.units) {
     lines.push(`${unit.id.padEnd(5)}${pad(unit.files, 6)}${pad(unit.cost, 9)}${pad(unit.view_chars, 9)}${pad(unit.owned_chars, 9)}` +
@@ -258,13 +243,13 @@ function render(report) {
   const worst = Math.max(...report.units.map(unit => unit.prompt_chars));
   lines.push(`largest unit prompt ${worst} of ${report.prompt_limit} chars (estimate)`,
     `harness calls ${report.calls} (${report.units.length} units x 2 roles + 2 integration, no grading)`,
-    `record ${report.record_bytes} of ${report.record_limit} bytes (${(100 * report.record_bytes / report.record_limit).toFixed(1)}%)`,
-    `signed receipt ${report.receipt_bytes} of ${report.receipt_limit} bytes, verified through the one derivation`);
+    `record ${report.record_bytes} bytes (${(100 * report.record_bytes / report.record_limit).toFixed(1)}% of the ${report.record_limit} single-receipt limit)`,
+    `signed receipt ${report.receipt_bytes} bytes in ${report.receipt_files} file${report.receipt_files === 1 ? '' : 's'}, verified through the one derivation`);
   return `${lines.join('\n')}\n`;
 }
 
 function refusalCode(error) {
-  if (error instanceof PartitionRefusal || error instanceof MeasureRefusal) return error.message;
+  if (error instanceof PartitionRefusal) return error.message;
   return error instanceof ChunkedRecordError ? `${error.cause_code}: ${error.message}` : null;
 }
 
@@ -272,13 +257,13 @@ function refusalCode(error) {
 function main(argv, io = {}) {
   const read = io.readFile ?? (file => fs.readFileSync(file, 'utf8'));
   const out = io.stdout ?? process.stdout;
-  const flags = {'--ceiling': 'C', '--shared': 'S', '--cap': 'cap', '--max-units': 'max_units'};
+  const flags = {'--ceiling': 'C', '--shared': 'S'};
   const overrides = {};
   let table = TABLE;
   for (let index = 0; index < argv.length; index++) {
     if (!argv[index].startsWith('--')) table = argv[index];
     else if (flags[argv[index]]) overrides[flags[argv[index]]] = Number(argv[++index]);
-    else throw new TypeError(`unknown option ${argv[index]}; usage: measure-chunked [TABLE.json] [--ceiling N] [--shared N] [--cap N] [--max-units N]`);
+    else throw new TypeError(`unknown option ${argv[index]}; usage: measure-chunked [TABLE.json] [--ceiling N] [--shared N]`);
   }
   try {
     out.write(render(measure(JSON.parse(read(table)), overrides)));
@@ -291,5 +276,5 @@ function main(argv, io = {}) {
   }
 }
 
-module.exports = {PARAMS, CODEX_LIMIT, RECEIPT_LIMIT, MeasureRefusal, scaledTable, withLargeFile, filler, combinedSnapshot, changeTable, hooksFor, fakeReport, buildRecord,
+module.exports = {PARAMS, CODEX_LIMIT, RECEIPT_LIMIT, scaledTable, withLargeFile, filler, combinedSnapshot, changeTable, hooksFor, fakeReport, buildRecord,
   signAndVerify, measure, render, main};

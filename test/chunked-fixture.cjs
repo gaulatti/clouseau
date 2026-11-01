@@ -9,7 +9,7 @@ const {refresh} = require('../src/acceptance-sources.cjs');
 const {elideQuotes} = require('../src/chunked-record.cjs');
 const {FACTORS} = require('../src/acceptance.cjs');
 
-const PARAMS = {C: 450000, S: 100000, cap: 2400000, max_units: 16};
+const PARAMS = {C: 450000, S: 100000};
 const STRICT = ['violated', 'unresolved', 'satisfied', 'inapplicable'];
 
 function unitView(snapshot, spec) {
@@ -25,7 +25,7 @@ function planOf(snapshot, params, groups) {
     const spec = {id: `u${index}`, owned, context_ids: [], cost: 1};
     return {...spec, view_digest: unitView(snapshot, spec).digest};
   });
-  const plan = {scheme: 'clouseau-partition/1', params: {C: params.C, S: params.S, cap: params.cap}, units};
+  const plan = {scheme: 'clouseau-partition/1', params: {C: params.C, S: params.S}, units};
   return {...plan, plan_digest: digest(plan)};
 }
 

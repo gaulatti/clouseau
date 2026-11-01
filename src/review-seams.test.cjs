@@ -131,7 +131,7 @@ test('seam computation works on a real partition plan and uses restored patches'
     {path: 'b/two.ts', head: 'export const t = 1;\n', patch_body: 'head_source', patch: '@@ -0,0 +1 @@\n'},
   ];
   const {snapshot} = change(files.map(file => ({...file, unit: 'x'})));
-  const plan = partition(files.map(file => ({path: file.path, base_size: 0, head_size: 600, patch_chars: 0})), {unit_ceiling: 1000, shared: 100, budget: 2000, file_ceiling: 5000});
+  const plan = partition(files.map(file => ({path: file.path, base_size: 0, head_size: 600, patch_chars: 0})), {unit_ceiling: 1000, shared: 100, budget: 2000, reserve: 500, file_overhead: 0});
   assert.equal(plan.units.length, 2);
   const [seam] = seamsOf({snapshot, plan});
   assert.equal(seam.kind, 'import');
@@ -335,4 +335,18 @@ test('a missing seam on a report without a coverage register is refused rather t
   refusal('seam_hold_unrepresentable', () => holdMissingSeams({report: mergedReport(false), seams, dispositions}));
   assert.doesNotThrow(() => holdMissingSeams({report: mergedReport(false), seams: [], dispositions: dispositionSeams({seams: [], answers: []})}));
   refusal('limit_invalid', () => holdMissingSeams({report: mergedReport(), seams, dispositions}, {textCap: -1}));
+});
+
+test('a file split into segments stands for its first owner in plan order, so its edges are deterministic', () => {
+  const {snapshot, plan} = change([
+    {path: 'lib/big.ts', unit: 'u0', base: 'export const a = 1;\n', head: 'export const a = 2;\n', patch: '@@ -1 +1 @@\n-export const a = 1;\n+export const a = 2;\n'},
+    {path: 'app/page.ts', unit: 'u0', head: "import {a} from '../lib/big';\n"},
+    {path: 'app/other.ts', unit: 'u2', head: "import {a} from '../lib/big';\n"},
+  ]);
+  // lib/big.ts also has a later segment in u1; u0 (its first owner) imports it, u2 does.
+  plan.units.splice(1, 0, {id: 'u1', owned: ['lib/big.ts'], context_ids: [], parts: {'lib/big.ts': {index: 1, count: 2}}});
+  plan.units[0].parts = {'lib/big.ts': {index: 0, count: 2}};
+  assert.deepEqual(kinds(seamsOf({snapshot, plan})).sort(), ['export_consumer:app/other.ts>lib/big.ts']);
+  const found = seamsOf({snapshot, plan})[0];
+  assert.deepEqual([found.a.unit, found.b.unit], ['u2', 'u0']);
 });

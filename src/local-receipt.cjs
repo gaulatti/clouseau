@@ -8,9 +8,9 @@ const {validateInspection, combine} = require('./acceptance-review.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {centralSource, acceptsEngine} = require('./central-version.cjs');
-const {chunkedVerifier, ChunkedRecordError} = require('./chunked-record.cjs');
+const {chunkedVerifier, ChunkedRecordError, RECORD_LIMIT} = require('./chunked-record.cjs');
 const {ReceiptRejected} = require('./receipt-rejection.cjs');
-const {ReceiptPatchMismatch} = require('./receipt-patch.cjs');
+const {partName, isRoot, splitRecord, joinRecord} = require('./receipt-parts.cjs');
 
 const DOMAIN = 'clouseau.local-review.v1';
 const MAX_RECEIPT_BYTES = 3000000;
@@ -82,19 +82,24 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
     lifetime > 0 && lifetime <= 172800, 'invalid runner revision, challenge or lifetime');
   const key = crypto.createPrivateKey(privateKey);
   requireReceipt(key.asymmetricKeyType === 'ed25519', 'Ed25519 signing key required');
+  // A partitioned record too large for one receipt is signed as a root over consecutive parts (receipt-parts.cjs); the
+  // bundle then also carries the parts, which publishing stores as separate files. Any other record is signed as before.
+  const split = Object.hasOwn(record, 'partition') && Buffer.byteLength(JSON.stringify(record)) > RECORD_LIMIT ? splitRecord(record) : null;
   const payload = {type: DOMAIN, key_id: keyId, issuer, reviewer_sha: reviewerSha, reviewer_digest: reviewerDigest,
     issued_at: Math.floor(now / 1000), expires_at: Math.floor(now / 1000) + lifetime,
-    nonce, record_digest: digest(record), record};
+    nonce, record_digest: digest(record), record: split ? split.root : record};
   const signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(payload)}`), key).toString('base64url');
-  return {payload, signature};
+  return split ? {payload, signature, parts: split.parts.map(part => part.toString('base64'))} : {payload, signature};
 }
 
-function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = null}) {
-  validateTrust(trust);
-  reject(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
+// The enrolled key that signed this envelope, or a refusal. It looks at the signed payload only, never at a record or a
+// part, so it can run before anything else is fetched.
+function signingKey(bundle, trust) {
+  // The parts of a multi-part receipt travel beside the signed envelope; each is bounded like a receipt artifact.
+  const keyList = bundle && typeof bundle === 'object' ? Object.keys(bundle).sort().join(',') : '';
+  reject(['payload,signature', 'parts,payload,signature'].includes(keyList) &&
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
-    Buffer.byteLength(JSON.stringify(bundle)) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
+    Buffer.byteLength(JSON.stringify({payload: bundle.payload, signature: bundle.signature})) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
   const p = bundle.payload;
   reject(p && Object.keys(p).sort().join(',') ===
     'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type' && p.type === DOMAIN,
@@ -102,13 +107,30 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
   reject(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
     Buffer.from(bundle.signature, 'base64url')), 'untrusted, revoked or invalid signature', 'signature');
+  return key;
+}
+
+function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
+  now = Date.now(), engine = null, chunked = null}) {
+  validateTrust(trust);
+  const key = signingKey(bundle, trust);
+  const p = bundle.payload;
   reject(key.github_actor === author, 'signing identity is not enrolled for this PR author', 'author');
   const timestamp = Math.floor(now / 1000);
   reject(Number.isSafeInteger(p.issued_at) && Number.isSafeInteger(p.expires_at) &&
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
     typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge', 'expired');
-  const record = p.record;
+  reject(isRoot(p.record) === Object.hasOwn(bundle, 'parts'), 'a multi-part receipt needs its parts, and only it has them', 'malformed');
+  let record = p.record;
+  if (isRoot(record)) {
+    reject(Array.isArray(bundle.parts), 'malformed multi-part record parts', 'malformed');
+    try {
+      record = joinRecord(record, bundle.parts.map(part => Buffer.from(part, 'base64')));
+    } catch (error) {
+      reject(false, error.message, 'record');
+    }
+  }
   const snapshot = record.snapshot;
   const changed = 'repository, revisions, policy, configuration or record changed';
   reject(p.record_digest === digest(record) && sha(p.reviewer_sha) && Boolean(snapshot && record.result), changed, 'record');
@@ -150,9 +172,9 @@ function marker(body) {
   return matches[0]?.[1] || null;
 }
 
-async function loadReceipt({github, repo, ref}) {
-  reject(sha(ref), 'immutable receipt reference required', 'malformed');
-  let {data} = await github.rest.repos.getContent({...repo, ref, path: 'clouseau-review.json'});
+// One artifact file of the immutable receipt commit, as bytes.
+async function loadFile({github, repo, ref, path}) {
+  let {data} = await github.rest.repos.getContent({...repo, ref, path});
   if (data.encoding === 'none') {
     reject(data.type === 'file' && sha(data.sha) && Number.isSafeInteger(data.size) &&
       data.size >= 0 && data.size <= MAX_RECEIPT_BYTES, 'complete receipt artifact unavailable', 'unavailable');
@@ -168,8 +190,30 @@ async function loadReceipt({github, repo, ref}) {
   }
   reject(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= MAX_RECEIPT_BYTES,
     'complete receipt artifact unavailable', 'unavailable');
-  try {return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));}
-  catch {throw new ReceiptRejected('malformed', 'receipt artifact is not JSON');}
+  return Buffer.from(data.content, 'base64');
+}
+
+// The signed envelope and, for a multi-part receipt, its parts in the order the signed root lists them. Parts are fetched
+// only for an envelope that an enrolled key signed (`trust`), so an unsigned root can never make CI read files.
+async function loadReceipt({github, repo, ref, trust}) {
+  reject(sha(ref), 'immutable receipt reference required', 'malformed');
+  let bundle;
+  try {bundle = JSON.parse((await loadFile({github, repo, ref, path: 'clouseau-review.json'})).toString('utf8'));}
+  catch (error) {
+    if (error instanceof SyntaxError) throw new ReceiptRejected('malformed', 'receipt artifact is not JSON');
+    throw error;
+  }
+  const root = bundle?.payload?.record;
+  if (isRoot(root)) {
+    reject(trust, 'a multi-part receipt is only loaded against a trust policy', 'malformed');
+    signingKey(bundle, validateTrust(trust));
+    reject(Array.isArray(root.parts) && root.parts.length > 0, 'malformed multi-part record root', 'malformed');
+    bundle.parts = [];
+    for (let index = 0; index < root.parts.length; index++) {
+      bundle.parts.push((await loadFile({github, repo, ref, path: partName(index)})).toString('base64'));
+    }
+  }
+  return bundle;
 }
 
 // A derived dependency summary is never trusted as signed: it is recomputed from the exact base and head
@@ -289,7 +333,7 @@ async function screenReceipt({github, repo, pr, engine, trust, configDigest, pol
   try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason};}
   if (!ref) return {ref: null, rejected: null};
   let bundle;
-  try {bundle = await loadReceipt({github, repo, ref});} catch (error) {
+  try {bundle = await loadReceipt({github, repo, ref, trust});} catch (error) {
     const reason = rejection(error) ?? (error.status === 404 ? 'unavailable' : null);
     if (!reason) throw error;
     return {ref: null, rejected: reason};

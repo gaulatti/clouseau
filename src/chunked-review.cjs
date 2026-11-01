@@ -20,7 +20,8 @@ const {digest} = require('./acceptance.cjs');
 const {investigate, gradeReview, stageInstructions, reviewContext, policy} = require('./local-review.cjs');
 const {unitView, mergeUnitReports} = require('./review-units.cjs');
 const {combine} = require('./acceptance-review.cjs');
-const {SCHEME, parseParams, snapshotDigest, assertRecordSize, elideQuotes} = require('./chunked-record.cjs');
+const {SCHEME, parseParams, elideQuotes} = require('./chunked-record.cjs');
+const {segmentLimit} = require('./change-table.cjs');
 
 const ROLES = Object.freeze(['examiner', 'challenger']);
 const STATES = Object.freeze(['checked', 'finding', 'missing']);
@@ -39,7 +40,7 @@ class ChunkedReviewRefusal extends Error {
 }
 const refuse = (code, message, extra) => new ChunkedReviewRefusal(code, message, extra);
 
-// The protected configuration: {params: {C, S, cap, max_units}, concurrency?, unit_deadline_ms?, integration_cap?}.
+// The protected configuration: {params: {C, S}, concurrency?, unit_deadline_ms?, integration_cap?}.
 function runnerLimits(chunked) {
   const keys = ['params', ...Object.keys(DEFAULTS)];
   if (!chunked || typeof chunked !== 'object' || Array.isArray(chunked) || Object.keys(chunked).some(key => !keys.includes(key))) {
@@ -215,18 +216,11 @@ async function chunkedReview({snapshot, plan, seams = [], ask, chunked, journal 
   }
   // Size never refuses a review: any number of units runs in waves of `concurrency` sessions.
   checkSeams(seams);
-  snapshotDigest(snapshot, params.cap);
-  const specs = plan.units.map(unit => ({id: unit.id, owned: [...unit.owned], context_ids: [...(unit.context_ids ?? [])]}));
-  const views = specs.map(spec => {
-    try {
-      return unitView(snapshot, spec, {units: specs, sharedCap: params.S});
-    } catch (error) {
-      // A unit that cannot fit even alone is a typed gap for the integrator (segment the file), not a verdict.
-      if (error.code === 'unit_exceeds_budget') throw refuse('file_exceeds_unit', error.message, {unit: spec.id, paths: spec.owned});
-      throw error;
-    }
-  });
-  const partition = {scheme: SCHEME, params: {C: params.C, S: params.S, cap: params.cap},
+  // A file too large for one unit is owned by one unit per segment (`parts`); each unit sees only its own segment.
+  const specs = plan.units.map(unit => ({id: unit.id, owned: [...unit.owned], context_ids: [...(unit.context_ids ?? [])], ...(unit.parts ? {parts: unit.parts} : {})}));
+  const limit = segmentLimit({unit_ceiling: params.C, shared: params.S});
+  const views = specs.map(spec => unitView(snapshot, spec, {units: specs, sharedCap: params.S, segmentLimit: limit}));
+  const partition = {scheme: SCHEME, params: {C: params.C, S: params.S},
     units: specs.map((spec, index) => ({...spec, view_digest: views[index].digest, cost: plan.units[index].cost})), plan_digest: plan.plan_digest};
   const remembered = memoized(ask, journal, scope);
 
@@ -258,7 +252,6 @@ async function chunkedReview({snapshot, plan, seams = [], ask, chunked, journal 
     integration: item.integration, drafts: item.graded.drafts, grading: item.graded.grading}));
   const result = {version: 2, snapshot: snapshot.digest, policy_digest: snapshot.policy_digest, config_digest: snapshot.config_digest,
     decision: combine(reviews), reviews: stored, usage, execution_digest: digest(usage)};
-  assertRecordSize({snapshot, partition, seams, result});
   return {result, partition, seams, reviews};
 }
 

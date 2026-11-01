@@ -520,6 +520,9 @@ artifact's metadata. It checks the exact blob identity, byte count and Git objec
 hash before the normal signature, source, policy and engine verification.
 Unavailable, oversized or substituted content makes the receipt ignored (class
 `unavailable`); this transport does not grant trust or change receipt compatibility.
+A partitioned review record too large for one receipt is stored as a signed multi-part receipt
+(`clouseau-review.part-NNNN` files beside the envelope, see `docs/chunked-record.md`); each file keeps this bound.
+A missing or unreadable part, or a part that does not join to the signed root, is the same `unavailable` or `record` class.
 
 ## Review partition (dry run, not yet used by review)
 
@@ -534,31 +537,66 @@ units of at most `unit_ceiling` (C = 450,000); an atom above C becomes its own u
 scheme, parameters, unit membership and costs, so it is the same for any input order. Every changed path is
 owned by exactly one unit (checked by `checkOwnership`).
 
-The plan is refused, never truncated, with `file_over_bound` (a changed file over the 300,000-byte per-file
-bound), `unit_exceeds_budget` (an atom above the 900,000 budget minus 100,000 shared context),
-`too_many_units` (more than 8), `unpartitionable_path` or `unpartitionable_binary`. A file with a
-`derived_size` (a lockfile replaced by a summary CI can recompute) costs that summary instead of its sources.
+A change is never refused for its size, and never truncated. The plan refuses only what is not a size: an
+`unpartitionable_path`, an `unpartitionable_binary` (binary changes still fail closed), a duplicate path, or an
+inconsistent ownership. A file with a `derived_size` (a lockfile replaced by a summary CI can recompute) costs that summary
+instead of its sources. Every entry also costs `file_overhead` (512 characters, its accounting entry and manifest row), so a
+thousand tiny files fill units as a few large ones do.
+
+The number of units is unbounded (the runner executes them in waves). A stem group (a file and its tests) costing more than
+`budget - shared - reserve` (900,000 - 100,000 - 240,000 = 560,000) falls apart into its files; a file costing more than that
+is split into **segments** of at most C (`src/file-segments.cjs`). Every unit view stays inside the 900,000 budget.
+
+A segment owns a contiguous run of the file's patch rows, so every changed line belongs to exactly one segment, and one
+unit per segment (two segments of one file never share a unit). Its view shows that segment's patch (with sub-hunk headers
+that count exactly its rows) and, as ordinary sources, the windows of the base and head text the rows touch plus 12 lines of
+margin (a file added whole is stored compactly, its body once, in the head window). Windows keep the file's line structure:
+the first line of a window is line `segment.start_line` of the whole source. A single line larger than a fragment (a minified
+bundle) is cut into consecutive pieces owned by consecutive segments. The merge lifts every citation of a window to the same
+lines of the whole source, which holds because a quote is a piece of the lines it cites, so the merged report is validated by
+the unchanged validators against the complete combined snapshot. A unit's spec names its segment as
+`parts: {path: {index, count}}`; `checkOwnership` and the record verifier want every index of `0..count-1` exactly once.
+Inconsistent evidence (a patch that names a line outside its source) is an integrity error (`segment_inconsistent`), never a guess.
+
+The change manifest every unit receives lists every changed path while it fits 60,000 characters. Beyond that the deepest
+directories are summarized first (`{dir, files, additions, deletions, size, units}`, `unit_count` when more than 16 units), then
+shallower ones, down to one row for the whole change; the files a unit owns are listed in full in its own files. Optional shared
+context beyond the shared cap (another unit's lockfile summary, an engine file) is dropped and listed in `shared_omitted`;
+only the contracts, the verification record and the request are mandatory, and those must fit the shared cap. That limit is a
+property of the repository's contract documents, not of the size of a change.
+
+`src/change-table.cjs` reads the planner's table from the stored snapshot, costing text by its JSON-escaped length, and adds
+the segment costs of a file too large for a unit, so the plan, CI's recomputation and the views agree.
 
 Print a plan for a table of changed files (`{files: [{path, previous?, base_size, head_size, patch_chars,
 derived_size?}]}`; `test/fixtures/alcantara-02618a9.json` is the measured table of alcantara commit 02618a9,
-which gives 4 units at C = 450,000 with stored sizes, 5 when every added file also counts its full patch):
+which gives 4 units at C = 450,000 with stored sizes, 5 when every added file also counts its full patch). A table has only
+sizes, so a file too large for a unit is split into equal parts:
 
 ```
-scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000] [--max-units 8]
+scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000]
 ```
 
 The parameters are fixed in code for now; reading them from protected configuration is part of wiring the
-partition into review.
+partition into review. The earlier `max_units` and `file_ceiling` parameters, and the protected `cap` and `max_units`, bound
+nothing any more (the protected configuration still accepts `cap` and `max_units` and ignores them).
+
+### Unbounded collection
+
+`collectLocal({..., unbounded: true})` is the collector of a chunked review: a changed file, a patch or the combined
+snapshot of any size is read whole (binary evidence still fails closed), and the optional engine seed is never omitted for
+size. Without the option nothing changes: one snapshot of at most 900,000 characters. The combined snapshot is reviewed in
+bounded views and stored as a multi-part receipt (`docs/chunked-record.md`).
 
 ### Alcantara-shaped measurement
 
-`scripts/measure-chunked [TABLE.json] [--ceiling N] [--shared N] [--cap N] [--max-units N]` builds a synthetic
+`scripts/measure-chunked [TABLE.json] [--ceiling N] [--shared N]` builds a synthetic
 change from a table (fictional filler content of exactly the measured sizes, a real derived lockfile summary, compact
 added files), partitions it, builds every unit view, merges fake finding-free unit reports, builds the thin chunked
 record, signs it with an ephemeral key and verifies it through the one derivation. It prints the unit count,
-per-unit sizes (view, owned, shared, manifest, foreign hunks, estimated prompt), the record size against the 95%
-signing limit and the signed receipt size. No AI, network or secret is used. For `02618a9` it gives 4 units, a 1.55M
-combined snapshot, a 1.70M record (59.5% of the limit) and a largest estimated prompt of 588K characters.
-`src/chunked-measure.test.cjs` asserts these bounds and, in tests named `known size gap`, pins every place the
-current code still refuses a change for its size (170 files over the combined cap, more than 8 units, a record over
-the signing limit, roughly 500 paths over the manifest cap, a file over 300,000 bytes, a unit over the unit budget).
+per-unit sizes (view, owned, shared, manifest, foreign hunks, estimated prompt), the record size against the single-receipt
+limit and the signed receipt (one file, or a multi-part receipt) size. No AI, network or secret is used. For `02618a9`
+it gives 4 units, a 1.55M combined snapshot, a 1.70M record (59.5% of the single-receipt limit) and a largest estimated prompt of about 570K characters.
+`src/chunked-measure.test.cjs` asserts these bounds and that every size which used to be refused (170 files, more than 8 units,
+a record over the signing limit, roughly 500 paths, a file over 300,000 bytes, a unit over the unit budget, a file of
+millions of characters, a single line of a million) is partitioned, reviewed, merged, signed and verified.

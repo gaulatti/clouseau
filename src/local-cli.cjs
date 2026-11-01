@@ -296,12 +296,18 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
 
 function publishReceipt({directory, receipt}) {
   const bundle = JSON.parse(fs.readFileSync(receipt, 'utf8'));
-  const {payload} = bundle;
-  assertUnchanged(directory, payload.record.snapshot);
-  const blob = git(directory, ['hash-object', '-w', '--stdin'], JSON.stringify(bundle) + '\n').trim();
-  const tree = git(directory, ['mktree'], `100644 blob ${blob}\tclouseau-review.json\n`).trim();
+  const {parts = [], ...envelope} = bundle;
+  const {payload} = envelope;
+  // A multi-part receipt (receipt-parts.cjs) publishes its signed envelope and every part as files of the one commit.
+  const {isRoot, joinRecord, partName} = require('./receipt-parts.cjs');
+  const record = isRoot(payload.record) ? joinRecord(payload.record, parts.map(part => Buffer.from(part, 'base64'))) : payload.record;
+  assertUnchanged(directory, record.snapshot);
+  const files = [['clouseau-review.json', JSON.stringify(envelope) + '\n'],
+    ...parts.map((part, index) => [partName(index), Buffer.from(part, 'base64')])];
+  const entries = files.map(([name, content]) => `100644 blob ${git(directory, ['hash-object', '-w', '--stdin'], content).trim()}\t${name}\n`);
+  const tree = git(directory, ['mktree'], entries.join('')).trim();
   const commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
-    `Authenticated local review of ${payload.record.snapshot.head_sha}\n`).trim();
+    `Authenticated local review of ${record.snapshot.head_sha}\n`).trim();
   git(directory, ['push', 'origin', `${commit}:refs/tags/clouseau-review/${payload.nonce}`]);
   return {artifact_commit: commit, marker: `<!-- clouseau-local-review:v1 ${commit} -->`};
 }
