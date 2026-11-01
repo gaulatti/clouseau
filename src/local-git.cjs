@@ -25,6 +25,11 @@ function lockfileText(directory, ref, filename) {
   try { return new TextDecoder('utf-8', {fatal: true}).decode(bytes); } catch { throw new LockfileError('not_text'); }
 }
 
+// A repository path that is absent at the frozen head: structured, never a raw git failure.
+class SourceNotFound extends Error {
+  constructor(filename) { super(`Path not found at the reviewed head: ${filename}`); this.reason = 'source_not_found'; this.path = filename; }
+}
+
 function readLocalConfig(value) {
   if (!value || ![1, 2].includes(value.version) || !/^[a-zA-Z0-9._/-]+$/.test(value.base_branch) ||
     !safePath(value.readme) || !safePath(value.repository_policy) ||
@@ -86,6 +91,7 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     }
     const id = `${ref}:${filename}`;
     if (snapshot.sources[id]) return id;
+    if (!git(directory, ['ls-tree', ref, '--', filename]).trim()) throw new SourceNotFound(filename);
     const content = read('show', `${ref}:${filename}`);
     if (content.includes('\0') || (!unbounded && Buffer.byteLength(content) > FILE_LIMIT)) throw new Error('Binary or oversized local evidence');
     const contract = (ref === baseSha || (installation && ref === head)) && [config.readme, config.repository_policy].includes(filename);
@@ -155,7 +161,15 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     if (!Array.isArray(paths) || !paths.length || paths.length > 8 || new Set(paths).size !== paths.length) {
       throw new Error('Local source requests require one to eight distinct paths');
     }
-    for (const filename of paths) source(filename, head);
+    for (const filename of paths) {
+      // Absence is evidence: a requested path missing at the head is recorded as an omitted source, exactly as the
+      // hosted review records a 404, so the signed snapshot states it and the check of a receipt recomputes it.
+      try { source(filename, head); } catch (error) {
+        if (!(error instanceof SourceNotFound)) throw error;
+        snapshot.omitted_sources = [...(snapshot.omitted_sources || []).filter(item => item.path !== filename),
+          {path: filename, reason: 'not found at the head revision'}];
+      }
+    }
     refresh(snapshot, cap);
   };
   return {snapshot, localConfig, addSources};
@@ -166,4 +180,4 @@ function assertUnchanged(directory, snapshot) {
     git(directory, ['status', '--porcelain']).trim()) throw new Error('Local source changed during review; no receipt issued');
 }
 
-module.exports = {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged};
+module.exports = {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound};

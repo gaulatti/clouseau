@@ -3,7 +3,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {git, readLocalConfig, githubRepository, collectLocal, assertUnchanged} = require('./local-git.cjs');
+const {git, readLocalConfig, githubRepository, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 
 const {repository} = require('../test/local-git-fixture.cjs');
 
@@ -321,4 +321,14 @@ test('an unbounded collection keeps the optional engine seed whatever the size o
   git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'feat: large']);
   const {snapshot} = collectLocal({...f, request: 'a', technical: {}, unbounded: true, reviewerSha: 'e'.repeat(40)});
   assert.equal(snapshot.omitted_sources, undefined);
+}));
+
+test('a requested path absent at the head is recorded as omitted evidence, not a git failure', () => repository(async f => {
+  const {snapshot, addSources} = collectLocal({...f, request: 'Reject missing input.', technical: {}});
+  await addSources(['frontend/app/routes/radio-settings.test.tsx', 'README.md']);
+  await addSources(['frontend/app/routes/radio-settings.test.tsx']);
+  assert.deepEqual(snapshot.omitted_sources, [{path: 'frontend/app/routes/radio-settings.test.tsx', reason: 'not found at the head revision'}]);
+  assert.ok(Object.keys(snapshot.sources).some(id => id.endsWith(':README.md')));
+  const error = new SourceNotFound('x/y.js');
+  assert.equal(error.reason, 'source_not_found'); assert.equal(error.path, 'x/y.js');
 }));

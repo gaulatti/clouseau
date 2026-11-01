@@ -6,7 +6,7 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const crypto = require('node:crypto');
 const {digest} = require('./acceptance.cjs');
-const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged} = require('./local-git.cjs');
+const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
 const {askHarness} = require('./local-harness.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
@@ -292,6 +292,11 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
       return {status: 'awaiting_agent', ...error.info, reviewer_sha: reviewerSha, provider_api_calls: 0, harness_invocations: 0,
         respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session FRESH_SESSION_ID`,
         then: 'Repeat the identical review command. If Clouseau main advanced, the review restarts under the new revision.'};
+    }
+    if (error instanceof SourceNotFound) {
+      const failed = {status: 'failed', reason: error.reason, path: error.path};
+      fs.writeFileSync(path.join(cache, 'failure.json'), JSON.stringify({...failed, failure: error.message, harness: null}, null, 2) + '\n', {mode: 0o600});
+      return {...failed, evidence: cache};
     }
     fs.writeFileSync(path.join(cache, 'failure.json'), JSON.stringify({failure: error.message,
       harness: error.harnessDiagnostic || null}, null, 2) + '\n', {mode: 0o600});

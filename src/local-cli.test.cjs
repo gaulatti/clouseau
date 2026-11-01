@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {git} = require('./local-git.cjs');
+const {git, SourceNotFound} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {invoke} = require('./local-harness.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
@@ -455,3 +455,17 @@ test('quality scope never presents absent historical local verification as a tec
   assert.equal(summary.independent_ci_required, true);
   assert.equal(summary.merge_authority, false);
 });
+
+test('a missing source path fails with a structured status instead of a raw git command', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-source-missing-'));
+  try {
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const args = {directory: f.directory, base: f.base, 'request-file': request};
+    const result = await runReview(args, {state, installed: fixtureInstallation, verify: () => ({}), ask: async () => { throw new SourceNotFound('gone/file.test.tsx'); }});
+    assert.deepEqual({status: result.status, reason: result.reason, path: result.path}, {status: 'failed', reason: 'source_not_found', path: 'gone/file.test.tsx'});
+    const failure = JSON.parse(fs.readFileSync(path.join(result.evidence, 'failure.json')));
+    assert.deepEqual({status: failure.status, reason: failure.reason, path: failure.path, harness: failure.harness},
+      {status: 'failed', reason: 'source_not_found', path: 'gone/file.test.tsx', harness: null});
+    assert.ok(!/git -C/.test(JSON.stringify(failure)));
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+}));
