@@ -8,8 +8,8 @@ const cp = require('node:child_process');
 const {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {fixture} = require('../test/local-review-fixture.cjs');
-const {issueReceipt, verifyReceipt, validateTrust}
-const {ReceiptRejected} = require('./receipt-rejection.cjs'); = require('./local-receipt.cjs');
+const {issueReceipt, verifyReceipt, validateTrust} = require('./local-receipt.cjs');
+const {ReceiptRejected} = require('./receipt-rejection.cjs');
 const {createPolicy} = require('./policy.cjs');
 const {verifyRecord} = require('./acceptance-controller.cjs');
 const {digest} = require('./acceptance.cjs');
