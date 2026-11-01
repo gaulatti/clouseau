@@ -159,7 +159,7 @@ function applyGrades(merged, review, role) {
   return entries.length > 0;
 }
 
-function checkUsage(result, plan, graded) {
+function checkUsage(result, plan, graded, seams) {
   const ids = new Set(plan.units.map(unit => unit.id));
   need(result.usage.every(item => item.unit === undefined || ids.has(item.unit)), 'harness execution is tagged with an unknown unit');
   for (const role of ROLES) {
@@ -167,7 +167,8 @@ function checkUsage(result, plan, graded) {
     for (const unit of plan.units) {
       need(mine.some(item => item.phase === 'investigation' && item.unit === unit.id), `${role} has no recorded investigation of unit ${unit.id}`);
     }
-    need(mine.some(item => item.phase === 'integration'), `${role} has no recorded integration pass`);
+    // With no seams (recomputed by CI) there is nothing to integrate and no session is made.
+    need(!seams.length || mine.some(item => item.phase === 'integration'), `${role} has no recorded integration pass`);
     need(!graded[role] || mine.some(item => item.phase === 'grading'), `${role} has no recorded grading round`);
   }
 }
@@ -214,7 +215,7 @@ function chunkedVerifier(record, chunked) {
         const scores = checked(`${role} merged report`, () => validateReport(merged, validateInspection(merged, snapshot, drafts)));
         return {role, report: merged, drafts, scores};
       });
-      checkUsage(result, partition, graded);
+      checkUsage(result, partition, graded, record.seams);
       return reviews;
     },
   };
