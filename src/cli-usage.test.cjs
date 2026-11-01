@@ -18,7 +18,7 @@ test('help and every usage error list every command with one line each and name 
   }
   assert.match(help, /installation-review .*--harness/);
   await assert.rejects(normal.main(['ordinary-unknown']), error => { assert.equal(error.message, help); return true; });
-  assert.throws(() => cli.options(['installation-review', '--agent', 'claude']), /installation-review accepts: --directory --manifest --grant-comment --harness/);
+  assert.throws(() => cli.options(['installation-review', '--nope', 'x']), /installation-review accepts: --directory --manifest --grant-comment --harness --agent/);
   assert.throws(() => cli.options(['installation-engine', '--x', 'y']), /accepts: no options/);
   assert.throws(() => cli.options(['installation-nope']), /valid commands: public-identity, installation-engine/);
   assert.throws(() => normal.options(['review', '--nope', 'x']), /accepted: --directory --base/);
