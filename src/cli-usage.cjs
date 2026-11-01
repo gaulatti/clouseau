@@ -19,7 +19,7 @@ const INSTALLATION = {
   'installation-check': 'Verify a published initial installation on its pull request',
 };
 
-const line = (name, text, options) => `  ${name.padEnd(22)}${text}${options ? `: ${options}` : ''}`;
+const line = (name, text, options) => `  ${name.padEnd(24)}${text}${options ? `: ${options}` : ''}`;
 
 function usage() {
   const {COMMANDS} = require('./installation-cli.cjs');
