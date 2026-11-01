@@ -476,3 +476,18 @@ test('a missing source path fails with a structured status instead of a raw git 
     assert.ok(!/git -C/.test(JSON.stringify(failure)));
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
+
+test('a mistyped --harness fails naming the valid values before anything is recorded and never blocks the head', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-bad-harness-'));
+  try {
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const args = {directory: f.directory, base: f.base, 'request-file': request};
+    const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
+    for (const harness of ['bogus', 'claud']) {
+      await assert.rejects(runReview({...args, harness}, {...deps, ask: async () => {throw new Error('Must not invoke a harness');}}),
+        error => { assert.match(error.message, /Unsupported --harness .*codex, claude/); return true; });
+    }
+    assert.deepEqual(fs.readdirSync(state), ['requirement.txt'], 'an invalid invocation records no ledger, journal or cache');
+    assert.equal((await runReview({...args, harness: 'claude'}, deps)).decision, 'auto_approve');
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+}));

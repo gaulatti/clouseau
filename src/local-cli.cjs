@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const {digest} = require('./acceptance.cjs');
 const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
-const {askHarness} = require('./local-harness.cjs');
+const {askHarness, assertHarness} = require('./local-harness.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
@@ -147,6 +147,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   const agent = args.agent;
   if (agent && args.harness) throw new Error('Choose either --agent (inside an AI harness) or --harness (headless), not both');
   if (agent && !AGENTS.includes(agent)) throw new Error(`Supported agent harnesses: ${AGENTS.join(', ')}`);
+  if (args.harness) assertHarness(args.harness);
   const base =args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
   const config = readLocalConfig(JSON.parse(git(directory, ['show', `${base}:.clouseau-local.json`])));
   const head = git(directory, ['rev-parse', 'HEAD']).trim();

@@ -7,7 +7,7 @@ const {digest} = require('./acceptance.cjs');
 const {git, collectLocal, assertUnchanged, readLocalConfig} = require('./local-git.cjs');
 const {refresh} = require('./acceptance-sources.cjs');
 const {localReview} = require('./local-review.cjs');
-const {askHarness} = require('./local-harness.cjs');
+const {askHarness, assertHarness} = require('./local-harness.cjs');
 const {reconcile, priorState} = require('./acceptance-ledger.cjs');
 const {issueReceipt, loadReceipt, verifySources} = require('./local-receipt.cjs');
 const {validateConfig} = require('./config.cjs');
@@ -68,6 +68,7 @@ function verification({directory, config}) {
 }
 
 async function runReview(args, {api, installed, state, clock, ask = askHarness, verify = verification}) {
+  if (args.harness) assertHarness(args.harness);
   const directory = path.resolve(args.directory || process.cwd());
   const manifest = bootstrap.validateManifest(readJson(args.manifest, 60000), clock());
   const reviewer = installed();
