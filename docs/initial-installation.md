@@ -85,6 +85,17 @@ clouseau installation-review --directory /path/to/project \
   --grant-comment NATIVE_COMMENT_ID --harness codex
 ```
 
+`--harness codex|claude` runs a headless harness. Inside an AI coding harness,
+pass `--agent claude|codex|opencode` instead (not both), exactly as for
+`clouseau review`: the command prints an `awaiting_agent` request (exit status 3),
+a fresh subagent answers it with `clouseau respond --agent-request FILE --answer
+FILE --session ID`, and repeating the identical command continues. The real
+verification runs once and the exchange costs one installation attempt however
+many commands it spans. The signed manifest binds the engine revision, so the
+exchange continues only on that revision; if Clouseau main advances, prepare a
+new manifest. A mistyped `--harness`, `--agent` or option fails before anything is
+recorded.
+
 `--harness` is `codex` or `claude`; this command does not accept the `--agent`
 form of `clouseau review` (it launches the harness itself, also from inside an
 AI session). Use a correct harness name: a mistyped one still records an
