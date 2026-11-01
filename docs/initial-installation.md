@@ -180,11 +180,10 @@ jobs:
           --pull-request "${{ github.event.pull_request.number }}"
 ```
 
-Use the same frozen engine as the grant. Guard the job with
-`if: contains(github.event.pull_request.body, 'clouseau-installation-review:v1')`
-under `initial-trust:`; unguarded, it runs on every later PR and fails with
-`Invalid initial installation: one installation-only receipt marker is
-required`. Run this job in a **different workflow**
+Use the same frozen engine as the grant. Keep the job's `if:` guard on the
+installation receipt marker (`clouseau-installation-review:v1`): unguarded, it
+runs on every later PR and fails with `Invalid initial installation: one
+installation-only receipt marker is required`. Run this job in a **different workflow**
 from configured verification: it waits for that complete verification run and
 must not wait on itself. It makes zero model requests, receives no provider key
 or write permission, and cannot discard an existing review ledger. Unprotected
