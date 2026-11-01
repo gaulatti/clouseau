@@ -64,7 +64,7 @@ function hooksFor(params) {
     }
     return plans.get(snapshot);
   };
-  const viewOf = (snapshot, unit) => unitView(snapshot, {id: unit.id, owned: unit.owned, context_ids: unit.context_ids ?? [], ...(unit.parts ? {parts: unit.parts} : {})},
+  const viewOf = (snapshot, unit) => unitView(snapshot, {id: unit.id, owned: unit.owned, context_ids: unit.context_ids, ...(unit.parts ? {parts: unit.parts} : {})},
     {units: planOf(snapshot).specs, sharedCap: params.S, segmentLimit: limit});
   const seams = ({snapshot, plan}) => seamsOf({snapshot, plan});
   return {
