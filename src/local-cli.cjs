@@ -30,7 +30,9 @@ function options(argv) {
     'agent-request', 'answer', 'session', 'engine'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
-    if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) throw new Error('Invalid Clouseau local arguments');
+    if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) {
+      throw new Error(`Invalid Clouseau local arguments at ${JSON.stringify(args[i])}: every option is "--name value", given once; accepted: ${allowed.map(item => `--${item}`).join(' ')}`);
+    }
     parsed[name] = args[i + 1];
   }
   return parsed;
@@ -382,6 +384,7 @@ function publishReceipt({directory, receipt}) {
 }
 
 async function main(argv, runtime = {}) {
+  if (['--help', '-h', 'help'].includes(argv[0])) return require('./cli-usage.cjs').usage();
   if (argv[0] === 'public-identity' || argv[0]?.startsWith('installation-')) return require('./installation-cli.cjs').main(argv, runtime);
   const args = options(argv);
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
@@ -389,7 +392,7 @@ async function main(argv, runtime = {}) {
   if (args.command === 'review') return runReview(args, runtime);
   if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
-  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --agent claude|codex|opencode | --harness codex|claude --identity FILE --additional-checks FILE --engine latest] | respond --agent-request FILE --answer FILE --session ID | publish --directory PATH --receipt FILE');
+  throw new Error(require('./cli-usage.cjs').usage());
 }
 
 module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};

@@ -30,11 +30,12 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function options(argv) {
   const [command, ...values] = argv;
-  requireInput(Object.hasOwn(COMMANDS, command), 'unknown installation command');
+  requireInput(Object.hasOwn(COMMANDS, command), `unknown installation command; valid commands: ${Object.keys(COMMANDS).join(', ')}`);
   const args = {command};
   for (let index = 0; index < values.length; index += 2) {
     const key = values[index].slice(2);
-    requireInput(values[index].startsWith('--') && COMMANDS[command].includes(key) && values[index + 1] && !args[key], 'invalid command arguments');
+    requireInput(values[index].startsWith('--') && COMMANDS[command].includes(key) && values[index + 1] && !args[key],
+      `invalid command arguments at ${JSON.stringify(values[index])}; every option is "--name value", given once; ${command} accepts: ${COMMANDS[command].map(option => `--${option}`).join(' ') || 'no options'}`);
     args[key] = values[index + 1];
   }
   return args;
@@ -267,4 +268,4 @@ async function main(argv, runtime = {}) {
   return check(args, context);
 }
 
-module.exports = {options, readJson, writeJson, positive, verification, runReview, remoteConfiguration, readyPull, check, main};
+module.exports = {COMMANDS, options, readJson, writeJson, positive, verification, runReview, remoteConfiguration, readyPull, check, main};
