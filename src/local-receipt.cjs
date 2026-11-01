@@ -16,6 +16,15 @@ const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const fail = message => {throw new Error(`Invalid local review receipt: ${message}`);};
 const requireReceipt = (value, message) => {if (!value) fail(message);};
 
+// A receipt that is valid in every respect except that it was produced by a different engine revision than the
+// protected one the caller resolved. The code, never the message text, lets the CI controller ignore it.
+class EngineMismatchError extends Error {
+  constructor(message) {
+    super(`Invalid local review receipt: ${message}`);
+    this.code = 'ENGINE_MISMATCH';
+  }
+}
+
 function validateTrust(trust) {
   requireReceipt(trust && (centralSource(trust.central_source) && trust.reviewer_digest === undefined ||
     trust.central_source === undefined && /^[a-f0-9]{64}$/.test(trust.reviewer_digest)) && ['required', 'optional'].includes(trust.mode) &&
@@ -102,18 +111,23 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
     typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge');
-  if (trust.central_source || engine) {
-    requireReceipt(acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
-      p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha,
-    'engine mismatch; refresh public Clouseau and review again, then start a fresh CI run. No paid fallback is allowed');
-  }
+  // The engine comparison happens here, after every identity, trust and challenge check. A different engine is
+  // only reported once the receipt is otherwise proven bound to this exact change; it is never accepted.
+  const engineMatches = !(trust.central_source || engine) || acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
+    p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha;
   const record = p.record;
   const snapshot = record.snapshot;
   requireReceipt(p.record_digest === digest(record) && snapshot.repository === repository &&
     sha(headSha) && snapshot.head_sha === headSha && sha(baseSha) && snapshot.base_sha === baseSha &&
-    sha(p.reviewer_sha) && (!reviewerSha || p.reviewer_sha === reviewerSha) &&
-    p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest) && snapshot.config_digest === configDigest &&
-    snapshot.policy_digest === policyDigest, 'repository, revisions, policy, configuration or record changed');
+    sha(p.reviewer_sha) && snapshot.config_digest === configDigest && snapshot.policy_digest === policyDigest &&
+    (!engineMatches || (!reviewerSha || p.reviewer_sha === reviewerSha) &&
+      p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest)),
+  'repository, revisions, policy, configuration or record changed');
+  if (!engineMatches) {
+    // Another engine's scoring cannot be re-validated here; its signed claim must still be a pass.
+    requireReceipt(record.result.decision === 'auto_approve', 'review did not pass');
+    throw new EngineMismatchError('engine mismatch; the receipt predates the current protected engine and is never accepted as evidence');
+  }
   const result = reviewDecision(record, {chunked});
   requireReceipt(result.decision === 'auto_approve', 'review did not pass');
   return {record, ...result};
@@ -234,4 +248,4 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
   }
 }
 
-module.exports = {DOMAIN, MAX_RECEIPT_BYTES, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {EngineMismatchError, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
