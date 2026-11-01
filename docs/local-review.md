@@ -357,7 +357,9 @@ the requirement text; those inputs must be appropriate for publication there.
 An opted-in protected workflow loads configuration and Clouseau from trusted
 source. It loads a referenced receipt as data, validates its
 signature/issuer/author/time/revisions/policy, compares the complete signed source
-inventory to GitHub's immutable PR sources, and recalculates the AI scores.
+inventory to GitHub's immutable PR sources (dependency lockfile summaries are
+recomputed from the repository's lockfile bytes and must match exactly), and
+recalculates the AI scores.
 A valid local assessment can be authenticated and reused with zero CI AI calls
 even while independent CI is pending or failed. That result remains
 `pending_technical` or `blocked_technical`, with no approval-usable record digest

@@ -150,3 +150,18 @@ test('a verified chunked record holding a file added whole keeps its patch verif
   forged.sources[forged.files.find(item => item.path === 'README.md').head_source].content += 'extra line\n';
   mismatch(() => verifyPatches({snapshot: forged, files}), 'README.md');
 });
+
+test('a summarized lockfile is exempt from the patch comparison only when it is exactly the fixed placeholder', () => {
+  const { LOCKFILE_PATCH } = require('./lockfile-summary.cjs');
+  const item = (path, status, extra = {}) => ({path, status, patch: LOCKFILE_PATCH, lockfile: true, ...extra});
+  const lock = (filename, status, patch) => live(filename, status, patch);
+  // GitHub may omit the patch of a huge lockfile or give one: neither is compared, the summary is recomputed from the bytes.
+  verifyPatches({snapshot: {files: [item('package-lock.json', 'modified')]}, files: [lock('package-lock.json', 'modified', undefined)]});
+  verifyPatches({snapshot: {files: [item('package-lock.json', 'modified')]}, files: [lock('package-lock.json', 'modified', HUNK)]});
+  mismatch(() => verifyPatches({snapshot: {files: [item('package-lock.json', 'modified')]}, files: [lock('package-lock.json', 'added', undefined)]}), 'package-lock.json');
+  // A file that is not a lockfile, a changed placeholder or a missing patch for an ordinary file never gets the exemption.
+  mismatch(() => verifyPatches({snapshot: {files: [item('src/a.js', 'modified')]}, files: [lock('src/a.js', 'modified', HUNK)]}), 'src/a.js');
+  mismatch(() => verifyPatches({snapshot: {files: [item('yarn.lock', 'modified', {patch: HUNK})]}, files: [lock('yarn.lock', 'modified', HUNK)]}), 'yarn.lock');
+  assert.throws(() => verifyPatches({snapshot: {files: [item('src/a.js', 'modified')]}, files: [lock('src/a.js', 'modified', undefined)]}), /incomplete/);
+  assert.throws(() => verifyPatches({snapshot: {files: []}, files: [lock('package-lock.json', 'modified', undefined)]}), /incomplete/);
+});

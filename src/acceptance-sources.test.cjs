@@ -340,3 +340,128 @@ test('bleecker layout (lab5): extracted helper, private rename and type-only imp
   split.f.files[0].patch = "@@ -1 +1 @@\n-import { Input } from './input';\n+import { Input } from './input2';\n+export const behaviour = 1;";
   assert.match(split.approvalHold({gates}, await collectSnapshot(split.f)), /test integrity is unresolved/);
 });
+
+// ---- Dependency lockfiles: derived summaries replace raw text and patches (issue 65).
+
+const lockfixture = require('../test/fixtures/lockfiles.cjs');
+const {LOCKFILE_PATCH} = require('./lockfile-summary.cjs');
+const {classify, NEXT_STEPS} = require('./incomplete.cjs');
+
+function lockfileFixture(files, contents) {
+  const f = fixture();
+  f.files = files; f.pr.changed_files = files.length;
+  f.github.tree = {truncated: false, tree: []};
+  f.github.rest.repos.getContent = async args => {
+    f.calls.push(args);
+    const key = `${args.ref === f.pr.base.sha ? 'base' : 'head'}:${args.path}`;
+    const value = typeof contents[key] === 'function' ? contents[key]() : contents[key];
+    if (value === undefined) throw Object.assign(new Error('Not Found'), {status: 404});
+    if (value.data) return value;
+    return {data: {content: Buffer.from(value).toString('base64'), encoding: 'base64', size: Buffer.byteLength(value)}};
+  };
+  return f;
+}
+const lockfileChange = (filename = 'pnpm-lock.yaml', status = 'modified', patch = '@@ -1 +1 @@\n-a\n+b') => ({filename, status, patch});
+const PLAIN = {'base:README.md': 'Readme.\n', 'base:.github/clouseau.md': 'Policy.\n'};
+const derivedOf = snapshot => Object.entries(snapshot.sources).filter(([, source]) => source.kind === 'lockfile-summary');
+
+test('a changed lockfile enters the snapshot as a derived summary, never as raw text or patch, and is citable', async () => {
+  const f = lockfileFixture([lockfileChange()], {...PLAIN, 'base:pnpm-lock.yaml': lockfixture.pnpmBase(), 'head:pnpm-lock.yaml': lockfixture.pnpmHead()});
+  const snapshot = await collectSnapshot(f);
+  const [[id, source]] = derivedOf(snapshot);
+  assert.equal(source.authority, 'derived'); assert.equal(source.ref, f.pr.head.sha); assert.equal(source.path, 'pnpm-lock.yaml');
+  assert.match(source.content, /RISK\[downgrade\] CHANGED zod/);
+  const item = snapshot.files[0];
+  assert.deepEqual([item.lockfile, item.base_source, item.head_source, item.patch], [true, id, id, LOCKFILE_PATCH]);
+  assert.equal(Object.values(snapshot.sources).filter(candidate => candidate.path === 'pnpm-lock.yaml').length, 1, 'no raw base or head text');
+  assert.ok(!JSON.stringify(snapshot).includes('sha512-'.concat(lockfixture.sri('zod@3.23.8').slice(7, 20))), 'no raw integrity text');
+  assert.equal(snapshot.lockfile_failures, undefined);
+  assert.match(snapshot.digest, /^[a-f0-9]{64}$/);
+  const proofs = proofCatalog(snapshot).filter(proof => proof.source === id);
+  assert.ok(proofs.length > 0, 'reviewers can cite the derived summary');
+  const location = {subject: 'Dependency swap', obligation: 'Evaluate each RISK line', context: {}, target: {reason: 'A package changed.', evidence: [proofs[0].id]}};
+  const packet = packetFor(location, {evidence: [proofs[0]]}, snapshot);
+  assert.equal(packet.evidence[0].authority, 'derived');
+  assert.match(packet.evidence[0].text, /Dependency lockfile summary/);
+  const digest = snapshot.digest;
+  source.content = source.content.replace('3.22.0', '3.23.7');
+  assert.notEqual(refresh(snapshot).digest, digest, 'the digest covers the derived item');
+  assert.deepEqual(f.calls.filter(call => call.path === 'pnpm-lock.yaml').map(call => call.ref), [f.pr.base.sha, f.pr.head.sha]);
+});
+
+test('two 537 KB pnpm lockfiles no longer trip the source budget', async () => {
+  const big = lockfixture.largePnpm(2300); const bigger = lockfixture.largePnpm(2300, 40);
+  assert.ok(Buffer.byteLength(big) > 530000 && Buffer.byteLength(big) < 1000000);
+  const files = [lockfileChange('pnpm-lock.yaml'), lockfileChange('apps/web/pnpm-lock.yaml')];
+  const contents = {...PLAIN};
+  for (const name of ['pnpm-lock.yaml', 'apps/web/pnpm-lock.yaml']) { contents[`base:${name}`] = big; contents[`head:${name}`] = bigger; }
+  const snapshot = await collectSnapshot(lockfileFixture(files, contents));
+  assert.ok(JSON.stringify(snapshot).length < 100000, `evidence ${JSON.stringify(snapshot).length}`);
+  assert.equal(derivedOf(snapshot).length, 2);
+  // The same change as raw text is what used to fail: each raw lockfile exceeds the 300 KB source bound.
+  const raw = lockfileFixture([{filename: 'pnpm-lock.yml', status: 'modified', patch: '@@ -1 +1 @@\n-a\n+b'}],
+    {...PLAIN, 'base:pnpm-lock.yml': big, 'head:pnpm-lock.yml': bigger});
+  await assert.rejects(collectSnapshot(raw), error => error.unavailable === true);
+});
+
+test('added, removed and renamed lockfiles are summarized with the applicable sides only', async () => {
+  const text = lockfixture.npmBase();
+  const added = await collectSnapshot(lockfileFixture([lockfileChange('package-lock.json', 'added')], {...PLAIN, 'head:package-lock.json': text}));
+  assert.deepEqual([added.files[0].base_source, added.history.length], [undefined, 0]);
+  assert.match(derivedOf(added)[0][1].content, /^base: absent$/m);
+  const removed = await collectSnapshot(lockfileFixture([lockfileChange('package-lock.json', 'removed')], {...PLAIN, 'base:package-lock.json': text}));
+  assert.deepEqual([removed.files[0].head_source, removed.files[0].base_source], [undefined, derivedOf(removed)[0][0]]);
+  assert.equal(derivedOf(removed)[0][1].ref, removed.base_sha);
+  const renamed = await collectSnapshot(lockfileFixture([{...lockfileChange('web/package-lock.json', 'renamed'), previous_filename: 'package-lock.json'}],
+    {...PLAIN, 'base:package-lock.json': text, 'head:web/package-lock.json': text}));
+  assert.equal(derivedOf(renamed)[0][1].derived.base_path, 'package-lock.json');
+  assert.equal(renamed.history[0].path, 'package-lock.json');
+  const patchless = await collectSnapshot(lockfileFixture([{filename: 'package-lock.json', status: 'modified'}], {...PLAIN, 'base:package-lock.json': text, 'head:package-lock.json': text}));
+  assert.equal(patchless.files[0].patch, LOCKFILE_PATCH, 'GitHub omits the patch of a huge lockfile; the summary needs none');
+});
+
+test('a lockfile that cannot be summarized keeps its raw evidence and records the specific reason', async () => {
+  const f = lockfileFixture([lockfileChange('Cargo.lock')], {...PLAIN, 'base:Cargo.lock': 'version = 2\n', 'head:Cargo.lock': 'version = 2\n'});
+  const snapshot = await collectSnapshot(f);
+  assert.deepEqual(snapshot.lockfile_failures, [{path: 'Cargo.lock', reason: 'unsupported_version'}]);
+  assert.equal(derivedOf(snapshot).length, 0);
+  assert.equal(snapshot.files[0].lockfile, undefined);
+  assert.equal(snapshot.sources[`${f.pr.head.sha}:Cargo.lock`].content, 'version = 2\n');
+  assert.equal(snapshot.files[0].patch, '@@ -1 +1 @@\n-a\n+b', 'raw patch as before');
+  // Raw text that does not fit either: the failure is the specific lockfile reason, not the generic one.
+  const oversize = lockfileFixture([lockfileChange('yarn.lock')], {...PLAIN, 'base:yarn.lock': `# yarn lockfile v1\n${'#'.repeat(400000)}\nbad:\n`, 'head:yarn.lock': 'x'});
+  const error = await collectSnapshot(oversize).catch(item => item);
+  assert.deepEqual(error.lockfile, {path: 'yarn.lock', reason: 'invalid_structure'});
+  assert.equal(error.unavailable, undefined);
+  const classified = classify(error);
+  assert.equal(classified.cause, 'lockfile_unsummarizable');
+  assert.match(classified.reason, /yarn\.lock cannot be summarized \(it does not have the expected lockfile structure\)/);
+  assert.ok(NEXT_STEPS.lockfile_unsummarizable);
+  const huge = lockfileFixture([lockfileChange('go.sum')], {...PLAIN, 'base:go.sum': {data: {encoding: 'none', content: '', size: 2000000}}, 'head:go.sum': 'a v1 h1:x=\n'});
+  assert.deepEqual((await collectSnapshot(huge).catch(item => item)).lockfile, {path: 'go.sum', reason: 'too_large'});
+  const binary = lockfileFixture([lockfileChange('go.sum')], {...PLAIN, 'base:go.sum': {data: {encoding: 'base64', content: Buffer.from([0xff, 0xfe]).toString('base64'), size: 2}}, 'head:go.sum': 'a v1 h1:x=\n'});
+  assert.deepEqual((await collectSnapshot(binary).catch(item => item)).lockfile, {path: 'go.sum', reason: 'not_text'});
+  const patchless = lockfileFixture([{filename: 'Cargo.lock', status: 'modified'}], {...PLAIN, 'base:Cargo.lock': 'version = 2\n', 'head:Cargo.lock': 'version = 2\n'});
+  assert.deepEqual((await collectSnapshot(patchless).catch(item => item)).lockfile, {path: 'Cargo.lock', reason: 'unsupported_version'});
+  const failure = lockfileFixture([lockfileChange('Cargo.lock')], {...PLAIN, 'base:Cargo.lock': 'x', 'head:Cargo.lock': () => { throw Object.assign(new Error('boom'), {status: 500}); }});
+  await assert.rejects(collectSnapshot(failure), /boom/);
+  const unrelated = lockfileFixture([lockfileChange('Cargo.lock')], {...PLAIN, 'base:Cargo.lock': 'version = 2\n', 'head:Cargo.lock': 'version = 2\n'});
+  unrelated.github.rest.repos.listCommits = async () => { throw new Error('history unavailable'); };
+  await assert.rejects(collectSnapshot(unrelated), /history unavailable/);
+});
+
+test('only raw lockfile evidence that causes the overflow is reported as a lockfile problem', async () => {
+  const raw = `version = 2\n${'#'.repeat(290000)}\n`;
+  const files = Array.from({length: 3}, (_, i) => lockfileChange(`m${i}/Cargo.lock`));
+  const contents = {...PLAIN};
+  for (const file of files) { contents[`base:${file.filename}`] = raw; contents[`head:${file.filename}`] = raw; }
+  const error = await collectSnapshot(lockfileFixture(files, contents)).catch(item => item);
+  assert.deepEqual(error.lockfile, {path: 'm0/Cargo.lock', reason: 'unsupported_version'});
+  // A tiny unsupported lockfile next to an unrelated overflow keeps the generic budget cause.
+  const f = lockfileFixture([lockfileChange('Cargo.lock')], {...PLAIN, 'base:Cargo.lock': 'version = 2\n', 'head:Cargo.lock': 'version = 2\n'});
+  const snapshot = await collectSnapshot(f);
+  snapshot.claims.description = 'z'.repeat(1000000);
+  assert.throws(() => refresh(snapshot), error => error.lockfile === undefined && /source budget/.test(error.message));
+  delete snapshot.lockfile_failures;
+  assert.throws(() => refresh(snapshot), /source budget/);
+});
