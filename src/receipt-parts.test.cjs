@@ -88,6 +88,8 @@ test('a multi-part receipt verifies, and any change to its envelope or its parts
   fails(copy => {copy.parts[0] = Buffer.from('tampered').toString('base64');}, /differs from the signed root/);
   fails(copy => {copy.parts[1] = 7;}, /differs from the signed root|argument must be/);
   fails(copy => {copy.extra = 1;}, /malformed signature envelope/);
+  // A bundle that is not an object has no envelope at all.
+  for (const value of [null, undefined, 'bundle', 7]) assert.throws(() => verifyReceipt(value, f.expected), /malformed signature envelope/);
   // Parts on a receipt that is not a multi-part one are not an envelope extension.
   const small = await chunkedFixture();
   const plain = issueReceipt(small.issue);
