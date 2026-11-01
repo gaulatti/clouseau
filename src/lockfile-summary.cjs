@@ -63,7 +63,9 @@ function classifyUrl(raw, name, version) {
   if (!['https:', 'http:'].includes(url.protocol)) return {source: `other:${raw}`, credentials};
   const http = url.protocol === 'http:';
   const scoped = name.split('/').pop();
-  if (url.pathname === `/${name}/-/${scoped}-${version}.tgz`) return {source: `${http ? 'registry-http' : 'registry'}:${url.host}`, credentials};
+  // A registry may live under a path prefix (Artifactory, Nexus); the prefix is part of its identity.
+  const tail = `/${name}/-/${scoped}-${version}.tgz`;
+  if (url.pathname.endsWith(tail)) return {source: `${http ? 'registry-http' : 'registry'}:${url.host}${url.pathname.slice(0, -tail.length)}`, credentials};
   return {source: `url:${url.protocol}//${url.host}${url.pathname}`, credentials};
 }
 
@@ -291,6 +293,9 @@ function parseYarn(text) {
       const resolution = item.fields.resolution;
       if (!isText(resolution)) fail('invalid_structure');
       const protocol = resolution.slice(resolution.indexOf('@', 1) + 1);
+      // The resolved package name is the one the install fetches; a header name pointing elsewhere is an alias.
+      const resolved = resolution.slice(0, resolution.indexOf('@', 1));
+      if (resolved !== name) flags.push(`alias:${show(resolved)}`);
       source = protocol.startsWith('npm:') ? 'registry:npm' : protocol.startsWith('workspace:') ? 'workspace' : `other:${show(protocol)}`;
       key = resolution;
     } else {

@@ -432,3 +432,12 @@ test('ordinary go.sum and composer changes are not flagged, while local composer
   assert.match(summarize('composer.lock', '', composer('dev-main', '../local/p', 'path'), 'added'), /^RISK\[non-registry-source\] ADDED v\/p@dev-main source=file:\.\.\/local\/p /m);
   assert.match(summarize('composer.lock', '', composer('1.0.0', '../local/p'), 'added'), /^RISK\[non-registry-source\] ADDED v\/p@1\.0\.0 source=file:/m);
 });
+
+test('a yarn berry entry resolving to another package name is an alias, and prefixed registries stay stable across bumps', () => {
+  const out = summarize('yarn.lock', YARN_BERRY('4.17.21', 'lodash@npm:4.17.21', 'aaa'), YARN_BERRY('4.17.22', 'evil@npm:4.17.22', 'bbb'));
+  assert.match(out, /^RISK\[alias-added\] CHANGED lodash: version 4\.17\.21 -> 4\.17\.22; .*flags \+\[alias:evil\]/m);
+  assert.deepEqual(classifyUrl('https://repo.example.invalid/artifactory/api/npm/npm/a/-/a-1.0.0.tgz', 'a', '1.0.0'),
+    {source: 'registry:repo.example.invalid/artifactory/api/npm/npm', credentials: false});
+  const prefixed = version => lock.npmLock([{name: 'a', version, resolved: `https://repo.example.invalid/npm/a/-/a-${version}.tgz`}]);
+  assert.doesNotMatch(summarize('package-lock.json', prefixed('1.0.0'), prefixed('1.1.0')), /^RISK\[/m);
+});
