@@ -22,10 +22,11 @@ const {unitView, mergeUnitReports} = require('./review-units.cjs');
 const {combine} = require('./acceptance-review.cjs');
 const {SCHEME, parseParams, elideQuotes} = require('./chunked-record.cjs');
 const {segmentLimit} = require('./change-table.cjs');
+const {selectSeams, overflowEntry} = require('./integration-plan.cjs');
 
 const ROLES = Object.freeze(['examiner', 'challenger']);
 const STATES = Object.freeze(['checked', 'finding', 'missing']);
-const DEFAULTS = Object.freeze({concurrency: 2, unit_deadline_ms: 300000, integration_cap: 250000});
+const DEFAULTS = Object.freeze({concurrency: 2, unit_deadline_ms: 300000, integration_cap: 250000, integration_call_seams: 60, integration_max_seams: 400});
 const MAX_CONCURRENCY = 8;
 const PROMPT_LIMIT = 1048576;
 const TEXT = 2000;
@@ -40,7 +41,8 @@ class ChunkedReviewRefusal extends Error {
 }
 const refuse = (code, message, extra) => new ChunkedReviewRefusal(code, message, extra);
 
-// The protected configuration: {params: {C, S}, concurrency?, unit_deadline_ms?, integration_cap?}.
+// The protected configuration: {params: {C, S}, concurrency?, unit_deadline_ms?, integration_cap?, integration_call_seams?,
+// integration_max_seams?}.
 function runnerLimits(chunked) {
   const keys = ['params', ...Object.keys(DEFAULTS)];
   if (!chunked || typeof chunked !== 'object' || Array.isArray(chunked) || Object.keys(chunked).some(key => !keys.includes(key))) {
@@ -134,8 +136,8 @@ function summaryOf(view, report) {
     accounting: report.accounting.map(item => ({path: item.path, reason: String(item.reason).slice(0, TEXT)}))};
 }
 
-// Splits the seams into shards so that every integration prompt payload stays within the cap.
-function shardSeams(base, seams, cap) {
+// Splits the seams into shards so that every integration prompt payload stays within the cap and holds at most `perCall` seams.
+function shardSeams(base, seams, cap, perCall) {
   const size = value => JSON.stringify(value).length;
   const fixed = size({...base, seams: []});
   if (fixed > cap) throw refuse('integration_input_too_large', `The unit summaries and manifest take ${fixed} characters, above the ${cap} integration cap`);
@@ -143,7 +145,7 @@ function shardSeams(base, seams, cap) {
   for (const seam of seams) {
     const need = size(seam) + 1;
     if (fixed + need > cap) throw refuse('seam_too_large', `Seam ${seam.id} cannot fit the ${cap} integration cap`, {seam: seam.id});
-    if (used + need > cap) {shards.push([]); used = fixed;}
+    if (used + need > cap || shards.at(-1).length >= perCall) {shards.push([]); used = fixed;}
     shards.at(-1).push(seam); used += need;
   }
   return shards;
@@ -168,7 +170,10 @@ async function integrate({role, views, reports, seams, ask, limits, usage}) {
   const base = {review_context: {...reviewContext, integration: true}, manifest: views[0].change_manifest,
     untrusted_unit_summaries: views.map((view, index) => summaryOf(view, reports[index]))};
   const entries = [];
-  for (const shard of shardSeams(base, seams, limits.integration_cap)) {
+  // No seam, no session: CI recomputes the seams, so an empty list cannot be claimed falsely (integration-plan.cjs).
+  if (!seams.length) return entries;
+  const {reviewed, overflow} = selectSeams(seams, limits.integration_max_seams);
+  for (const shard of shardSeams(base, reviewed, limits.integration_cap, limits.integration_call_seams)) {
     const check = value => {dispositionsOf(value, shard);};
     const response = await ask({role, phase: 'integration', schema: schemaOf(), check,
       prompt: `${policy()}\n\n${stageInstructions}Role: ${role}. This is the integration pass of a chunked review. You see only your own role's unit summaries; ` +
@@ -178,6 +183,7 @@ async function integrate({role, views, reports, seams, ask, limits, usage}) {
     usage.push(response.provenance);
     entries.push({seams: shard.map(seam => seam.id), dispositions: dispositionsOf(response.value, shard)});
   }
+  if (overflow.length) entries.push(overflowEntry(overflow, limits.integration_max_seams));
   return entries;
 }
 
@@ -188,7 +194,7 @@ function mergeWithIntegration({reports, integration, snapshot, seams}) {
   const expected = checkSeams(seams).map(seam => seam.id);
   let rows;
   try {
-    if (!Array.isArray(integration) || !integration.length) throw new Error('no integration pass');
+    if (!Array.isArray(integration) || (!integration.length && expected.length)) throw new Error('no integration pass');
     rows = integration.flatMap(entry => dispositionsOf({dispositions: entry.dispositions}, entry.seams.map(id => ({id}))));
   } catch {
     throw refuse('integration_invalid', 'Integration entries are missing or do not disposition their seams exactly once');
