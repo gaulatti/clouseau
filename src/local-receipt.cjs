@@ -33,6 +33,8 @@ function validateTrust(trust) {
     Array.isArray(trust.keys) && trust.keys.length > 0 &&
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
     trust.max_age_seconds <= 172800, 'explicit trust policy and maximum age required');
+  const chunkedProblem = require('./chunked-wiring.cjs').problem(trust.chunked);
+  requireReceipt(chunkedProblem === null, `invalid protected chunked review configuration: ${chunkedProblem}`);
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -116,7 +118,7 @@ function signingKey(bundle, trust) {
 }
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = null}) {
+  now = Date.now(), engine = null, chunked = undefined}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;
@@ -152,7 +154,9 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     requireReceipt(record.result.decision === 'auto_approve', 'review did not pass');
     throw new EngineMismatchError('engine mismatch; the receipt predates the current protected engine and is never accepted as evidence');
   }
-  const result = reviewDecision(record, {chunked});
+  // A chunked record is verified against the protected parameters of the trust policy unless the caller supplies its own.
+  const chunkedOptions = chunked !== undefined ? chunked : (Object.hasOwn(record, 'partition') ? require('./chunked-wiring.cjs').verifierOptions(trust) : null);
+  const result = reviewDecision(record, {chunked: chunkedOptions});
   requireReceipt(result.decision === 'auto_approve', 'review did not pass');
   return {record, ...result};
 }

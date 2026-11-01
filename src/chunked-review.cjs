@@ -1,6 +1,6 @@
 'use strict';
 
-// Unit runner for a chunked local review (design: chunked review, section 7, PR 4). Dark: nothing calls it.
+// Unit runner for a chunked local review (design: chunked review, section 7, PR 4). Called through chunked-wiring.cjs.
 //
 // Given a partition plan and the combined snapshot it runs every unit through the unchanged examiner and
 // challenger investigation (`investigate`, local-review.cjs) on that unit's view, at most `concurrency` sessions

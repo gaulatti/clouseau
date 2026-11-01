@@ -1,6 +1,6 @@
 # Cross-unit seams (chunked review)
 
-Status: dark. `src/review-seams.cjs` is called by nothing yet; the unit runner and the integrator (separate changes) use it.
+Status: live. `src/chunked-wiring.cjs` computes the seams of a chunked review with `seamsOf` and the verifier recomputes them.
 
 A defect can sit between review units: a caller in one unit of a function whose contract changed in another. The controller
 computes those seams from the signed snapshot and the partition plan, never a model, so CI can recompute them with the
