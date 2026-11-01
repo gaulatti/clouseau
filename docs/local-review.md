@@ -486,12 +486,29 @@ an unstamped change (the pending or blocked result carries the notice).
 
 Deliberately unchanged, because they are intent and infrastructure rather than
 receipt verification: a verified receipt still cannot replace changed review
-history or supply protected-control owner authorization (the controller holds);
+history or supply protected-control owner authorization (the controller holds,
+and the notice now names which rule: cause `receipt_protected_controls` or
+`receipt_history_changed`);
 a GitHub outage, rate limit or permission error while reading the receipt is
 reported with its ordinary cause, not ignored; and the post-assessment gate
 re-verifies the exact accepted record immediately before approval or merge and
 refuses (it does not fall back) if that record no longer verifies, in which case
 the next run assesses afresh.
+
+### Protected files make a receipt unusable in CI
+
+A change to any protected control path (the CI workflow, `.github/ci/`,
+`.github/clouseau.json`, CODEOWNERS, `.clouseau-local.json`, the repository
+policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs exact-head
+owner confirmation (`/approve-intent <head sha>` from the configured maintainer).
+A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
+cause `receipt_protected_controls` and a reason naming the protected controls.
+`clouseau review` and `clouseau publish` print the same condition as a
+`warning:` on stderr and a `warnings` entry in their JSON result, naming only
+the repository paths. This includes the mandatory agent-standard updater commit
+(`chore(agents): sync managed rules ...`), which rewrites `AGENTS.md`: keep it
+local and unpushed, or push it on its own PR with a maintainer confirmation,
+rather than riding on an ordinary change.
 
 Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
 engine. The collector records that engine revision as untrusted source evidence

@@ -403,6 +403,8 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /owner authorization changed/);
     const held = await assess();
     assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
+    assert.equal(held.cause, 'receipt_protected_controls');
+    assert.match(held.reason, /protected review controls \(AGENTS\.md, .*exact-head owner confirmation is missing\.$/);
     f.state.comments = owner;
   }
   if (central === true) {
@@ -412,9 +414,23 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
       return {data: result.data.map(({patch, ...file}) => file)};
     };
     f.state.comments = [{id: 88, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
-    assert.equal((await assess()).decision, 'review_incomplete', 'owner intent cannot waive incomplete GitHub patch evidence');
+    const incomplete = await assess();
+    assert.equal(incomplete.decision, 'review_incomplete', 'owner intent cannot waive incomplete GitHub patch evidence');
+    assert.equal(incomplete.cause, 'changed_files_incomplete');
     f.state.comments = [];
     f.github.rest.pulls.listFiles = list;
+  }
+  if (central === false) {
+    const state = {version: 2, repository: `${f.context.repo.owner}/${f.context.repo.repo}`, number: f.state.pr.number,
+      head_sha: f.state.pr.head.sha, findings: [{id: 'f'.repeat(64), blocking: true, state: 'confirmed',
+        title: 'Later blocker', path: 'src/upload.test.js', cause: 'Persistence missing', obligation: 'Durable acceptance'}]};
+    f.state.comments = [{id: 999, user: {login: 'github-actions[bot]', type: 'Bot'},
+      body: `<!-- clouseau-acceptance:v2 -->\n<!-- clouseau-state:${Buffer.from(JSON.stringify(state)).toString('base64')} -->`}];
+    const changed = await assess();
+    assert.equal(changed.decision, 'review_incomplete');
+    assert.equal(changed.cause, 'receipt_history_changed');
+    assert.match(changed.reason, /findings recorded on the pull request changed after the local receipt was issued/);
+    f.state.comments = [];
   }
   if (central === true) {
     const newerEngine = {...engine, sha: 'd'.repeat(40)};
