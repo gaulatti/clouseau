@@ -507,3 +507,16 @@ scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000] [
 
 The parameters are fixed in code for now; reading them from protected configuration is part of wiring the
 partition into review.
+
+### Alcantara-shaped measurement
+
+`scripts/measure-chunked [TABLE.json] [--ceiling N] [--shared N] [--cap N] [--max-units N]` builds a synthetic
+change from a table (fictional filler content of exactly the measured sizes, a real derived lockfile summary, compact
+added files), partitions it, builds every unit view, merges fake finding-free unit reports, builds the thin chunked
+record, signs it with an ephemeral key and verifies it through the one derivation. It prints the unit count,
+per-unit sizes (view, owned, shared, manifest, foreign hunks, estimated prompt), the record size against the 95%
+signing limit and the signed receipt size. No AI, network or secret is used. For `02618a9` it gives 4 units, a 1.55M
+combined snapshot, a 1.70M record (59.5% of the limit) and a largest estimated prompt of 588K characters.
+`src/chunked-measure.test.cjs` asserts these bounds and, in tests named `known size gap`, pins every place the
+current code still refuses a change for its size (170 files over the combined cap, more than 8 units, a record over
+the signing limit, roughly 500 paths over the manifest cap, a file over 300,000 bytes, a unit over the unit budget).
