@@ -2,7 +2,7 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const table = require('../test/fixtures/alcantara-02618a9.json');
-const {PARAMS, CODEX_LIMIT, RECEIPT_LIMIT, MeasureRefusal, scaledTable, withLargeFile, filler, combinedSnapshot, changeTable,
+const {PARAMS, CODEX_LIMIT, RECEIPT_LIMIT, MeasureRefusal, scaledTable, withLargeFile, filler, combinedSnapshot, changeTable, hooksFor,
   buildRecord, signAndVerify, measure, render, main} = require('../test/chunked-measure.cjs');
 const {refresh} = require('./acceptance-sources.cjs');
 const {checkOwnership, PartitionRefusal} = require('./review-partition.cjs');
@@ -63,6 +63,12 @@ test('the plan owns every changed path once and every unit view is inside the un
     assert.equal(view.digest, plan.units[index].view_digest);
   });
   assert.ok(report.units.some(unit => unit.foreign_hunks > 0), 'cross-unit imports produce foreign hunks');
+});
+
+test('foreign hunks are listed in path order whichever order the snapshot lists its files', () => {
+  const reversed = {...snapshot, files: [...snapshot.files].reverse()};
+  const view = hooksFor(PARAMS).unitView(reversed, built.plan.units[1]);
+  assert.deepEqual(view.foreign_hunks.map(hunk => hunk.path), built.views[1].foreign_hunks.map(hunk => hunk.path));
 });
 
 test('the merge accepts a full set of fake unit reports and the chunked record verifies, signed, under the record cap', () => {
