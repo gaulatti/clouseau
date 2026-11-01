@@ -58,7 +58,7 @@ parts: [{bytes, sha256}]}`, while `payload.record_digest` is the digest of the r
 every byte of every part: a part that is altered, dropped, repeated, reordered or substituted fails the root, and the record
 the verifier rebuilds is exactly the one that was signed. `issueReceipt` returns `{payload, signature, parts}` (parts as base64);
 `publish` stores `clouseau-review.json` (the envelope) and `clouseau-review.part-0001`, `-0002`, ... as files of the one
-immutable commit; `loadReceipt` reads them in the order the root lists and `verifyReceipt` joins them. Each file stays inside the
+immutable commit; `loadReceipt` reads them in the order the root lists, and only for an envelope that an enrolled key of the given `trust` signed (an unsigned root makes CI read nothing), and `verifyReceipt` joins them. Each file stays inside the
 3,000,000 byte bound, and a receipt with parts is rejected unless its payload has a root (and the reverse).
 
 The only remaining limit is the verifier's memory: it parses the rebuilt record as one JSON text, which JavaScript bounds at

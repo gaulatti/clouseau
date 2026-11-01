@@ -119,7 +119,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Invalid compact local review record');
     }
     const receipts = require('./local-receipt.cjs');
-    const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact});
+    const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact, trust: config.local_review});
     const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
       repository: `${repo.owner}/${repo.repo}`, author: record.local_author, headSha: assessment.head_sha,
       baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest()});
@@ -151,7 +151,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       let bundle = null;
       let verified = null;
       if (receiptRef) {
-        bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
+        bundle = await receipts.loadReceipt({github, repo, ref: receiptRef, trust: config.local_review});
         try {
           verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
             repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,

@@ -9,7 +9,8 @@ const os = require('node:os');
 const path = require('node:path');
 const {chunkedFixture} = require('../test/chunked-fixture.cjs');
 const {PART_SCHEME, PART_BYTES, partName, isRoot, splitRecord, joinRecord} = require('./receipt-parts.cjs');
-const {issueReceipt, verifyReceipt, loadReceipt} = require('./local-receipt.cjs');
+const {DOMAIN, issueReceipt, verifyReceipt, loadReceipt} = require('./local-receipt.cjs');
+const {digest} = require('./acceptance.cjs');
 const {publishReceipt} = require('./local-cli.cjs');
 const {RECORD_LIMIT} = require('./chunked-record.cjs');
 
@@ -116,13 +117,22 @@ test('the parts of a receipt are loaded from the same immutable commit, large on
     const bytes = Object.values(files).find(item => sha1(item) === sha);
     return {data: {encoding: 'base64', content: bytes.toString('base64'), size: bytes.length, sha}};
   }}}};
-  const loaded = await loadReceipt({github, repo, ref});
+  // Nothing but the envelope is fetched for a root that no enrolled key signed, or without a trust policy to check it.
+  await assert.rejects(loadReceipt({github, repo, ref}), /only loaded against a trust policy/);
+  await assert.rejects(loadReceipt({github, repo, ref, trust: {...f.expected.trust, keys: [{...f.expected.trust.keys[0], id: 'other'}]}}), /untrusted, revoked or invalid signature/);
+  assert.deepEqual(seen, ['clouseau-review.json', 'clouseau-review.json']);
+  seen.length = 0;
+  const loaded = await loadReceipt({github, repo, ref, trust: f.expected.trust});
   assert.deepEqual(seen, ['clouseau-review.json', ...bundle.parts.map((_, index) => partName(index))]);
   assert.deepEqual(loaded, bundle);
   assert.equal(verifyReceipt(loaded, f.expected).decision, 'auto_approve');
-  // A root without parts listed is not loaded.
-  files['clouseau-review.json'] = Buffer.from(JSON.stringify({payload: {record: {scheme: PART_SCHEME, parts: []}}, signature: 'x'}));
-  await assert.rejects(loadReceipt({github, repo, ref}), /malformed multi-part record root/);
+  // A signed root that lists no parts is not loaded.
+  const signed = record => {
+    const payload = {...bundle.payload, record, record_digest: digest(record)};
+    return Buffer.from(JSON.stringify({payload, signature: crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(payload)}`), crypto.createPrivateKey(f.issue.privateKey)).toString('base64url')}));
+  };
+  files['clouseau-review.json'] = signed({scheme: PART_SCHEME, parts: []});
+  await assert.rejects(loadReceipt({github, repo, ref, trust: f.expected.trust}), /malformed multi-part record root/);
   // An ordinary receipt loads as before, with no parts.
   files['clouseau-review.json'] = Buffer.from(JSON.stringify({payload: {record: {version: 3}}, signature: 'x'}));
   assert.equal((await loadReceipt({github, repo, ref})).parts, undefined);

@@ -97,9 +97,9 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   return split ? {payload, signature, parts: split.parts.map(part => part.toString('base64'))} : {payload, signature};
 }
 
-function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = null}) {
-  validateTrust(trust);
+// The enrolled key that signed this envelope, or a refusal. It looks at the signed payload only, never at a record or a
+// part, so it can run before anything else is fetched.
+function signingKey(bundle, trust) {
   // The parts of a multi-part receipt travel beside the signed envelope; each is bounded like a receipt artifact.
   const keyList = bundle && typeof bundle === 'object' ? Object.keys(bundle).sort().join(',') : '';
   requireReceipt(['payload,signature', 'parts,payload,signature'].includes(keyList) &&
@@ -112,6 +112,14 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
   requireReceipt(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
     Buffer.from(bundle.signature, 'base64url')), 'untrusted, revoked or invalid signature');
+  return key;
+}
+
+function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
+  now = Date.now(), engine = null, chunked = null}) {
+  validateTrust(trust);
+  const key = signingKey(bundle, trust);
+  const p = bundle.payload;
   requireReceipt(key.github_actor === author, 'signing identity is not enrolled for this PR author');
   const timestamp = Math.floor(now / 1000);
   requireReceipt(Number.isSafeInteger(p.issued_at) && Number.isSafeInteger(p.expires_at) &&
@@ -189,12 +197,15 @@ async function loadFile({github, repo, ref, path}) {
   return Buffer.from(data.content, 'base64');
 }
 
-// The signed envelope and, for a multi-part receipt, its parts in the order the signed root lists them.
-async function loadReceipt({github, repo, ref}) {
+// The signed envelope and, for a multi-part receipt, its parts in the order the signed root lists them. Parts are fetched
+// only for an envelope that an enrolled key signed (`trust`), so an unsigned root can never make CI read files.
+async function loadReceipt({github, repo, ref, trust}) {
   requireReceipt(sha(ref), 'immutable receipt reference required');
   const bundle = JSON.parse((await loadFile({github, repo, ref, path: 'clouseau-review.json'})).toString('utf8'));
   const root = bundle?.payload?.record;
   if (isRoot(root)) {
+    requireReceipt(trust, 'a multi-part receipt is only loaded against a trust policy');
+    signingKey(bundle, validateTrust(trust));
     requireReceipt(Array.isArray(root.parts) && root.parts.length > 0, 'malformed multi-part record root');
     bundle.parts = [];
     for (let index = 0; index < root.parts.length; index++) {
