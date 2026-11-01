@@ -26,6 +26,7 @@ const COMMANDS = {
   'installation-publish': ['directory', 'receipt'],
   'installation-check': ['repository', 'pull-request'],
 };
+const SETTINGS_NOTICE = 'Repository settings could not be verified as merge-safe (unprotected private base branch or unreadable auto-merge setting); trust was verified and automatic merge stays withheld until a maintainer merges manually or protects the base branch.';
 const requireInput = (condition, message) => { if (!condition) throw new Error(`Initial installation: ${message}`); };
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -241,8 +242,11 @@ async function check(args, {api, installed, clock, maxPolls = 240, pause = wait}
   const config = await remoteConfiguration(api, manifest);
   const repository = await api('GET', `repos/${args.repository}`);
   const base = await api('GET', `repos/${args.repository}/branches/${encodeURIComponent(manifest.base_branch)}`);
-  requireInput(!(repository.private && !base.protected) || (['manual', 'automatic'].includes(config.merge_mode) && repository.allow_auto_merge === false),
-    'unprotected private installations require explicit manual or strict owner automatic mode and disabled repository auto-merge');
+  // Repository settings are the owner's choice and are never an installation precondition. The workflow token cannot
+  // even read allow_auto_merge (it arrives as null), so unreadable or insufficient settings only withhold merge arming,
+  // which this check never grants (auto_merge_authorized is always false) and surface one fixed notice.
+  const settingsSufficient = !repository.private || base.protected === true ||
+    (['manual', 'automatic'].includes(config.merge_mode) && repository.allow_auto_merge === false);
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
   await verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: reviewer.sha, installation: grant});
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
@@ -267,7 +271,7 @@ async function check(args, {api, installed, clock, maxPolls = 240, pause = wait}
   return {installation_verified: true, manual_owner_acceptance_required: true, ordinary_pr_approval: false,
     auto_merge_authorized: false, head_sha: manifest.head_sha, base_sha: manifest.base_sha,
     reviewer_sha: reviewer.sha, reviewer_digest: reviewer.digest, record_digest: digest(verified.record),
-    provider_api_calls: 0, technical};
+    provider_api_calls: 0, technical, ...(settingsSufficient ? {} : {notice: SETTINGS_NOTICE})};
 }
 
 async function main(argv, runtime = {}) {
@@ -305,4 +309,4 @@ async function main(argv, runtime = {}) {
   return check(args, context);
 }
 
-module.exports = {COMMANDS, options, readJson, writeJson, positive, verification, runReview, remoteConfiguration, readyPull, check, main};
+module.exports = {SETTINGS_NOTICE, COMMANDS, options, readJson, writeJson, positive, verification, runReview, remoteConfiguration, readyPull, check, main};
