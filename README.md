@@ -164,6 +164,15 @@ from GitHub Actions, a fresh approving review, no deletion, and no force pushes.
 administrator must also verify no bypass actors. Repository auto-merge and Actions
 approving reviews must be enabled for automatic merge. Runtime tokens do not get administration access.
 
+Missing or insufficient repository settings are a notice, never a failure. The review, acceptance
+record and approval complete and the job succeeds, but Clouseau neither arms nor performs the
+merge. It posts one fixed-text comment, updated in place, naming only bounded classes: auto-merge
+disabled, main not protected, required checks missing, approval freshness missing, up-to-date
+missing, force-push+deletion protection missing. Security reasoning: without protection the bot
+approval cannot make an unsafe merge more possible than it already is, so it is harmless, while
+merging or arming auto-merge on insufficient protection stays forbidden. API errors other than a
+reported gap still fail.
+
 Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
 configuration. Repository auto-merge must be disabled in this mode, including
 for owner-authored PRs. Tests, exact coverage, review, source binding and

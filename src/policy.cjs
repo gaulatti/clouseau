@@ -406,13 +406,15 @@ async function assertProtection(github, repo, policyJob = CHECK) {
     {...repo, branch: config.base_branch, per_page: 100});
   const checks = rules.find(rule => rule.type === 'required_status_checks')?.parameters;
   const reviews = rules.find(rule => rule.type === 'pull_request')?.parameters;
-  if (!checks?.strict_required_status_checks_policy ||
-    [config.verification.job, policyJob].some(name => !checks.required_status_checks.some(check =>
-      check.context === name && check.integration_id === 15368)) ||
-    !reviews || reviews.required_approving_review_count < 1 ||
-    !reviews.dismiss_stale_reviews_on_push || !reviews.require_last_push_approval ||
-    !rules.some(rule => rule.type === 'deletion') || !rules.some(rule => rule.type === 'non_fast_forward')) {
-    throw new Error(`Main must enforce ${config.verification.job}, ${policyJob}, fresh approval, up-to-date checks, and protection from deletion/force pushes`);
+  const gaps = [];
+  if ([config.verification.job, policyJob].some(name => !checks?.required_status_checks?.some(check =>
+    check.context === name && check.integration_id === 15368))) gaps.push('required checks missing');
+  if (!checks?.strict_required_status_checks_policy) gaps.push('up-to-date missing');
+  if (!reviews || reviews.required_approving_review_count < 1 ||
+    !reviews.dismiss_stale_reviews_on_push || !reviews.require_last_push_approval) gaps.push('approval freshness missing');
+  if (!rules.some(rule => rule.type === 'deletion') || !rules.some(rule => rule.type === 'non_fast_forward')) gaps.push('force-push+deletion protection missing');
+  if (gaps.length) {
+    throw Object.assign(new Error(`Main must enforce ${config.verification.job}, ${policyJob}, fresh approval, up-to-date checks, and protection from deletion/force pushes`), {gaps});
   }
 }
 
@@ -453,6 +455,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
   const initialProtection = await protection();
   const controllerManaged = initialProtection.controllerManaged === true;
+  const protectionGaps = initialProtection.insufficient ? initialProtection.gaps : null;
   // A held assessment carries no record by design; report its own reason
   // instead of the misleading missing-record error that would hide it.
   const held = assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity';
@@ -477,7 +480,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       if (privateOwnerAutomatic) ownership = {...ownership, automatic: false, reason: 'Explicit automatic mode requires configured CODEOWNERS on the accepted base; automatic merge is denied.'};
     }
     const automatic = ownership.automatic && !manualMerge;
-    const nativeAutomatic = automatic && !controllerManaged;
+    const nativeAutomatic = automatic && !controllerManaged && !protectionGaps;
     if (!nativeAutomatic && pr.auto_merge) {
       await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
     }
@@ -563,6 +566,11 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
         (currentProtection && !currentProtection.enforced ? `\n\n${currentProtection.reason}` : ''));
       return;
     }
+    if (protectionGaps) {
+      await require('./merge-protection.cjs').postProtectionNotice({github, repo, pull_number, gaps: protectionGaps});
+      await finish('success', `Tests, exact coverage and approval recorded. Merge was not armed because repository settings are insufficient: ${protectionGaps.join(', ')}.`);
+      return;
+    }
     if (manualMerge) {
       await finish('success', 'Tests, exact coverage and review passed. Automatic merge is disabled; the code owner must merge manually.' +
         (currentProtection.enforced ? '' : `\n\n${currentProtection.reason}`));
@@ -610,6 +618,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
     const checked = await require('./merge-protection.cjs').assertMergeProtection({github, repo,
       baseBranch: config.base_branch, manual: false, privateOwnerAutomatic,
       assertProtection: () => assertProtection(github, repo, 'approve-and-merge')});
+    if (checked.insufficient) return;
     if (checked.controllerManaged) throw new Error('Private owner merge must complete through the validated acceptance gate before finalization');
   }
   if (codeownersRequired && !pr.merged) {
