@@ -295,8 +295,11 @@ function parseYarn(text) {
       const protocol = resolution.slice(resolution.indexOf('@', 1) + 1);
       // The resolved package name is the one the install fetches; a header name pointing elsewhere is an alias.
       const resolved = resolution.slice(0, resolution.indexOf('@', 1));
-      if (resolved !== name) flags.push(`alias:${show(resolved)}`);
-      source = protocol.startsWith('npm:') ? 'registry:npm' : protocol.startsWith('workspace:') ? 'workspace' : `other:${show(protocol)}`;
+      // Berry merges every descriptor that resolves to one package into a single block, so each must name it.
+      const names = item.header.split(', ').map(descriptor => descriptor.replaceAll('"', '')).map(descriptor => descriptor.slice(0, descriptor.indexOf('@', 1)));
+      if (names.some(candidate => candidate !== resolved)) flags.push(`alias:${show(resolved)}`);
+      // Parameters after "::" (for example __archiveUrl) change where the tarball comes from.
+      source = protocol.startsWith('npm:') && !protocol.includes('::') ? 'registry:npm' : protocol.startsWith('workspace:') ? 'workspace' : `other:${show(protocol)}`;
       key = resolution;
     } else {
       if (!isText(item.fields.resolved)) fail('invalid_structure');

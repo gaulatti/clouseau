@@ -441,3 +441,10 @@ test('a yarn berry entry resolving to another package name is an alias, and pref
   const prefixed = version => lock.npmLock([{name: 'a', version, resolved: `https://repo.example.invalid/npm/a/-/a-${version}.tgz`}]);
   assert.doesNotMatch(summarize('package-lock.json', prefixed('1.0.0'), prefixed('1.1.0')), /^RISK\[/m);
 });
+
+test('berry resolutions with tarball parameters or a merged alias descriptor are not plain registry packages', () => {
+  const archive = summarize('yarn.lock', YARN_BERRY('4.17.21', 'lodash@npm:4.17.21', 'aaa'), YARN_BERRY('4.17.22', 'lodash@npm:4.17.22::__archiveUrl=https%3A%2F%2Fevil.example.invalid%2Fl.tgz', 'bbb'));
+  assert.match(archive, /^RISK\[source-changed,left-registry\] CHANGED lodash: .*registry:npm -> other:npm:4\.17\.22::__archiveUrl=/m);
+  const merged = '__metadata:\n  version: 6\n\n"lodash@npm:^4.17.21, evil@npm:^1.0.0":\n  version: 4.17.21\n  resolution: "lodash@npm:4.17.21"\n  checksum: aaa\n';
+  assert.match(summarize('yarn.lock', '', merged, 'added'), /alias-added\] ADDED lodash@4\.17\.21 .*flags=alias:lodash/m);
+});
