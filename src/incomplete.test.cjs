@@ -25,9 +25,13 @@ test('every cause has a specific next step and unknown causes fall to the diagno
   for (const cause of Object.keys(NEXT_STEPS)) {
     const text = body({...assessment, cause}, 'https://github.com/example/product/actions/runs/9');
     assert.ok(text.startsWith(`${MARKER}\n`));
-    assert.ok(text.includes(NEXT_STEPS[cause]));
+    assert.ok(text.includes(NEXT_STEPS[cause].replaceAll('{head}', assessment.head_sha)));
     assert.ok(text.includes('Reason owner second line'), 'mentions are neutralized and whitespace collapsed');
-    assert.ok(text.includes('actions/runs/9') && text.includes('aaaaaaaaaaaa') && !text.includes('a'.repeat(13)));
+    assert.ok(text.includes('actions/runs/9') && text.includes('aaaaaaaaaaaa'));
+    // Only the maintainer command carries the full revision.
+    assert.equal(text.includes('a'.repeat(13)), cause === 'receipt_protected_controls');
+    if (cause === 'receipt_protected_controls') assert.ok(text.includes(`\`/approve-intent ${assessment.head_sha}\``));
+    assert.ok(!text.includes('artifact'), 'no incomplete notice names an artifact that may not exist in this transport');
     assert.match(text, /no secret values/);
   }
   assert.ok(body({...assessment, cause: 'unknown'}, 'u').includes(NEXT_STEPS.evidence_incomplete));

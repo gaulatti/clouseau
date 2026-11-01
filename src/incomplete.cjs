@@ -24,11 +24,11 @@ const NEXT_STEPS = Object.freeze({
   verification_failed: 'Open the failing job linked in the reason (when it names one), fix the failing step, and push; the review is reassessed when verification passes.',
   github_api_error: 'GitHub rejected an API request this review needs (status and endpoint are in the reason). Re-run the failed jobs; if it repeats, the PR or repository state it describes must change.',
   github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
-  receipt_protected_controls: 'A local receipt cannot stand in for the owner. Either have a maintainer comment `/approve-intent` followed by the full head SHA of this exact revision, ' +
+  receipt_protected_controls: 'A local receipt cannot stand in for the owner. Either have a maintainer comment exactly `/approve-intent {head}` on this pull request, ' +
     'or remove the protected-file change (for example an AGENTS.md update, which should stay out of an ordinary PR) and push a new head.',
   receipt_history_changed: 'Run the local Clouseau review again on this exact head so the receipt reflects the findings now on the pull request.',
   chunked_record_invalid: 'The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head.',
-  evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
+  evidence_incomplete: 'Open the log of the failed assessment job in the workflow run below for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
 });
 
@@ -87,7 +87,7 @@ function classify(error) {
 }
 
 function body(assessment, runUrl) {
-  const step = NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete;
+  const step = (NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete).replaceAll('{head}', String(assessment.head_sha));
   const reason = String(assessment.reason).replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500);
   return `${MARKER}\n## Clouseau review incomplete\n\n` +
     `Revision \`${String(assessment.head_sha).slice(0, 12)}\` was not approved or merged because no review decision could be reached.\n\n` +

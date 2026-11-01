@@ -404,6 +404,9 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     const held = await assess();
     assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
     assert.equal(held.cause, 'receipt_protected_controls');
+    const notice = require('./incomplete.cjs').body(held, 'https://github.com/example/run/1');
+    assert.ok(notice.includes(`\`/approve-intent ${held.head_sha}\``), 'the notice states the exact command for this head');
+    assert.ok(!notice.includes('artifact'), 'no artifact is named');
     assert.match(held.reason, /protected review controls \(AGENTS\.md, .*exact-head owner confirmation is missing\.$/);
     f.state.comments = owner;
   }
