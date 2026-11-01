@@ -200,11 +200,16 @@ test('grades attach to the merged findings exactly once and must match their rec
 
 test('every unit and the integration pass must have recorded harness executions', async () => {
   const f = await chunkedFixture({finding: true});
-  const without = predicate => {
-    const record = clone(f.record); record.result.usage = record.result.usage.filter(item => !predicate(item)); return reseal(record);
+  const without2 = (record, predicate) => {
+    const copy = clone(record); copy.result.usage = copy.result.usage.filter(item => !predicate(item)); return reseal(copy);
   };
+  const without = predicate => without2(f.record, predicate);
   rejects(without(item => item.role === 'challenger' && item.unit === 'u1'), f.chunked, /challenger has no recorded investigation of unit u1/);
-  rejects(without(item => item.role === 'examiner' && item.phase === 'integration'), f.chunked, /examiner has no recorded integration pass/);
+  // The seams are recomputed by CI: with none there is nothing to integrate and no session is required; with some, one is.
+  assert.equal(reviewDecision(without(item => item.role === 'examiner' && item.phase === 'integration'), {chunked: f.chunked}).decision, 'auto_approve');
+  const seamed = clone(f.record); seamed.seams = [{id: 's1'}];
+  const seams = {...f.chunked, hooks: {...f.chunked.hooks, seams: () => seamed.seams}};
+  rejects(without2(seamed, item => item.role === 'examiner' && item.phase === 'integration'), seams, /examiner has no recorded integration pass/);
   rejects(without(item => item.role === 'examiner' && item.phase === 'grading'), f.chunked, /examiner has no recorded grading round/);
   const tagged = clone(f.record); tagged.result.usage[0].unit = 'u7'; reseal(tagged);
   rejects(tagged, f.chunked, /tagged with an unknown unit/);

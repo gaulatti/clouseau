@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const {digest} = require('./acceptance.cjs');
 const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
-const {askHarness} = require('./local-harness.cjs');
+const {askHarness, assertHarness} = require('./local-harness.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
@@ -30,7 +30,9 @@ function options(argv) {
     'agent-request', 'answer', 'session', 'engine'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
-    if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) throw new Error('Invalid Clouseau local arguments');
+    if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) {
+      throw new Error(`Invalid Clouseau local arguments at ${JSON.stringify(args[i])}: every option is "--name value", given once; accepted: ${allowed.map(item => `--${item}`).join(' ')}`);
+    }
     parsed[name] = args[i + 1];
   }
   return parsed;
@@ -147,6 +149,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   const agent = args.agent;
   if (agent && args.harness) throw new Error('Choose either --agent (inside an AI harness) or --harness (headless), not both');
   if (agent && !AGENTS.includes(agent)) throw new Error(`Supported agent harnesses: ${AGENTS.join(', ')}`);
+  if (args.harness) assertHarness(args.harness);
   const base =args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
   const config = readLocalConfig(JSON.parse(git(directory, ['show', `${base}:.clouseau-local.json`])));
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
@@ -169,6 +172,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     const parsed = JSON.parse(git(directory, ['show', `${base}:.github/clouseau.json`]));
     ciConfig = require('./config.cjs').validateConfig(parsed);
   }
+  const warn = paths => {const warnings = controlWarnings(ciConfig, paths); return warnings.length ? {warnings} : {};};
   let identityPath = args.identity;
   if (!identityPath && ciConfig?.local_review) {
     const available = ciConfig.local_review.keys.filter(key => !key.revoked)
@@ -212,7 +216,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
-      provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical)};
+      provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths)};
   }
   const agentDirectory = path.join(cache, 'agent');
   // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
@@ -344,7 +348,18 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,
-    harness_invocations: result.usage.length, ...reviewStatus(technical)};
+    harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths)};
+}
+
+// A receipt that touches protected review controls verifies but cannot carry owner confirmation, so CI holds the review.
+// Say so while the author can still act, naming only repository paths.
+function controlWarnings(config, paths) {
+  const hits = config ? require('./policy.cjs').protectedChanges(config, paths.map(filename => ({filename}))) : [];
+  if (!hits.length) return [];
+  const warning = `Protected review controls changed (${hits.slice(0, 5).join(', ')}): CI cannot accept a local receipt for this change ` +
+    'without the exact-head owner confirmation (/approve-intent) and will report review_incomplete. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.';
+  process.stderr.write(`warning: ${warning}\n`);
+  return [warning];
 }
 
 function publishReceipt({directory, receipt}) {
@@ -355,6 +370,9 @@ function publishReceipt({directory, receipt}) {
   const {isRoot, joinRecord, partName} = require('./receipt-parts.cjs');
   const record = isRoot(payload.record) ? joinRecord(payload.record, parts.map(part => Buffer.from(part, 'base64'))) : payload.record;
   assertUnchanged(directory, record.snapshot);
+  const configured = git(directory, ['ls-tree', record.snapshot.base_sha, '--', '.github/clouseau.json']).trim();
+  const warnings = controlWarnings(configured ? require('./config.cjs').validateConfig(JSON.parse(
+    git(directory, ['show', `${record.snapshot.base_sha}:.github/clouseau.json`]))) : null, record.snapshot.paths);
   const files = [['clouseau-review.json', JSON.stringify(envelope) + '\n'],
     ...parts.map((part, index) => [partName(index), Buffer.from(part, 'base64')])];
   const entries = files.map(([name, content]) => `100644 blob ${git(directory, ['hash-object', '-w', '--stdin'], content).trim()}\t${name}\n`);
@@ -362,10 +380,11 @@ function publishReceipt({directory, receipt}) {
   const commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
     `Authenticated local review of ${record.snapshot.head_sha}\n`).trim();
   git(directory, ['push', 'origin', `${commit}:refs/tags/clouseau-review/${payload.nonce}`]);
-  return {artifact_commit: commit, marker: `<!-- clouseau-local-review:v1 ${commit} -->`};
+  return {artifact_commit: commit, marker: `<!-- clouseau-local-review:v1 ${commit} -->`, ...(warnings.length ? {warnings} : {})};
 }
 
 async function main(argv, runtime = {}) {
+  if (['--help', '-h', 'help'].includes(argv[0])) return require('./cli-usage.cjs').usage();
   if (argv[0] === 'public-identity' || argv[0]?.startsWith('installation-')) return require('./installation-cli.cjs').main(argv, runtime);
   const args = options(argv);
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
@@ -373,7 +392,7 @@ async function main(argv, runtime = {}) {
   if (args.command === 'review') return runReview(args, runtime);
   if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
-  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --agent claude|codex|opencode | --harness codex|claude --identity FILE --additional-checks FILE --engine latest] | respond --agent-request FILE --answer FILE --session ID | publish --directory PATH --receipt FILE');
+  throw new Error(require('./cli-usage.cjs').usage());
 }
 
 module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};

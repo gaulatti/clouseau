@@ -455,9 +455,7 @@ check. Manual mode continues to require manual merge.
 Every `review_incomplete` assessment carries a fixed `cause` (for example
 `provider_key_missing`, `provider_key_invalid`, `provider_rejected`,
 `provider_unavailable`, `local_receipt_required`,
-`control_authorization_required` or `evidence_incomplete`). When review controls
-or the protected purpose contract changed and a local receipt cannot carry that
-authority, the notice is `control_authorization_required` and states the exact
+`evidence_incomplete`). The `receipt_protected_controls` notice states the exact
 command a maintainer posts, `/approve-intent <full head SHA>`. Notices never name
 an artifact; the diagnostic is in the assessment job log. A local receipt that does not verify is never a cause: it is
 ignored with a fixed one-line notice and CI reviews the change itself (see

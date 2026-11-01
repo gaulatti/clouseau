@@ -15,8 +15,6 @@ test('failures map to fixed, secret-free causes and never forward raw error text
     {cause: 'provider_rejected', reason: 'Jev provider rejected the credential (HTTP 403).'});
   assert.deepEqual(classify(new Error('Acceptance provider unavailable: HTTP 503')),
     {cause: 'provider_unavailable', reason: 'Acceptance provider was unavailable (HTTP 503).'});
-  assert.deepEqual(classify(Object.assign(new Error('internal text'), {code: 'CONTROL_AUTHORIZATION'})), {cause: 'control_authorization_required',
-    reason: 'Review controls or a protected repository-purpose contract changed, and no maintainer has authorized this exact revision.'});
   for (const error of [new Error(`Headers.append: "Bearer ${SECRET}" is an invalid header value`), {}, null, undefined]) {
     assert.deepEqual(classify(error), {cause: 'evidence_incomplete', reason: GENERIC});
   }
@@ -31,8 +29,8 @@ test('every cause has a specific next step and unknown causes fall to the diagno
     assert.ok(text.includes('Reason owner second line'), 'mentions are neutralized and whitespace collapsed');
     assert.ok(text.includes('actions/runs/9') && text.includes('aaaaaaaaaaaa'));
     // Only the maintainer command carries the full revision.
-    assert.equal(text.includes('a'.repeat(13)), cause === 'control_authorization_required');
-    if (cause === 'control_authorization_required') assert.ok(text.includes(`\`/approve-intent ${assessment.head_sha}\``));
+    assert.equal(text.includes('a'.repeat(13)), cause === 'receipt_protected_controls');
+    if (cause === 'receipt_protected_controls') assert.ok(text.includes(`\`/approve-intent ${assessment.head_sha}\``));
     assert.ok(!text.includes('artifact'), 'no incomplete notice names an artifact that may not exist in this transport');
     assert.match(text, /no secret values/);
   }
