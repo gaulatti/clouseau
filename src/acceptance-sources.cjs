@@ -29,6 +29,7 @@ function evidenceSize(snapshot) {
 }
 
 function refresh(snapshot, cap = BUDGET) {
+  if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error('Invalid evidence limit: the cap must be a positive safe integer');
   const value = {...snapshot}; delete value.digest;
   if (JSON.stringify(value).length > cap) {
     // A lockfile that could not be summarized is the specific reason only when its raw evidence is what overflows.

@@ -392,9 +392,27 @@ test('refresh takes the cap as a parameter and the default stays 900000', () => 
   const value = {sources: {large: {content: 'x'.repeat(900001)}}};
   assert.throws(() => refresh(value), /source budget/);
   assert.throws(() => refresh({sources: {s: {content: 'x'.repeat(100)}}}, 50), /source budget/);
-  assert.equal(refresh({sources: {s: {content: 'x'}}}, Infinity).digest, refresh({sources: {s: {content: 'x'}}}).digest, 'the cap never enters the digest');
+  assert.equal(refresh({sources: {s: {content: 'x'}}}, 5000).digest, refresh({sources: {s: {content: 'x'}}}).digest, 'the cap never enters the digest');
+  assert.equal(refresh({sources: {s: {content: 'x'}}}, undefined).digest, refresh({sources: {s: {content: 'x'}}}).digest, 'undefined means the default');
+  for (const bad of [NaN, '10', 0, -1, Infinity, 1.5, null, {}]) {
+    assert.throws(() => refresh({sources: {s: {content: 'x'.repeat(2000000)}}}, bad), /Invalid evidence limit/, String(bad));
+  }
   const a = {sources: {s: {content: 'x'.repeat(500000)}}};
   assert.equal(refresh(a).digest, digest({sources: a.sources}), 'unchanged behaviour under the default cap');
   assert.throws(() => refresh({sources: {large: {content: 'x'.repeat(900001)}}}, 899999), /source budget/);
   assert.ok(refresh({sources: {large: {content: 'x'.repeat(900001)}}}, 1000000).digest, 'a larger cap admits what the default refuses');
+});
+
+test('every unit evidence limit must be a positive safe integer (a fraction for foreignShare); invalid limits fail closed', () => {
+  const snapshot = combined();
+  for (const name of ['cap', 'sharedCap', 'manifestCap']) {
+    for (const bad of [NaN, '10', 0, -1, Infinity, 1.5, null]) {
+      assert.throws(() => unitView(snapshot, U0, {units: UNITS, [name]: bad}), error => error.code === 'limit_invalid' && error.message.includes(name), `${name}=${String(bad)}`);
+    }
+    assert.ok(unitView(snapshot, U0, {units: UNITS, [name]: undefined}).digest, `${name} undefined means the default`);
+  }
+  for (const bad of [NaN, '0.2', 0, -0.1, 1.01, Infinity, null]) {
+    assert.throws(() => unitView(snapshot, U0, {units: UNITS, foreignShare: bad}), error => error.code === 'limit_invalid' && /foreignShare/.test(error.message), `foreignShare=${String(bad)}`);
+  }
+  assert.ok(unitView(snapshot, U0, {units: UNITS, foreignShare: 1}).digest);
 });

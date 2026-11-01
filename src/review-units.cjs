@@ -90,7 +90,12 @@ function foreignHunks(snapshot, ownedFiles, ownedPaths, units, budget) {
 // A normal snapshot for one unit. Same base, head, policy and configuration as the combined snapshot, so its
 // digest binds all of them; `partition_of` binds the combined snapshot itself.
 function unitView(snapshot, unit, options = {}) {
-  const {cap, sharedCap, manifestCap, foreignShare} = {...DEFAULTS, ...options};
+  const {cap, sharedCap, manifestCap, foreignShare} = Object.fromEntries(Object.entries(DEFAULTS).map(([name, value]) => [name, options[name] === undefined ? value : options[name]]));
+  // A comparison with NaN, a string, zero, a negative or Infinity is false or vacuous and would accept oversized evidence.
+  for (const [name, value] of Object.entries({cap, sharedCap, manifestCap})) {
+    if (!Number.isSafeInteger(value) || value <= 0) throw refuse('limit_invalid', `Evidence limit ${name} must be a positive safe integer`);
+  }
+  if (typeof foreignShare !== 'number' || !(foreignShare > 0 && foreignShare <= 1)) throw refuse('limit_invalid', 'Evidence limit foreignShare must be a number above 0 and at most 1');
   const units = options.units || [unit];
   checkPartition(snapshot, unit, units);
   const ownedPaths = new Set(unit.owned);
@@ -126,6 +131,9 @@ function unitView(snapshot, unit, options = {}) {
   }
 }
 
+// The digest `refresh` assigns, without applying any size cap (the cap was enforced when the view was built).
+const viewDigest = view => {const {digest: _, ...value} = view; return digest(value);};
+
 // `reports`: [{view, report, drafts}] from running the unchanged reviewers on each `unitView`, in plan order.
 // `snapshot`: the combined snapshot. Returns {report, drafts} for the existing validators.
 function mergeUnitReports(reports, snapshot) {
@@ -137,7 +145,7 @@ function mergeUnitReports(reports, snapshot) {
     throw refuse('merge_invalid', 'Unit reports must cover every changed path exactly once');
   }
   for (const {view, report, drafts = []} of reports) {
-    if (view.partition_of !== snapshot.digest || view.digest !== refresh(structuredClone(view), Infinity).digest) {
+    if (view.partition_of !== snapshot.digest || view.digest !== viewDigest(view)) {
       throw refuse('merge_invalid', 'A unit report belongs to another snapshot or an altered view', {unit: view.unit.id});
     }
     validateInspection(report, view, drafts);
