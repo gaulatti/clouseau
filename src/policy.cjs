@@ -12,6 +12,22 @@ function intentText(body, sha) {
   return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
 }
 
+function matchesPath(filename, paths) {
+  return paths.some(path => path.endsWith('/') ? filename.startsWith(path) : filename === path);
+}
+
+// The paths whose change needs exact-head owner confirmation. One list for CI scope checks and the local warning.
+function controlPaths(config) {
+  return [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS',
+    '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+}
+
+function protectedChanges(config, files) {
+  const sensitive = controlPaths(config);
+  return files.flatMap(file => [file.filename, file.previous_filename || ''])
+    .filter((name, index, all) => name && matchesPath(name, sensitive) && all.indexOf(name) === index);
+}
+
 function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
@@ -35,7 +51,7 @@ function numberFor(context) {
 
 function scopeReason(files, pr) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
-  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS', '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+  const sensitive = controlPaths(config);
   if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
@@ -418,10 +434,6 @@ async function assertProtection(github, repo, policyJob = CHECK) {
   }
 }
 
-function matchesPath(filename, paths) {
-  return paths.some(path => path.endsWith('/') ? filename.startsWith(path) : filename === path);
-}
-
 function needsDeployment(files) {
   return config.deployment !== null && files.some(file =>
     matchesPath(file.filename, config.deployment.paths) || matchesPath(file.previous_filename || '', config.deployment.paths));
@@ -659,4 +671,4 @@ return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, f
 
 }
 
-module.exports = {createPolicy, intentText};
+module.exports = {createPolicy, intentText, protectedChanges};

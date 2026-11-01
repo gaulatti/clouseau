@@ -20,6 +20,8 @@ const {lockfileEvidence, LOCKFILE_PATCH} = require('../src/lockfile-summary.cjs'
 const {PartitionRefusal, partition} = require('../src/review-partition.cjs');
 const {changeTable, segmentLimit} = require('../src/change-table.cjs');
 const {unitView, mergeUnitReports} = require('../src/review-units.cjs');
+const {seamsOf} = require('../src/review-seams.cjs');
+const {chunkedReview} = require('../src/chunked-review.cjs');
 const {SCHEME, RECORD_LIMIT, ChunkedRecordError, elideQuotes} = require('../src/chunked-record.cjs');
 const {issueReceipt, verifyReceipt} = require('../src/local-receipt.cjs');
 const {engineDigest} = require('../src/local-version.cjs');
@@ -213,6 +215,36 @@ function unitSizes(view, unit, policy) {
     prompt_chars: policy.length + PROMPT_FRAME + JSON.stringify({evidence: localEvidence(view), template: modelTemplate(view), drafts: []}).length};
 }
 
+// EXACT prompt sizes of a chunked review of `snapshot`: the real runner against a fake harness that answers every
+// session from the controller's templates (investigation) and `checked` (seams). Nothing is estimated.
+async function promptSizes(snapshot, params = PARAMS) {
+  const hooks = hooksFor(params);
+  const plan = hooks.partition({snapshot, params});
+  const views = Object.fromEntries(plan.units.map(unit => [unit.id, hooks.unitView(snapshot, unit)]));
+  const seams = seamsOf({snapshot, plan});
+  const rows = [];
+  const ask = async task => {
+    rows.push({phase: task.phase, chars: task.prompt.length});
+    const value = task.phase === 'investigation' ? {kind: 'report', report: fakeTemplate(views[task.unit]), request_sources: []}
+      : {dispositions: JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1)).seams.map(seam => ({seam: seam.id, state: 'checked', reason: 'Examined both ends.'}))};
+    return {value, provenance: {harness: 'codex', role: task.role, phase: task.phase, session: `fictional-session-${rows.length}`,
+      request_digest: digest(task.prompt), response_digest: digest(value), transport_digest: digest(rows.length)}};
+  };
+  await chunkedReview({snapshot, plan, seams, ask, chunked: {params, concurrency: 1}});
+  const by = phase => {
+    const mine = rows.filter(row => row.phase === phase);
+    return {calls: mine.length, chars: sum(mine, row => row.chars), max: Math.max(0, ...mine.map(row => row.chars))};
+  };
+  return {seams: seams.length, seam_chars: JSON.stringify(seams).length, investigation: by('investigation'), integration: by('integration')};
+}
+
+// What an honest, finding-free reviewer returns for one unit view, before the controller completes it.
+function fakeTemplate(view) {
+  const report = modelTemplate(view);
+  report.gates.forEach(gate => {gate.state = 'satisfied';});
+  return report;
+}
+
 function measure(table, overrides = {}) {
   const params = {...PARAMS, ...overrides};
   const snapshot = combinedSnapshot(table);
@@ -248,13 +280,16 @@ function render(report) {
   return `${lines.join('\n')}\n`;
 }
 
+const renderPrompts = sizes => `exact prompts: ${sizes.investigation.calls} unit calls ${sizes.investigation.chars} chars (largest ${sizes.investigation.max}), ` +
+  `${sizes.integration.calls} integration calls ${sizes.integration.chars} chars (largest ${sizes.integration.max}) for ${sizes.seams} seams (${sizes.seam_chars} chars)\n`;
+
 function refusalCode(error) {
   if (error instanceof PartitionRefusal) return error.message;
   return error instanceof ChunkedRecordError ? `${error.cause_code}: ${error.message}` : null;
 }
 
 // `main(['table.json', '--ceiling', '300000'], {stdout})` prints the measurements of the plan, or the refusal (exit 2).
-function main(argv, io = {}) {
+async function main(argv, io = {}) {
   const read = io.readFile ?? (file => fs.readFileSync(file, 'utf8'));
   const out = io.stdout ?? process.stdout;
   const flags = {'--ceiling': 'C', '--shared': 'S'};
@@ -266,7 +301,9 @@ function main(argv, io = {}) {
     else throw new TypeError(`unknown option ${argv[index]}; usage: measure-chunked [TABLE.json] [--ceiling N] [--shared N]`);
   }
   try {
-    out.write(render(measure(JSON.parse(read(table)), overrides)));
+    const parsed = JSON.parse(read(table));
+    out.write(render(measure(parsed, overrides)));
+    out.write(renderPrompts(await promptSizes(combinedSnapshot(parsed), {...PARAMS, ...overrides})));
     return 0;
   } catch (error) {
     const reason = refusalCode(error);
@@ -276,5 +313,5 @@ function main(argv, io = {}) {
   }
 }
 
-module.exports = {PARAMS, CODEX_LIMIT, RECEIPT_LIMIT, scaledTable, withLargeFile, filler, combinedSnapshot, changeTable, hooksFor, fakeReport, buildRecord,
+module.exports = {promptSizes, PARAMS, CODEX_LIMIT, RECEIPT_LIMIT, scaledTable, withLargeFile, filler, combinedSnapshot, changeTable, hooksFor, fakeReport, buildRecord,
   signAndVerify, measure, render, main};
