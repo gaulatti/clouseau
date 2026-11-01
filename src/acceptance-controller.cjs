@@ -59,15 +59,16 @@ function verifyRecord(record, assessment, config, engine = null) {
     throw new Error('Acceptance record belongs to a different frozen engine');
   }
   if (record.local_receipt) {
-    require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
+    // The receipt's own record: for a multi-part receipt the signed payload holds only the root.
+    const signed = require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
       engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author,
       headSha: assessment.head_sha, baseSha: assessment.base_sha,
       configDigest: digest(config), policyDigest: policyDigest(),
     });
     for (const field of ['snapshot', 'result', 'controls']) {
-      if (digest(record[field]) !== digest(record.local_receipt.payload.record[field])) throw new Error('Local review record was substituted');
+      if (digest(record[field]) !== digest(signed.record[field])) throw new Error('Local review record was substituted');
     }
-    if (digest(record.previous.findings) !== digest(record.local_receipt.payload.record.previous.findings)) throw new Error('Local review history was substituted');
+    if (digest(record.previous.findings) !== digest(signed.record.previous.findings)) throw new Error('Local review history was substituted');
   }
   if (assessment.version !== 2 || digest(record) !== assessment.record_digest ||
       record.snapshot.config_digest !== digest(config) || record.snapshot.policy_digest !== policyDigest() ||
@@ -118,7 +119,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Invalid compact local review record');
     }
     const receipts = require('./local-receipt.cjs');
-    const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact});
+    const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact, trust: config.local_review});
     const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
       repository: `${repo.owner}/${repo.repo}`, author: record.local_author, headSha: assessment.head_sha,
       baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest()});
@@ -150,7 +151,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       let bundle = null;
       let verified = null;
       if (receiptRef) {
-        bundle = await receipts.loadReceipt({github, repo, ref: receiptRef});
+        bundle = await receipts.loadReceipt({github, repo, ref: receiptRef, trust: config.local_review});
         try {
           verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
             repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,

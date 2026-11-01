@@ -25,7 +25,6 @@ const NEXT_STEPS = Object.freeze({
   github_api_error: 'GitHub rejected an API request this review needs (status and endpoint are in the reason). Re-run the failed jobs; if it repeats, the PR or repository state it describes must change.',
   github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
   chunked_record_invalid: 'The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head.',
-  record_too_large: 'The chunked review record is too large to sign within the receipt limit. Split the change into smaller reviews.',
   evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
 });

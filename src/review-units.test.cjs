@@ -126,11 +126,19 @@ test('imports of a changed file in another unit bring that callee hunk, read-onl
   assert.ok(!v0.sources['b.head'], 'a foreign hunk is not citable evidence');
 });
 
-test('a view over the cap, or with oversized shared context or manifest, is refused with a typed code', () => {
+test('a unit the plan did not size, or mandatory shared context above its cap, is an integrity error; nothing else is a size refusal', () => {
   const snapshot = combined();
   assert.throws(() => unitView(snapshot, U0, {units: UNITS, cap: 1000}), error => error.code === 'unit_exceeds_budget' && error.unit === 'u0' && /source budget/.test(error.message));
   assert.throws(() => unitView(snapshot, U0, {units: UNITS, sharedCap: 10}), error => error.code === 'shared_context_too_large');
-  assert.throws(() => unitView(snapshot, U0, {units: UNITS, manifestCap: 100}), error => error.code === 'manifest_too_large');
+  // Optional shared context (a summary of another unit's lockfile, a frozen engine file) is dropped and listed, not refused.
+  const mandatory = ['contract', 'verification', 'local-request'].reduce((total, id) => total + snapshot.sources[id].content.length, 0);
+  const trimmed = unitView(snapshot, U1, {units: UNITS, sharedCap: mandatory});
+  assert.ok(!trimmed.sources['lock.base'] && !trimmed.sources['lock.head'] && trimmed.sources.contract);
+  assert.deepEqual(trimmed.shared_omitted, [{path: 'pnpm-lock.yaml', reason: 'exceeds the shared context cap of this unit'}, {path: 'pnpm-lock.yaml', reason: 'exceeds the shared context cap of this unit'}]);
+  assert.equal(unitView(snapshot, U1, {units: UNITS}).shared_omitted, undefined);
+  validateInspection(report(trimmed), trimmed);
+  // A manifest too large for its cap is summarized by directory, down to one row, whatever the cap.
+  assert.ok(unitView(snapshot, U0, {units: UNITS, manifestCap: 100}).change_manifest.length >= 1);
   const tight = unitView(snapshot, U0, {units: UNITS, cap: 60000, foreignShare: 0.0001});
   assert.deepEqual(tight.foreign_hunks, []);
   assert.deepEqual(tight.foreign_omitted, ['src/b.cjs'], 'what does not fit is listed, never silently dropped');
@@ -415,4 +423,55 @@ test('every unit evidence limit must be a positive safe integer (a fraction for 
     assert.throws(() => unitView(snapshot, U0, {units: UNITS, foreignShare: bad}), error => error.code === 'limit_invalid' && /foreignShare/.test(error.message), `foreignShare=${String(bad)}`);
   }
   assert.ok(unitView(snapshot, U0, {units: UNITS, foreignShare: 1}).digest);
+});
+
+// The same change with its files three directories deep, so the manifest has levels to collapse.
+function deep() {
+  const snapshot = combined();
+  const move = name => (name.startsWith('src/') ? `pkg/core/sub/${name.slice(4)}` : name === 'docs/readme.md' ? 'pkg/docs/x/readme.md' : name);
+  for (const file of snapshot.files) file.path = move(file.path);
+  snapshot.paths = snapshot.files.map(file => file.path).sort();
+  snapshot.history = []; delete snapshot.covering_tests;
+  refresh(snapshot, 3000000);
+  return {snapshot, units: UNITS.map(unit => ({...unit, owned: unit.owned.map(move)}))};
+}
+
+test('a manifest above its cap is summarized by directory, deepest first, and never refused', () => {
+  const {snapshot, units} = deep();
+  const manifest = cap => unitView(snapshot, units[0], {units, manifestCap: cap}).change_manifest;
+  const rows = manifest(1000000);
+  assert.equal(rows.length, 8);
+  const sum = (list, key) => list.reduce((total, row) => total + (row[key] ?? 0), 0);
+  // One level up: the files of each deepest directory become one row with totals and owners; shallower files stay rows.
+  const level2 = manifest(JSON.stringify(rows).length - 1);
+  assert.deepEqual(level2.map(row => row.dir ?? row.path), ['pkg/core', 'pkg/docs', 'pnpm-lock.yaml']);
+  assert.deepEqual(level2.find(row => row.dir === 'pkg/core'), {dir: 'pkg/core', files: 6, additions: sum(rows.filter(row => row.path.startsWith('pkg/core')), 'additions'),
+    deletions: sum(rows.filter(row => row.path.startsWith('pkg/core')), 'deletions'), size: sum(rows.filter(row => row.path.startsWith('pkg/core')), 'size'), units: ['u0', 'u1']});
+  // Smaller: everything below the root is one row, then the whole change is one row, whatever the cap.
+  const level1 = manifest(JSON.stringify(level2).length - 1);
+  assert.deepEqual(level1.map(row => row.dir ?? row.path), ['pkg', 'pnpm-lock.yaml']);
+  const level0 = manifest(JSON.stringify(level1).length - 1);
+  assert.deepEqual(level0.map(row => row.dir ?? row.path), ['.', 'pnpm-lock.yaml']);
+  const one = manifest(1);
+  assert.deepEqual(one.map(row => [row.dir, row.files, row.units]), [['.', 8, ['u0', 'u1']]]);
+  for (const level of [level2, level1, level0, one]) {
+    assert.equal(sum(level, 'additions'), sum(rows, 'additions'));
+    assert.equal(sum(level, 'deletions'), sum(rows, 'deletions'));
+    assert.equal(sum(level, 'size'), sum(rows, 'size'));
+  }
+  // A view over a collapsed manifest is still an ordinary snapshot an unchanged validator accepts.
+  const collapsed = unitView(snapshot, units[0], {units, manifestCap: 1});
+  validateInspection(report(collapsed), collapsed);
+});
+
+test('a collapsed row counts its owners when there are too many to list', () => {
+  const {snapshot} = deep();
+  const many = Array.from({length: 20}, (_, index) => ({id: `w${index}`, owned: [], context_ids: []}));
+  // Twenty units each owning one file of one directory.
+  const files = Array.from({length: 20}, (_, index) => ({path: `wide/dir/f${index}.txt`, status: 'added', patch: '+x\n', head_source: `w${index}.head`}));
+  const sources = Object.fromEntries(files.map((file, index) => [`w${index}.head`, source(file.path, `x${index}\n`)]));
+  const wide = refresh({...snapshot, files, paths: files.map(file => file.path).sort(), sources: {...snapshot.sources, ...sources}, history: []}, 3000000);
+  const units = many.map((unit, index) => ({...unit, owned: [files[index].path]}));
+  const manifest = unitView(wide, units[0], {units, manifestCap: 400}).change_manifest;
+  assert.deepEqual(manifest.map(row => [row.dir, row.files, row.unit_count, row.units]), [['wide', 20, 20, undefined]]);
 });

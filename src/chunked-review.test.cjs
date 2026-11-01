@@ -10,7 +10,8 @@ const {refresh} = require('./acceptance-sources.cjs');
 const {modelTemplate} = require('./acceptance-review.cjs');
 const {unitView} = require('./review-units.cjs');
 const {partition} = require('./review-partition.cjs');
-const {chunkedVerifier} = require('./chunked-record.cjs');
+const {chunkedVerifier, RECORD_LIMIT} = require('./chunked-record.cjs');
+const {changeTable, segmentLimit} = require('./change-table.cjs');
 const {runnerLimits, memoryJournal, chunkedReview, mergeWithIntegration, ChunkedReviewRefusal} = require('./chunked-review.cjs');
 
 const HEAD = 'a'.repeat(40), BASE = 'b'.repeat(40);
@@ -56,7 +57,7 @@ function combined({prior = [], manifest = true} = {}) {
   return refresh(snapshot, 3000000);
 }
 
-const PARAMS = {C: 1, S: 100000, cap: 2400000, max_units: 8};
+const PARAMS = {C: 1, S: 100000};
 const sizeOf = (snapshot, id) => (id ? snapshot.sources[id].content.length : 0);
 function planOf(snapshot, ceiling = 1) {
   return partition(snapshot.files.map(file => ({path: file.path, base_size: sizeOf(snapshot, file.base_source),
@@ -65,8 +66,9 @@ function planOf(snapshot, ceiling = 1) {
 
 // A fake harness. `options.finding` adds a defect to unit u0 of the examiner; `options.dispose` chooses seam states.
 function harness(snapshot, plan, options = {}) {
-  const views = Object.fromEntries(plan.units.map(unit => [unit.id, unitView(snapshot, {id: unit.id, owned: unit.owned, context_ids: []},
-    {units: plan.units.map(item => ({id: item.id, owned: item.owned, context_ids: []}))})]));
+  const spec = unit => ({id: unit.id, owned: unit.owned, context_ids: [], ...(unit.parts ? {parts: unit.parts} : {})});
+  const views = Object.fromEntries(plan.units.map(unit => [unit.id, unitView(snapshot, spec(unit),
+    {units: plan.units.map(spec), segmentLimit: segmentLimit({unit_ceiling: options.ceiling ?? PARAMS.C, shared: PARAMS.S})})]));
   const state = {calls: [], active: 0, peak: 0, tasks: []};
   const ask = async task => {
     state.tasks.push(task);
@@ -143,7 +145,7 @@ test('a plan of more units than the old ceiling still runs, one session at a tim
   const snapshot = combined();
   const plan = planOf(snapshot);
   const h = harness(snapshot, plan);
-  const out = await chunkedReview({snapshot, plan, ask: h.ask, chunked: {params: {...PARAMS, max_units: 2}, concurrency: 1}});
+  const out = await chunkedReview({snapshot, plan, ask: h.ask, chunked: {params: {...PARAMS, cap: 10, max_units: 2}, concurrency: 1}});
   assert.equal(h.state.peak, 1);
   assert.equal(out.result.decision, 'auto_approve');
   assert.equal(h.state.calls.filter(call => call.includes('integration')).length, 2, 'the integration pass runs even with no seams');
@@ -212,19 +214,51 @@ test('malformed input is refused before any session starts', async () => {
   await refused(run(snapshot, plan, h, {seams: [seam('a'), seam('a')]}), 'seams_invalid');
   await refused(run(snapshot, plan, h, {seams: 'x'}), 'seams_invalid');
   await refused(run(snapshot, plan, h, {seams: [{id: ''}]}), 'seams_invalid');
-  await assert.rejects(chunkedReview({snapshot, plan, ask: h.ask, chunked: {params: {...PARAMS, cap: 10}}}), /snapshot cap/);
   await assert.rejects(run(snapshot, {...plan, units: plan.units.slice(1)}, h), error => error.code === 'partition_invalid');
   assert.deepEqual(h.state.calls, []);
 });
 
-test('a unit that cannot fit alone is a typed file_exceeds_unit gap, not a verdict', async () => {
+test('a plan that was not sized for its evidence is an integrity error, not a size verdict', async () => {
   const snapshot = combined();
   const plan = planOf(snapshot);
   const big = structuredClone(snapshot);
   big.sources['a.head'].content = 'x'.repeat(950000);
   refresh(big, 3000000);
   const h = harness(snapshot, plan);
-  await assert.rejects(run(big, plan, h), error => error.code === 'file_exceeds_unit' && typeof error.unit === 'string' && error.paths.includes('src/a.cjs'));
+  await assert.rejects(run(big, plan, h), error => error.code === 'unit_exceeds_budget' && typeof error.unit === 'string');
+});
+
+// A file of 40,000 lines edited every third line: far more than one unit can hold, so the planner splits it.
+function huge() {
+  const old = Array.from({length: 40000}, (_, index) => `line ${index + 1}`);
+  const edited = old.map((line, index) => (index % 3 === 0 ? `${line} edited` : line));
+  let diff = 'diff --git a/src/a.cjs b/src/a.cjs\n--- a/src/a.cjs\n+++ b/src/a.cjs\n';
+  old.forEach((line, index) => {if (index % 3 === 0) diff += `@@ -${index + 1},1 +${index + 1},1 @@\n-${line}\n+${edited[index]}\n`;});
+  const snapshot = combined();
+  snapshot.sources['a.base'].content = `${old.join('\n')}\n`; snapshot.sources['a.head'].content = `${edited.join('\n')}\n`;
+  snapshot.files.find(file => file.path === 'src/a.cjs').patch = diff;
+  return refresh(snapshot, Number.MAX_SAFE_INTEGER);
+}
+
+test('a file larger than any unit is split into segments, each unit reviewed on its own segment, and the record verifies', async () => {
+  const snapshot = huge();
+  const params = {C: 450000, S: 100000};
+  const plan = partition(changeTable(snapshot, {unit_ceiling: params.C, shared: params.S}), {unit_ceiling: params.C, shared: params.S});
+  const holders = plan.units.filter(unit => unit.owned.includes('src/a.cjs'));
+  assert.ok(holders.length >= 3 && holders.every(unit => unit.parts['src/a.cjs'].count === holders.length));
+  const h = harness(snapshot, plan, {ceiling: params.C});
+  const out = await chunkedReview({snapshot, plan, ask: h.ask, chunked: {params}});
+  assert.equal(out.result.decision, 'auto_approve');
+  assert.deepEqual(out.partition.units.filter(unit => unit.owned.includes('src/a.cjs')).map(unit => unit.parts['src/a.cjs'].index), holders.map((_, index) => index));
+  assert.equal(out.result.usage.filter(item => item.phase === 'investigation').length, plan.units.length * 2);
+  const hooks = {
+    partition: () => out.partition,
+    unitView: (combinedSnapshot, unit) => h.views[unit.id],
+    seams: () => out.seams,
+    merge: ({unitReports, integration, snapshot: combinedSnapshot}) => mergeWithIntegration({integration, snapshot: combinedSnapshot, seams: out.seams,
+      reports: unitReports.map(({unit, report}) => ({view: h.views[unit], report, drafts: []}))}).report};
+  const record = {version: 3, snapshot, partition: out.partition, seams: out.seams, result: out.result};
+  assert.deepEqual(chunkedVerifier(record, {params, hooks}).reviews().map(item => item.report), out.reviews.map(item => item.report));
 });
 
 test('a unit asking for more source refuses the whole review', async () => {
@@ -290,12 +324,13 @@ test('a plan unit may carry its own context ids', async () => {
   assert.equal(out.result.decision, 'auto_approve');
 });
 
-test('a record too large to sign is refused with its own code after the review', async () => {
+test('a record above the single-receipt limit is not refused: it is signed in parts', async () => {
   const snapshot = combined();
   const plan = planOf(snapshot);
   const seams = Array.from({length: 15}, (_, index) => seam(`s${index}`, 200000));
-  await assert.rejects(chunkedReview({snapshot, plan, seams, ask: harness(snapshot, plan).ask, chunked: {params: PARAMS}}),
-    error => error.cause_code === 'record_too_large');
+  const out = await chunkedReview({snapshot, plan, seams, ask: harness(snapshot, plan).ask, chunked: {params: PARAMS}});
+  assert.equal(out.result.decision, 'auto_approve');
+  assert.ok(Buffer.byteLength(JSON.stringify({snapshot, partition: out.partition, seams: out.seams, result: out.result})) > RECORD_LIMIT);
 });
 
 test('merging requires every seam dispositioned exactly once by well-formed integration entries', () => {

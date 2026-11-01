@@ -37,3 +37,6 @@ register cannot carry that record and is refused (`seam_hold_unrepresentable`) r
 
 Refusal codes: `limit_invalid`, `unowned_path`, `seam_answer_invalid`, `seam_unknown`,
 `seam_duplicate`, `seam_finding_unknown`, `seam_hold_unrepresentable`.
+
+A file split into segments (`docs/local-review.md`, review partition) is owned by several units; for the owning unit of a path
+the seams use its first owner in plan order, so a seam names one unit per end and is deterministic.
