@@ -370,6 +370,11 @@ test('screening classifies every receipt failure with a fixed class and propagat
   const signed = {payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
     crypto.createPrivateKey(f.privateKey)).toString('base64url')};
   assert.deepEqual(await screen(content(signed)), {ref: null, rejected: 'record'});
+  // A signed payload whose record is not an object throws inside the verifier itself; that is still only an ignored receipt.
+  const hollow = {...bundle.payload, record: null, record_digest: digest(null)};
+  const hollowSigned = {payload: hollow, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(hollow)}`),
+    crypto.createPrivateKey(f.privateKey)).toString('base64url')};
+  assert.deepEqual(await screen(content(hollowSigned)), {ref: null, rejected: 'malformed'});
 });
 
 test('source screening ignores a receipt whose signed sources, diff or inventory differ and propagates every other failure', async () => {

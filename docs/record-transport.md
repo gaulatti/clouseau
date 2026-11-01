@@ -64,8 +64,8 @@ names the complete record. Each write boundary (the gate and the private-plan
 atomic merge check) independently loads the receipt from its immutable Git blob,
 re-verifies signature, author, base, head, config, policy and engine, rebuilds
 the complete record and requires its digest to equal `record_digest` before any
-write. A missing, substituted or unavailable receipt fails closed with no AI
-fallback. Complete records produced by earlier engines remain accepted; they are
+write. A missing, substituted or unavailable receipt fails closed at the write
+boundary (the next assessment ignores it and reviews afresh). Complete records produced by earlier engines remain accepted; they are
 distinguished by the absence of `record_reference_digest`.
 
 ## Data format and limits

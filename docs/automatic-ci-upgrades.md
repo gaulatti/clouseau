@@ -68,13 +68,16 @@ AI calls. Independent tests, exact 100% line and branch coverage, current source
 base, policy and configuration checks remain mandatory. Review-control changes require a separate, current-head owner purpose
 confirmation. The receipt supplies the scored review only; CI records and
 revalidates that separate authorization before approval. Missing receipts in optional mode use
-the ordinary CI AI reviewer. A receipt that is valid except that its engine
-revision differs from the protected main resolved by the run is ignored (never
-accepted as evidence) and treated as missing, with a visible notice that CI
-reviewed the change itself. Invalid, expired, revoked or otherwise mismatched
-receipts block approval without an unexpected paid fallback. Refresh the public
+the ordinary CI AI reviewer. So does any receipt that does not verify in every
+respect (malformed, unknown or revoked key, bad signature, wrong author, expired,
+wrong head or base, changed policy, configuration or record, different engine
+revision, changed sources or diff, or a review that did not pass): it is ignored,
+never accepted as evidence, CI performs every check itself and the PR shows one
+fixed notice naming a bounded reason class. An ignored receipt cannot approve
+anything. In `required` mode there is no hosted review, so the outcome is
+`local_receipt_required` with the same notice. Refresh the public
 local installation, review the current committed source again, publish a fresh
-receipt, and start a fresh CI run. A central advance during that interval may
+receipt, and start a fresh CI run to reuse the local review. A central advance during that interval may
 require another fresh review; previous evidence must remain available.
 
 Local investigators can inspect `.clouseau-ci/` source requests through their
