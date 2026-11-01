@@ -142,5 +142,5 @@ test('known size gap: a file above the 450,000 ceiling is its own unit, above th
   const modified = (size, patch) => ({files: [...table.files, {path: 'big/modified.ts', status: 'modified', previous: null, base_size: size, head_size: size, patch_chars: patch}]});
   const own = measure(modified(200000, 100000));
   assert.ok(own.units.some(unit => unit.files === 1 && unit.cost > PARAMS.C && unit.cost <= 800000));
-  refuses(() => measure(modified(299000, 250000), {max_units: 100}), PartitionRefusal, 'unit_exceeds_budget');
+  refuses(() => buildRecord(large(modified(299000, 250000)), big), PartitionRefusal, 'unit_exceeds_budget');
 });
