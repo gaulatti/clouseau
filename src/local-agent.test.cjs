@@ -196,3 +196,44 @@ test('a schema-valid answer that fails evidence validation goes back to the agen
   const next = await main(argv, deps);
   assert.equal(next.status, 'awaiting_agent'); assert.equal(next.sequence, 2);
 }));
+
+test('an in-flight agent review stays pinned to its engine revision while main advances, until --engine latest', () => withReview(async ({state, deps, argv}) => {
+  const {installedCache} = require('../test/engine-cache-fixture.cjs');
+  const {engineDigest} = require('./local-version.cjs');
+  const cacheHome = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-pin-home-'));
+  try {
+    const {cache, checkout, pin} = installedCache(cacheHome);
+    const started = {...deps, installed: () => ({sha: pin.reviewer_sha, digest: pin.reviewer_digest, clean: true}), cacheRoot: cache};
+    const advanced = {...started, installed: () => ({sha: 'f'.repeat(40), digest: engineDigest(), clean: true})};
+    const first = await main(argv, started);
+    assert.equal(first.status, 'awaiting_agent'); assert.match(first.then, /pinned engine revision.*--engine latest/);
+    assert.equal(fs.readdirSync(path.join(state, 'pins')).length, 1);
+    // Main moved: the continuation runs on the recorded revision, with a one-line notice, never on the new code.
+    const calls = []; const lines = [];
+    const spy = {...advanced, run: (root, args) => { calls.push([root, args]); return {status: 'awaiting_agent'}; }};
+    const original = process.stderr.write; process.stderr.write = text => { lines.push(text); return true; };
+    try {
+      assert.deepEqual(await main(argv, spy), {status: 'awaiting_agent'});
+      assert.deepEqual(calls, [[checkout, argv]]);
+      assert.deepEqual(lines, [`Clouseau review pinned to engine ${pin.reviewer_sha.slice(0, 12)}; newer ${'f'.repeat(12)} exists (pass --engine latest to restart on it)\n`]);
+      // The pinned engine itself continues in place, with no notice and no re-execution.
+      assert.equal((await main(argv, started)).status, 'awaiting_agent'); assert.equal(calls.length, 1);
+      // A pin whose revision was tampered with is never executed.
+      fs.writeFileSync(path.join(checkout, 'src/a.cjs'), 'tampered');
+      await assert.rejects(main(argv, spy), /not an unmodified installation.*--engine latest/); assert.equal(calls.length, 1);
+      // The escape restarts on the newest revision and drops the pin.
+      const latest = await main([...argv, '--engine', 'latest'], spy);
+      assert.equal(latest.status, 'awaiting_agent'); assert.equal(latest.sequence, 1); assert.equal(calls.length, 1);
+    } finally {process.stderr.write = original;}
+    await assert.rejects(main([...argv, '--engine', 'old'], advanced), /accepts only "latest"/);
+    // A review that has moved to the newest revision completes and releases its pin.
+    let result = await main(argv, advanced);
+    for (let n = 1; result.status === 'awaiting_agent'; n++) {
+      fs.writeFileSync(result.answer_file, JSON.stringify(subagent(JSON.parse(fs.readFileSync(result.request_file, 'utf8')))));
+      await main(['respond', '--agent-request', result.request_file, '--answer', result.answer_file, '--session', `opencode-pinned-${n}`], advanced);
+      result = await main(argv, advanced);
+    }
+    assert.equal(result.decision, 'auto_approve');
+    assert.equal(fs.readdirSync(path.join(state, 'pins')).length, 0);
+  } finally {fs.rmSync(cacheHome, {recursive: true, force: true});}
+}));
