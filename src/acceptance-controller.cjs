@@ -187,12 +187,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         // A verified receipt still never grants owner confirmation. Name which rule holds the review.
         const held = (cause, message) => Object.assign(new Error(message), {code: 'RECEIPT_AUTHORITY', cause_code: cause});
-        if (controls === legacy.REVIEW_CONTROL_REASON && !authorization) {
+        if (controls && !authorization) {
           throw held('receipt_protected_controls', 'A verified local receipt cannot authorize a change to protected review controls ' +
             '(AGENTS.md, CI workflow or configuration, the repository policy or another configured sensitive path); ' +
             'the exact-head owner confirmation is missing.');
         }
-        if (controls && controls !== legacy.REVIEW_CONTROL_REASON) throw new Error('Changed-file evidence is incomplete');
         if (digest(previous.findings) !== digest(verified.record.previous.findings)) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
         }

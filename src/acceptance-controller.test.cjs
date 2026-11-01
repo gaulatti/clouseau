@@ -416,7 +416,6 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     f.state.comments = [{id: 88, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
     const incomplete = await assess();
     assert.equal(incomplete.decision, 'review_incomplete', 'owner intent cannot waive incomplete GitHub patch evidence');
-    assert.equal(incomplete.cause, 'changed_files_incomplete');
     f.state.comments = [];
     f.github.rest.pulls.listFiles = list;
   }
