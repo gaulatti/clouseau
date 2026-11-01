@@ -9,7 +9,11 @@ computes those seams from the signed snapshot and the partition plan, never a mo
 ## Seam kinds
 
 Each seam is `{id, kind, a: {path, unit}, b: {path, unit}, exports?, excerpts}`. `a` is the file whose unit must look at
-`b`; `excerpts` are the changed hunks of both ends (each capped at `excerptCap`, with `truncated` set when cut). Only edges
+`b`; each excerpt is `{path, unit, status, added, removed, lines, truncated}`: the lines that make the edge (the import
+statement and the uses of consumed exports on the importing side, the changed lines that touch those exports on the changed
+side, the removed assertions of a lost test), at most 6 lines of 160 characters and `excerptCap` (2000) characters, with
+`truncated` set when a matching line was left out or cut and `added`/`removed` always giving the full size of the change
+(`src/seam-excerpts.cjs`). Only edges
 between DIFFERENT units are seams.
 
 | kind | meaning |

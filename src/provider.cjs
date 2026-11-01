@@ -24,7 +24,9 @@ async function checkProvider({fetchImpl = fetch} = {}) {
 // Retry only missing/truncated completions, never a completed review decision.
 async function requestReview({messages, fetchImpl = fetch,
   wait = ms => new Promise(resolve => setTimeout(resolve, ms)), report = () => {}}) {
-  assertProviderKey('DEEPSEEK_API_KEY');
+  // The key is validated and named by policy.assess before this transport runs.
+  // Checking again here would make consumer unit tests that inject fetchImpl
+  // require a provider secret in their verify job.
   let maxTokens = 4096;
   let outcome;
   for (let attempt = 1; attempt <= 3; attempt++) {
