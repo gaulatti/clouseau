@@ -260,3 +260,76 @@ test('historical bootstrap evidence is verified from the fixed public repository
   response = {encoding: 'base64', content: Buffer.from('binary\0').toString('base64'), size: 7};
   await assert.rejects(verifySources(options), /binary historical engine/);
 });
+
+// ---- Derived lockfile evidence is recomputed by CI from the repository's own lockfile bytes (issue 65).
+
+test('CI recomputes the derived lockfile summary from the exact base and head bytes; any substitution is rejected', async () => {
+  const fs = require('node:fs'); const path = require('node:path');
+  const {repository} = require('../test/local-git-fixture.cjs');
+  const {git, collectLocal} = require('./local-git.cjs');
+  const lockfixture = require('../test/fixtures/lockfiles.cjs');
+  await repository(async f => {
+    fs.writeFileSync(path.join(f.directory, 'package-lock.json'), lockfixture.npmHead());
+    fs.rmSync(path.join(f.directory, 'go.sum'));
+    fs.writeFileSync(path.join(f.directory, 'Pipfile.lock'), '{"_meta":{},"default":{"tool":{"version":"==1.0.0","hashes":["sha256:a"]}}}\n');
+    git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'chore: dependencies']);
+    const {snapshot} = collectLocal({...f, request: 'Update dependencies.', technical: {}});
+    const live = {};
+    const serve = async args => {
+      const key = `${args.ref}:${args.path}`;
+      if (live[key] !== undefined) return live[key];
+      let text;
+      try { text = git(f.directory, ['show', key]); } catch { throw Object.assign(new Error('Not Found'), {status: 404}); }
+      return {data: {encoding: 'base64', content: Buffer.from(text).toString('base64'), size: Buffer.byteLength(text)}};
+    };
+    const github = {rest: {repos: {getContent: serve}}};
+    const repo = {owner: 'example', repo: 'local-fixture'};
+    const pr = {changed_files: snapshot.files.length, base: {sha: snapshot.base_sha},
+      head: {sha: snapshot.head_sha, repo: {owner: {login: 'example'}, name: 'local-fixture'}}};
+    const files = require('../test/hosted-files.cjs').hostedFiles(snapshot).map(file => /(?:package-lock\.json|Pipfile\.lock|go\.sum)$/.test(file.filename) ? {...file, patch: undefined} : file);
+    const options = {github, repo, pr, files, snapshot, config: {readme: 'README.md', repository_policy: 'AGENTS.md'}};
+    await verifySources(options);
+    const [id, source] = Object.entries(snapshot.sources).find(([, item]) => item.kind === 'lockfile-summary' && item.path === 'package-lock.json');
+    const removedId = Object.entries(snapshot.sources).find(([, item]) => item.kind === 'lockfile-summary' && item.path === 'go.sum')[0];
+    assert.ok(removedId);
+    const mutate = change => { const copy = structuredClone(snapshot); change(copy, copy.sources[id]); return copy; };
+    // A fabricated summary that hides a dependency swap is not the summary of the repository's bytes.
+    await assert.rejects(verifySources({...options, snapshot: mutate((copy, item) => { item.content = item.content.replaceAll('RISK[', 'info['); })}), /differs from the repository lockfiles/);
+    await assert.rejects(verifySources({...options, snapshot: mutate((copy, item) => { item.derived.head_sha256 = 'f'.repeat(64); })}), /differs from the repository lockfiles/);
+    const retargeted = mutate((copy, item) => { item.authority = 'trusted'; });
+    await assert.rejects(verifySources({...options, snapshot: retargeted}), /not bound to a changed lockfile/);
+    await assert.rejects(verifySources({...options, snapshot: mutate((copy, item) => { item.path = 'src/handler.js'; })}), /not bound/);
+    await assert.rejects(verifySources({...options, snapshot: mutate((copy, item) => { item.path = 'elsewhere/package-lock.json'; })}), /not bound/);
+    await assert.rejects(verifySources({...options, snapshot: mutate(copy => { copy.files.find(file => file.path === 'package-lock.json').lockfile = false; })}), /not bound|incomplete/);
+    // The live repository changed under the signed evidence.
+    live[`${snapshot.head_sha}:package-lock.json`] = {data: {encoding: 'base64', content: Buffer.from(lockfixture.npmBase()).toString('base64'), size: 10}};
+    await assert.rejects(verifySources(options), /differs from the repository lockfiles/);
+    live[`${snapshot.head_sha}:package-lock.json`] = {data: {encoding: 'none', content: '', size: 2000000}};
+    await assert.rejects(verifySources(options), /cannot be recomputed/);
+    live[`${snapshot.head_sha}:package-lock.json`] = {data: {encoding: 'base64', content: Buffer.from('{broken').toString('base64'), size: 7}};
+    await assert.rejects(verifySources(options), /cannot be recomputed/);
+    live[`${snapshot.head_sha}:package-lock.json`] = undefined;
+    const failing = {rest: {repos: {getContent: async args => { if (args.path === 'package-lock.json') throw Object.assign(new Error('upstream failure'), {status: 502}); return serve(args); }}}};
+    await assert.rejects(verifySources({...options, github: failing}), /upstream failure/);
+    // File-level binding: a lockfile item must reference exactly its own derived summary.
+    const rebind = change => { const copy = structuredClone(snapshot); change(copy.files.find(file => file.path === 'package-lock.json'), copy); return copy; };
+    await assert.rejects(verifySources({...options, snapshot: rebind(item => { item.head_source = 'unknown'; })}), /omitted or substituted/);
+    await assert.rejects(verifySources({...options, snapshot: rebind(item => { item.head_source = Object.keys(snapshot.sources).find(key => key.endsWith(':README.md')); })}), /omitted or substituted/);
+    await assert.rejects(verifySources({...options, snapshot: rebind(item => { delete item.base_source; })}), /omitted or substituted/);
+    const removedFile = copy => copy.files.find(file => file.path === 'go.sum');
+    const doubled = structuredClone(snapshot); removedFile(doubled).head_source = removedId;
+    await assert.rejects(verifySources({...options, snapshot: doubled}), /omitted or substituted/);
+    const addedFile = copy => copy.files.find(file => file.path === 'Pipfile.lock');
+    assert.equal(addedFile(snapshot).status, 'added');
+    const swapped = structuredClone(snapshot); addedFile(swapped).base_source = addedFile(swapped).head_source; delete addedFile(swapped).head_source;
+    await assert.rejects(verifySources({...options, snapshot: swapped}), /omitted or substituted/);
+    const gone = structuredClone(snapshot); removedFile(gone).base_source = 'unknown'; 
+    await assert.rejects(verifySources({...options, snapshot: gone}), /omitted or substituted/);
+    await assert.rejects(verifySources({...options, snapshot: rebind(item => { item.head_source = undefined; })}), /omitted or substituted/);
+    await assert.rejects(verifySources({...options, snapshot: rebind(item => { item.path = 'src/handler.js'; })}), /omitted or substituted|inventory|status/);
+    await assert.rejects(verifySources({...options, snapshot: rebind((item, copy) => { copy.files.find(file => file.path === 'src/handler.js').lockfile = true; })}), /omitted or substituted|not bound|receipt_patch_mismatch/);
+  }, directory => {
+    fs.writeFileSync(path.join(directory, 'package-lock.json'), lockfixture.npmBase());
+    fs.writeFileSync(path.join(directory, 'go.sum'), 'example.com/mod v1.0.0 h1:abc=\n');
+  });
+});

@@ -160,6 +160,77 @@ test('a seeded engine file that a pinned legacy revision never had is skipped, w
   } finally {fs.rmSync(root, {recursive: true, force: true});}
 }));
 
+// ---- Dependency lockfiles (issue 65): the local review summarizes with the same code as the hosted review.
+
+const lockfixture = require('../test/fixtures/lockfiles.cjs');
+const {LOCKFILE_PATCH} = require('./lockfile-summary.cjs');
+
+const commitLockfile = (f, name, text) => {
+  fs.mkdirSync(path.dirname(path.join(f.directory, name)), {recursive: true});
+  fs.writeFileSync(path.join(f.directory, name), text);
+  git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', `chore: update ${name}`]);
+};
+
+test('local collection replaces a changed lockfile with its derived summary and keeps package.json as source', () => repository(f => {
+  commitLockfile(f, 'package.json', '{"name":"fictional"}\n');
+  commitLockfile(f, 'package-lock.json', lockfixture.npmHead());
+  const {snapshot} = collectLocal({...f, request: 'Update dependencies.', technical: {}});
+  const item = snapshot.files.find(file => file.path === 'package-lock.json');
+  const [id, source] = Object.entries(snapshot.sources).find(([, candidate]) => candidate.kind === 'lockfile-summary');
+  assert.deepEqual([item.lockfile, item.patch, item.head_source, item.base_source], [true, LOCKFILE_PATCH, id, undefined]);
+  assert.equal(source.authority, 'derived'); assert.equal(source.ref, snapshot.head_sha);
+  assert.match(source.content, /^base: absent$/m);
+  assert.equal(Object.values(snapshot.sources).filter(candidate => candidate.path === 'package-lock.json').length, 1);
+  assert.equal(snapshot.files.find(file => file.path === 'package.json').head_source.endsWith(':package.json'), true);
+}, directory => fs.writeFileSync(path.join(directory, 'package.json'), '{"name":"before"}\n')));
+
+test('local collection summarizes modified, removed and renamed lockfiles from exact blob bytes', () => repository(f => {
+  commitLockfile(f, 'package-lock.json', lockfixture.npmHead());
+  fs.renameSync(path.join(f.directory, 'uv.lock'), path.join(f.directory, 'tools/uv.lock'));
+  git(f.directory, ['rm', '-q', '--cached', 'uv.lock']); fs.rmSync(path.join(f.directory, 'go.sum'));
+  git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'chore: move lockfiles']);
+  const {snapshot} = collectLocal({...f, request: 'Move lockfiles.', technical: {}});
+  const summaries = Object.values(snapshot.sources).filter(source => source.kind === 'lockfile-summary');
+  assert.deepEqual(summaries.map(source => source.path).sort(), ['go.sum', 'package-lock.json', 'tools/uv.lock']);
+  const removed = snapshot.files.find(file => file.path === 'go.sum');
+  assert.deepEqual([removed.head_source, snapshot.sources[removed.base_source].ref], [undefined, snapshot.base_sha]);
+  assert.equal(snapshot.files.find(file => file.path === 'tools/uv.lock').status, 'renamed');
+  assert.match(summaries.find(source => source.path === 'package-lock.json').content, /RISK\[downgrade\] CHANGED semver/);
+}, directory => {
+  fs.mkdirSync(path.join(directory, 'tools'));
+  fs.writeFileSync(path.join(directory, 'package-lock.json'), lockfixture.npmBase());
+  fs.writeFileSync(path.join(directory, 'uv.lock'), lockfixture.uvBase());
+  fs.writeFileSync(path.join(directory, 'go.sum'), 'example.com/mod v1.0.0 h1:abc=\n');
+}));
+
+test('a lockfile that cannot be summarized locally keeps raw evidence, and an unreadable one fails with the specific reason', () => repository(f => {
+  commitLockfile(f, 'Cargo.lock', 'version = 2\n');
+  const {snapshot} = collectLocal({...f, request: 'a', technical: {}});
+  assert.deepEqual(snapshot.lockfile_failures, [{path: 'Cargo.lock', reason: 'unsupported_version'}]);
+  assert.equal(snapshot.files.find(file => file.path === 'Cargo.lock').lockfile, undefined);
+  assert.equal(snapshot.sources[`${snapshot.head_sha}:Cargo.lock`].content, 'version = 2\n');
+  commitLockfile(f, 'Cargo.lock', `version = 2\n${'#'.repeat(310000)}\n`);
+  assert.throws(() => collectLocal({...f, request: 'a', technical: {}}), error => error.lockfile?.reason === 'unsupported_version' && /Cargo\.lock/.test(error.message));
+}, directory => fs.writeFileSync(path.join(directory, 'Cargo.lock'), 'version = 3\n')));
+
+test('local lockfile bytes over the bound or not UTF-8 fail closed with specific reasons', () => repository(f => {
+  commitLockfile(f, 'yarn.lock', `# yarn lockfile v1\n${'#'.repeat(1100000)}\n`);
+  assert.throws(() => collectLocal({...f, request: 'a', technical: {}}), error => error.lockfile?.reason === 'too_large');
+  commitLockfile(f, 'yarn.lock', Buffer.from([0x23, 0xff, 0xfe, 0x0a]));
+  assert.deepEqual(collectLocal({...f, request: 'a', technical: {}}).snapshot.lockfile_failures, [{path: 'yarn.lock', reason: 'not_text'}]);
+}, directory => fs.writeFileSync(path.join(directory, 'yarn.lock'), '# yarn lockfile v1\n')));
+
+test('a git failure while reading a lockfile blob is not mistaken for a lockfile problem', () => repository(f => {
+  commitLockfile(f, 'go.sum', 'example.com/mod v1.0.0 h1:abc=\n');
+  const real = require('node:child_process').execFileSync;
+  const cp = require('node:child_process');
+  cp.execFileSync = (command, args, options) => {
+    if (args.includes('show') && String(args.at(-1)).endsWith(':go.sum')) throw Object.assign(new Error('git exploded'), {code: 'EIO'});
+    return real(command, args, options);
+  };
+  try { assert.throws(() => collectLocal({...f, request: 'a', technical: {}}), /git exploded/); } finally { cp.execFileSync = real; }
+}, directory => fs.writeFileSync(path.join(directory, 'go.sum'), '')));
+
 // The shape of the Alcantara song-similarity change that stopped at "Complete review evidence exceeds the
 // source budget": 30 files (17 added, 13 modified, one of them a workflow carrying a Clouseau pin), about
 // 150 KB of diff, 48 KB of contracts and an 11 KB verification record. Source sizes follow the real files.

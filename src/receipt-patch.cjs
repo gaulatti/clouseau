@@ -1,6 +1,7 @@
 'use strict';
 
 const {patchOf} = require('./acceptance.cjs');
+const {LOCKFILE_PATCH, isLockfile} = require('./lockfile-summary.cjs');
 
 // CI recomputes nothing from the model: the patch the reviewers saw is compared with the
 // patch GitHub reports for the same pull request. The file list is the one already fetched for
@@ -46,13 +47,25 @@ function signedPatch(snapshot, item) {
   try {return patchOf(snapshot, item);} catch {return null;}
 }
 
+// A lockfile carries no patch in the snapshot: its derived summary replaces the raw text and patch, and
+// verifySources recomputes that summary from GitHub's base and head bytes. Only a known lockfile marked as
+// summarized with exactly the fixed placeholder is exempt, so the exemption cannot carry other text.
+const summarized = item => item.lockfile === true && isLockfile(item.path) && item.patch === LOCKFILE_PATCH;
+
 function verifyPatches({snapshot, files}) {
-  // GitHub supplies no patch for very large or binary changes; the hosted collector refuses those and so does this.
-  if (files.some(file => typeof file.patch !== 'string' || !file.patch)) throw new Error('Changed-file evidence is incomplete');
   const signed = new Map(snapshot.files.map(file => [file.path, file]));
+  // GitHub supplies no patch for very large or binary changes; the hosted collector refuses those and so does this.
+  if (files.some(file => (typeof file.patch !== 'string' || !file.patch) && !(signed.has(file.filename) && summarized(signed.get(file.filename))))) {
+    throw new Error('Changed-file evidence is incomplete');
+  }
   for (const file of snapshot.files) if (!files.some(live => live.filename === file.path)) throw new ReceiptPatchMismatch(file.path);
   for (const live of files) {
     const item = signed.get(live.filename);
+    if (item && item.lockfile === true && !summarized(item)) throw new ReceiptPatchMismatch(live.filename);
+    if (item && summarized(item)) {
+      if (item.status !== live.status) throw new ReceiptPatchMismatch(live.filename);
+      continue;
+    }
     if (!item || item.status !== live.status || hostedForm(signedPatch(snapshot, item), live) !== live.patch) throw new ReceiptPatchMismatch(live.filename);
   }
 }
