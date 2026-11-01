@@ -1023,3 +1023,11 @@ test('a completed verification run never reruns a succeeded, running, stale, unr
     f.github.rest.repos.listPullRequestsAssociatedWithCommit = async () => ({data: []});
   }, verificationTrigger({pull_requests: []})), /No single open PR/);
 });
+
+test('finalization on an owner-automatic repository with insufficient protection merges nothing', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+  const f = fixture();
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  await policy.finalize({github: f.github, context, core: {info() {}}, assessment: automatic});
+  assert.ok(!f.writes.some(write => write.name === 'arm' || write.name === 'dispatch'));
+});
