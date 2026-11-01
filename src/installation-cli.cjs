@@ -7,7 +7,7 @@ const {digest} = require('./acceptance.cjs');
 const {git, collectLocal, assertUnchanged, readLocalConfig} = require('./local-git.cjs');
 const {refresh} = require('./acceptance-sources.cjs');
 const {localReview} = require('./local-review.cjs');
-const {askHarness} = require('./local-harness.cjs');
+const {askHarness, assertHarness} = require('./local-harness.cjs');
 const {reconcile, priorState} = require('./acceptance-ledger.cjs');
 const {issueReceipt, loadReceipt, verifySources} = require('./local-receipt.cjs');
 const {validateConfig} = require('./config.cjs');
@@ -15,13 +15,14 @@ const {SOURCE} = require('./central-version.cjs');
 const normal = require('./local-cli.cjs');
 const bootstrap = require('./installation-bootstrap.cjs');
 const {cliApi, githubFromApi} = require('./installation-github.cjs');
+const {AGENTS, AwaitingAgent, createExchange} = require('./local-agent.cjs');
 
 const COMMANDS = {
   'public-identity': ['identity'],
   'installation-engine': [],
   'installation-prepare': ['directory', 'base', 'request-file', 'identity', 'output'],
   'installation-authorize': ['manifest'],
-  'installation-review': ['directory', 'manifest', 'grant-comment', 'harness', 'identity', 'output'],
+  'installation-review': ['directory', 'manifest', 'grant-comment', 'harness', 'agent', 'identity', 'output'],
   'installation-publish': ['directory', 'receipt'],
   'installation-check': ['repository', 'pull-request'],
 };
@@ -30,11 +31,12 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function options(argv) {
   const [command, ...values] = argv;
-  requireInput(Object.hasOwn(COMMANDS, command), 'unknown installation command');
+  requireInput(Object.hasOwn(COMMANDS, command), `unknown installation command; valid commands: ${Object.keys(COMMANDS).join(', ')}`);
   const args = {command};
   for (let index = 0; index < values.length; index += 2) {
     const key = values[index].slice(2);
-    requireInput(values[index].startsWith('--') && COMMANDS[command].includes(key) && values[index + 1] && !args[key], 'invalid command arguments');
+    requireInput(values[index].startsWith('--') && COMMANDS[command].includes(key) && values[index + 1] && !args[key],
+      `invalid command arguments at ${JSON.stringify(values[index])}; every option is "--name value", given once; ${command} accepts: ${COMMANDS[command].map(option => `--${option}`).join(' ') || 'no options'}`);
     args[key] = values[index + 1];
   }
   return args;
@@ -68,7 +70,11 @@ function verification({directory, config}) {
 }
 
 async function runReview(args, {api, installed, state, clock, ask = askHarness, verify = verification}) {
+  if (args.harness) assertHarness(args.harness);
   const directory = path.resolve(args.directory || process.cwd());
+  const agent = args.agent;
+  requireInput(!(agent && args.harness), 'choose either --agent (inside an AI harness) or --harness (headless), not both');
+  requireInput(!agent || AGENTS.includes(agent), `supported agent harnesses: ${AGENTS.join(', ')}`);
   const manifest = bootstrap.validateManifest(readJson(args.manifest, 60000), clock());
   const reviewer = installed();
   bootstrap.assertManifestLocal(directory, manifest, reviewer, clock());
@@ -80,40 +86,73 @@ async function runReview(args, {api, installed, state, clock, ask = askHarness, 
   const branch = git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   const historyPath = path.join(state, 'installation-ledgers', `${digest({repository: manifest.repository, branch})}.json`);
   const previous = normal.readHistory(historyPath, manifest.repository, branch);
+  const prior = previous?.findings || [];
+  const cache = path.join(state, 'installation-reviews', digest({manifest, grant, harness: agent ? `agent:${agent}` : args.harness || 'codex', prior}));
+  // An unfinished agent exchange resumes on its recorded evidence without spending another attempt or verification.
+  const agentDirectory = path.join(cache, 'agent');
+  const technicalPath = path.join(agentDirectory, 'technical.json');
+  const resuming = Boolean(agent) && previous?.cache_id === path.basename(cache) &&
+    fs.existsSync(technicalPath) && !fs.existsSync(path.join(agentDirectory, 'completed.json'));
   if (previous) {
     requireInput(Number.isSafeInteger(previous.installation_attempts) && previous.installation_attempts >= 1 && previous.installation_attempts <= 3,
       'invalid preserved installation attempt history');
     const unchanged = previous.head_sha === manifest.head_sha && previous.base_sha === manifest.base_sha &&
       previous.reviewer_digest === reviewer.digest && previous.request_digest === digest(manifest.request);
-    requireInput(!unchanged || previous.decision === 'auto_approve', 'this unchanged revision already has a negative review; repair it before reassessment');
+    requireInput(resuming || !unchanged || previous.decision === 'auto_approve', 'this unchanged revision already has a negative review; repair it before reassessment');
   }
-  const attempts = (previous?.installation_attempts || 0) + 1;
+  const attempts = (previous?.installation_attempts || 0) + (resuming ? 0 : 1);
   requireInput(attempts <= 3, 'the initial installation exhausted its two repair cycles; retain the evidence and resolve the implementation attempt');
-  const prior = previous?.findings || [];
-  const cache = path.join(state, 'installation-reviews', digest({manifest, grant, harness: args.harness || 'codex', prior}));
   const journal = path.join(cache, 'observations.jsonl');
-  requireInput(!fs.existsSync(journal), `this exact installation review already ran; inspect ${cache}`);
+  requireInput(resuming || !fs.existsSync(journal), `this exact installation review already ran; inspect ${cache}`);
   const output = path.resolve(args.output || path.join(cache, 'record.json'));
   requireInput(output !== directory && !output.startsWith(directory + path.sep), 'store installation evidence outside the checkout');
   requireInput(!fs.existsSync(output), 'preserve the existing report and choose a new output path');
-  const technical = verify({directory, config: local});
+  let technical;
+  if (resuming) technical = JSON.parse(fs.readFileSync(technicalPath, 'utf8'));
+  else {
+    technical = verify({directory, config: local});
+    if (agent) {
+      // The exchange spans several commands; persist the one real verification so later commands cannot rerun it.
+      technical = JSON.parse(JSON.stringify(technical));
+      fs.mkdirSync(agentDirectory, {recursive: true, mode: 0o700});
+      fs.writeFileSync(technicalPath, JSON.stringify(technical), {mode: 0o600});
+    }
+  }
   const collected = collectLocal({directory, base: manifest.base_sha, request: manifest.request, technical, ciConfig: config,
     reviewerSha: reviewer.sha, installation: grant});
   collected.snapshot.prior_findings = prior;
   refresh(collected.snapshot);
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
+  if (agent) {
+    const frozen = path.join(agentDirectory, 'snapshot.digest');
+    if (!fs.existsSync(frozen)) fs.writeFileSync(frozen, collected.snapshot.digest, {mode: 0o600});
+    else requireInput(fs.readFileSync(frozen, 'utf8') === collected.snapshot.digest,
+      `source or evidence changed since this agent exchange began; evidence preserved in ${agentDirectory}`);
+  }
   const pending = {version: 1, repository: manifest.repository, branch, head_sha: manifest.head_sha, base_sha: manifest.base_sha,
     reviewer_digest: reviewer.digest, request_digest: digest(manifest.request), cache_id: path.basename(cache),
     has_receipt: false, decision: 'review_incomplete', findings: prior, installation_attempts: attempts};
   // Preserve failed or incomplete harness attempts even when a new grant has
   // different timestamps. Renewing metadata is not new implementation evidence.
   writeJson(historyPath, pending, directory, true);
-  const result = await localReview({...collected, ask: async task => {
-    fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started', request_digest: digest(task)}) + '\n', {mode: 0o600});
-    const response = await ask({...task, harness: args.harness || 'codex'});
-    fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
-    return response;
-  }});
+  const exchange = agent ? createExchange({directory: agentDirectory, agent,
+    journal: entry => fs.appendFileSync(journal, JSON.stringify(entry) + '\n', {mode: 0o600})}) : null;
+  let result;
+  try {
+    result = await localReview({...collected, ask: async task => {
+      if (exchange) return exchange.ask(task);
+      fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started', request_digest: digest(task)}) + '\n', {mode: 0o600});
+      const response = await ask({...task, harness: args.harness || 'codex'});
+      fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
+      return response;
+    }});
+  } catch (error) {
+    if (!(error instanceof AwaitingAgent)) throw error;
+    return {status: 'awaiting_agent', installation_only: true, ...error.info, reviewer_sha: reviewer.sha, provider_api_calls: 0, harness_invocations: 0,
+      respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session FRESH_SESSION_ID`,
+      then: 'Repeat the identical installation-review command. The signed manifest binds this engine revision, so the exchange continues on it.'};
+  }
+  if (agent) fs.writeFileSync(path.join(agentDirectory, 'completed.json'), '{}\n', {mode: 0o600});
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(result, collected.snapshot, prior);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
@@ -266,4 +305,4 @@ async function main(argv, runtime = {}) {
   return check(args, context);
 }
 
-module.exports = {options, readJson, writeJson, positive, verification, runReview, remoteConfiguration, readyPull, check, main};
+module.exports = {COMMANDS, options, readJson, writeJson, positive, verification, runReview, remoteConfiguration, readyPull, check, main};

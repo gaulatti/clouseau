@@ -42,7 +42,10 @@ test('a changed export and its caller in another unit form one export_consumer s
   assert.deepEqual(seam.a, {path: 'app/page.ts', unit: 'u1'});
   assert.deepEqual(seam.b, {path: 'lib/store.ts', unit: 'u0'});
   assert.deepEqual(seam.excerpts.map(item => [item.path, item.unit, item.truncated]), [['app/page.ts', 'u1', false], ['lib/store.ts', 'u0', false]]);
-  assert.match(seam.excerpts[1].patch, /\+export function read\(id: string\)/);
+  // Only the lines that make the edge, not the hunks: the import and the use, the changed declaration, and the sizes.
+  assert.deepEqual(seam.excerpts[0].lines, ["1: import {read} from '../lib/store';", '2: read();']);
+  assert.deepEqual(seam.excerpts[1].lines, ['-export function read() {}', '+export function read(id: string) {}']);
+  assert.deepEqual(seam.excerpts.map(item => [item.added, item.removed, item.status]), [[1, 1, 'modified'], [1, 1, 'modified']]);
   assert.match(seam.id, /^s[0-9a-f]{12}$/);
   assert.ok(KINDS.includes(seam.kind));
 });
@@ -135,7 +138,8 @@ test('seam computation works on a real partition plan and uses restored patches'
   assert.equal(plan.units.length, 2);
   const [seam] = seamsOf({snapshot, plan});
   assert.equal(seam.kind, 'import');
-  assert.match(seam.excerpts[1].patch, /\+export const t = 1;/);
+  assert.deepEqual(seam.excerpts[1].lines, [], 'a plain import carries no hunk lines, only the size of the change');
+  assert.deepEqual([seam.excerpts[1].added, seam.excerpts[1].removed], [1, 0], 'the restored patch body is counted');
 });
 
 test('an excerpt over the cap is cut and says so, and the cap is validated', () => {
@@ -143,10 +147,25 @@ test('an excerpt over the cap is cut and says so, and the cap is validated', () 
     {path: 'a/one.ts', unit: 'u0', head: "import '../b/two';\n", patch: 'x'.repeat(50)},
     {path: 'b/two.ts', unit: 'u1', head: 'export const t = 1;\n', patch: 'y'.repeat(10)},
   ]);
-  const [seam] = seamsOf({snapshot, plan}, {excerptCap: 20});
-  assert.deepEqual(seam.excerpts.map(item => [item.patch.length, item.truncated]), [[20, true], [10, false]]);
+  const [seam] = seamsOf({snapshot, plan}, {excerptCap: 10});
+  assert.deepEqual(seam.excerpts.map(item => [item.lines, item.truncated]), [[[], true], [[], false]]);
+  assert.equal(seamsOf({snapshot, plan})[0].excerpts[0].truncated, false);
   for (const bad of [0, -1, 1.5, NaN, Infinity, '9']) refusal('limit_invalid', () => seamsOf({snapshot, plan}, {excerptCap: bad}));
   assert.equal(DEFAULTS.integrationCap, 250000);
+});
+
+test('a removed import and a deleted test carry the lines that matter: the stale import, the lost assertions', () => {
+  const {snapshot, plan} = change([
+    {path: 'lib/old.ts', unit: 'u0', status: 'removed', base: 'export const x = 1;\n', patch: '@@ -1 +0,0 @@\n-export const x = 1;\n'},
+    {path: 'app/page.ts', unit: 'u1', head: "const ok = 1;\nimport {x} from '../lib/old';\n"},
+    {path: 'lib/store.ts', unit: 'u0', head: 'export const y = 2;\n', patch: '@@ -1 +1 @@\n-export const y = 1;\n+export const y = 2;\n'},
+    {path: 'test/store.test.ts', unit: 'u1', status: 'removed', base: "import {y} from '../lib/store';\n", patch: '@@ -1,2 +0,0 @@\n-it("y", () => {});\n-it("z", () => {});\n'},
+  ]);
+  const byKind = Object.fromEntries(seamsOf({snapshot, plan}).map(seam => [seam.kind, seam]));
+  assert.deepEqual(byKind.removed_import.excerpts[0].lines, ["2: import {x} from '../lib/old';"]);
+  assert.deepEqual([byKind.removed_import.excerpts[1].lines, byKind.removed_import.excerpts[1].removed], [[], 1]);
+  assert.deepEqual(byKind.test_subject.excerpts[0].lines, ['-it("y", () => {});', '-it("z", () => {});']);
+  assert.deepEqual(byKind.test_subject.excerpts[1].lines, ['-export const y = 1;', '+export const y = 2;']);
 });
 
 test('a changed path with no owning unit is refused', () => {

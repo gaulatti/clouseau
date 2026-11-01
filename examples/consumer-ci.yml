@@ -1,0 +1,388 @@
+# Reference consumer verification-and-review workflow, verified end to end in a
+# fresh repository (GitHub-hosted runners, record-transport: job-output, provenance:
+# summary). Save as .github/workflows/ci.yml. Replace FULL_REVIEWED_RELEASE_SHA with the
+# reviewer_sha printed by `clouseau installation-engine`. The job named "verify" and its
+# step names must match "verification" in .github/clouseau.json; adapt the install and
+# test steps to your stack. Secrets (all optional, see docs/quickstart.md):
+# DEEPSEEK_API_KEY, TYPESAFE_API_KEY, CLOUSEAU_REPAIR_TOKEN.
+name: CI
+run-name: >-
+  ${{ github.event_name == 'pull_request' && format('Verify PR #{0}', github.event.pull_request.number) ||
+      inputs.check_author && 'Verify repair author' ||
+      format('PR review ({0})', github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref_name) }}
+on:
+  push:
+    branches: ['policy-install/**']
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_target:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pull_request:
+        description: PR number to reassess without executing contributor code; empty runs verification
+        type: string
+        required: false
+      check_author:
+        description: Inspect existing repair author identity and repository access without writing or deploying
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}
+  cancel-in-progress: true
+jobs:
+  resolve-clouseau:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.engine.outputs.sha }}
+      digest: ${{ steps.engine.outputs.digest }}
+    steps:
+      - id: engine
+        uses: gaulatti/clouseau/scripts/resolve@FULL_REVIEWED_RELEASE_SHA
+        with:
+          provenance: summary
+
+  verify:
+    # Schedule the job so GitHub resolves its name, including metadata events.
+    # Step guards keep those events from running contributor code.
+    name: >-
+      ${{ (github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '' && !inputs.check_author)) && 'verify' || 'metadata-only' }}
+    needs: resolve-clouseau
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        if: &verify-code >-
+          github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '' && !inputs.check_author)
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check out this run frozen Clouseau engine
+        if: *verify-code
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - name: Verify the frozen Clouseau engine
+        if: *verify-code
+        uses: ./.clouseau-ci
+        with:
+          operation: verify-engine
+      - uses: actions/setup-node@v4
+        if: *verify-code
+        with:
+          node-version: '22'
+      - name: Select accepted verification recipe
+        if: *verify-code
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if test -n "$BASE_SHA" && git cat-file -e "$BASE_SHA:.clouseau-local.json" 2>/dev/null; then
+            git show "$BASE_SHA:.clouseau-local.json" > "$RUNNER_TEMP/clouseau-coverage.json"
+          else
+            cp .clouseau-local.json "$RUNNER_TEMP/clouseau-coverage.json"
+          fi
+      - name: Install verification dependencies
+        if: *verify-code
+        run: npm ci --ignore-scripts
+      - name: Run tests and measure native coverage
+        if: *verify-code
+        run: npm run test:coverage
+      - name: Enforce 100% line and branch coverage
+        if: *verify-code
+        uses: ./.clouseau-ci
+        with:
+          operation: coverage
+          coverage-config: ${{ runner.temp }}/clouseau-coverage.json
+
+  assess-intent:
+    if: &review-event >-
+      (github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+      (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      assessment: ${{ steps.local-review.outputs.assessment || steps.assess.outputs.assessment }}
+      review-record: ${{ steps.local-review.outputs.review-record || steps.assess.outputs.review-record }}
+      number: ${{ steps.install.outputs.number || github.event.pull_request.number }}
+    needs: resolve-clouseau
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - name: Verify the owner-authorized frozen reviewer installation
+        if: github.event_name == 'push'
+        id: install
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const match = context.ref.match(/^refs\/heads\/policy-install\/pr-([1-9][0-9]*)$/);
+            if (context.actor !== context.repo.owner || !/^[a-f0-9]{40}$/.test(context.sha) || !match) {
+              throw new Error('Reviewer installation requires the repository owner and a ready PR number');
+            }
+            const pull_number = Number(match[1]);
+            if (!Number.isSafeInteger(pull_number)) throw new Error('Invalid installation PR number');
+            const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number});
+            if (pr.state !== 'open' || pr.draft || pr.base.ref !== 'main' ||
+                pr.user.login !== context.repo.owner || pr.head.sha !== context.sha ||
+                pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}`) {
+              throw new Error('Installation requires the owner-authored same-repository PR at this exact workflow revision');
+            }
+            const comments = await github.paginate(github.rest.issues.listComments,
+              {...context.repo, issue_number: pull_number, per_page: 100});
+            if (!comments.some(comment => comment.user?.type === 'User' && comment.user.login === context.repo.owner &&
+                comment.body.trim() === `/approve-intent ${context.sha}`)) {
+              throw new Error('Installation requires owner intent confirmation at this exact revision');
+            }
+            core.setOutput('number', String(pull_number));
+      # Never load the controller or its configuration from the PR.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - name: Wait for tests and exact coverage
+        uses: actions/github-script@v7
+        env:
+          REQUESTED_PR: ${{ steps.install.outputs.number }}
+        with:
+          script: |
+            const path = require('node:path');
+            const root = path.resolve('.clouseau-ci');
+            const config = require(path.join(root, 'src/config.cjs')).loadConfig('.github/clouseau.json');
+            const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()});
+            const number = context.payload.pull_request?.number || Number(process.env.REQUESTED_PR);
+            for (let attempt = 0; attempt < 120; attempt++) {
+              const {data: pr} = await github.rest.pulls.get({...context.repo, pull_number: number});
+              const expected = context.payload.pull_request?.head.sha || context.sha;
+              if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
+                throw new Error('PR closed, became draft, or changed while verification was pending');
+              }
+              const result = await policy.technicalRun(github, context.repo, pr);
+              if (result.failure) throw new Error(result.failure);
+              if (!result.pending) { core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`); return; }
+              core.info('Waiting for independent verification and exact coverage. No AI request has been made.');
+              await new Promise(resolve => setTimeout(resolve, 15000));
+            }
+            throw new Error('PR verification did not complete within 30 minutes');
+      - name: Select authenticated local review or the installed CI reviewer
+        id: review-route
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.setOutput('local', String((context.payload.pull_request?.body || '').includes('clouseau-local-review:v1')));
+      - name: Verify authenticated local review without AI credentials
+        if: steps.review-route.outputs.local == 'true'
+        id: local-review
+        uses: ./.clouseau-ci
+        with:
+          operation: verify-local
+          record-transport: job-output
+          pull-request: ${{ steps.install.outputs.number }}
+          wait-for-verification: 'false'
+      - name: Review unstamped PR through the installed CI AI reviewer
+        if: steps.review-route.outputs.local != 'true'
+        uses: ./.clouseau-ci
+        id: assess
+        with:
+          operation: assess
+          record-transport: job-output
+          pull-request: ${{ steps.install.outputs.number }}
+          wait-for-verification: 'false'
+          provider-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          typesafe-key: ${{ secrets.TYPESAFE_API_KEY }}
+
+  approve-and-merge:
+    name: ${{ ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) && 'approve-and-merge' || 'metadata-only-approval' }}
+    needs: [assess-intent, resolve-clouseau]
+    # Always resolve the job name; only trusted, ready PR events run its steps.
+    # A failed assessment must still fail the required native approval check.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      actions: write
+    concurrency:
+      group: pr-approval-${{ needs.assess-intent.outputs.number || github.run_id }}
+      cancel-in-progress: false
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - name: Require a completed assessment
+        if: >-
+          ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+          (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) &&
+          needs.assess-intent.result != 'success'
+        run: exit 1
+      - uses: actions/checkout@v4
+        if: *review-event
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        if: *review-event
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - if: *review-event
+        uses: ./.clouseau-ci
+        with:
+          operation: gate
+          record-transport: job-output
+          review-record: ${{ needs.assess-intent.outputs.review-record }}
+          pull-request: ${{ needs.assess-intent.outputs.number }}
+          native-gate: 'true'
+          assessment: ${{ needs.assess-intent.outputs.assessment }}
+
+  apply-repair:
+    needs: [assess-intent, approve-and-merge, resolve-clouseau]
+    if: >-
+      always() && github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      needs.assess-intent.result == 'success' && needs.approve-and-merge.result == 'failure' &&
+      fromJSON(needs.assess-intent.outputs.assessment).repair_digest != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      actions: read
+    concurrency:
+      group: pr-approval-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
+        with:
+          operation: repair
+          record-transport: job-output
+          review-record: ${{ needs.assess-intent.outputs.review-record }}
+          assessment: ${{ needs.assess-intent.outputs.assessment }}
+          repair-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}
+
+  finalize-merge:
+    needs: [assess-intent, approve-and-merge, resolve-clouseau]
+    if: *review-event
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
+        with:
+          operation: finalize
+          pull-request: ${{ needs.assess-intent.outputs.number }}
+          assessment: ${{ needs.assess-intent.outputs.assessment }}
+
+  request-reassessment:
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve-intent ')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.check_author)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write
+    needs: resolve-clouseau
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - uses: ./.clouseau-ci
+        with:
+          operation: request-reassessment
+          pull-request: ${{ inputs.pull_request }}
+
+  check-author:
+    if: github.event_name == 'workflow_dispatch' && inputs.check_author
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    permissions: {}
+    steps:
+      - name: Verify independent repair author without writing
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}
+          script: |
+            const {data: user} = await github.rest.users.getAuthenticated();
+            const {data: repository} = await github.rest.repos.get(context.repo);
+            if (user.login === 'github-actions[bot]' || !repository.permissions?.push) {
+              throw new Error('Repair requires an independent author with Contents write access');
+            }
+            core.info(`Independent repair author ${user.login} can access ${context.repo.owner}/${context.repo.repo}. No write or deployment was made.`);

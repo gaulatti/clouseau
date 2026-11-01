@@ -5,7 +5,8 @@
 // the merged planner, unit views, seams and merge, runs the unit runner, and assembles the chunked record.
 //
 // Chunked review is available by default for local review. The protected configuration can only TIGHTEN it:
-//   chunked: {enabled?: boolean, force?: boolean, params?: {C, S}, concurrency?, unit_deadline_ms?, integration_cap?}
+//   chunked: {enabled?: boolean, force?: boolean, params?: {C, S}, concurrency?, unit_deadline_ms?, integration_cap?,
+//             integration_call_seams?, integration_max_seams?}
 // `enabled: false` turns it off (an oversized change then fails exactly as before); `force: true` chunks even a change
 // that fits one snapshot; every number may only be lowered from DEFAULT_SETTINGS. CI reads the same object from the
 // base branch, so the partition CI recomputes always uses the parameters the review used.
@@ -19,8 +20,8 @@ const {seamsOf} = require('./review-seams.cjs');
 const {chunkedReview, mergeWithIntegration, DEFAULTS} = require('./chunked-review.cjs');
 
 const DEFAULT_SETTINGS = Object.freeze({params: Object.freeze({C: 450000, S: 100000}), ...DEFAULTS});
-const KEYS = ['enabled', 'force', 'params', 'concurrency', 'unit_deadline_ms', 'integration_cap'];
-const LIMITED = ['concurrency', 'unit_deadline_ms', 'integration_cap'];
+const KEYS = ['enabled', 'force', 'params', 'concurrency', 'unit_deadline_ms', 'integration_cap', 'integration_call_seams', 'integration_max_seams'];
+const LIMITED = ['concurrency', 'unit_deadline_ms', 'integration_cap', 'integration_call_seams', 'integration_max_seams'];
 const whole = value => Number.isSafeInteger(value) && value > 0;
 
 // The protected object, or an error message naming what is wrong (null when valid).
@@ -36,7 +37,7 @@ function problem(value) {
     return 'params must be {C, S} positive integers no larger than the defaults';
   }
   if (LIMITED.some(key => value[key] !== undefined && (!whole(value[key]) || value[key] > DEFAULT_SETTINGS[key]))) {
-    return 'concurrency, unit_deadline_ms and integration_cap must be positive integers no larger than the defaults';
+    return 'concurrency, unit_deadline_ms, integration_cap, integration_call_seams and integration_max_seams must be positive integers no larger than the defaults';
   }
   return null;
 }
@@ -104,7 +105,8 @@ async function review({snapshot, active, ask, journal, scope, agent = false, tec
   const plan = hooks.plan(snapshot);
   const seams = hooks.seams({snapshot, plan});
   const run = await chunkedReview({snapshot, plan, seams, ask, journal, scope,
-    chunked: {params: active.params, concurrency: agent ? 1 : active.concurrency, unit_deadline_ms: active.unit_deadline_ms, integration_cap: active.integration_cap}});
+    chunked: {params: active.params, concurrency: agent ? 1 : active.concurrency, unit_deadline_ms: active.unit_deadline_ms, integration_cap: active.integration_cap,
+      integration_call_seams: active.integration_call_seams, integration_max_seams: active.integration_max_seams}});
   const record = {version: 3, snapshot, partition: run.partition, seams: run.seams, result: run.result, previous: {comment: null, findings: []},
     local_previous: {findings: priorFindings}, controls: false, technical};
   return {record, reviews: run.reviews};

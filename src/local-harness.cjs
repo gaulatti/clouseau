@@ -62,8 +62,16 @@ function invoke(program, args, options) {
   });
 }
 
+const HARNESSES = ['codex', 'claude'];
+
+// Every entry point validates the harness name with this before it records anything, so a mistyped
+// value can never consume a review attempt or leave behind a negative review.
+function assertHarness(harness) {
+  if (!HARNESSES.includes(harness)) throw new Error(`Unsupported --harness ${JSON.stringify(harness)}. Supported authenticated harnesses: ${HARNESSES.join(', ')}`);
+}
+
 async function askHarness({harness, role, phase, schema, prompt, execute = invoke}) {
-  if (!['codex', 'claude'].includes(harness)) throw new Error('Supported authenticated harnesses: codex, claude');
+  assertHarness(harness);
   if (harness === 'codex' && prompt.length > 1048576) throw new Error('Local Codex input exceeds its 1048576-character transport limit; preserve and inspect the complete evidence without truncation');
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-harness-'));
   try {
@@ -106,4 +114,4 @@ async function askHarness({harness, role, phase, schema, prompt, execute = invok
   } finally {fs.rmSync(directory, {recursive: true, force: true});}
 }
 
-module.exports = {boundedTail, compactSchema, invoke, askHarness};
+module.exports = {boundedTail, compactSchema, invoke, HARNESSES, assertHarness, askHarness};

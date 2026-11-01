@@ -236,17 +236,24 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
       acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
       local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity]}};
     if (central) {delete config.local_review.reviewer_digest; config.local_review.central_source = {...require('./central-version.cjs').SOURCE};}
+    // Only the central variant treats the changed source as a protected control, to prove the local warning at every stage.
+    if (central) config.sensitive_paths = ['src/new.js'];
     await repository(async f => {
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
       const args = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};
+      const warned = value => {
+        if (!central) return assert.equal(value.warnings, undefined);
+        assert.equal(value.warnings.length, 1);
+        assert.match(value.warnings[0], /^Protected review controls changed \(src\/new\.js\): CI cannot accept a local receipt .*\(\/approve-intent\) and will report review_incomplete/);
+      };
       const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}),
         installed: () => ({sha: reviewerSha, digest: 'e'.repeat(64), clean: true})};
       const result = await runReview(args, deps);
-      assert.ok(result.receipt); assert.equal(result.decision, 'auto_approve');
+      assert.ok(result.receipt); assert.equal(result.decision, 'auto_approve'); warned(result);
       const issued = JSON.parse(fs.readFileSync(result.receipt)).payload; assert.equal(issued.expires_at - issued.issued_at, 3600);
       const reused = await runReview({...args, identity: undefined}, {...deps,
         ask: async () => {throw new Error('A verified cached review must not call AI');}});
-      assert.equal(reused.reused, true); assert.equal(reused.harness_invocations, 0);
+      assert.equal(reused.reused, true); assert.equal(reused.harness_invocations, 0); warned(reused);
       // A new central commit may retain identical engine bytes. Its old signed
       // receipt must remain intact while a fresh review signs the new exact SHA.
       const advancedDeps = {...deps, installed: () => ({sha: 'f'.repeat(40), digest: 'e'.repeat(64), clean: true})};
@@ -260,7 +267,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
       const bare = path.join(state, 'artifacts.git'); git(state, ['init', '-q', '--bare', bare]);
       git(f.directory, ['config', `url.${bare}.insteadOf`, 'https://github.com/example/local-fixture.git']);
       const published = await main(['publish', '--directory', f.directory, '--receipt', result.receipt]);
-      assert.equal(published.artifact_commit.length, 40); assert.match(published.marker, /clouseau-local-review:v1/);
+      assert.equal(published.artifact_commit.length, 40); assert.match(published.marker, /clouseau-local-review:v1/); warned(published);
       assert.equal(JSON.parse(git(bare, ['show', `${published.artifact_commit}:clouseau-review.json`])).payload.record.snapshot.head_sha,
         result.head_sha);
       assert.equal(git(f.directory, ['rev-parse', 'HEAD']).trim(), result.head_sha);
@@ -467,5 +474,20 @@ test('a missing source path fails with a structured status instead of a raw git 
     assert.deepEqual({status: failure.status, reason: failure.reason, path: failure.path, harness: failure.harness},
       {status: 'failed', reason: 'source_not_found', path: 'gone/file.test.tsx', harness: null});
     assert.ok(!/git -C/.test(JSON.stringify(failure)));
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+}));
+
+test('a mistyped --harness fails naming the valid values before anything is recorded and never blocks the head', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-bad-harness-'));
+  try {
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const args = {directory: f.directory, base: f.base, 'request-file': request};
+    const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
+    for (const harness of ['bogus', 'claud']) {
+      await assert.rejects(runReview({...args, harness}, {...deps, ask: async () => {throw new Error('Must not invoke a harness');}}),
+        error => { assert.match(error.message, /Unsupported --harness .*codex, claude/); return true; });
+    }
+    assert.deepEqual(fs.readdirSync(state), ['requirement.txt'], 'an invalid invocation records no ledger, journal or cache');
+    assert.equal((await runReview({...args, harness: 'claude'}, deps)).decision, 'auto_approve');
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));

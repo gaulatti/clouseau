@@ -185,8 +185,15 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       if (receiptRef) {
         const controls = legacy.scopeReason(files, pr);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
-        if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
-          throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
+        // A verified receipt still never grants owner confirmation. Name which rule holds the review.
+        const held = (cause, message) => Object.assign(new Error(message), {code: 'RECEIPT_AUTHORITY', cause_code: cause});
+        if (controls && !authorization) {
+          throw held('receipt_protected_controls', 'A verified local receipt cannot authorize a change to protected review controls ' +
+            '(AGENTS.md, CI workflow or configuration, the repository policy or another configured sensitive path); ' +
+            'the exact-head owner confirmation is missing.');
+        }
+        if (digest(previous.findings) !== digest(verified.record.previous.findings)) {
+          throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
         }
         if (technicalBlock) {
           if (report) report('Authenticated local Clouseau quality review verified. Independent CI acceptance remains blocked. CI AI calls: 0.');
