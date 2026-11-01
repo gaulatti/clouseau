@@ -236,7 +236,7 @@ test('a malformed provider key is rejected by name before any request on every t
   try {
     for (const value of ['fictional-test-key\n', ' fictional-test-key', 'fictional test key', '"fictional-test-key"', '']) {
       process.env.DEEPSEEK_API_KEY = value;
-      const attempts = [checkProvider({fetchImpl}), requestReview({messages, fetchImpl}),
+      const attempts = [checkProvider({fetchImpl}),
         requestWiki({messages, schema: {type: 'object'}, fetchImpl})];
       for (const attempt of attempts) {
         await assert.rejects(attempt, error => {
@@ -247,4 +247,33 @@ test('a malformed provider key is rejected by name before any request on every t
       }
     }
   } finally {process.env.DEEPSEEK_API_KEY = original;}
+});
+
+test('the review transport runs an injected fetch with the provider key unset, as consumer verify jobs do', async () => {
+  const original = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const verdict = '{"decision":"auto_approve"}';
+    const requests = [];
+    const recovered = await requestReview({messages, wait: async () => {}, fetchImpl: async (_, options) => {
+      requests.push(JSON.parse(options.body).max_tokens);
+      return response(requests.length === 1 ? completion('length', 'partial') : completion('stop', verdict));
+    }});
+    assert.deepEqual(recovered, {content: verdict});
+    assert.deepEqual(requests, [4096, 8192]);
+    assert.deepEqual(await requestReview({messages, fetchImpl: async () => ({ok: false, status: 503})}),
+      {failure: 'AI assessment unavailable: provider HTTP 503'});
+  } finally {
+    if (original === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = original;
+  }
+});
+
+test('a separate process with no provider key runs the review transport', () => {
+  const {spawnSync} = require('node:child_process');
+  const env = {...process.env}; delete env.DEEPSEEK_API_KEY;
+  const script = `const {requestReview} = require('./src/provider.cjs');
+    requestReview({messages: [], wait: async () => {}, fetchImpl: async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: 'ok'}}]})})})
+      .then(result => { if (result.content !== 'ok') process.exit(2); }, () => process.exit(3));`;
+  const run = spawnSync(process.execPath, ['-e', script], {cwd: require('node:path').join(__dirname, '..'), env});
+  assert.equal(run.status, 0, String(run.stderr));
 });

@@ -44,6 +44,24 @@ run selects the new approved commit. Rerunning the resolver job makes a new
 selection, so rerun the whole workflow after a release rather than combining
 old successful jobs with a new selection.
 
+## Consumer verify jobs need no provider secret
+
+A consumer's `.github/tests/provider-recovery.test.mjs` (a consumer-owned file)
+imports `src/provider.cjs` from the frozen `.clouseau-ci` checkout and calls
+`requestReview` with an injected `fetchImpl`. Because the checkout is the
+resolved engine revision, an engine fix reaches every installed consumer with no
+consumer change; consumers do not carry a copy of the provider.
+
+`requestReview` therefore does not validate `DEEPSEEK_API_KEY` itself. The
+named, secret-free notice for a missing or malformed key comes from
+`policy.assess` (and `requestJSON` / `requestWiki` / `checkProvider` for their own
+paths), which run before any request in a real review. A `verify` job, a fork PR
+or a fresh installation with no provider secret must pass. Engine revisions
+`d0d773b` through `bc88519` regressed this; fixed revisions need no consumer
+edit. If a consumer ever pins an affected revision, the minimal workaround is
+`process.env.DEEPSEEK_API_KEY ??= 'fictional-test-key';` at the top of the test,
+and the upgrade path is to advance to the fixed `main`.
+
 ## Repository-local receipt authorization
 
 Keep signer enrollment, author binding, maximum age and revocation in protected

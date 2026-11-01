@@ -550,7 +550,7 @@ A missing or unreadable part, or a part that does not join to the signed root, i
 It collects the change as before; when the complete evidence does not fit one 900,000-character snapshot (or a changed file is
 over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`), bounded unit views
 (a file too large for one unit is split into segments), both roles on every unit through the unchanged reviewer, controller-computed
-seams, one blind integration pass per role, merge, one grading round per role, one chunked record (`version 3`, multi-part
+seams, one blind integration pass per role (none when there are no seams), merge, one grading round per role, one chunked record (`version 3`, multi-part
 when it exceeds one receipt) and ONE signed receipt. A change that fits is reviewed and signed exactly as before (record `version 2`,
 byte-identical). CI verifies a chunked receipt through the same single derivation, recomputing the partition, views and seams.
 
@@ -564,7 +564,9 @@ values) can only **tighten** it:
 | `params: {C, S}` | unit ceiling and shared context | at most 450000 and 100000 |
 | `concurrency` | harness sessions at once (an `--agent` review answers one at a time) | at most 2 |
 | `unit_deadline_ms` | deadline of one session | at most 300000 |
-| `integration_cap` | integration pass input | at most 250000 |
+| `integration_cap` | integration session input | at most 250000 |
+| `integration_call_seams` | seams one integration session is given (more seams, more sessions) | at most 60 |
+| `integration_max_seams` | seams the integration pass examines at all; the rest are recorded `missing` and hold approval | at most 400 |
 
 No argument or environment variable changes them. A unit that misses the deadline stops the review with `unit_deadline` and the
 ceiling to use; lower `params.C` in the protected configuration and review again. A crashed headless review resumes from its journal
@@ -640,7 +642,8 @@ change from a table (fictional filler content of exactly the measured sizes, a r
 added files), partitions it, builds every unit view, merges fake finding-free unit reports, builds the thin chunked
 record, signs it with an ephemeral key and verifies it through the one derivation. It prints the unit count,
 per-unit sizes (view, owned, shared, manifest, foreign hunks, estimated prompt), the record size against the single-receipt
-limit and the signed receipt (one file, or a multi-part receipt) size. No AI, network or secret is used. For `02618a9`
+limit and the signed receipt (one file, or a multi-part receipt) size, then runs the real unit runner against a fake harness and prints the
+EXACT prompt characters of every unit and integration session. No AI, network or secret is used. For `02618a9`
 it gives 4 units, a 1.55M combined snapshot, a 1.70M record (59.5% of the single-receipt limit) and a largest estimated prompt of about 570K characters.
 `src/chunked-measure.test.cjs` asserts these bounds and that every size which used to be refused (170 files, more than 8 units,
 a record over the signing limit, roughly 500 paths, a file over 300,000 bytes, a unit over the unit budget, a file of

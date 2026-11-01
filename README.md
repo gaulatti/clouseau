@@ -10,6 +10,7 @@ its quality verdict separate from real verification results. Opted-in CI verifie
 an enrolled runner's passing AI receipt without repeating the review, then still
 requires its own tests and exact coverage before approval/merge. See
 [local review, installation and trust boundaries](docs/local-review.md).
+New to Clouseau? Start with the [quickstart](docs/quickstart.md).
 Consumers without accepted recipe/enrollment/workflows use the separate
 [initial owner-authorized trust installation](docs/initial-installation.md).
 Its signed evidence cannot approve ordinary changes or automatically merge.
