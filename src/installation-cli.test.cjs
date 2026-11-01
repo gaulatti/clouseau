@@ -476,3 +476,19 @@ test('a private unprotected repository cannot silently opt into general automati
   assert.equal(accepted.auto_merge_authorized, false);
   assert.equal(accepted.manual_owner_acceptance_required, true);
 }));
+
+test('help and every usage error list every command with one line each and name the accepted options', async () => {
+  const {LOCAL, INSTALLATION} = require('./cli-usage.cjs');
+  assert.deepEqual(Object.keys(INSTALLATION).sort(), Object.keys(cli.COMMANDS).sort(), 'every installation command is described');
+  const help = await normal.main(['--help']);
+  assert.equal(await normal.main(['-h']), help); assert.equal(await normal.main(['help']), help);
+  for (const name of [...LOCAL.map(item => item[0]), ...Object.keys(cli.COMMANDS)]) {
+    assert.equal(help.split('\n').filter(line => line.startsWith(`  ${name} `)).length, 1, `${name} has exactly one line`);
+  }
+  assert.match(help, /installation-review .*--harness/);
+  await assert.rejects(normal.main(['ordinary-unknown']), error => { assert.equal(error.message, help); return true; });
+  assert.throws(() => cli.options(['installation-review', '--agent', 'claude']), /installation-review accepts: --directory --manifest --grant-comment --harness/);
+  assert.throws(() => cli.options(['installation-engine', '--x', 'y']), /accepts: no options/);
+  assert.throws(() => cli.options(['installation-nope']), /valid commands: public-identity, installation-engine/);
+  assert.throws(() => normal.options(['review', '--nope', 'x']), /accepted: --directory --base/);
+});
