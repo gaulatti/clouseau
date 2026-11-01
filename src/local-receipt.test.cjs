@@ -2,7 +2,9 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture} = require('../test/local-review-fixture.cjs');
-const {issueReceipt, verifyReceipt, validateTrust, reviewDecision, marker, loadReceipt, verifySources} = require('./local-receipt.cjs');
+const {issueReceipt, verifyReceipt, validateTrust, reviewDecision, marker, loadReceipt, verifySources,
+  screenReceipt, screenSources} = require('./local-receipt.cjs');
+const {ChunkedRecordError} = require('./chunked-record.cjs');
 const {digest} = require('./acceptance.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
 const crypto = require('node:crypto');
@@ -333,4 +335,58 @@ test('CI recomputes the derived lockfile summary from the exact base and head by
     fs.writeFileSync(path.join(directory, 'package-lock.json'), lockfixture.npmBase());
     fs.writeFileSync(path.join(directory, 'go.sum'), 'example.com/mod v1.0.0 h1:abc=\n');
   });
+});
+
+test('screening classifies every receipt failure with a fixed class and propagates only failures that are not the receipt\'s', async () => {
+  const f = await fixture();
+  const bundle = issueReceipt({...f.issue, now: Date.now()});
+  const ref = 'c'.repeat(40);
+  const pr = {body: `<!-- clouseau-local-review:v1 ${ref} -->`, user: {login: f.expected.author},
+    head: {sha: f.expected.headSha}, base: {sha: f.expected.baseSha}};
+  const repo = {owner: 'example', repo: f.expected.repository.split('/')[1]};
+  const github = served => ({rest: {repos: {getContent: async () => served()}}});
+  const content = value => () => ({data: {encoding: 'base64', size: 10, content: Buffer.from(typeof value === 'string' ? value : JSON.stringify(value)).toString('base64')}});
+  const options = {repo, engine: null, trust: f.expected.trust, configDigest: f.expected.configDigest, policyDigest: f.expected.policyDigest};
+  const screen = (served, change = {}) => screenReceipt({github: github(served), pr: {...pr, ...change}, ...options,
+    repo: {owner: f.expected.repository.split('/')[0], repo: f.expected.repository.split('/')[1]}});
+  const accepted = await screen(content(bundle));
+  assert.equal(accepted.ref, ref); assert.equal(accepted.rejected, null); assert.equal(accepted.verified.decision, 'auto_approve');
+  assert.deepEqual(await screen(content(bundle), {body: 'no claim'}), {ref: null, rejected: null});
+  assert.deepEqual(await screen(content(bundle), {body: `<!-- clouseau-local-review:v1 ${ref} -->\n<!-- clouseau-local-review:v1 ${'d'.repeat(40)} -->`}), {ref: null, rejected: 'malformed'});
+  assert.deepEqual(await screen(content('not json')), {ref: null, rejected: 'malformed'});
+  assert.deepEqual(await screen(content({unexpected: true})), {ref: null, rejected: 'malformed'});
+  assert.deepEqual(await screen(content(bundle), {user: {login: 'someone-else'}}), {ref: null, rejected: 'author'});
+  // A bundle that is not even an object cannot be verified; the receipt is ignored, not a crash.
+  assert.deepEqual(await screen(content(null)), {ref: null, rejected: 'malformed'});
+  assert.deepEqual(await screen(() => {throw Object.assign(new Error('Not Found'), {status: 404});}), {ref: null, rejected: 'unavailable'});
+  assert.deepEqual(await screen(() => ({data: {encoding: 'none', type: 'dir'}})), {ref: null, rejected: 'unavailable'});
+  for (const status of [500, 403, 429]) {
+    await assert.rejects(screen(() => {throw Object.assign(new Error('GitHub failed'), {status});}), error => error.status === status);
+  }
+  assert.deepEqual(await screen(content(bundle), {head: {sha: 'd'.repeat(40)}}), {ref: null, rejected: 'revision'});
+  // A chunked record that does not verify is the receipt's own failure too.
+  const chunked = structuredClone(f.record); chunked.partition = {scheme: 'unknown'};
+  const payload = {...bundle.payload, record: chunked, record_digest: digest(chunked)};
+  const signed = {payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
+    crypto.createPrivateKey(f.privateKey)).toString('base64url')};
+  assert.deepEqual(await screen(content(signed)), {ref: null, rejected: 'record'});
+});
+
+test('source screening ignores a receipt whose signed sources, diff or inventory differ and propagates every other failure', async () => {
+  const f = await fixture();
+  const files = hostedFiles(f.snapshot);
+  const pr = {changed_files: 1, base: {sha: f.snapshot.base_sha}, head: {sha: f.snapshot.head_sha,
+    repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}};
+  const options = {github: f.github, repo: f.repo, pr, files, snapshot: f.snapshot,
+    config: {readme: 'README.md', repository_policy: '.github/clouseau.md'}};
+  assert.equal(await screenSources(options), null);
+  assert.equal(await screenSources({...options, files: []}), 'source');
+  assert.equal(await screenSources({...options, files: files.map(file => ({...file, patch: `${file.patch}\n+tampered`}))}), 'source');
+  const tickets = structuredClone(f.snapshot); tickets.tickets = [{}];
+  assert.equal(await screenSources({...options, snapshot: tickets}), 'record');
+  const missing = {rest: {repos: {getContent: async () => {throw Object.assign(new Error('Not Found'), {status: 404});}}}};
+  assert.equal(await screenSources({...options, github: missing}), 'source');
+  const outage = {rest: {repos: {getContent: async () => {throw Object.assign(new Error('Server Error'), {status: 502});}}}};
+  await assert.rejects(screenSources({...options, github: outage}), error => error.status === 502);
+  await assert.rejects(screenSources({...options, files: files.map(({patch, ...file}) => file)}), /Changed-file evidence is incomplete/);
 });

@@ -11,6 +11,7 @@ const {digest} = require('./acceptance.cjs');
 const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
+const {noticeText} = require('./receipt-rejection.cjs');
 const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: '.github/clouseau.md', readme: 'README.md', acceptance: {
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
@@ -224,7 +225,7 @@ test('v2 assessment and native approval exchange a complete source-bound record 
   assert.equal(decided({decision: 'auto_approve'}, true), 'owner_decision');
 }));
 
-test('optional local review rejects every malformed receipt claim without paid fallback while unstamped changes receive CI review', () => fixture(async f => {
+test('optional local review ignores every malformed receipt claim, shows a fixed notice and reviews the change in CI', () => fixture(async f => {
   const keys = require('node:crypto').generateKeyPairSync('ed25519');
   const trusted = {...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
     max_age_seconds: 172800, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
@@ -242,18 +243,28 @@ test('optional local review rejects every malformed receipt claim without paid f
   for (const body of [`<!-- clouseau-local-review:v1 malformed-sha -->`, unknown,
     `${local}\n${unknown}`, `${local}\n${local}`, installation, `${local}\n${installation}`]) {
     f.state.pr.body = body;
-    const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
-    assert.equal(result.decision, 'review_incomplete', body);
-    assert.equal(f.state.calls, 0, 'a claimed but invalid local review cannot become a paid CI fallback');
-    assert.equal(artifactReads, 0, 'ambiguous or unsupported claims are rejected before fetching an artifact');
-    assert.equal(f.state.writes.length, 0, 'invalid claims cannot write an approval or acceptance ledger');
+    const calls = f.state.calls; const lines = [];
+    const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: line => lines.push(line)});
+    assert.equal(result.decision, 'auto_approve', `${body}: ${result.reason}`);
+    assert.equal(result.receipt_notice, 'malformed');
+    assert.ok(lines.includes(noticeText('malformed', false)));
+    assert.ok(f.state.calls > calls, 'the ordinary CI review ran instead of the claimed receipt');
+    assert.notEqual(result.review_source, 'authenticated_local');
+    assert.equal(artifactReads, 0, 'ambiguous or unsupported claims are ignored before fetching an artifact');
+    assert.equal(f.state.writes.length, 0, 'assessment itself does not grant a GitHub approval');
   }
   f.state.pr.body = 'Useful application regression fix with no local receipt.';
   const ordinary = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
   assert.equal(ordinary.decision, 'auto_approve', ordinary.reason);
-  assert.ok(f.state.calls > 0, 'a genuinely unstamped change receives the configured independent CI AI review');
+  assert.equal(ordinary.receipt_notice, undefined, 'an absent receipt shows no notice');
   assert.equal(artifactReads, 0);
-  assert.equal(f.state.writes.length, 0, 'assessment itself does not grant a GitHub approval');
+  // The same claims in a repository that requires a receipt cannot be reviewed by CI; they ask for a new receipt.
+  const required = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'required'}});
+  f.state.pr.body = `${local}\n${local}`;
+  const calls = f.state.calls;
+  const asked = await required.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  assert.equal(asked.decision, 'review_incomplete'); assert.equal(asked.cause, 'local_receipt_required');
+  assert.equal(asked.receipt_notice, 'malformed'); assert.equal(f.state.calls, calls);
 }));
 
 test('job-output data still requires the complete scored record and fresh head/base and CI before approval', () => fixture(async f => {
@@ -339,7 +350,9 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     const kept = fs.readFileSync(f.recordPath); fs.rmSync(f.recordPath);
     const holdAssessment = await assess();
     assert.equal(holdAssessment.decision, 'review_incomplete');
-    assert.match(holdAssessment.reason, /Authenticated local review held: review completeness is unresolved/);
+    assert.equal(holdAssessment.cause, 'local_receipt_required', 'a receipt whose evidence does not meet the approval rule is ignored');
+    assert.equal(holdAssessment.receipt_notice, 'held');
+    assert.notEqual(holdAssessment.review_source, 'authenticated_local');
     assert.equal(fs.existsSync(f.recordPath), false);
     served = bundle; fs.writeFileSync(f.recordPath, kept);
   }
@@ -363,11 +376,15 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   }
   const validSignature = bundle.signature;
   bundle.signature = `${validSignature[0] === 'a' ? 'b' : 'a'}${validSignature.slice(1)}`;
-  assert.equal((await assess()).decision, 'review_incomplete', 'failed CI cannot conceal a bad signed review or cause paid fallback');
+  const badSignature = await assess();
+  assert.equal(badSignature.decision, 'blocked_technical', 'failed CI is reported and a bad signed review is ignored, never used');
+  assert.equal(badSignature.receipt_notice, 'signature'); assert.equal(badSignature.review_source, undefined);
   bundle.signature = validSignature;
   const author = f.state.pr.user.login;
   f.state.pr.user.login = 'another-author';
-  assert.equal((await assess()).decision, 'review_incomplete', 'failed CI cannot conceal a receipt from another author');
+  const wrongAuthor = await assess();
+  assert.equal(wrongAuthor.decision, 'blocked_technical', 'failed CI is reported and a receipt from another author is ignored');
+  assert.equal(wrongAuthor.receipt_notice, 'author'); assert.equal(wrongAuthor.review_source, undefined);
   f.state.pr.user.login = author;
   fs.writeFileSync(f.recordPath, approvedRecord);
   await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
@@ -400,7 +417,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   }
   if (central === true) {
     const newerEngine = {...engine, sha: 'd'.repeat(40)};
-    const NOTICE = 'Local review receipt predates the current Clouseau engine; CI reviewed this change itself.';
+    const NOTICE = noticeText('engine', false); const REQUIRED_NOTICE = noticeText('engine', true);
     const kept = fs.readFileSync(f.recordPath);
     const writes = f.state.writes.length;
     const callsBefore = f.state.calls;
@@ -413,8 +430,8 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     assert.equal(required.decision, 'review_incomplete');
     assert.equal(required.cause, 'local_receipt_required');
     assert.equal(required.provider_api_calls, undefined);
-    assert.equal(required.receipt_notice, NOTICE);
-    assert.ok(hostedReports.includes(NOTICE));
+    assert.equal(required.receipt_notice, 'engine');
+    assert.ok(hostedReports.includes(REQUIRED_NOTICE));
     // Optional mode: the valid-but-older receipt is ignored and the normal CI review runs and approves on its own evidence.
     const optionalConfig = {...trusted, local_review: {...trusted.local_review, mode: 'optional'}};
     const newer = createPolicy(optionalConfig, {engine: newerEngine});
@@ -428,12 +445,12 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     served = optionalBundle;
     const hosted = await run(newer);
     assert.equal(hosted.decision, 'auto_approve', hosted.reason);
-    assert.equal(hosted.receipt_notice, NOTICE);
+    assert.equal(hosted.receipt_notice, 'engine');
     assert.notEqual(hosted.review_source, 'authenticated_local');
     assert.ok(f.state.calls > callsBefore, 'the hosted reviewer ran');
     const hostedRecord = JSON.parse(fs.readFileSync(f.recordPath));
     assert.ok(!hostedRecord.local_receipt_reference && !hostedRecord.local_receipt, 'the old receipt is not carried as evidence');
-    assert.ok(hostedReports.filter(line => line === NOTICE).length === 2);
+    assert.ok(hostedReports.filter(line => line === NOTICE).length === 1);
     await newer.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: hosted, nativeGate: true,
       wait: async () => {}});
     const posted = f.state.writes.slice(writes);
@@ -445,36 +462,134 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
       f.state.pending = pending; f.state.failed = failed;
       const held = await run(newer);
       assert.equal(held.decision, decision);
-      assert.equal(held.receipt_notice, NOTICE);
+      assert.equal(held.receipt_notice, 'engine');
       assert.equal(held.review_source, undefined);
     }
     f.state.pending = false; f.state.failed = false;
-    // Everything other than the engine remains a hard failure, with no notice and no hosted review.
-    const hardCalls = f.state.calls;
-    const hard = async (change, restore) => {
-      change();
-      const result = await run(newer, {fetchImpl: async () => {throw new Error('a hard failure cannot become a hosted review');}});
-      assert.equal(result.decision, 'review_incomplete');
-      assert.equal(result.receipt_notice, undefined);
-      assert.notEqual(result.cause, 'local_receipt_required');
-      restore();
+    // Every other receipt failure is ignored the same way: optional mode reviews the change in CI, the receipt is
+    // never carried as evidence, and the PR shows the one fixed sentence for the failure's class.
+    const sign = payload => ({payload, signature: require('node:crypto').sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
+      keys.privateKey).toString('base64url')});
+    const retarget = change => {
+      const changed = structuredClone(optionalRecord); change(changed);
+      return sign({...optionalBundle.payload, record: changed, record_digest: digest(changed)});
     };
+    const current = createPolicy(optionalConfig, {engine});
+    const getContent = f.github.rest.repos.getContent; const listFiles = f.github.rest.pulls.listFiles;
+    let artifactFailure = null;
+    f.github.rest.repos.getContent = async args => {
+      if (args.path === 'clouseau-review.json' && artifactFailure) throw artifactFailure;
+      return getContent(args);
+    };
+    const reviewed = async (reason, policy, change, restore, {rest = {}} = {}) => {
+      change();
+      const lines = []; const before = f.state.calls;
+      const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl,
+        report: line => lines.push(line), ...rest});
+      try {
+        assert.equal(result.decision, 'auto_approve', `${reason}: ${result.reason}`);
+        assert.equal(result.receipt_notice, reason);
+        assert.ok(lines.includes(noticeText(reason, false)), `${reason}: the fixed sentence is reported`);
+        assert.ok(f.state.calls > before, `${reason}: the hosted reviewer ran`);
+        assert.notEqual(result.review_source, 'authenticated_local');
+        const written = JSON.parse(fs.readFileSync(f.recordPath));
+        assert.ok(!written.local_receipt_reference && !written.local_receipt, `${reason}: the receipt is not evidence`);
+      } finally {restore();}
+      return result;
+    };
+    const noop = () => {};
     const validSignature = optionalBundle.signature;
-    await hard(() => {optionalBundle.signature = `${validSignature[0] === 'a' ? 'b' : 'a'}${validSignature.slice(1)}`;}, () => {optionalBundle.signature = validSignature;});
+    await reviewed('signature', current, () => {optionalBundle.signature = `${validSignature[0] === 'a' ? 'b' : 'a'}${validSignature.slice(1)}`;},
+      () => {optionalBundle.signature = validSignature;});
     const author = f.state.pr.user.login;
-    await hard(() => {f.state.pr.user.login = 'another-author';}, () => {f.state.pr.user.login = author;});
+    await reviewed('author', current, () => {f.state.pr.user.login = 'another-author';}, () => {f.state.pr.user.login = author;});
     const head = f.state.pr.head.sha;
-    await hard(() => {f.state.pr.head.sha = 'e'.repeat(40);}, () => {f.state.pr.head.sha = head;});
+    await reviewed('revision', current, () => {f.state.pr.head.sha = 'e'.repeat(40);}, () => {f.state.pr.head.sha = head;});
     const base = f.state.pr.base.sha;
-    await hard(() => {f.state.pr.base.sha = 'e'.repeat(40);}, () => {f.state.pr.base.sha = base;});
+    await reviewed('revision', current, () => {f.state.pr.base.sha = 'e'.repeat(40);}, () => {f.state.pr.base.sha = base;});
     const expiredBundle = issueReceipt({record: optionalRecord, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
       keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha, now: Date.now() - 400000 * 1000});
-    await hard(() => {served = expiredBundle;}, () => {served = optionalBundle;});
-    const changedConfig = createPolicy({...optionalConfig, sensitive_paths: [...optionalConfig.sensitive_paths, 'docs/']}, {engine: newerEngine});
-    const configResult = await run(changedConfig, {fetchImpl: async () => {throw new Error('a hard failure cannot become a hosted review');}});
-    assert.equal(configResult.decision, 'review_incomplete');
-    assert.equal(configResult.receipt_notice, undefined);
-    assert.equal(f.state.calls, hardCalls);
+    await reviewed('expired', current, () => {served = expiredBundle;}, () => {served = optionalBundle;});
+    await reviewed('changed', createPolicy({...optionalConfig, sensitive_paths: [...optionalConfig.sensitive_paths, 'docs/']}, {engine}), noop, noop);
+    await reviewed('engine', newer, noop, noop);
+    await reviewed('not_passing', newer, () => {served = retarget(changed => {changed.result.decision = 'repair_required';});}, () => {served = optionalBundle;});
+    await reviewed('record', current, () => {served = retarget(changed => {changed.result.decision = 'repair_required';});}, () => {served = optionalBundle;});
+    await reviewed('record', current, () => {served = sign({...optionalBundle.payload, record_digest: 'f'.repeat(64)});}, () => {served = optionalBundle;});
+    await reviewed('malformed', current, () => {served = {payload: {}, signature: 'x'};}, () => {served = optionalBundle;});
+    await reviewed('malformed', current, () => {served = {unexpected: true};}, () => {served = optionalBundle;});
+    const garbled = {encoding: 'base64', content: Buffer.from('not json').toString('base64'), size: 8};
+    f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: garbled} : getContent(args);
+    await reviewed('malformed', current, noop, noop);
+    f.github.rest.repos.getContent = async args => {
+      if (args.path === 'clouseau-review.json' && artifactFailure) throw artifactFailure;
+      return getContent(args);
+    };
+    await reviewed('unavailable', current, () => {artifactFailure = Object.assign(new Error('Not Found'), {status: 404});}, () => {artifactFailure = null;});
+    const unreadable = {...optionalBundle, signature: optionalBundle.signature};
+    await reviewed('unavailable', current, () => {served = unreadable; artifactFailure = null; f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ?
+      {data: {encoding: 'none', type: 'dir'}} : getContent(args);}, () => {f.github.rest.repos.getContent = getContent; served = optionalBundle;});
+    f.github.rest.repos.getContent = async args => {
+      if (args.path === 'clouseau-review.json' && artifactFailure) throw artifactFailure;
+      return getContent(args);
+    };
+    // The live repository must still equal what the receipt signed: a different diff, inventory or source ignores it
+    // (a different diff is exercised below, where CI is blocked, because the hosted review cannot review an inconsistent diff).
+    const files = (await listFiles({})).data;
+    // While CI is blocked an ignored receipt is still just an absent receipt, including when the source check ignores it.
+    f.state.failed = true;
+    const tamper = {
+      patch: [() => {f.github.rest.pulls.listFiles = Object.assign(async () => ({data: files.map(file => ({...file, patch: `${file.patch}\n+tampered`}))}), {endpointName: 'files'});},
+        () => {f.github.rest.pulls.listFiles = listFiles;}],
+      inventory: [() => {f.state.pr.changed_files = 2;}, () => {f.state.pr.changed_files = 1;}],
+      missing: [() => {f.github.rest.repos.getContent = async args => {
+        if (args.path === 'src/upload.test.js' && args.ref === head) throw Object.assign(new Error('Not Found'), {status: 404});
+        return getContent(args);
+      };}, () => {f.github.rest.repos.getContent = getContent;}],
+    };
+    for (const [name, [change, restore]] of Object.entries(tamper)) {
+      change();
+      const blocked = await run(current);
+      restore();
+      assert.equal(blocked.decision, 'blocked_technical', name);
+      assert.equal(blocked.receipt_notice, 'source', name); assert.equal(blocked.review_source, undefined, name);
+    }
+    f.state.failed = false;
+    f.github.rest.repos.getContent = async args => {
+      if (args.path === 'clouseau-review.json' && artifactFailure) throw artifactFailure;
+      return getContent(args);
+    };
+    // A hosted review that cannot run still shows why the receipt was not used, and is never a receipt failure.
+    const unavailable = await run(newer, {fetchImpl: async () => {throw new Error('provider unreachable');}});
+    assert.equal(unavailable.decision, 'review_incomplete');
+    assert.notEqual(unavailable.cause, 'local_receipt_required');
+    assert.equal(unavailable.receipt_notice, 'engine');
+    f.state.failed = false;
+    // Failures that are GitHub's rather than the receipt's keep their ordinary classification and are not ignored.
+    artifactFailure = Object.assign(new Error('Server Error'), {status: 500});
+    const outage = await run(current);
+    artifactFailure = null;
+    assert.equal(outage.decision, 'review_incomplete'); assert.equal(outage.cause, 'github_api_error');
+    assert.equal(outage.receipt_notice, undefined);
+    // Required mode has no hosted review: every class asks for a new receipt and no provider call is made.
+    const requiredCurrent = createPolicy(trusted, {engine});
+    const requiredCalls = f.state.calls;
+    for (const [change, restore] of [
+      [() => {served = {unexpected: true};}, () => {served = optionalBundle;}],
+      [() => {f.state.pr.user.login = 'another-author';}, () => {f.state.pr.user.login = author;}]]) {
+      change();
+      const asked = await run(requiredCurrent, {fetchImpl: async () => {throw new Error('required mode has no hosted review');}});
+      restore();
+      assert.equal(asked.decision, 'review_incomplete'); assert.equal(asked.cause, 'local_receipt_required');
+      assert.ok(asked.receipt_notice);
+    }
+    assert.equal(f.state.calls, requiredCalls);
+    f.github.rest.repos.getContent = getContent;
+    // No regression: the same receipt, verified in every respect, is still trusted with zero CI AI calls.
+    served = optionalBundle;
+    const valid = await run(current, {fetchImpl: async () => {throw new Error('a valid receipt needs no hosted review');}});
+    assert.equal(valid.decision, 'auto_approve', valid.reason);
+    assert.equal(valid.review_source, 'authenticated_local'); assert.equal(valid.provider_api_calls, 0);
+    assert.equal(valid.receipt_notice, undefined);
     served = bundle;
     fs.writeFileSync(f.recordPath, kept);
   }
@@ -1089,18 +1204,24 @@ test('signed local quality with incomplete coverage is reused on red CI without 
     assert.equal(fs.existsSync(f.recordPath), false);
     const signature = p.bundle.signature;
     p.bundle.signature = `${signature[0] === 'a' ? 'b' : 'a'}${signature.slice(1)}`;
-    assert.equal((await assess()).decision, 'review_incomplete');
+    const ignored = async (reason, policy) => {
+      const result = await assess(policy);
+      assert.equal(result.decision, 'blocked_technical', 'red CI is reported; the unverifiable receipt is ignored, never used');
+      assert.equal(result.receipt_notice, reason); assert.equal(result.review_source, undefined);
+      assert.equal(Object.hasOwn(result, 'record_digest'), false);
+    };
+    await ignored('signature');
     p.bundle.signature = signature;
     const revoked = structuredClone(p.trusted); revoked.local_review.keys[0].revoked = true;
-    assert.equal((await assess(createPolicy(revoked, {engine: p.engine}))).decision, 'review_incomplete');
+    await ignored('signature', createPolicy(revoked, {engine: p.engine}));
     const head = f.state.pr.head.sha;
     f.state.pr.head.sha = (head[0] === 'd' ? 'c' : 'd').repeat(40);
-    assert.equal((await assess()).decision, 'review_incomplete');
+    await ignored('revision');
     f.state.pr.head.sha = head;
     const content = f.github.rest.repos.getContent;
     f.github.rest.repos.getContent = args => args.path === 'src/upload.test.js' && args.ref === head ? Promise.resolve({data: {
       encoding: 'base64', content: Buffer.from('substituted immutable source').toString('base64'), size: 29}}) : content(args);
-    assert.equal((await assess()).decision, 'review_incomplete');
+    await ignored('source');
     f.github.rest.repos.getContent = content;
     assert.equal(providerCalls, 0);
     assert.equal(f.state.writes.filter(item => ['approve', 'atomic', 'enable-auto'].includes(item.name)).length, 0);
