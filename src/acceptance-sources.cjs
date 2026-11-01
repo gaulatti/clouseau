@@ -28,15 +28,16 @@ function evidenceSize(snapshot) {
   return JSON.stringify(value).length;
 }
 
-function refresh(snapshot) {
+function refresh(snapshot, cap = BUDGET) {
+  if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error('Invalid evidence limit: the cap must be a positive safe integer');
   const value = {...snapshot}; delete value.digest;
-  if (JSON.stringify(value).length > BUDGET) {
+  if (JSON.stringify(value).length > cap) {
     // A lockfile that could not be summarized is the specific reason only when its raw evidence is what overflows.
     const failed = (snapshot.lockfile_failures || []).filter(item => item.path);
     const paths = new Set(failed.map(item => item.path));
     const rest = {...value, sources: Object.fromEntries(Object.entries(value.sources).filter(([, source]) => !paths.has(source.path))),
       files: value.files?.filter(file => !paths.has(file.path))};
-    throw failed.length && JSON.stringify(rest).length <= BUDGET ? lockfileError(failed[0].path, failed[0].reason) : new Error('Complete review evidence exceeds the source budget');
+    throw failed.length && JSON.stringify(rest).length <= cap ? lockfileError(failed[0].path, failed[0].reason) : new Error('Complete review evidence exceeds the source budget');
   }
   snapshot.digest = digest(value);
   return snapshot;
