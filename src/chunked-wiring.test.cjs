@@ -75,7 +75,7 @@ async function reviewPublishVerify({f, args, deps, state, config}, {expectParts}
   const record = JSON.parse(fs.readFileSync(result.record));
   assert.equal(record.version, 3); assert.equal(record.partition.scheme, 'clouseau-partition/1');
   assert.ok(record.partition.units.length > 1);
-  assert.equal(fake.stats.calls, record.partition.units.length * 2 + 2);
+  assert.equal(fake.stats.calls, record.partition.units.length * 2 + (record.seams.length ? 2 : 0), 'integration only when there are seams');
   const bare = path.join(state, 'artifacts.git'); git(state, ['init', '-q', '--bare', bare]);
   git(f.directory, ['config', 'url.' + bare + '.insteadOf', 'https://github.com/example/local-fixture.git']);
   const published = await main(['publish', '--directory', f.directory, '--receipt', result.receipt]);
@@ -104,13 +104,13 @@ test('protected chunked configuration can only tighten the defaults; invalid val
   assert.equal(settings({}).params.C, 450000);
   assert.equal(settings({chunked: {enabled: false}}), null);
   const tight = settings({chunked: {force: true, params: {C: 100000, S: 50000}, concurrency: 1, unit_deadline_ms: 1000, integration_cap: 5000}});
-  assert.deepEqual(tight, {params: {C: 100000, S: 50000}, concurrency: 1, unit_deadline_ms: 1000, integration_cap: 5000, force: true});
+  assert.deepEqual(tight, {params: {C: 100000, S: 50000}, concurrency: 1, unit_deadline_ms: 1000, integration_cap: 5000, integration_call_seams: 60, integration_max_seams: 400, force: true});
   assert.deepEqual(DEFAULT_SETTINGS.params, {C: 450000, S: 100000});
   assert.equal(verifierOptions({chunked: {enabled: false}}), null);
   assert.deepEqual(verifierOptions(undefined).params, {C: 450000, S: 100000});
   for (const bad of [null, [], 'x', {unknown: 1}, {enabled: 'yes'}, {force: 1}, {enabled: false, force: true}, {params: null}, {params: {C: 1}},
     {params: {C: 450001, S: 1}}, {params: {C: 1, S: 100001}}, {params: {C: 0, S: 1}}, {params: {C: 1.5, S: 1}, },
-    {concurrency: 3}, {concurrency: 0}, {unit_deadline_ms: 300001}, {integration_cap: 250001}, {integration_cap: '1'}]) {
+    {concurrency: 3}, {concurrency: 0}, {unit_deadline_ms: 300001}, {integration_cap: 250001}, {integration_cap: '1'}, {integration_call_seams: 61}, {integration_max_seams: 401}, {integration_max_seams: 0}]) {
     assert.ok(problem(bad), JSON.stringify(bad));
     assert.throws(() => settings({chunked: bad}), /Invalid protected chunked review configuration/);
   }
@@ -167,7 +167,7 @@ test('forcing chunking on a small change resumes after an outage without samplin
     const result = await runReview(args, {...deps, ask: resumed.ask});
     assert.equal(result.decision, 'auto_approve');
     const record = JSON.parse(fs.readFileSync(result.record));
-    assert.equal(resumed.stats.calls, record.partition.units.length * 2 + 2 - 3, 'the three finished calls were replayed from the journal');
+    assert.equal(resumed.stats.calls, record.partition.units.length * 2 + (record.seams.length ? 2 : 0) - 3, 'the three finished calls were replayed from the journal');
     assert.ok(record.partition.units.length > 1);
   }));
 

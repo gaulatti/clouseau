@@ -92,29 +92,30 @@ test('a smaller unit ceiling gives more units and the same coverage', () => {
   assert.equal(small.units.reduce((total, unit) => total + unit.files, 0), 85);
 });
 
-test('the report prints the plan; the command line handles arguments, refusals and defaults', () => {
+test('the report prints the plan; the command line handles arguments, refusals and defaults', async () => {
   const text = render(report);
   assert.match(text, /^4 units, 85 files, C 450000/m);
   assert.match(text, /largest unit prompt \d+ of 1048576 chars/);
   assert.match(text, /^record \d+ bytes \(\d+\.\d% of the 2850000 single-receipt limit\)/m);
   assert.match(text, /^signed receipt \d+ bytes in 1 file, verified/m);
-  const run = (argv, files = table.files) => {
+  const run = async (argv, files = table.files) => {
     let out = '';
-    const code = main(argv, {readFile: name => { assert.equal(name, argv.find(arg => !arg.startsWith('--') && arg.endsWith('.json')) ?? require('node:path').join(__dirname, '../test/fixtures/alcantara-02618a9.json')); return JSON.stringify({files}); },
+    const code = await main(argv, {readFile: name => { assert.equal(name, argv.find(arg => !arg.startsWith('--') && arg.endsWith('.json')) ?? require('node:path').join(__dirname, '../test/fixtures/alcantara-02618a9.json')); return JSON.stringify({files}); },
       stdout: {write: chunk => { out += chunk; }}});
     return {code, out};
   };
-  assert.equal(run(['table.json', '--ceiling', '300000', '--shared', '100000']).code, 0);
-  const many = run(['table.json'], scaledTable(table, 2).files);
+  assert.equal((await run(['table.json', '--ceiling', '300000', '--shared', '100000'])).code, 0);
+  const many = await run(['table.json'], scaledTable(table, 2).files);
   assert.equal(many.code, 0);
   assert.match(many.out, /^signed receipt \d+ bytes in [2-9] files/m);
-  assert.throws(() => run(['--bogus', '1']), /unknown option --bogus/);
-  assert.throws(() => main(['t.json'], {readFile: () => '{', stdout: {write() {}}}), SyntaxError);
+  await assert.rejects(run(['--bogus', '1']), /unknown option --bogus/);
+  await assert.rejects(main(['t.json'], {readFile: () => '{', stdout: {write() {}}}), SyntaxError);
   const written = [];
   const original = process.stdout.write;
   process.stdout.write = chunk => { written.push(String(chunk)); return true; };
-  try { assert.equal(main([]), 0); } finally { process.stdout.write = original; }
+  try { assert.equal(await main([]), 0); } finally { process.stdout.write = original; }
   assert.match(written.join(''), /^clouseau-partition\/1 /);
+  assert.match(written.join(''), /^exact prompts: 8 unit calls \d+ chars \(largest \d+\), \d+ integration calls \d+ chars/m);
 });
 
 // The tenet: a change is never refused for its size. Each size that used to be a refusal is now partitioned into bounded
