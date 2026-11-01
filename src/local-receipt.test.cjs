@@ -96,9 +96,10 @@ test('tampered report, signature, key, repository, revision and policy never aut
   const unknown = structuredClone(bundle); unknown.payload.key_id = 'other';
   assert.throws(() => verifyReceipt(unknown, f.expected), /signature/);
   for (const [name, value] of Object.entries({repository: 'example/other', headSha: '0'.repeat(40),
-    baseSha: '0'.repeat(40), reviewerSha: '0'.repeat(40), configDigest: '0'.repeat(64), policyDigest: '0'.repeat(64)})) {
+    baseSha: '0'.repeat(40), configDigest: '0'.repeat(64), policyDigest: '0'.repeat(64)})) {
     assert.throws(() => verifyReceipt(bundle, {...f.expected, [name]: value}), /changed/);
   }
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, reviewerSha: '0'.repeat(40)}), /engine mismatch/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, now: 9999000}), /future/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, author: 'unregistered-contributor'}), /PR author/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, now: 182800000}), /expired/);

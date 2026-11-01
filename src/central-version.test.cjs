@@ -8,7 +8,8 @@ const cp = require('node:child_process');
 const {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {fixture} = require('../test/local-review-fixture.cjs');
-const {issueReceipt, verifyReceipt, validateTrust, EngineMismatchError} = require('./local-receipt.cjs');
+const {issueReceipt, verifyReceipt, validateTrust}
+const {ReceiptRejected} = require('./receipt-rejection.cjs'); = require('./local-receipt.cjs');
 const {createPolicy} = require('./policy.cjs');
 const {verifyRecord} = require('./acceptance-controller.cjs');
 const {digest} = require('./acceptance.cjs');
@@ -134,7 +135,7 @@ test('central authorization is exclusive and engine identity cannot come from a 
   await assert.rejects(policy.finalize({assessment: {engine: {...engine, sha: second}}}), /different frozen engine/);
 });
 
-test('an engine mismatch is reported by a distinct error only after every other binding and trust check passes', async () => {
+test('every receipt failure carries one fixed class, and an engine mismatch is reported only after every other check passes', async () => {
   const crypto = require('node:crypto');
   const f = await fixture();
   const engine = {...SOURCE, sha: f.issue.reviewerSha, digest: f.trust.reviewer_digest};
@@ -142,22 +143,23 @@ test('an engine mismatch is reported by a distinct error only after every other 
   delete trust.reviewer_digest;
   const bundle = issueReceipt(f.issue);
   const newer = {...engine, sha: second};
-  const mismatch = () => verifyReceipt(bundle, {...f.expected, trust, engine: newer});
-  assert.throws(mismatch, error => error instanceof EngineMismatchError && error.code === 'ENGINE_MISMATCH' && error instanceof Error &&
-    /engine mismatch/.test(error.message));
-  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust, engine: {...engine, digest: '0'.repeat(64)}}), EngineMismatchError);
-  // Every other failure keeps its own non-degradable error, even though the engine also differs.
-  const hard = (options, pattern, source = bundle) => assert.throws(() => verifyReceipt(source, {...f.expected, trust, engine: newer, ...options}),
-    error => !(error instanceof EngineMismatchError) && error.code === undefined && pattern.test(error.message));
-  hard({}, /untrusted, revoked or invalid signature/, {...bundle, signature: `${bundle.signature[0] === 'a' ? 'b' : 'a'}${bundle.signature.slice(1)}`});
-  hard({trust: {...trust, keys: [{...trust.keys[0], revoked: true}]}}, /untrusted/);
-  hard({author: 'another-author'}, /not enrolled/);
-  hard({now: 10000000 + 200000 * 1000}, /expired/);
-  hard({headSha: 'd'.repeat(40)}, /revisions, policy, configuration or record changed/);
-  hard({baseSha: 'd'.repeat(40)}, /revisions, policy, configuration or record changed/);
-  hard({repository: 'other/repository'}, /revisions, policy, configuration or record changed/);
-  hard({configDigest: 'x'}, /revisions, policy, configuration or record changed/);
-  hard({policyDigest: 'x'}, /revisions, policy, configuration or record changed/);
+  const reason = (options, source = bundle, base = {engine: newer}) => {
+    try {verifyReceipt(source, {...f.expected, trust, ...base, ...options});} catch (error) {
+      assert.ok(error instanceof ReceiptRejected && error instanceof Error && error.code === 'RECEIPT_REJECTED');
+      assert.match(error.message, /^Invalid local review receipt: /);
+      return error.reason;
+    }
+    return assert.fail('the receipt was accepted');
+  };
+  assert.equal(reason({}), 'engine');
+  assert.equal(reason({engine: {...engine, digest: '0'.repeat(64)}}), 'engine');
+  // Every other failure keeps its own class, even though the engine also differs.
+  assert.equal(reason({}, {...bundle, signature: `${bundle.signature[0] === 'a' ? 'b' : 'a'}${bundle.signature.slice(1)}`}), 'signature');
+  assert.equal(reason({trust: {...trust, keys: [{...trust.keys[0], revoked: true}]}}), 'signature');
+  assert.equal(reason({author: 'another-author'}), 'author');
+  assert.equal(reason({now: 10000000 + 200000 * 1000}), 'expired');
+  for (const change of [{headSha: 'd'.repeat(40)}, {baseSha: 'd'.repeat(40)}, {repository: 'other/repository'}]) assert.equal(reason(change), 'revision');
+  for (const change of [{configDigest: 'x'}, {policyDigest: 'x'}]) assert.equal(reason(change), 'changed');
   const sign = payload => ({payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
     crypto.createPrivateKey(f.privateKey)).toString('base64url')});
   const retarget = change => {
@@ -165,9 +167,9 @@ test('an engine mismatch is reported by a distinct error only after every other 
     return sign({...bundle.payload, record, record_digest: digest(record)});
   };
   const notPassing = retarget(record => {record.result.decision = 'repair_required';});
-  hard({}, /review did not pass/, notPassing);
-  assert.throws(() => verifyReceipt(notPassing, {...f.expected, trust, engine}), /claimed decision differs/);
-  hard({}, /record changed/, sign({...bundle.payload, record_digest: 'f'.repeat(64)}));
+  assert.equal(reason({}, notPassing), 'not_passing');
+  assert.equal(reason({engine}, notPassing, {}), 'record', 'a current-engine receipt whose claimed decision is false is a record failure');
+  assert.equal(reason({}, sign({...bundle.payload, record_digest: 'f'.repeat(64)})), 'record');
   // A receipt for the current engine is unchanged: accepted when everything matches.
   assert.equal(verifyReceipt(bundle, {...f.expected, trust, engine}).decision, 'auto_approve');
 });
@@ -197,7 +199,7 @@ test('a trusted frozen workflow can migrate legacy digest enrollment without acc
   const engine = {...SOURCE, sha: f.issue.reviewerSha, digest: f.trust.reviewer_digest};
   const oldTrust = {...f.trust, reviewer_digest: '0'.repeat(64)};
   const bundle = issueReceipt(f.issue);
-  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust}), /changed/);
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust}), /engine mismatch/);
   assert.equal(verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine}).decision, 'auto_approve');
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, sha: second}}), /engine mismatch/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, repository: 'attacker/reviewer'}}), /engine mismatch/);
