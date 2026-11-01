@@ -1,6 +1,6 @@
 # Chunked review unit runner
 
-Status: dark. `src/chunked-review.cjs` is called by nothing; `local_review.chunked` wiring is a later change.
+Status: live. `clouseau review` calls `src/chunked-review.cjs` through `src/chunked-wiring.cjs` whenever the change does not fit one snapshot (see `docs/local-review.md`, "Chunked local review").
 `src/local-review.cjs` now exposes `investigate` and `gradeReview`, extracted unchanged from `localReview`
 (an ordinary review asks the same prompts in the same order).
 
