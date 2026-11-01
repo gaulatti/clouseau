@@ -762,7 +762,7 @@ test('a model failure or pending/failed verification cannot reach an approval or
   const ready = await f.policy.assessWhenReady({github: f.github, context: f.context, recordPath: f.recordPath,
     fetchImpl: async () => {throw new Error('still offline');}});
   assert.equal(ready.decision, 'review_incomplete');
-  assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger'], 'only the visible incomplete notice is written');
+  assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger', 'disable-auto'], 'only the visible incomplete notice is written and the armed merge is withdrawn');
   assert.match(f.state.writes[0].args.body, /Clouseau review incomplete/);
   assert.equal(incomplete.cause, 'evidence_incomplete');
 }));
@@ -782,12 +782,12 @@ test('a malformed provider key stops before any request and every incomplete out
       assert.match(warnings[0], new RegExp(cause));
       await assert.rejects(f.gate(assessment), /DEEPSEEK_API_KEY/);
       const [notice] = f.state.writes;
-      assert.equal(f.state.writes.length, 1); assert.equal(notice.name, 'create-ledger');
+      assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger', 'disable-auto']); assert.equal(notice.name, 'create-ledger');
       assert.match(notice.args.body, /Clouseau review incomplete/); assert.match(notice.args.body, /DEEPSEEK_API_KEY/);
       assert.match(notice.args.body, /Next step:/); assert.ok(!notice.args.body.includes('sk-fictional-secret'));
       f.state.comments.push({id: 55, user: {login: 'github-actions[bot]'}, body: notice.args.body});
       await assert.rejects(f.gate(assessment), /DEEPSEEK_API_KEY/);
-      assert.equal(f.state.writes[1].name, 'update-ledger', 'a rerun updates the one notice');
+      assert.equal(f.state.writes[2].name, 'update-ledger', 'a rerun updates the one notice');
       assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
     });
   }
@@ -814,7 +814,7 @@ test('malformed provider JSON retains the exact undecodable response and cannot 
   assert.equal(trace.details.raw_response, raw); assert.equal(trace.details.canonical_response, raw);
   assert.equal(trace.details.model, 'deepseek-flash'); assert.equal(trace.details.usage.length, 3);
   await assert.rejects(f.gate(assessment), /incomplete/);
-  assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger']);
+  assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger', 'disable-auto']);
 }));
 
 test('failure before source collection is retained without fabricating a snapshot', () => fixture(async f => {
@@ -864,7 +864,7 @@ test('technical or integrity defects cannot be waived by an owner comment and an
   assert.ok(assessment.repair_digest); assert.ok(fs.existsSync(`${f.recordPath}.repair.json`));
   f.state.comments.push({id: 5, user: {login: 'owner', type: 'User'}, body: `/approve-intent ${assessment.head_sha}`});
   await assert.rejects(f.gate(assessment), /cannot waive/);
-  assert.ok(f.state.pr.auto_merge); assert.ok(f.state.writes.some(item => item.name === 'enable-auto'));
+  assert.equal(f.state.pr.auto_merge, null); assert.equal(f.state.writes.some(item => item.name === 'enable-auto'), false);
   assert.equal(f.state.writes.some(item => item.name === 'approve'), false);
   const ledger = f.state.writes.find(item => item.name === 'create-ledger');
   f.state.comments.push({id: 6, user: {login: 'github-actions[bot]', type: 'Bot'}, body: ledger.args.body});
@@ -1343,6 +1343,8 @@ test('a reviewer that stays invalid after bounded retries ends in a classified h
   assert.match(assessment.reason, /invalid tool call or malformed JSON/);
   await assert.rejects(f.gate(assessment), /incomplete/);
   assert.match(f.state.writes[0].args.body, /unusable answer \(invalid tool call or malformed JSON\)/);
+  assert.equal(f.state.pr.auto_merge, null, 'an incomplete review leaves auto-merge disarmed');
+  assert.ok(!f.state.writes.some(write => write.name === 'enable-auto'));
 }));
 
 test('an exhausted GitHub API budget during the wait is an explicit hold that names the cause and retry time', () => fixture(async f => {

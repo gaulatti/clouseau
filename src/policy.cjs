@@ -23,6 +23,7 @@ const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
 const MANUAL_REVIEWER = config.manual_reviewer;
 const VERIFY_STEPS = config.verification.steps;
+const NEVER_ARMED = Object.freeze(['review_incomplete', 'repair_required', 'blocked_technical', 'blocked_integrity']);
 const REVIEW_CONTROL_REASON = 'Review controls or a protected repository-purpose contract changed';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -480,7 +481,8 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       if (privateOwnerAutomatic) ownership = {...ownership, automatic: false, reason: 'Explicit automatic mode requires configured CODEOWNERS on the accepted base; automatic merge is denied.'};
     }
     const automatic = ownership.automatic && !manualMerge;
-    const nativeAutomatic = automatic && !controllerManaged && !protectionGaps;
+    // A review that reached no approvable decision never arms native auto-merge, even before the gate fails on it.
+    const nativeAutomatic = automatic && !controllerManaged && !protectionGaps && !NEVER_ARMED.includes(assessment.decision);
     if (!nativeAutomatic && pr.auto_merge) {
       await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
     }

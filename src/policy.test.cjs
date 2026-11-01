@@ -61,7 +61,10 @@ function fixture(overrides = {}) {
       createWorkflowDispatch: write('dispatch'),
     },
   }, graphql: async (query, args) => {
-    if (query.startsWith('mutation')) {writes.push({name: 'arm', args}); state.pr.auto_merge = {}; return {};}
+    if (query.startsWith('mutation')) {
+      const disarm = query.includes('disablePullRequestAutoMerge');
+      writes.push({name: disarm ? 'disarm' : 'arm', args}); state.pr.auto_merge = disarm ? null : {}; return {};
+    }
     return {repository: {pullRequest: {closingIssuesReferences: {nodes: [{number: 1, title: 'Fix naming', body: 'Restore contract'}], pageInfo: {hasNextPage: false}}}}};
   }};
   github.paginate = async (method, args) => (await method(args)).data;
@@ -501,6 +504,20 @@ test('an unprotected branch records the approval, posts one notice and never arm
     assert.equal(noticeWrites(f).length, 1);
     assert.match(noticeWrites(f)[0].args.body, /main not protected/);
     if (!nativeGate) assert.ok(f.writes.some(write => write.args?.conclusion === 'success'));
+  }
+});
+
+test('a review that reached no approvable decision never arms auto-merge and disarms an armed one', async () => {
+  for (const decision of ['review_incomplete', 'repair_required', 'blocked_technical', 'blocked_integrity']) {
+    for (const armed of [false, true]) {
+      const f = fixture();
+      f.state.pr.auto_merge = armed ? {} : null; f.state.pr.node_id = 'N';
+      f.github.graphql = async query => {f.writes.push({name: query.includes('disable') ? 'disarm' : 'arm'}); f.state.pr.auto_merge = null; return {};};
+      await f.run({assessment: {...automatic, decision, reason: 'No decision.'}}).catch(() => {});
+      assert.ok(!f.writes.some(write => write.name === 'arm'), `${decision} must never arm auto-merge`);
+      assert.equal(f.writes.some(write => write.name === 'disarm'), armed);
+      assert.ok(!f.writes.some(write => write.name === 'review'));
+    }
   }
 });
 
