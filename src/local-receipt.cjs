@@ -8,7 +8,9 @@ const {validateInspection, combine} = require('./acceptance-review.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
 const {centralSource, acceptsEngine} = require('./central-version.cjs');
-const {chunkedVerifier} = require('./chunked-record.cjs');
+const {chunkedVerifier, ChunkedRecordError} = require('./chunked-record.cjs');
+const {ReceiptRejected} = require('./receipt-rejection.cjs');
+const {ReceiptPatchMismatch} = require('./receipt-patch.cjs');
 
 const DOMAIN = 'clouseau.local-review.v1';
 const MAX_RECEIPT_BYTES = 3000000;
@@ -17,14 +19,8 @@ const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const fail = message => {throw new Error(`Invalid local review receipt: ${message}`);};
 const requireReceipt = (value, message) => {if (!value) fail(message);};
 
-// A receipt that is valid in every respect except that it was produced by a different engine revision than the
-// protected one the caller resolved. The code, never the message text, lets the CI controller ignore it.
-class EngineMismatchError extends Error {
-  constructor(message) {
-    super(`Invalid local review receipt: ${message}`);
-    this.code = 'ENGINE_MISMATCH';
-  }
-}
+// A failed receipt check carries a fixed class (see receipt-rejection.cjs); configuration and issuance failures do not.
+const reject = (value, message, reason) => {if (!value) throw new ReceiptRejected(reason, message);};
 
 function validateTrust(trust) {
   requireReceipt(trust && (centralSource(trust.central_source) && trust.reviewer_digest === undefined ||
@@ -51,12 +47,12 @@ function validateTrust(trust) {
 function reviewDecision(record, {chunked = null} = {}) {
   const {snapshot, result} = record;
   const verifier = Object.hasOwn(record, 'partition') ? chunkedVerifier(record, chunked) : null;
-  requireReceipt(snapshot && result && snapshot.digest === (verifier ? verifier.snapshotDigest() : refresh(structuredClone(snapshot)).digest),
-    'altered evidence snapshot');
-  requireReceipt(result.snapshot === snapshot.digest && result.policy_digest === snapshot.policy_digest &&
-    result.config_digest === snapshot.config_digest, 'review does not match evidence');
+  reject(snapshot && result && snapshot.digest === (verifier ? verifier.snapshotDigest() : refresh(structuredClone(snapshot)).digest),
+    'altered evidence snapshot', 'record');
+  reject(result.snapshot === snapshot.digest && result.policy_digest === snapshot.policy_digest &&
+    result.config_digest === snapshot.config_digest, 'review does not match evidence', 'record');
   const graded = role => result.reviews?.find(item => item.role === role)?.report?.findings?.length > 0;
-  requireReceipt(Array.isArray(result.usage) && result.usage.length >= 2 &&
+  reject(Array.isArray(result.usage) && result.usage.length >= 2 &&
     result.execution_digest === digest(result.usage) && new Set(result.usage.map(item => item.session)).size === result.usage.length &&
     result.usage.every(item => ['codex', 'claude', 'opencode'].includes(item.harness) && [undefined, 'agent_session'].includes(item.execution) &&
       typeof item.session === 'string' && item.session.length > 0 &&
@@ -65,17 +61,17 @@ function reviewDecision(record, {chunked = null} = {}) {
     // A chunked record accounts for every unit and the integration pass inside its own verifier.
     (verifier || ['examiner', 'challenger'].every(role => ['investigation', 'grading'].every(phase =>
       (phase === 'grading' && !graded(role)) || result.usage.some(item => item.role === role && item.phase === phase)))),
-    'complete independent harness execution records required');
-  requireReceipt(Array.isArray(result.reviews) && result.reviews.length === 2 &&
-    result.reviews.map(item => item.role).join(',') === 'examiner,challenger', 'two independent roles required');
+    'complete independent harness execution records required', 'record');
+  reject(Array.isArray(result.reviews) && result.reviews.length === 2 &&
+    result.reviews.map(item => item.role).join(',') === 'examiner,challenger', 'two independent roles required', 'record');
   const reviews = verifier ? verifier.reviews() : result.reviews.map(item => ({...item,
     scores: validateReport(item.report, validateInspection(item.report, snapshot, item.drafts))}));
   const prior = record.local_previous?.findings || [];
-  requireReceipt(digest(snapshot.prior_findings) === digest(prior), 'local finding history differs from the reviewed evidence');
+  reject(digest(snapshot.prior_findings) === digest(prior), 'local finding history differs from the reviewed evidence', 'record');
   const state = reconcile({...result, reviews}, snapshot, prior);
   const combined = combine(reviews);
   const decision = state.unresolved.length && combined === 'auto_approve' ? 'review_incomplete' : combined;
-  requireReceipt(result.decision === decision, 'claimed decision differs from calculated decision');
+  reject(result.decision === decision, 'claimed decision differs from calculated decision', 'record');
   return {decision, reviews};
 }
 
@@ -96,82 +92,84 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
   now = Date.now(), engine = null, chunked = null}) {
   validateTrust(trust);
-  requireReceipt(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
+  reject(bundle && Object.keys(bundle).sort().join(',') === 'payload,signature' &&
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
-    Buffer.byteLength(JSON.stringify(bundle)) <= MAX_RECEIPT_BYTES, 'malformed signature envelope');
+    Buffer.byteLength(JSON.stringify(bundle)) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
   const p = bundle.payload;
-  requireReceipt(p && Object.keys(p).sort().join(',') ===
+  reject(p && Object.keys(p).sort().join(',') ===
     'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type' && p.type === DOMAIN,
-    'unknown receipt type or fields');
+  'unknown receipt type or fields', 'malformed');
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
-  requireReceipt(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
-    Buffer.from(bundle.signature, 'base64url')), 'untrusted, revoked or invalid signature');
-  requireReceipt(key.github_actor === author, 'signing identity is not enrolled for this PR author');
+  reject(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
+    Buffer.from(bundle.signature, 'base64url')), 'untrusted, revoked or invalid signature', 'signature');
+  reject(key.github_actor === author, 'signing identity is not enrolled for this PR author', 'author');
   const timestamp = Math.floor(now / 1000);
-  requireReceipt(Number.isSafeInteger(p.issued_at) && Number.isSafeInteger(p.expires_at) &&
+  reject(Number.isSafeInteger(p.issued_at) && Number.isSafeInteger(p.expires_at) &&
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
-    typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge');
-  // The engine comparison happens here, after every identity, trust and challenge check. A different engine is
-  // only reported once the receipt is otherwise proven bound to this exact change; it is never accepted.
-  const engineMatches = !(trust.central_source || engine) || acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
-    p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha;
+    typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge', 'expired');
   const record = p.record;
   const snapshot = record.snapshot;
-  requireReceipt(p.record_digest === digest(record) && snapshot.repository === repository &&
-    sha(headSha) && snapshot.head_sha === headSha && sha(baseSha) && snapshot.base_sha === baseSha &&
-    sha(p.reviewer_sha) && snapshot.config_digest === configDigest && snapshot.policy_digest === policyDigest &&
-    (!engineMatches || (!reviewerSha || p.reviewer_sha === reviewerSha) &&
-      p.reviewer_digest === reviewerDigest && (engine || trust.reviewer_digest === reviewerDigest)),
-  'repository, revisions, policy, configuration or record changed');
+  const changed = 'repository, revisions, policy, configuration or record changed';
+  reject(p.record_digest === digest(record) && sha(p.reviewer_sha) && Boolean(snapshot && record.result), changed, 'record');
+  reject(snapshot.repository === repository && sha(headSha) && snapshot.head_sha === headSha &&
+    sha(baseSha) && snapshot.base_sha === baseSha, changed, 'revision');
+  reject(snapshot.config_digest === configDigest && snapshot.policy_digest === policyDigest, changed, 'changed');
+  // The engine comparison happens after every identity, trust, challenge and binding check. A different engine is
+  // only reported once the receipt is otherwise proven bound to this exact change; it is never accepted. Another
+  // engine's scoring cannot be re-validated here, so its signed claim must still be a pass.
+  const engineMatches = (!(trust.central_source || engine) || acceptsEngine(trust, engine) && engine.digest === reviewerDigest &&
+    p.reviewer_digest === engine.digest && p.reviewer_sha === engine.sha) &&
+    (!reviewerSha || p.reviewer_sha === reviewerSha) && p.reviewer_digest === reviewerDigest &&
+    (engine || trust.reviewer_digest === reviewerDigest);
   if (!engineMatches) {
-    // Another engine's scoring cannot be re-validated here; its signed claim must still be a pass.
-    requireReceipt(record.result.decision === 'auto_approve', 'review did not pass');
-    throw new EngineMismatchError('engine mismatch; the receipt predates the current protected engine and is never accepted as evidence');
+    reject(record.result.decision === 'auto_approve', 'review did not pass', 'not_passing');
+    reject(false, 'engine mismatch; the receipt predates the current protected engine and is never accepted as evidence', 'engine');
   }
   const result = reviewDecision(record, {chunked});
-  requireReceipt(result.decision === 'auto_approve', 'review did not pass');
+  reject(result.decision === 'auto_approve', 'review did not pass', 'not_passing');
   return {record, ...result};
 }
 
 function verifyReceipt(bundle, options) {
   const result = verifySignedRecord(bundle, options);
   const {snapshot} = result.record;
-  requireReceipt(snapshot.intent_confirmation === null && snapshot.number === 0 &&
+  reject(snapshot.intent_confirmation === null && snapshot.number === 0 &&
     Array.isArray(snapshot.prior_findings) && result.record.controls === false &&
-    !Object.hasOwn(result.record, 'installation'), 'receipt cannot grant owner authority');
+    !Object.hasOwn(result.record, 'installation'), 'receipt cannot grant owner authority', 'record');
   return result;
 }
 
 function marker(body) {
   const text = body || '';
-  requireReceipt(!text.includes('clouseau-installation-review:'), 'installation-only evidence cannot approve an ordinary PR');
+  reject(!text.includes('clouseau-installation-review:'), 'installation-only evidence cannot approve an ordinary PR', 'malformed');
   const matches = [...text.matchAll(MARKER)];
-  requireReceipt(matches.length <= 1, 'multiple receipt references');
-  requireReceipt([...text.matchAll(/clouseau-local-review:/g)].length === matches.length,
-    'malformed or unsupported receipt reference; no paid fallback is allowed');
+  reject(matches.length <= 1, 'multiple receipt references', 'malformed');
+  reject([...text.matchAll(/clouseau-local-review:/g)].length === matches.length,
+    'malformed or unsupported receipt reference', 'malformed');
   return matches[0]?.[1] || null;
 }
 
 async function loadReceipt({github, repo, ref}) {
-  requireReceipt(sha(ref), 'immutable receipt reference required');
+  reject(sha(ref), 'immutable receipt reference required', 'malformed');
   let {data} = await github.rest.repos.getContent({...repo, ref, path: 'clouseau-review.json'});
   if (data.encoding === 'none') {
-    requireReceipt(data.type === 'file' && sha(data.sha) && Number.isSafeInteger(data.size) &&
-      data.size >= 0 && data.size <= MAX_RECEIPT_BYTES, 'complete receipt artifact unavailable');
+    reject(data.type === 'file' && sha(data.sha) && Number.isSafeInteger(data.size) &&
+      data.size >= 0 && data.size <= MAX_RECEIPT_BYTES, 'complete receipt artifact unavailable', 'unavailable');
     const metadata = data;
     ({data} = await github.rest.git.getBlob({...repo, file_sha: metadata.sha}));
-    requireReceipt(data.sha === metadata.sha && data.size === metadata.size,
-      'receipt blob differs from immutable artifact');
-    requireReceipt(data.encoding === 'base64' && typeof data.content === 'string', 'complete receipt blob unavailable');
+    reject(data.sha === metadata.sha && data.size === metadata.size,
+      'receipt blob differs from immutable artifact', 'unavailable');
+    reject(data.encoding === 'base64' && typeof data.content === 'string', 'complete receipt blob unavailable', 'unavailable');
     const bytes = Buffer.from(data.content, 'base64');
-    requireReceipt(bytes.length === metadata.size && crypto.createHash('sha1')
+    reject(bytes.length === metadata.size && crypto.createHash('sha1')
       .update(`blob ${bytes.length}\0`).update(bytes).digest('hex') === metadata.sha,
-    'receipt blob content differs from immutable artifact');
+    'receipt blob content differs from immutable artifact', 'unavailable');
   }
-  requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= MAX_RECEIPT_BYTES,
-    'complete receipt artifact unavailable');
-  return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));
+  reject(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= MAX_RECEIPT_BYTES,
+    'complete receipt artifact unavailable', 'unavailable');
+  try {return JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'));}
+  catch {throw new ReceiptRejected('malformed', 'receipt artifact is not JSON');}
 }
 
 // A derived dependency summary is never trusted as signed: it is recomputed from the exact base and head
@@ -179,7 +177,7 @@ async function loadReceipt({github, repo, ref}) {
 async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, files}) {
   const live = files.find(item => item.filename === source.path);
   const item = snapshot.files.find(candidate => candidate.path === source.path);
-  requireReceipt(live && item && item.lockfile === true && isLockfile(source.path) && source.authority === 'derived', 'derived lockfile evidence is not bound to a changed lockfile');
+  reject(live && item && item.lockfile === true && isLockfile(source.path) && source.authority === 'derived', 'derived lockfile evidence is not bound to a changed lockfile', 'source');
   const view = {head_sha: pr.head.sha, head_repository: {owner: pr.head.repo.owner.login, repo: pr.head.repo.name}};
   let expected;
   try {
@@ -188,40 +186,40 @@ async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, fi
     const headText = live.status === 'removed' ? null : await fetchText({github, repo, snapshot: view, filename: live.filename, ref: pr.head.sha, limit: MAX_BYTES});
     expected = lockfileEvidence({file: live, baseSha: pr.base.sha, headSha: pr.head.sha, baseText, headText});
   } catch (error) {
-    if (error instanceof LockfileError || error.unavailable) fail('derived lockfile evidence cannot be recomputed');
+    if (error instanceof LockfileError || error.unavailable) reject(false, 'derived lockfile evidence cannot be recomputed', 'source');
     throw error;
   }
-  requireReceipt(expected.id === id && digest(expected.source) === digest(source), 'derived lockfile evidence differs from the repository lockfiles');
+  reject(expected.id === id && digest(expected.source) === digest(source), 'derived lockfile evidence differs from the repository lockfiles', 'source');
 }
 
 async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha, installation = null}) {
-  requireReceipt(files.length === pr.changed_files && files.length > 0 &&
-    digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs');
-  requireReceipt(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
-    item.path === file.filename && item.status === file.status)), 'changed-file status differs');
+  reject(files.length === pr.changed_files && files.length > 0 &&
+    digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs', 'source');
+  reject(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
+    item.path === file.filename && item.status === file.status)), 'changed-file status differs', 'source');
   require('./receipt-patch.cjs').verifyPatches({snapshot, files});
-  requireReceipt(snapshot.tickets.length === 0 &&
-    snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements');
+  reject(snapshot.tickets.length === 0 &&
+    snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements', 'record');
   for (const filename of [config.readme, config.repository_policy]) {
-    requireReceipt(Object.values(snapshot.sources).some(source => source.path === filename &&
+    reject(Object.values(snapshot.sources).some(source => source.path === filename &&
       source.ref === (installation ? pr.head.sha : pr.base.sha) && source.authority === 'trusted' && source.kind === 'contract'),
-    'protected purpose evidence omitted');
+    'protected purpose evidence omitted', 'source');
   }
   for (const [id, source] of Object.entries(snapshot.sources)) {
     if (id === 'installation-authorization') {
-      requireReceipt(installation && source.authority === 'trusted' && source.kind === 'contract' &&
+      reject(installation && source.authority === 'trusted' && source.kind === 'contract' &&
         source.path === `commits/${pr.head.sha}/comments/${installation.comment_id}` && source.ref === digest(installation) &&
-        source.content === JSON.stringify(installation), 'installation authority was substituted');
+        source.content === JSON.stringify(installation), 'installation authority was substituted', 'source');
       continue;
     }
     if (id === 'verification') {
-      requireReceipt(source.authority === 'trusted' && source.kind === 'verification' && source.ref === pr.head.sha,
-        'invalid local execution receipt');
+      reject(source.authority === 'trusted' && source.kind === 'verification' && source.ref === pr.head.sha,
+        'invalid local execution receipt', 'source');
       continue;
     }
     if (id === 'local-request') {
-      requireReceipt(source.authority === 'untrusted' && source.kind === 'requirement' &&
-        source.ref === digest(source.content), 'local request is not sealed untrusted evidence');
+      reject(source.authority === 'untrusted' && source.kind === 'requirement' &&
+        source.ref === digest(source.content), 'local request is not sealed untrusted evidence', 'source');
       continue;
     }
     if (source.kind === 'lockfile-summary') {
@@ -231,10 +229,10 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     if (source.path.startsWith('.clouseau-ci/')) {
       let reference;
       try {reference = require('./central-version.cjs').engineEvidence(source.path, reviewerSha);}
-      catch {fail('invalid frozen engine evidence');}
+      catch {reject(false, 'invalid frozen engine evidence', 'source');}
       const {relative, ref} = reference;
-      requireReceipt(source.ref === ref &&
-        source.authority === 'untrusted' && source.kind === 'source', 'invalid frozen engine evidence');
+      reject(source.ref === ref &&
+        source.authority === 'untrusted' && source.kind === 'source', 'invalid frozen engine evidence', 'source');
       const root = require('node:path').join(__dirname, '..');
       // The action has already checked this source against the run digest.
       // Git-free distributions compare the same file bytes without invoking Git.
@@ -242,42 +240,77 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       if (ref === reviewerSha) content = require('node:fs').readFileSync(require('node:path').join(root, relative), 'utf8');
       else {
         const {data} = await github.rest.repos.getContent({owner: 'gaulatti', repo: 'clouseau', ref, path: relative});
-        requireReceipt(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 300000, 'historical engine evidence unavailable');
+        reject(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 300000, 'historical engine evidence unavailable', 'source');
         content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
-        requireReceipt(!content.includes('\0'), 'binary historical engine evidence');
+        reject(!content.includes('\0'), 'binary historical engine evidence', 'source');
       }
-      requireReceipt(content === source.content, 'signed engine evidence differs from the accepted engine');
+      reject(content === source.content, 'signed engine evidence differs from the accepted engine', 'source');
       continue;
     }
-    requireReceipt(safePath(source.path) && [pr.base.sha, pr.head.sha].includes(source.ref) &&
-      ['source', 'contract'].includes(source.kind), 'source outside exact repository revisions');
+    reject(safePath(source.path) && [pr.base.sha, pr.head.sha].includes(source.ref) &&
+      ['source', 'contract'].includes(source.kind), 'source outside exact repository revisions', 'source');
     const contract = (source.ref === pr.base.sha || (installation && source.ref === pr.head.sha)) && [config.readme, config.repository_policy].includes(source.path);
-    requireReceipt(source.authority === (contract ? 'trusted' : 'untrusted') &&
-      source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted');
+    reject(source.authority === (contract ? 'trusted' : 'untrusted') &&
+      source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted', 'source');
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
     const {data} = await github.rest.repos.getContent({...sourceRepo, path: source.path, ref: source.ref});
     // The Contents API describes a symlink by its target; `git show` yields the same bytes locally.
-    requireReceipt(data.type === 'symlink' ? data.target === source.content :
+    reject(data.type === 'symlink' ? data.target === source.content :
       data.encoding === 'base64' && Buffer.from(data.content, 'base64').toString('utf8') === source.content,
-    'signed evidence differs from repository source');
+    'signed evidence differs from repository source', 'source');
   }
   for (const file of snapshot.files) {
     const live = files.find(item => item.filename === file.path);
     if (file.lockfile === true) {
       const derived = [file.base_source, file.head_source].filter(Boolean);
-      requireReceipt(isLockfile(file.path) && derived.length === (file.status === 'added' || file.status === 'removed' ? 1 : 2) &&
+      reject(isLockfile(file.path) && derived.length === (file.status === 'added' || file.status === 'removed' ? 1 : 2) &&
         derived.every(id => snapshot.sources[id]?.kind === 'lockfile-summary' && snapshot.sources[id].path === file.path && id === derived[0]) &&
-        (file.status === 'added' ? !file.base_source : file.status === 'removed' ? !file.head_source : true), 'changed-file evidence omitted or substituted');
+        (file.status === 'added' ? !file.base_source : file.status === 'removed' ? !file.head_source : true), 'changed-file evidence omitted or substituted', 'source');
       continue;
     }
     for (const side of ['base', 'head']) {
       if ((side === 'base' && file.status === 'added') || (side === 'head' && file.status === 'removed')) continue;
       const source = snapshot.sources[file[`${side}_source`]];
-      requireReceipt(source && source.ref === pr[side].sha &&
+      reject(source && source.ref === pr[side].sha &&
         source.path === (side === 'base' ? live.previous_filename || file.path : file.path),
-      'changed-file evidence omitted or substituted');
+      'changed-file evidence omitted or substituted', 'source');
     }
   }
 }
 
-module.exports = {EngineMismatchError, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
+// Only the receipt's own verdict is ignored. A GitHub failure other than a missing object (outage, rate limit, permission) is
+// something CI itself could not do and keeps its ordinary classification.
+const rejection = error => error instanceof ReceiptRejected ? error.reason : error instanceof ChunkedRecordError ? 'record' : null;
+
+// The one decision for a claimed receipt: `ref` is set only when it verifies in every respect. Any other outcome returns
+// the fixed class in `rejected` (or neither, when no receipt is claimed) and the receipt is never consulted again.
+async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest}) {
+  let ref;
+  try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason};}
+  if (!ref) return {ref: null, rejected: null};
+  let bundle;
+  try {bundle = await loadReceipt({github, repo, ref});} catch (error) {
+    const reason = rejection(error) ?? (error.status === 404 ? 'unavailable' : null);
+    if (!reason) throw error;
+    return {ref: null, rejected: reason};
+  }
+  try {
+    const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login,
+      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest});
+    return {ref, bundle, verified, rejected: null};
+  } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed'};}
+}
+
+// The same decision for the live repository: the signed sources, inventory and patches must equal what GitHub reports.
+async function screenSources(options) {
+  try {
+    await verifySources(options);
+    return null;
+  } catch (error) {
+    const reason = rejection(error) ?? (error.status === 404 ? 'source' : null);
+    if (!reason) throw error;
+    return reason;
+  }
+}
+
+module.exports = {screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
