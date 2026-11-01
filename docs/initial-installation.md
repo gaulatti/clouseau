@@ -154,10 +154,13 @@ jobs:
 Use the same frozen engine as the grant. Run this job in a **different workflow**
 from configured verification: it waits for that complete verification run and
 must not wait on itself. It makes zero model requests, receives no provider key
-or write permission, and cannot discard an existing review ledger. Unprotected
-private repositories must explicitly select `manual` or strict owner-only
-`automatic` merge mode and disable repository native auto-merge. Selecting the
-eventual ordinary automatic policy does not grant this installation any merge
+or write permission, and cannot discard an existing review ledger. Repository settings are the
+owner's choice and never fail the installation: the workflow token cannot read
+`allow_auto_merge`, and a private repository may have no branch protection. In
+those cases the result carries one fixed `notice` and merge arming stays
+withheld (`auto_merge_authorized` is always `false`); signature, identity,
+provenance and independent-CI checks are unchanged. Selecting the eventual
+ordinary automatic policy does not grant this installation any merge
 authority: the frozen grant binds that configuration, the initial receipt still
 requires manual owner acceptance, and ordinary changes later use accepted-base
 policy and enrollment. See the private-plan controller path in

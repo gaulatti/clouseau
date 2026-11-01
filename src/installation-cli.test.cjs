@@ -458,21 +458,24 @@ test('native authorization and base are freshly revalidated after independent CI
   }
 }));
 
-test('a private unprotected repository cannot silently opt into general automatic merge', () => fixture(async f => {
+test('unreadable or insufficient repository settings never block trust and only add one fixed notice', () => fixture(async f => {
   const remote = await f.remote();
-  f.live.repository.private = true; f.live.repository.allow_auto_merge = false; f.live.base.protected = false;
-  await assert.rejects(cli.check(remote.args, remote.runtime), /explicit manual or strict owner automatic mode/);
+  f.live.repository.private = true; f.live.repository.allow_auto_merge = null; f.live.base.protected = false;
+  const unreadable = await cli.check(remote.args, remote.runtime);
+  assert.equal(unreadable.installation_verified, true);
+  assert.equal(unreadable.auto_merge_authorized, false);
+  assert.equal(unreadable.notice, cli.SETTINGS_NOTICE);
+  f.live.repository.allow_auto_merge = true;
+  assert.equal((await cli.check(remote.args, remote.runtime)).notice, cli.SETTINGS_NOTICE);
+  f.live.repository.allow_auto_merge = false;
+  assert.equal((await cli.check(remote.args, remote.runtime)).notice, cli.SETTINGS_NOTICE, 'no explicit merge mode');
   f.config.merge_mode = 'manual'; fs.writeFileSync(path.join(f.directory, '.github/clouseau.json'), JSON.stringify(f.config));
   git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: require manual first-install acceptance']); await f.refresh();
   const manual = await f.remote();
-  assert.equal((await cli.check(manual.args, manual.runtime)).auto_merge_authorized, false);
-  f.live.repository.allow_auto_merge = true;
-  await assert.rejects(cli.check(manual.args, manual.runtime), /disabled repository auto-merge/);
-  f.live.repository.allow_auto_merge = false;
-  f.config.merge_mode = 'automatic'; fs.writeFileSync(path.join(f.directory, '.github/clouseau.json'), JSON.stringify(f.config));
-  git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: explicitly require strict owner automatic mode']); await f.refresh();
-  const automatic = await f.remote();
-  const accepted = await cli.check(automatic.args, automatic.runtime);
+  const accepted = await cli.check(manual.args, manual.runtime);
+  assert.equal(accepted.notice, undefined);
   assert.equal(accepted.auto_merge_authorized, false);
   assert.equal(accepted.manual_owner_acceptance_required, true);
+  f.live.base.protected = true; f.live.repository.allow_auto_merge = null;
+  assert.equal((await cli.check(manual.args, manual.runtime)).notice, undefined, 'protected base needs no notice');
 }));
