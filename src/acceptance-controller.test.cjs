@@ -403,6 +403,10 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment}), /owner authorization changed/);
     const held = await assess();
     assert.equal(held.decision, 'review_incomplete', 'a signature cannot supply protected-control authority');
+    assert.equal(held.cause, 'control_authorization_required');
+    const notice = require('./incomplete.cjs').body(held, 'https://github.com/example/run/1');
+    assert.ok(notice.includes(`/approve-intent ${held.head_sha}`), 'the notice states the exact command for this head');
+    assert.ok(!notice.includes('clouseau-acceptance` artifact'), 'no artifact is named');
     f.state.comments = owner;
   }
   if (central === true) {

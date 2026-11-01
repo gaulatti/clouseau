@@ -185,9 +185,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       if (receiptRef) {
         const controls = legacy.scopeReason(files, pr);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
-        if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
-          throw new Error('Local receipt cannot replace changed review history or protected-control authorization');
+        if (digest(previous.findings) !== digest(verified.record.previous.findings)) {
+          throw new Error('Local receipt cannot replace changed review history');
         }
+        if (controls && !authorization) throw Object.assign(new Error('Protected-control change requires owner authorization'), {code: 'CONTROL_AUTHORIZATION'});
         if (technicalBlock) {
           if (report) report('Authenticated local Clouseau quality review verified. Independent CI acceptance remains blocked. CI AI calls: 0.');
           return {...identity, ...technicalBlock, review_source: 'authenticated_local', provider_api_calls: 0,

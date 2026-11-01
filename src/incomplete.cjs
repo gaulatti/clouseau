@@ -25,7 +25,9 @@ const NEXT_STEPS = Object.freeze({
   github_api_error: 'GitHub rejected an API request this review needs (status and endpoint are in the reason). Re-run the failed jobs; if it repeats, the PR or repository state it describes must change.',
   github_rate_limit: 'No change is needed. The repository installation token used its GitHub API budget; the review is reassessed when verification completes, or re-run the failed jobs after the time stated above.',
   chunked_record_invalid: 'The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head.',
-  evidence_incomplete: 'Open the `clouseau-acceptance` artifact of the workflow run for the diagnostic, repair the missing evidence, ' +
+  control_authorization_required: 'A maintainer must authorize this exact revision by commenting `/approve-intent {head}` on this pull request ' +
+    '(the repository owner configured as manual reviewer, with write access). Authorization names the revision only; it does not waive tests, coverage or review.',
+  evidence_incomplete: 'Open the log of the failed assessment job in the workflow run below for the diagnostic, repair the missing evidence, ' +
     'then re-run the failed jobs or push a new revision.',
 });
 
@@ -48,6 +50,9 @@ function classify(error) {
     const rejected = ['401', '403'].includes(provider[2]);
     return {cause: rejected ? 'provider_rejected' : 'provider_unavailable',
       reason: `${provider[1]} provider ${rejected ? 'rejected the credential' : 'was unavailable'} (HTTP ${provider[2]}).`};
+  }
+  if (error?.code === 'CONTROL_AUTHORIZATION') {
+    return {cause: 'control_authorization_required', reason: 'Review controls or a protected repository-purpose contract changed, and no maintainer has authorized this exact revision.'};
   }
   if (error?.code === 'CHUNKED_RECORD') return {cause: error.cause_code, reason: error.message};
   if (error?.code === 'RATE_LIMIT') return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(error.resetAt).toISOString()}.`};
@@ -84,7 +89,7 @@ function classify(error) {
 }
 
 function body(assessment, runUrl) {
-  const step = NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete;
+  const step = (NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete).replaceAll('{head}', String(assessment.head_sha));
   const reason = String(assessment.reason).replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500);
   return `${MARKER}\n## Clouseau review incomplete\n\n` +
     `Revision \`${String(assessment.head_sha).slice(0, 12)}\` was not approved or merged because no review decision could be reached.\n\n` +
