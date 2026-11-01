@@ -13,7 +13,8 @@ const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
-const {refresh, safePath} = require('./acceptance-sources.cjs');
+const {refresh, safePath, UNBOUNDED} = require('./acceptance-sources.cjs');
+const chunkedWiring = require('./chunked-wiring.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
 const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
 const gate = require('./coverage-gate.cjs');
@@ -203,8 +204,11 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   const agentDirectory = path.join(cache, 'agent');
   // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
-  const resuming = Boolean(agent) && fs.existsSync(path.join(agentDirectory, 'technical.json')) &&
-    !fs.existsSync(path.join(agentDirectory, 'completed.json'));
+  // A chunked review keeps its own durable journal and verification record, so it resumes without resampling a finished call.
+  const chunkedDirectory = path.join(cache, 'chunked');
+  const chunkedResume = fs.existsSync(path.join(chunkedDirectory, 'technical.json'));
+  const resuming = (Boolean(agent) && fs.existsSync(path.join(agentDirectory, 'technical.json')) &&
+    !fs.existsSync(path.join(agentDirectory, 'completed.json'))) || chunkedResume;
   if (fs.existsSync(journal) && !resuming) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
   const output = path.resolve(args.output || path.join(cache, 'record.json'));
   if (output.startsWith(directory + path.sep)) throw new Error('Store review evidence outside the source checkout');
@@ -220,7 +224,8 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   const technicalPath = path.join(agentDirectory, 'technical.json');
   let technical;
-  if (resuming) technical = JSON.parse(fs.readFileSync(technicalPath, 'utf8'));
+  if (chunkedResume && !agent) technical = JSON.parse(fs.readFileSync(path.join(chunkedDirectory, 'technical.json'), 'utf8'));
+  else if (resuming) technical = JSON.parse(fs.readFileSync(technicalPath, 'utf8'));
   else {
     technical = verify({directory, config, additional});
     if (agent) {
@@ -231,9 +236,25 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     }
   }
   if (git(directory, ['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed during local verification');
-  const collected = collectLocal({directory, base, request, technical, ciConfig, reviewerSha});
+  // Chunked review is available by default; the protected configuration can only tighten or disable it. A change that fits one
+  // snapshot is collected and reviewed exactly as before. One that does not (or that the configuration forces) is collected
+  // without a size cap and reviewed in bounded units.
+  const active = chunkedWiring.settings(ciConfig?.local_review);
+  const collect = unbounded => collectLocal({directory, base, request, technical, ciConfig, reviewerSha, unbounded});
+  let collected; let chunking = false;
+  if (active?.force) {collected = collect(true); chunking = true;}
+  else {
+    try {collected = collect(false);} catch (error) {
+      if (!active) throw error;
+      collected = collect(true); chunking = true;
+    }
+  }
   collected.snapshot.prior_findings = priorFindings;
-  refresh(collected.snapshot);
+  refresh(collected.snapshot, chunking ? UNBOUNDED : undefined);
+  if (chunking && !agent) {
+    fs.mkdirSync(chunkedDirectory, {recursive: true, mode: 0o700});
+    fs.writeFileSync(path.join(chunkedDirectory, 'technical.json'), JSON.stringify(technical), {mode: 0o600});
+  }
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
   if (agent) {
     const frozen = path.join(agentDirectory, 'snapshot.digest');
@@ -244,17 +265,28 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   const exchange = agent ? createExchange({directory: agentDirectory, agent,
     journal: entry => fs.appendFileSync(journal, JSON.stringify(entry) + '\n', {mode: 0o600})}) : null;
-  let result;
-  try {
-    result = await localReview({...collected, ask: async task => {
-    fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+  const session = async task => {
     if (exchange) return exchange.ask(task);
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started',
       request_digest: digest(task)}) + '\n', {mode: 0o600});
     const response = await ask({...task, harness: args.harness || 'codex'});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
     return response;
-    }});
+  };
+  let result; let chunkedRecord = null; let reviews;
+  try {
+    if (chunking) {
+      fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+      ({record: chunkedRecord, reviews} = await chunkedWiring.review({snapshot: collected.snapshot, active, ask: session, agent: Boolean(agent),
+        journal: exchange ? undefined : chunkedWiring.fileJournal(path.join(chunkedDirectory, 'journal')), scope: cacheId,
+        technical, priorFindings}));
+      result = chunkedRecord.result;
+    } else {
+      result = await localReview({...collected, ask: async task => {
+        fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+        return session(task);
+      }});
+    }
   } catch (error) {
     if (error instanceof AwaitingAgent) {
       return {status: 'awaiting_agent', ...error.info, reviewer_sha: reviewerSha, provider_api_calls: 0, harness_invocations: 0,
@@ -267,9 +299,9 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   if (agent) fs.writeFileSync(path.join(agentDirectory, 'completed.json'), '{}\n', {mode: 0o600});
   assertUnchanged(directory, collected.snapshot);
-  const findings = reconcile(result, collected.snapshot, priorFindings);
+  const findings = reconcile(chunking ? {...result, reviews} : result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
-  const record = {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
+  const record = chunkedRecord || {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
     local_previous: {findings: priorFindings}, controls: false, technical};
   fs.mkdirSync(path.dirname(output), {recursive: true});
   fs.writeFileSync(output, JSON.stringify(record, null, 2) + '\n', {mode: 0o600});
@@ -278,7 +310,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
-      lifetime: ciConfig.local_review.max_age_seconds});
+      lifetime: ciConfig.local_review.max_age_seconds, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null});
     verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});

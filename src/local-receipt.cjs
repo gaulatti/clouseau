@@ -111,7 +111,7 @@ function signingKey(bundle, trust) {
 }
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = null}) {
+  now = Date.now(), engine = null, chunked = undefined}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;
@@ -148,7 +148,12 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     reject(record.result.decision === 'auto_approve', 'review did not pass', 'not_passing');
     reject(false, 'engine mismatch; the receipt predates the current protected engine and is never accepted as evidence', 'engine');
   }
-  const result = reviewDecision(record, {chunked});
+  // A chunked record is verified against the protected parameters of the trust policy unless the caller supplies its own.
+  // An invalid protected chunked configuration means this receipt cannot be checked, so it is ignored like any other.
+  const wiring = require('./chunked-wiring.cjs');
+  reject(wiring.problem(trust.chunked) === null, 'invalid protected chunked review configuration', 'settings');
+  const chunkedOptions = chunked !== undefined ? chunked : (Object.hasOwn(record, 'partition') ? wiring.verifierOptions(trust) : null);
+  const result = reviewDecision(record, {chunked: chunkedOptions});
   reject(result.decision === 'auto_approve', 'review did not pass', 'not_passing');
   return {record, ...result};
 }

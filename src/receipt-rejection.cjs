@@ -16,6 +16,7 @@ const PHRASES = Object.freeze({
   record: 'its review record is incomplete or inconsistent',
   engine: 'it predates the current Clouseau engine',
   not_passing: 'the review it records did not pass',
+  settings: 'the protected chunked review configuration is invalid',
   held: 'its evidence does not meet the approval evidence rule',
 });
 

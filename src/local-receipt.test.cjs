@@ -364,6 +364,10 @@ test('screening classifies every receipt failure with a fixed class and propagat
     await assert.rejects(screen(() => {throw Object.assign(new Error('GitHub failed'), {status});}), error => error.status === status);
   }
   assert.deepEqual(await screen(content(bundle), {head: {sha: 'd'.repeat(40)}}), {ref: null, rejected: 'revision'});
+  // An invalid protected chunked configuration cannot check any receipt, so the receipt is ignored, never a crash.
+  const badSettings = await screenReceipt({github: github(content(bundle)), pr, ...options, trust: {...options.trust, chunked: {unknown: 1}},
+    repo: {owner: f.expected.repository.split('/')[0], repo: f.expected.repository.split('/')[1]}});
+  assert.deepEqual(badSettings, {ref: null, rejected: 'settings'});
   // A chunked record that does not verify is the receipt's own failure too.
   const chunked = structuredClone(f.record); chunked.partition = {scheme: 'unknown'};
   const payload = {...bundle.payload, record: chunked, record_digest: digest(chunked)};

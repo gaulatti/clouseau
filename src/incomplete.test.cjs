@@ -56,7 +56,7 @@ test('an ignored-receipt notice is one fixed line on incomplete and pending comm
 
 test('every receipt rejection class has exactly one fixed single-line sentence', () => {
   assert.deepEqual(Object.keys(PHRASES).sort(), ['author', 'changed', 'engine', 'expired', 'held', 'malformed', 'not_passing', 'record',
-    'revision', 'signature', 'source', 'unavailable']);
+    'revision', 'settings', 'signature', 'source', 'unavailable']);
   for (const reason of Object.keys(PHRASES)) for (const required of [false, true]) {
     const text = noticeText(reason, required);
     assert.match(text, /^Local review receipt ignored because [^\n]+\.$/);

@@ -249,7 +249,7 @@ the head source with every line prefixed `+` (consumers restore the identical pa
 engine seed for workflow changes is optional context: seed files that would use the last 150,000
 characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
 Changed files, their base and head sources and contracts are never omitted; a change that exceeds
-the cap with only that evidence still fails closed.
+the cap with only that evidence is reviewed in bounded units (see "Chunked local review") unless the protected configuration disabled chunked review, in which case it fails closed.
 
 ## Enrolling a trusted runner
 
@@ -456,6 +456,7 @@ untrusted text:
 | `record` | The record, its digest, history, chunked structure or claimed decision is inconsistent or incomplete |
 | `engine` | Produced by a different engine revision than the protected one |
 | `not_passing` | The review it records did not pass |
+| `settings` | The protected chunked review configuration is invalid, so the receipt cannot be checked |
 | `held` | Its evidence does not meet hosted approval's affirmative-evidence rule |
 
 Repositories in `required` mode have no hosted review to fall back to. The same
@@ -524,11 +525,37 @@ A partitioned review record too large for one receipt is stored as a signed mult
 (`clouseau-review.part-NNNN` files beside the envelope, see `docs/chunked-record.md`); each file keeps this bound.
 A missing or unreadable part, or a part that does not join to the signed root, is the same `unavailable` or `record` class.
 
-## Review partition (dry run, not yet used by review)
+## Chunked local review
+
+`clouseau review` (and `respond`/`publish`, which continue and publish the same review) never refuses a change for its size.
+It collects the change as before; when the complete evidence does not fit one 900,000-character snapshot (or a changed file is
+over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`), bounded unit views
+(a file too large for one unit is split into segments), both roles on every unit through the unchanged reviewer, controller-computed
+seams, one blind integration pass per role, merge, one grading round per role, one chunked record (`version 3`, multi-part
+when it exceeds one receipt) and ONE signed receipt. A change that fits is reviewed and signed exactly as before (record `version 2`,
+byte-identical). CI verifies a chunked receipt through the same single derivation, recomputing the partition, views and seams.
+
+It is on by default. The protected `local_review.chunked` object (in `.github/clouseau.json` on the base branch, so CI reads the same
+values) can only **tighten** it:
+
+| field | meaning | bound |
+|---|---|---|
+| `enabled: false` | turn chunked review off; an oversized change fails as it did before | |
+| `force: true` | chunk even a change that fits one snapshot | |
+| `params: {C, S}` | unit ceiling and shared context | at most 450000 and 100000 |
+| `concurrency` | harness sessions at once (an `--agent` review answers one at a time) | at most 2 |
+| `unit_deadline_ms` | deadline of one session | at most 300000 |
+| `integration_cap` | integration pass input | at most 250000 |
+
+No argument or environment variable changes them. A unit that misses the deadline stops the review with `unit_deadline` and the
+ceiling to use; lower `params.C` in the protected configuration and review again. A crashed headless review resumes from its journal
+(`<cache>/chunked/journal`) without sampling a finished call again. Rollback is unsetting `force` or setting `enabled: false`.
+
+## Review partition
 
 `src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
 whose complete evidence exceeds the 900,000-character snapshot budget in bounded units. It is deterministic
-and model-free, and nothing in `clouseau review` calls it yet: reviews behave exactly as before.
+and model-free; `clouseau review` uses it for a change that does not fit one snapshot.
 
 Changed files are sorted by new path (UTF-8 bytes) and grouped into atoms: a file stays with its `.test`,
 `.spec` and `.stories` siblings, and a rename is one entry keyed by its new path. A file costs
@@ -577,8 +604,7 @@ sizes, so a file too large for a unit is split into equal parts:
 scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000]
 ```
 
-The parameters are fixed in code for now; reading them from protected configuration is part of wiring the
-partition into review. The earlier `max_units` and `file_ceiling` parameters, and the protected `cap` and `max_units`, bound
+The parameters come from the protected `local_review.chunked` configuration (defaults C = 450,000, S = 100,000). The earlier `max_units` and `file_ceiling` parameters, and the protected `cap` and `max_units`, bound
 nothing any more (the protected configuration still accepts `cap` and `max_units` and ignores them).
 
 ### Unbounded collection
