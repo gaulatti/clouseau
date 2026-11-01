@@ -119,7 +119,12 @@ configuration digest. A nonzero command is not assumed to have failed only
 because of coverage. One frozen engine checks every part throughout the review.
 
 CI invokes the same shared verifier through `operation: coverage` with
-`coverage-config`. Supply the recipe from the exact accepted base, separately
+`coverage-config`. That input accepts only a **version 2** recipe: a version 1
+file fails with `Coverage gate failed: A multi-artifact coverage recipe requires
+version 2`. A repository whose CI uses `coverage-config` therefore commits
+`.clouseau-local.json` as version 2 with a one-element `coverage` array (the
+version 1 example above is for local-only use or for the legacy
+`coverage-report` + `source-directory` inputs). Supply the recipe from the exact accepted base, separately
 from the candidate checkout. For example, in an unprivileged PR verification
 job with no provider credentials:
 
