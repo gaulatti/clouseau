@@ -190,8 +190,22 @@ another request in the exchange, and allows three attempts per request. Repeatin
 the identical `review` command then resumes: it reuses the one recorded
 verification, requires the same frozen evidence digest, replays accepted answers
 and stops at the next pending session. A request whose stored digest no longer
-matches stops the review rather than guessing. If protected Clouseau main advances
-between commands the cache identity changes and the review restarts.
+matches stops the review rather than guessing.
+
+An in-flight agent review is pinned to the engine revision that started it. The
+launcher still refreshes protected main before every call, but a continuation of the
+same head, base and requirement re-executes the recorded revision from the local
+cache (`~/.cache/clouseau/revisions/<sha>`; the installer never prunes revisions, and
+a pin under `~/.local/share/clouseau/pins/` is the reference that names one) and
+prints one line stating the pinned revision and the newer one. The pinned checkout
+must be an unmodified worktree of the installer's own cached source whose engine
+digest equals the one recorded when the pin was made; otherwise the command fails and
+nothing from it runs. A receipt is issued under the pinned revision, so CI, which
+ignores a receipt whose engine differs from protected main, reviews the PR itself.
+A new review (different head or requirement) uses the newest revision. Pass
+`--engine latest` to drop the pin and restart on the newest revision; the pin is also
+released when the review completes. `respond` needs no pinning: it validates against
+the schema stored with the request.
 
 Usage records for these sessions carry `harness` (`claude`, `codex` or `opencode`),
 `execution: agent_session`, the supplied session identifier and digests of the

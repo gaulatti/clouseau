@@ -35,9 +35,10 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
    `clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session ID`,
    using the subagent's own unique session identifier, then repeat the identical
    review command. An invalid answer is rejected with the reason; the same
-   request allows three attempts. Real verification runs once and is reused. If
-   Clouseau main advances between commands the review restarts under the new
-   revision. Only outside an AI harness use the headless form
+   request allows three attempts. Real verification runs once and is reused. An
+   in-flight review stays pinned to the Clouseau revision that started it even if
+   main advances (one line says so); pass `--engine latest` only to deliberately
+   restart on the newest revision. Only outside an AI harness use the headless form
    `clouseau review --directory REPO --request-file FILE --harness codex|claude`.
    No CI provider keys are needed. Real verification outcomes are recorded first;
    partial coverage, a failing coverage command or unavailable/invalid coverage

@@ -18,6 +18,7 @@ const chunkedWiring = require('./chunked-wiring.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
 const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
 const gate = require('./coverage-gate.cjs');
+const pinning = require('./engine-pin.cjs');
 
 const root = path.join(__dirname, '..');
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
@@ -26,7 +27,7 @@ function options(argv) {
   const [command, ...args] = argv;
   const parsed = {command};
   const allowed = ['directory', 'base', 'harness', 'agent', 'request-file', 'output', 'identity', 'receipt', 'additional-checks',
-    'agent-request', 'answer', 'session'];
+    'agent-request', 'answer', 'session', 'engine'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
     if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) throw new Error('Invalid Clouseau local arguments');
@@ -139,7 +140,8 @@ function readHistory(filename, repository, branch) {
   return value;
 }
 
-async function runReview(args, {ask = askHarness, verify = executeVerification, state = stateDirectory(), installed = installation} = {}) {
+async function runReview(args, {ask = askHarness, verify = executeVerification, state = stateDirectory(), installed = installation,
+  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
   const agent = args.agent;
@@ -177,6 +179,16 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (identityPath && !reviewer.clean) throw new Error('Signing requires an unmodified Clouseau checkout');
   const baseSha = git(directory, ['rev-parse', base]).trim();
   const branch = git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  // An in-flight agent review stays on the engine revision that began it until it completes or --engine latest is given.
+  if (args.engine && args.engine !== 'latest') throw new Error('--engine accepts only "latest"');
+  const pinId = pinning.pinKey({repository, head, baseSha, requestDigest, agent: agent || null});
+  if (args.engine === 'latest') pinning.clearPin(state, pinId);
+  const pin = pinning.readPin(state, pinId);
+  if (pin && pin.reviewer_sha !== reviewer.sha) {
+    const checkout = pinning.verifiedRevision(cacheRoot, pin);
+    process.stderr.write(`Clouseau review pinned to engine ${pin.reviewer_sha.slice(0, 12)}; newer ${reviewer.sha.slice(0, 12)} exists (pass --engine latest to restart on it)\n`);
+    return run(checkout, pinning.argvFor(args));
+  }
   const historyPath = path.join(state, 'ledgers', `${digest({repository, branch})}.json`);
   const previous = readHistory(historyPath, repository, branch);
   const priorFindings = previous?.findings || [];
@@ -257,6 +269,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   }
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
   if (agent) {
+    pinning.writePin(state, pinId, reviewer);
     const frozen = path.join(agentDirectory, 'snapshot.digest');
     if (!fs.existsSync(frozen)) fs.writeFileSync(frozen, collected.snapshot.digest, {mode: 0o600});
     else if (fs.readFileSync(frozen, 'utf8') !== collected.snapshot.digest) {
@@ -291,7 +304,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     if (error instanceof AwaitingAgent) {
       return {status: 'awaiting_agent', ...error.info, reviewer_sha: reviewerSha, provider_api_calls: 0, harness_invocations: 0,
         respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session FRESH_SESSION_ID`,
-        then: 'Repeat the identical review command. If Clouseau main advanced, the review restarts under the new revision.'};
+        then: 'Repeat the identical review command. It continues on this pinned engine revision even if Clouseau main advances; pass --engine latest to restart on the newest.'};
     }
     if (error instanceof SourceNotFound) {
       const failed = {status: 'failed', reason: error.reason, path: error.path};
@@ -302,7 +315,10 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
       harness: error.harnessDiagnostic || null}, null, 2) + '\n', {mode: 0o600});
     error.message += `; preserved review evidence: ${cache}`; throw error;
   }
-  if (agent) fs.writeFileSync(path.join(agentDirectory, 'completed.json'), '{}\n', {mode: 0o600});
+  if (agent) {
+    fs.writeFileSync(path.join(agentDirectory, 'completed.json'), '{}\n', {mode: 0o600});
+    pinning.clearPin(state, pinId);
+  }
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(chunking ? {...result, reviews} : result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
@@ -357,7 +373,7 @@ async function main(argv, runtime = {}) {
   if (args.command === 'review') return runReview(args, runtime);
   if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
-  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --agent claude|codex|opencode | --harness codex|claude --identity FILE --additional-checks FILE] | respond --agent-request FILE --answer FILE --session ID | publish --directory PATH --receipt FILE');
+  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --agent claude|codex|opencode | --harness codex|claude --identity FILE --additional-checks FILE --engine latest] | respond --agent-request FILE --answer FILE --session ID | publish --directory PATH --receipt FILE');
 }
 
 module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};
