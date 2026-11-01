@@ -5,7 +5,8 @@ const {fixture} = require('../test/local-review-fixture.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
 const {verifySources} = require('./local-receipt.cjs');
 const {ReceiptPatchMismatch, hostedForm, verifyPatches} = require('./receipt-patch.cjs');
-const {classify, body, NEXT_STEPS} = require('./incomplete.cjs');
+const {classify, NEXT_STEPS} = require('./incomplete.cjs');
+const {ReceiptRejected} = require('./receipt-rejection.cjs');
 
 const HUNK = '@@ -1,2 +1,2 @@\n context\n-old secret-free line\n+new line';
 const GIT_HEADER = 'diff --git a/src/a.js b/src/a.js\nindex 1234567..89abcde 100644\n--- a/src/a.js\n+++ b/src/a.js\n';
@@ -102,17 +103,14 @@ test('files without a hosted patch are refused on both sides, never weakened', (
   assert.equal(classify(new Error('Changed-file evidence is incomplete')).cause, 'changed_files_incomplete');
 });
 
-test('the visible incomplete notice names the file with a specific next step and no diff content', () => {
+test('a patch mismatch is a receipt rejection of the source class and never a hard incomplete cause', () => {
   let error;
   try {verifyPatches({snapshot: snapshotOf(['src/a@b.js', 'modified', HUNK]), files: [live('src/a@b.js', 'modified', HUNK.replace('new', 'tampered'))]});}
   catch (caught) {error = caught;}
-  const classified = classify(error);
-  assert.equal(classified.cause, 'receipt_patch_mismatch');
-  assert.match(classified.reason, /src\/a@b\.js/);
-  assert.ok(!classified.reason.includes('tampered') && !classified.reason.includes('old secret-free'));
-  const notice = body({number: 1, head_sha: 'a'.repeat(40), ...classified}, 'https://github.com/o/r/actions/runs/1');
-  assert.ok(notice.includes('src/ab.js') && notice.includes(NEXT_STEPS.receipt_patch_mismatch));
-  assert.ok(!notice.includes('tampered'));
+  assert.ok(error instanceof ReceiptRejected && error.reason === 'source' && error.path === 'src/a@b.js');
+  assert.equal(classify(error).cause, 'evidence_incomplete', 'the controller ignores the receipt; no incomplete cause names it');
+  assert.ok(!NEXT_STEPS.receipt_patch_mismatch);
+  assert.ok(!error.message.includes('tampered'));
 });
 
 test('a file added whole in the compact signed form verifies against the hosted patch and nothing else', () => {

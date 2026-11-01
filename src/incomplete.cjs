@@ -2,6 +2,7 @@
 
 const {rateLimitDelay} = require('./verification-wait.cjs');
 const {REASONS} = require('./lockfile-summary.cjs');
+const {noticeLine} = require('./receipt-rejection.cjs');
 const MARKER = '<!-- clouseau-review-incomplete -->';
 const GENERIC = 'Automated review evidence is incomplete; inspect the assessment diagnostic and repair the missing evidence.';
 
@@ -18,7 +19,6 @@ const NEXT_STEPS = Object.freeze({
   changed_file_unreadable: 'A changed file cannot be read as complete text within the review limits. Split it out of this change or review it manually.',
   lockfile_unsummarizable: 'A changed dependency lockfile could not be summarized and its raw text does not fit the review limits. Regenerate it with a supported lockfile version, split it out of this change, or review it manually.',
   changed_files_incomplete: 'GitHub did not return a patch for every changed file (very large, binary or truncated diff). Reduce the change or review it manually.',
-  receipt_patch_mismatch: 'The signed review saw a diff that differs from the pull request diff GitHub reports for the named file. Run the local Clouseau review again on this exact head and update the receipt marker.',
   tree_truncated: 'The repository tree is too large to locate existing tests. Re-run later or review manually.',
   investigation_exhausted: 'The reviewer could not complete its bounded source investigation. Re-run the failed jobs.',
   verification_failed: 'Open the failing job linked in the reason (when it names one), fix the failing step, and push; the review is reassessed when verification passes.',
@@ -49,7 +49,6 @@ function classify(error) {
     return {cause: rejected ? 'provider_rejected' : 'provider_unavailable',
       reason: `${provider[1]} provider ${rejected ? 'rejected the credential' : 'was unavailable'} (HTTP ${provider[2]}).`};
   }
-  if (error?.code === 'RECEIPT_PATCH_MISMATCH') return {cause: 'receipt_patch_mismatch', reason: `The signed local review patch for ${error.path} differs from the pull request diff reported by GitHub (or the file or status is missing).`};
   if (error?.code === 'CHUNKED_RECORD') return {cause: error.cause_code, reason: error.message};
   if (error?.code === 'RATE_LIMIT') return {cause: 'github_rate_limit', reason: `Held: GitHub API rate limit, will retry after ${new Date(error.resetAt).toISOString()}.`};
   // A raw rate-limit response that escaped the retrying wrapper is the same hold, never a crash.
@@ -83,10 +82,6 @@ function classify(error) {
   if (/^Automated source investigation exhausted/.test(message)) return {cause: 'investigation_exhausted', reason: 'The reviewer kept requesting source after its bounded investigation budget.'};
   return {cause: 'evidence_incomplete', reason: GENERIC};
 }
-
-// The one-line, fixed notice that an older-engine local receipt was ignored; never forwards other text.
-const RECEIPT_NOTICE = 'Local review receipt predates the current Clouseau engine; CI reviewed this change itself.';
-const noticeLine = assessment => assessment.receipt_notice === RECEIPT_NOTICE ? `\n\n${RECEIPT_NOTICE}` : '';
 
 function body(assessment, runUrl) {
   const step = NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete;
@@ -141,4 +136,4 @@ function annotate({core, assessment}) {
   }
 }
 
-module.exports = {RECEIPT_NOTICE, apiErrorReason, PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};
+module.exports = {apiErrorReason, PENDING, pendingBody, postPending, resolvePending, MARKER, GENERIC, NEXT_STEPS, classify, body, post, annotate};

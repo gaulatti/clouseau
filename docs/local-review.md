@@ -302,12 +302,13 @@ Only existing protected configuration can enroll or revoke a key. A contributor
 cannot authorize their own key through the proposed PR. Keys are restricted to
 their enrolled native GitHub PR author. Set `revoked` or remove a key to reject
 its future receipts. `optional` mode permits the separately installed CI AI
-reviewer for PRs without a receipt. An invalid receipt never falls back to a paid
-AI review. `required` mode needs no CI AI provider credentials.
+reviewer for PRs without a receipt, and for any receipt that does not verify (it is
+ignored, see below). `required` mode needs no CI AI provider credentials.
 
-Malformed, unknown-version, duplicate or mixed receipt marker claims block
-before any provider call; only genuinely unstamped optional-mode PRs can enter
-the ordinary CI AI route. Do not normalize or discard an invalid stamp.
+Malformed, unknown-version, duplicate or mixed receipt marker claims are ignored
+before any artifact is fetched, with the `malformed` notice: in `optional` mode CI
+reviews the change itself, in `required` mode the outcome is `local_receipt_required`.
+Do not normalize an invalid stamp; replace it with a fresh receipt.
 
 The initial trust boundary is an enrolled maintainer workstation, including its
 operator and privileged processes. The identity is not remote or hardware
@@ -380,17 +381,18 @@ that is not the pull request's rename, is a mismatch. Whitespace-only difference
 are mismatches. The file list and each file's status must match exactly: no extra
 file, none missing.
 
-Any disagreement stops reuse with the incomplete reason `receipt_patch_mismatch`,
-which names the file (never diff content) and tells the author to review again on
-the exact head. GitHub supplies no `patch` for very large or binary changes. The
-hosted collector already refuses those (`changed_files_incomplete`), and receipts
-for such changes are refused the same way rather than verified with a weaker rule.
+Any disagreement means the receipt does not verify: it is ignored (class `source`)
+and CI reviews the change itself, as described under
+[a receipt that does not verify is ignored](#a-receipt-that-does-not-verify-is-ignored).
+No file name or diff content is forwarded. GitHub supplies no `patch` for very large or binary changes. The
+hosted collector already refuses those (`changed_files_incomplete`), and CI refuses
+the same changes with that cause rather than verifying a receipt with a weaker rule.
 
 Only after actual CI tests and exact coverage pass may the controller emit an
 approval assessment. It revalidates the receipt at the write gate and uses the
 existing native approval, merge-authority and protection checks. Missing, stale,
-revoked, altered, non-passing or unauthorized receipts cannot approve and never
-silently become a paid fallback.
+revoked, altered, non-passing or unauthorized receipts cannot approve; one that
+does not verify is ignored and CI performs every check itself.
 
 Tests, exact 100% coverage and the applicable shared protection/owner-merge
 rules remain mandatory before approval or merge. Review-control changes retain
@@ -421,15 +423,56 @@ contain review evidence, never the signing identity.
 
 Automatic central-source installations retain signer enrollment in protected base
 configuration and authorize protected Clouseau main instead of a recurring
-reviewer digest. A receipt that is valid in every respect except that it
-was produced by an older engine revision than the protected main CI resolved is
-ignored, never accepted as evidence: CI treats it as absent, reviews the change
-itself through the ordinary hosted path and shows the one-line notice that the
-receipt predates the current engine. Signature, trust, issuer, author, expiry,
-head and base, policy, configuration and record failures stay hard failures.
-(A repository in `required` mode still has no receipt, so it reports
-`local_receipt_required`.) Refresh and review again to reuse the local review. The selected commit and digest are in
+reviewer digest. A receipt produced by an older engine revision than the protected
+main CI resolved is one more receipt that does not verify (class `engine`, below).
+Refresh and review again to reuse the local review. The selected commit and digest are in
 the run summary and engine artifact.
+
+### A receipt that does not verify is ignored
+
+CI applies one rule to a local review receipt. A receipt that verifies in every
+respect is trusted. Any receipt that does not verify is ignored: it is never
+consulted again, CI runs the normal hosted review checks itself, and the pull
+request shows one fixed notice. No receipt problem remains a hard failure
+(`review_incomplete`). The safety argument: an ignored receipt cannot approve
+anything, and CI then performs every check it would perform without a receipt
+(independent tests, exact coverage, source, policy and the full hosted review), so
+ignoring a receipt can never lower the bar.
+
+The notice is `Local review receipt ignored because <reason>; CI reviewed this
+change itself.` where the reason is one of a fixed set of classes, never
+untrusted text:
+
+| Class | Receipt problem |
+| --- | --- |
+| `malformed` | Marker, envelope, fields or JSON are malformed, unsupported, duplicated, or installation-only evidence |
+| `unavailable` | The immutable artifact is missing, oversized, truncated or substituted |
+| `signature` | Unknown, revoked or invalid signing key or signature |
+| `author` | The signing identity is not enrolled for the PR author |
+| `expired` | Expired, not yet valid or an invalid challenge |
+| `revision` | Different repository, head or base |
+| `changed` | The policy or configuration changed after issue |
+| `source` | Signed sources, file inventory or diff differ from the pull request (including a changed lockfile summary) |
+| `record` | The record, its digest, history, chunked structure or claimed decision is inconsistent or incomplete |
+| `engine` | Produced by a different engine revision than the protected one |
+| `not_passing` | The review it records did not pass |
+| `settings` | The protected chunked review configuration is invalid, so the receipt cannot be checked |
+| `held` | Its evidence does not meet hosted approval's affirmative-evidence rule |
+
+Repositories in `required` mode have no hosted review to fall back to. The same
+notice then ends `this repository requires a valid receipt, so run the local
+review again.` and the outcome is `local_receipt_required`; no provider call is
+made. While tests are pending or failing, an ignored receipt behaves exactly like
+an unstamped change (the pending or blocked result carries the notice).
+
+Deliberately unchanged, because they are intent and infrastructure rather than
+receipt verification: a verified receipt still cannot replace changed review
+history or supply protected-control owner authorization (the controller holds);
+a GitHub outage, rate limit or permission error while reading the receipt is
+reported with its ordinary cause, not ignored; and the post-assessment gate
+re-verifies the exact accepted record immediately before approval or merge and
+refuses (it does not fall back) if that record no longer verifies, in which case
+the next run assesses afresh.
 
 Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
 engine. The collector records that engine revision as untrusted source evidence
@@ -476,10 +519,11 @@ When the [GitHub Contents API](https://docs.github.com/en/rest/repos/contents#ge
 omits inline content above 1 MB, CI reads the Git blob named by that immutable
 artifact's metadata. It checks the exact blob identity, byte count and Git object
 hash before the normal signature, source, policy and engine verification.
-Unavailable, oversized or substituted content holds approval without AI fallback;
-this transport does not grant trust or change receipt compatibility.
+Unavailable, oversized or substituted content makes the receipt ignored (class
+`unavailable`); this transport does not grant trust or change receipt compatibility.
 A partitioned review record too large for one receipt is stored as a signed multi-part receipt
 (`clouseau-review.part-NNNN` files beside the envelope, see `docs/chunked-record.md`); each file keeps this bound.
+A missing or unreadable part, or a part that does not join to the signed root, is the same `unavailable` or `record` class.
 
 ## Chunked local review
 

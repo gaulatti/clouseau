@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const {readPull} = require('./pull-read.cjs');
+const {noticeText, noticeLine} = require('./receipt-rejection.cjs');
 const path = require('node:path');
 const {digest, validateApproval, approvalHold, specifiersOf, JS_PATH} = require('./acceptance.cjs');
 const {collectSnapshot, refresh, supplyTests} = require('./acceptance-sources.cjs');
@@ -147,25 +148,18 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     };
     try {
       const receipts = require('./local-receipt.cjs');
-      let receiptRef = receipts.marker(pr.body);
-      let bundle = null;
-      let verified = null;
-      if (receiptRef) {
-        bundle = await receipts.loadReceipt({github, repo, ref: receiptRef, trust: config.local_review});
-        try {
-          verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
-            repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, headSha: pr.head.sha, baseSha: pr.base.sha,
-            configDigest: digest(config), policyDigest: policyDigest()});
-        } catch (error) {
-          // Only after signature, trust, issuer, author, expiry and payload checks passed: a receipt from another
-          // engine is ignored (never accepted) and CI reviews the change itself.
-          if (error.code !== 'ENGINE_MISMATCH') throw error;
-          receiptRef = null;
-          const {RECEIPT_NOTICE} = require('./incomplete.cjs');
-          identity.receipt_notice = RECEIPT_NOTICE;
-          if (report) report(RECEIPT_NOTICE);
-        }
-      }
+      // One rule: a receipt that verifies in every respect is trusted; any other is ignored and never consulted again.
+      // CI then reviews the change itself (or, where a receipt is required, asks for a new one) and shows a fixed notice.
+      const screened = await receipts.screenReceipt({github, repo, pr, engine, trust: config.local_review,
+        configDigest: digest(config), policyDigest: policyDigest()});
+      let receiptRef = screened.ref;
+      const {bundle, verified} = screened;
+      const ignore = reason => {
+        receiptRef = null;
+        identity.receipt_notice = reason;
+        if (report) report(noticeText(reason, receiptOnly || config.local_review?.mode === 'required'));
+      };
+      if (screened.rejected) ignore(screened.rejected);
       // A signed local quality review is reusable even when independent CI
       // cannot yet authorize acceptance. Unstamped changes retain the existing
       // technical precondition before any paid investigation.
@@ -173,13 +167,22 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: number, per_page: 100});
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
+      let discovery;
       if (receiptRef) {
-        await receipts.verifySources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
-        // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
-        // is reused only when hosted approval's affirmative-evidence rule also holds.
-        const {discovery, hold} = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.record.result.reviews});
-        if (hold) return {...identity, decision: 'review_incomplete', review_source: 'authenticated_local', provider_api_calls: 0,
-          reason: `Authenticated local review held: ${hold}.`};
+        let rejected = await receipts.screenSources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
+        if (!rejected) {
+          // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
+          // is reused only when hosted approval's affirmative-evidence rule also holds.
+          const held = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.record.result.reviews});
+          ({discovery} = held);
+          if (held.hold) rejected = 'held';
+        }
+        if (rejected) {
+          ignore(rejected);
+          if (technicalBlock) return {...identity, ...technicalBlock};
+        }
+      }
+      if (receiptRef) {
         const controls = legacy.scopeReason(files, pr);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) || controls && !authorization) {
@@ -317,7 +320,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       links.push(`[Evidence ${index + 1}/${pages.length}](https://github.com/${record.snapshot.repository}/pull/${pr.number}#issuecomment-${response.data.id})`);
     }
     let published = links.length ? `${body}\n\nComplete factor inputs and evidence citations: ${links.join(' · ')}` : body;
-    if (assessment.receipt_notice) published += `\n\n${assessment.receipt_notice}`;
+    published += noticeLine(assessment);
     if (record.local_receipt) published += `\n\nAuthenticated local review: ` +
       `[signed evidence](https://github.com/${record.snapshot.repository}/blob/${record.local_artifact}/clouseau-review.json). ` +
       'CI verified the signature, source, scores and passing tests/coverage. **CI AI review calls: 0.**';

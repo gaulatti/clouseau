@@ -2,6 +2,7 @@
 
 const {patchOf} = require('./acceptance.cjs');
 const {LOCKFILE_PATCH, isLockfile} = require('./lockfile-summary.cjs');
+const {ReceiptRejected} = require('./receipt-rejection.cjs');
 
 // CI recomputes nothing from the model: the patch the reviewers saw is compared with the
 // patch GitHub reports for the same pull request. The file list is the one already fetched for
@@ -17,9 +18,9 @@ const headerLines = live => {
   return new Set([`diff --git a/${old} b/${live.filename}`, `--- a/${old}`, '--- /dev/null', `+++ b/${live.filename}`, '+++ /dev/null']);
 };
 
-class ReceiptPatchMismatch extends Error {
+class ReceiptPatchMismatch extends ReceiptRejected {
   constructor(path) {
-    super(`Invalid local review receipt: receipt_patch_mismatch for ${String(path).slice(0, 200)}`);
+    super('source', `receipt_patch_mismatch for ${String(path).slice(0, 200)}`);
     this.code = 'RECEIPT_PATCH_MISMATCH';
     this.path = String(path).slice(0, 200);
   }

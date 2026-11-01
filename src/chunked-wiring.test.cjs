@@ -117,7 +117,8 @@ test('protected chunked configuration can only tighten the defaults; invalid val
   const trust = {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600,
     keys: [initializeIdentity(fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-trust-')), 'fixture-author').public_identity]};
   assert.equal(validateTrust({...trust, chunked: {params: {C: 300000, S: 100000}}}).chunked.params.C, 300000);
-  assert.throws(() => validateTrust({...trust, chunked: {concurrency: 9}}), /invalid protected chunked review configuration/);
+  // Trust validation does not decide this: a receipt checked against an invalid configuration is ignored (class `settings`).
+  assert.equal(validateTrust({...trust, chunked: {concurrency: 9}}).chunked.concurrency, 9);
 });
 
 test('an alcantara-shaped change (85 files, 2.3 MB) is reviewed in units, signed as one receipt and verified by CI', () =>
