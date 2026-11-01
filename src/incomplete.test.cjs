@@ -1,7 +1,7 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {classify, body, post, annotate, MARKER, NEXT_STEPS, GENERIC} = require('./incomplete.cjs');
+const {classify, body, pendingBody, post, annotate, MARKER, NEXT_STEPS, GENERIC, RECEIPT_NOTICE} = require('./incomplete.cjs');
 
 const SECRET = 'sk-fictional-secret-value';
 
@@ -32,6 +32,16 @@ test('every cause has a specific next step and unknown causes fall to the diagno
   assert.ok(body({...assessment, cause: 'unknown'}, 'u').includes(NEXT_STEPS.evidence_incomplete));
   assert.ok(body({...assessment}, 'u').includes(NEXT_STEPS.evidence_incomplete));
   assert.ok(body({...assessment, reason: 'x'.repeat(900)}, 'u').length < 1400);
+});
+
+test('the ignored-older-engine-receipt notice is one fixed line on incomplete and pending comments, and nothing else is forwarded', () => {
+  const assessment = {number: 5, head_sha: 'a'.repeat(40), reason: 'Reason', cause: 'local_receipt_required', verification: 'pending'};
+  assert.ok(body({...assessment, receipt_notice: RECEIPT_NOTICE}, 'u').includes(`\n\n${RECEIPT_NOTICE}\n\n`));
+  assert.ok(pendingBody({...assessment, receipt_notice: RECEIPT_NOTICE}, 'u').includes(`\n\n${RECEIPT_NOTICE}\n\n`));
+  assert.ok(!body(assessment, 'u').includes('predates'));
+  assert.ok(!pendingBody(assessment, 'u').includes('predates'));
+  assert.ok(!body({...assessment, receipt_notice: 'attacker text'}, 'u').includes('attacker text'));
+  assert.ok(!NEXT_STEPS.engine_mismatch);
 });
 
 test('the notice is created once and then updated in place', async () => {
