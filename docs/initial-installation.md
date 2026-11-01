@@ -130,6 +130,9 @@ permissions:
   issues: read
 jobs:
   initial-trust:
+    # Only the installation PR carries the installation receipt marker. Unguarded,
+    # this job fails on every later pull request.
+    if: contains(github.event.pull_request.body, 'clouseau-installation-review:v1')
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
