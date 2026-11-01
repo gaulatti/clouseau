@@ -225,8 +225,10 @@ Deleting an installation branch starts no installation or approval work.
 The read-only assessment uploads its full source-bound record and emits a compact
 digest. The separate approval job downloads that run's artifact, checks the
 digest, recomputes scores, reconciles history and rechecks current CI/head/base.
-It then enforces effective protection, fresh approval and enabled native
-auto-merge. No provider key enters the approval or repair writer. The author
+It then records fresh approval and arms native auto-merge only when effective
+protection and repository auto-merge are present; otherwise it posts one
+fixed-text notice naming the missing setting classes, withholds the merge and
+the job still succeeds (see the README). No provider key enters the approval or repair writer. The author
 token enters only the repair writer. Same-revision intent comments reassess
 metadata without rebuilding the application container.
 

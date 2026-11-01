@@ -29,8 +29,9 @@ test('absent protected-base CODEOWNERS leaves ownership inactive without waiving
   f.state.failed = false;
   const branch = f.github.rest.repos.getBranch;
   f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
-  await assert.rejects(f.gate(assessment), /protection/);
-  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  await f.gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'enable-auto').length, 0);
+  f.state.writes.length = 0;
   f.github.rest.repos.getBranch = branch; f.state.pr.auto_merge = null;
   f.github.rest.repos.getCollaboratorPermissionLevel = async () => {throw new Error('Do not infer ownership from permission');};
   const messages = [];

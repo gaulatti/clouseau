@@ -22,9 +22,34 @@ async function assertMergeProtection({github, repo, baseBranch, manual, privateO
     }
     throw new Error('Available branch protection must be enabled before automatic approval');
   }
-  if (!settings.allow_auto_merge || !branch.protected) throw new Error('Repository auto-merge and main protection must be enabled');
-  await assertProtection();
-  return {enforced: true};
+  // Repository settings are never a hard failure in automatic mode: review,
+  // acceptance record and approval complete, and only the merge is withheld.
+  // Without protection the bot approval cannot make an unsafe merge more
+  // possible than it already is, so it is harmless; merging or arming
+  // auto-merge on insufficient protection is what stays forbidden.
+  const gaps = [];
+  if (!settings.allow_auto_merge) gaps.push('auto-merge disabled');
+  if (!branch.protected) gaps.push('main not protected');
+  if (gaps.length === 0) {
+    try { await assertProtection(); } catch (error) {
+      if (!Array.isArray(error.gaps)) throw error;
+      gaps.push(...error.gaps);
+    }
+  }
+  return gaps.length === 0 ? {enforced: true} : {enforced: false, insufficient: true, gaps};
 }
 
-module.exports = {assertMergeProtection};
+const NOTICE_MARKER = '<!-- clouseau-protection-notice -->';
+
+// Fixed text only: the bounded gap classes are the sole variable content.
+async function postProtectionNotice({github, repo, pull_number, gaps}) {
+  const body = `${NOTICE_MARKER}\nClouseau recorded its decision and approval, but did not arm or perform the merge ` +
+    `because repository settings are insufficient: ${gaps.join(', ')}. Enable them to allow automatic merge; until then a maintainer merges manually.`;
+  const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pull_number, per_page: 100});
+  const existing = comments.find(comment => comment.user.type === 'Bot' && comment.body.startsWith(NOTICE_MARKER));
+  if (!existing) await github.rest.issues.createComment({...repo, issue_number: pull_number, body});
+  else if (existing.body !== body) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body});
+  return body;
+}
+
+module.exports = {assertMergeProtection, postProtectionNotice};

@@ -1,7 +1,7 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {assertMergeProtection} = require('./merge-protection.cjs');
+const {assertMergeProtection, postProtectionNotice} = require('./merge-protection.cjs');
 
 const unsupported = () => Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});
 function fixture() {
@@ -47,15 +47,35 @@ test('manual mode requires auto-merge disabled and continues to enforce all avai
   await assert.rejects(f.check(true), /Available branch protection/);
 });
 
-test('automatic mode never falls back when protection, settings or inspection is unavailable', async () => {
+test('automatic mode reports bounded gaps instead of failing and never claims enforcement', async () => {
   const f = fixture();
-  await assert.rejects(f.check(false), /auto-merge and main protection/);
+  assert.deepEqual(await f.check(false), {enforced: false, insufficient: true, gaps: ['auto-merge disabled', 'main not protected']});
+  assert.equal(f.state.checks, 0);
   f.state.settings.allow_auto_merge = true;
-  await assert.rejects(f.check(false), /auto-merge and main protection/);
+  assert.deepEqual((await f.check(false)).gaps, ['main not protected']);
   f.state.branch.protected = true;
   await assert.rejects(f.check(false), /Upgrade to GitHub Pro/);
+  f.state.error = Object.assign(new Error('x'), {gaps: ['up-to-date missing']});
+  assert.deepEqual((await f.check(false)).gaps, ['up-to-date missing']);
   f.state.error = null;
   assert.deepEqual(await f.check(false), {enforced: true});
+});
+
+test('the protection notice is one fixed-text comment updated in place', async () => {
+  const comments = [{id: 1, user: {type: 'User'}, body: '<!-- clouseau-protection-notice -->\nspoof'}];
+  const writes = [];
+  const github = {paginate: async () => comments, rest: {issues: {
+    createComment: async a => {writes.push(['create', a]); comments.push({id: 2, user: {type: 'Bot'}, body: a.body});},
+    updateComment: async a => writes.push(['update', a])}}};
+  const post = gaps => postProtectionNotice({github, repo: {owner: 'o', repo: 'r'}, pull_number: 3, gaps});
+  const body = await post(['main not protected']);
+  assert.match(body, /insufficient: main not protected\./);
+  assert.equal(writes[0][0], 'create');
+  await post(['main not protected']);
+  assert.equal(writes.length, 1);
+  await post(['auto-merge disabled']);
+  assert.deepEqual(writes[1][1].comment_id, 2);
+  assert.equal(writes[1][0], 'update');
 });
 
 test('explicit owner automatic mode admits only the unavailable private-plan path with native auto-merge disabled', async () => {
@@ -70,5 +90,5 @@ test('explicit owner automatic mode admits only the unavailable private-plan pat
   f.state.error = null;
   await assert.rejects(run(), /Available branch protection/);
   f.state.error = unsupported(); f.state.settings.allow_auto_merge = true;
-  await assert.rejects(run(), /auto-merge and main protection/);
+  assert.equal((await run()).insufficient, true);
 });

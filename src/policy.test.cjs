@@ -487,19 +487,42 @@ test('an independent human review permits an Actions-authored PR without self-ap
   assert.ok(!f.writes.some(write => write.name === 'review'));
 });
 
-test('auto-merge cannot be armed on an unprotected branch', async () => {
-  const f = fixture();
-  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
-  await assert.rejects(f.run(), /protection/);
-  assert.equal(f.writes.length, 0);
+function noticeWrites(f) { return f.writes.filter(write => write.name === 'comment' || write.name === 'updateComment'); }
+
+test('an unprotected branch records the approval, posts one notice and never arms auto-merge', async () => {
+  for (const nativeGate of [false, true]) {
+    const f = fixture();
+    f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+    f.github.rest.issues.updateComment = async args => {f.writes.push({name: 'updateComment', args});};
+    f.github.graphql = async () => {f.state.pr.auto_merge = null; return {};};
+    await f.run({nativeGate});
+    assert.ok(f.writes.some(write => write.name === 'review'));
+    assert.ok(!f.writes.some(write => write.name === 'arm'));
+    assert.equal(noticeWrites(f).length, 1);
+    assert.match(noticeWrites(f)[0].args.body, /main not protected/);
+    if (!nativeGate) assert.ok(f.writes.some(write => write.args?.conclusion === 'success'));
+  }
 });
 
-test('partial protection cannot satisfy the policy or arm auto-merge', async () => {
+test('an already-armed auto-merge is disarmed when protection is insufficient', async () => {
+  const f = fixture();
+  f.state.pr.auto_merge = {}; f.state.pr.node_id = 'N';
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  f.github.graphql = async query => {f.writes.push({name: query.includes('disable') ? 'disarm' : 'arm'}); f.state.pr.auto_merge = null; return {};};
+  await f.run();
+  assert.ok(f.writes.some(write => write.name === 'disarm'));
+  assert.ok(f.writes.some(write => write.name === 'review'));
+});
+
+test('partial protection withholds the merge, names the gaps and cannot arm auto-merge', async () => {
   const f = fixture();
   f.github.request = async () => ({data: []});
+  f.github.graphql = async () => {f.state.pr.auto_merge = null; return {};};
   await assert.rejects(assertProtection(f.github, repo), /Main must enforce/);
-  await assert.rejects(f.run(), /Main must enforce/);
-  assert.equal(f.writes.length, 0);
+  await f.run();
+  assert.ok(f.writes.some(write => write.name === 'review'));
+  assert.ok(!f.writes.some(write => write.name === 'arm'));
+  assert.match(noticeWrites(f)[0].args.body, /required checks missing, up-to-date missing, approval freshness missing, force-push\+deletion protection missing/);
 });
 
 test('a completed bot merge explicitly dispatches CD for the merged revision', async () => {
@@ -619,7 +642,9 @@ test('the gate refuses stale comments, changed revisions and withdrawn human con
     await assert.rejects(f.run({context: {...context, eventName: 'issue_comment', payload: {issue: {number: 8, pull_request: {}}, comment}}}));
   }
   const disabled = fixture(); disabled.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
-  await assert.rejects(disabled.run(), /auto-merge/);
+  disabled.github.graphql = async () => {disabled.state.pr.auto_merge = null; return {};};
+  await disabled.run();
+  assert.ok(disabled.writes.some(write => write.name === 'review') && !disabled.writes.some(write => write.name === 'arm'));
   const staleArm = fixture(); staleArm.state.pr.auto_merge = null;
   staleArm.github.graphql = async () => ({});
   await assert.rejects(staleArm.run(), /Auto-merge was not enabled/);
@@ -719,7 +744,9 @@ test('native policy result fails on missing intent, pending assessment and integ
     assert.equal(f.writes.some(w => w.name === 'createCheck' || w.name === 'updateCheck'), false);
   }
   const wrongProtection = fixture();
-  await assert.rejects(wrongProtection.run({nativeGate: true}), /approve-and-merge/);
+  wrongProtection.github.graphql = async () => {wrongProtection.state.pr.auto_merge = null; return {};};
+  await wrongProtection.run({nativeGate: true});
+  assert.match(noticeWrites(wrongProtection)[0].args.body, /required checks missing/);
 });
 
 test('native policy success requires completed evidence and finishes before merge finalization', async () => {
@@ -995,4 +1022,12 @@ test('a completed verification run never reruns a succeeded, running, stale, unr
   assert.match(await attempt(f => {
     f.github.rest.repos.listPullRequestsAssociatedWithCommit = async () => ({data: []});
   }, verificationTrigger({pull_requests: []})), /No single open PR/);
+});
+
+test('finalization on an owner-automatic repository with insufficient protection merges nothing', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+  const f = fixture();
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  await policy.finalize({github: f.github, context, core: {info() {}}, assessment: automatic});
+  assert.ok(!f.writes.some(write => write.name === 'arm' || write.name === 'dispatch'));
 });
