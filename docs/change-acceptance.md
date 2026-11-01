@@ -455,7 +455,9 @@ check. Manual mode continues to require manual merge.
 Every `review_incomplete` assessment carries a fixed `cause` (for example
 `provider_key_missing`, `provider_key_invalid`, `provider_rejected`,
 `provider_unavailable`, `local_receipt_required` or
-`evidence_incomplete`). The `assess` step raises a warning annotation, and the
+`evidence_incomplete`). A local receipt that does not verify is never a cause: it is
+ignored with a fixed one-line notice and CI reviews the change itself (see
+[local review](local-review.md#a-receipt-that-does-not-verify-is-ignored)). The `assess` step raises a warning annotation, and the
 `gate` creates (or updates in place) one `<!-- clouseau-review-incomplete -->`
 comment with the specific reason and a next step. Raw error text, provider
 responses and credentials are never forwarded: only fixed causes, HTTP status

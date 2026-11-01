@@ -106,7 +106,8 @@ Publication uses the existing separate immutable Git artifact/tag route.
 Include the returned `clouseau-installation-review:v1` marker in the initial
 ready PR body. The PR must be internal, authored by the authorized native actor
 and have automatic merge disabled. Ordinary receipt verification rejects this
-receipt and marker; invalid evidence never triggers paid fallback review.
+receipt and marker, which is the ordinary rule for any receipt that does not verify: it is ignored and
+the normal hosted review checks run (see [local review](local-review.md#a-receipt-that-does-not-verify-is-ignored)).
 
 ## Independent CI and initial owner acceptance
 

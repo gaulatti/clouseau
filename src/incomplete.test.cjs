@@ -1,7 +1,8 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {classify, body, pendingBody, post, annotate, MARKER, NEXT_STEPS, GENERIC, RECEIPT_NOTICE} = require('./incomplete.cjs');
+const {PHRASES, ReceiptRejected, noticeText, noticeLine} = require('./receipt-rejection.cjs');
+const {classify, body, pendingBody, post, annotate, MARKER, NEXT_STEPS, GENERIC} = require('./incomplete.cjs');
 
 const SECRET = 'sk-fictional-secret-value';
 
@@ -34,14 +35,36 @@ test('every cause has a specific next step and unknown causes fall to the diagno
   assert.ok(body({...assessment, reason: 'x'.repeat(900)}, 'u').length < 1400);
 });
 
-test('the ignored-older-engine-receipt notice is one fixed line on incomplete and pending comments, and nothing else is forwarded', () => {
-  const assessment = {number: 5, head_sha: 'a'.repeat(40), reason: 'Reason', cause: 'local_receipt_required', verification: 'pending'};
-  assert.ok(body({...assessment, receipt_notice: RECEIPT_NOTICE}, 'u').includes(`\n\n${RECEIPT_NOTICE}\n\n`));
-  assert.ok(pendingBody({...assessment, receipt_notice: RECEIPT_NOTICE}, 'u').includes(`\n\n${RECEIPT_NOTICE}\n\n`));
-  assert.ok(!body(assessment, 'u').includes('predates'));
-  assert.ok(!pendingBody(assessment, 'u').includes('predates'));
-  assert.ok(!body({...assessment, receipt_notice: 'attacker text'}, 'u').includes('attacker text'));
-  assert.ok(!NEXT_STEPS.engine_mismatch);
+test('an ignored-receipt notice is one fixed line on incomplete and pending comments, and nothing else is forwarded', () => {
+  const assessment = {number: 5, head_sha: 'a'.repeat(40), reason: 'Reason', cause: 'evidence_incomplete', verification: 'pending'};
+  const line = noticeText('engine', false);
+  assert.equal(line, 'Local review receipt ignored because it predates the current Clouseau engine; CI reviewed this change itself.');
+  assert.ok(body({...assessment, receipt_notice: 'engine'}, 'u').includes(`\n\n${line}\n\n`));
+  assert.ok(pendingBody({...assessment, receipt_notice: 'engine'}, 'u').includes(`\n\n${line}\n\n`));
+  assert.ok(!body(assessment, 'u').includes('ignored'));
+  assert.ok(!pendingBody(assessment, 'u').includes('ignored'));
+  for (const hostile of ['attacker text', 'toString', '__proto__', 7, null, {x: 1}]) {
+    assert.ok(!body({...assessment, receipt_notice: hostile}, 'u').includes('ignored'));
+    assert.equal(noticeLine({receipt_notice: hostile}), '');
+  }
+  // A repository that requires a receipt cannot be reviewed by CI instead, so the line says what to do.
+  const required = body({...assessment, cause: 'local_receipt_required', receipt_notice: 'signature'}, 'u');
+  assert.ok(required.includes('Local review receipt ignored because its signature is not from an enrolled, active key; this repository requires a valid receipt, so run the local review again.'));
+  assert.ok(!required.includes('CI reviewed this change itself'));
+  assert.ok(!NEXT_STEPS.engine_mismatch && !NEXT_STEPS.receipt_patch_mismatch);
+});
+
+test('every receipt rejection class has exactly one fixed single-line sentence', () => {
+  assert.deepEqual(Object.keys(PHRASES).sort(), ['author', 'changed', 'engine', 'expired', 'held', 'malformed', 'not_passing', 'record',
+    'revision', 'settings', 'signature', 'source', 'unavailable']);
+  for (const reason of Object.keys(PHRASES)) for (const required of [false, true]) {
+    const text = noticeText(reason, required);
+    assert.match(text, /^Local review receipt ignored because [^\n]+\.$/);
+    assert.equal(noticeLine({receipt_notice: reason, cause: required ? 'local_receipt_required' : 'evidence_incomplete'}), `\n\n${text}`);
+  }
+  const error = new ReceiptRejected('source', 'sentinel');
+  assert.equal(error.reason, 'source');
+  assert.equal(error.message, 'Invalid local review receipt: sentinel');
 });
 
 test('the notice is created once and then updated in place', async () => {
