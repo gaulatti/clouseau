@@ -59,15 +59,16 @@ function verifyRecord(record, assessment, config, engine = null) {
     throw new Error('Acceptance record belongs to a different frozen engine');
   }
   if (record.local_receipt) {
-    require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
+    // The receipt's own record: for a multi-part receipt the signed payload holds only the root.
+    const signed = require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
       engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author,
       headSha: assessment.head_sha, baseSha: assessment.base_sha,
       configDigest: digest(config), policyDigest: policyDigest(),
     });
     for (const field of ['snapshot', 'result', 'controls']) {
-      if (digest(record[field]) !== digest(record.local_receipt.payload.record[field])) throw new Error('Local review record was substituted');
+      if (digest(record[field]) !== digest(signed.record[field])) throw new Error('Local review record was substituted');
     }
-    if (digest(record.previous.findings) !== digest(record.local_receipt.payload.record.previous.findings)) throw new Error('Local review history was substituted');
+    if (digest(record.previous.findings) !== digest(signed.record.previous.findings)) throw new Error('Local review history was substituted');
   }
   if (assessment.version !== 2 || digest(record) !== assessment.record_digest ||
       record.snapshot.config_digest !== digest(config) || record.snapshot.policy_digest !== policyDigest() ||

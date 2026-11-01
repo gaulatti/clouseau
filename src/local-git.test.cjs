@@ -289,3 +289,36 @@ test('a large, mostly new change with a pinned workflow fits the evidence budget
   // A reviewer's later request still fits the room that was kept.
   return collected.addSources(['backend/a1.ts']).then(() => refresh(snapshot));
 }));
+
+test('an unbounded collection reads files and patches of any size whole, and the default collection still refuses them', () => repository(f => {
+  const {evidenceSize, BUDGET, refresh} = require('./acceptance-sources.cjs');
+  const {patchOf} = require('./acceptance.cjs');
+  const lines = size => Array.from({length: size}, (_, index) => `export const value${index} = ${index};`).join('\n') + '\n';
+  fs.writeFileSync(path.join(f.directory, 'src/huge.js'), lines(40000));
+  fs.writeFileSync(path.join(f.directory, 'src/handler.js'), lines(100000));
+  git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'feat: very large files']);
+  // A file of about 1.4 MB: far over the 300,000 byte file bound and the 2,000,000 byte patch bound together.
+  assert.ok(fs.statSync(path.join(f.directory, 'src/handler.js')).size > 3000000);
+  assert.throws(() => collectLocal({...f, request: 'a', technical: {}}), /oversized|ENOBUFS/);
+  const {snapshot, addSources} = collectLocal({...f, request: 'Large.', technical: {}, unbounded: true});
+  const huge = snapshot.files.find(file => file.path === 'src/huge.js');
+  assert.equal(snapshot.sources[huge.head_source].content, lines(40000));
+  assert.equal(patchOf(snapshot, huge), git(f.directory, ['diff', '--no-ext-diff', '--no-textconv', f.base, 'HEAD', '--', 'src/huge.js'], undefined, Infinity));
+  const handler = snapshot.files.find(file => file.path === 'src/handler.js');
+  assert.ok(handler.patch.length > 2000000);
+  assert.ok(evidenceSize(snapshot) > BUDGET, 'the combined snapshot is not capped');
+  assert.equal(snapshot.digest, refresh(structuredClone(snapshot), Number.MAX_SAFE_INTEGER).digest);
+  // A request for more sources is not capped either; binary evidence still fails closed.
+  return addSources(['AGENTS.md']).then(() => {
+    fs.writeFileSync(path.join(f.directory, 'src/binary.js'), Buffer.from([0, 1]));
+    git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'test: binary fixture']);
+    assert.throws(() => collectLocal({...f, request: 'a', technical: {}, unbounded: true}), /Binary or oversized/);
+  });
+}));
+
+test('an unbounded collection keeps the optional engine seed whatever the size of the change', () => repository(f => {
+  fs.writeFileSync(path.join(f.directory, 'src/handler.js'), `${'x'.repeat(1000000)}\n`);
+  git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'feat: large']);
+  const {snapshot} = collectLocal({...f, request: 'a', technical: {}, unbounded: true, reviewerSha: 'e'.repeat(40)});
+  assert.equal(snapshot.omitted_sources, undefined);
+}));

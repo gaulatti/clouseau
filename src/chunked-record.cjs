@@ -14,7 +14,9 @@
 //   unitView(snapshot, unitSpec)  -> a snapshot-shaped view with its own `digest`
 //   seams({snapshot, plan})       -> controller-computed seams
 //   merge({role, unitReports: [{unit, report}], integration, snapshot, plan}) -> one ordinary merged report
-// `params` are the PROTECTED parameters ({C, S, cap, max_units}); nothing is ever read from the record.
+// `params` are the PROTECTED parameters ({C, S}); nothing is ever read from the record. A record is never refused for
+// its size: the snapshot and the unit count are unbounded, and a record too large for one receipt is stored as a
+// signed multi-part receipt (receipt-parts.cjs).
 
 const {digest, validateReport} = require('./acceptance.cjs');
 const {validateInspection} = require('./acceptance-review.cjs');
@@ -23,7 +25,8 @@ const {locations, grade} = require('./acceptance-grading.cjs');
 const SCHEME = 'clouseau-partition/1';
 const ROLES = ['examiner', 'challenger'];
 const MAX_RECEIPT_BYTES = 3000000;
-// The signed bundle must stay under MAX_RECEIPT_BYTES; the signer refuses early, leaving headroom for the envelope.
+// The largest record signed as ONE receipt, leaving headroom for the envelope. A larger partitioned record is signed as a
+// multi-part receipt (receipt-parts.cjs), so no record is too large.
 const RECORD_LIMIT = Math.floor(MAX_RECEIPT_BYTES * 0.95);
 
 class ChunkedRecordError extends Error {
@@ -38,29 +41,21 @@ const need = (condition, reason) => {if (!condition) invalid(reason);};
 const named = value => JSON.stringify(String(value)).slice(0, 120);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 
+// `cap` and `max_units` were bounds of an earlier contract. They are still accepted so that existing protected
+// configuration keeps loading, and they bound nothing.
 function parseParams(raw) {
-  const keys = ['C', 'S', 'cap', 'max_units'];
-  if (!raw || typeof raw !== 'object' || Object.keys(raw).sort().join(',') !== [...keys].sort().join(',') ||
-      !keys.every(key => positive(raw[key])) || raw.cap > MAX_RECEIPT_BYTES) {
-    invalid('protected chunk parameters {C, S, cap, max_units} must be positive integers within the receipt bound');
+  const legacy = ['cap', 'max_units'];
+  if (!raw || typeof raw !== 'object' || Object.keys(raw).some(key => !['C', 'S', ...legacy].includes(key)) ||
+      !positive(raw.C) || !positive(raw.S) || legacy.some(key => raw[key] !== undefined && !positive(raw[key]))) {
+    invalid('protected chunk parameters {C, S} must be positive integers');
   }
-  return {C: raw.C, S: raw.S, cap: raw.cap, max_units: raw.max_units};
+  return {C: raw.C, S: raw.S};
 }
-const planParams = ({C, S, cap}) => ({C, S, cap});
+const planParams = ({C, S}) => ({C, S});
 
-function snapshotDigest(snapshot, cap) {
+function snapshotDigest(snapshot) {
   const value = {...snapshot}; delete value.digest;
-  need(JSON.stringify(value).length <= cap, 'combined evidence exceeds the protected snapshot cap');
   return digest(value);
-}
-
-function assertRecordSize(record, limit = RECORD_LIMIT) {
-  const bytes = Buffer.byteLength(JSON.stringify(record));
-  if (bytes > limit) {
-    throw new ChunkedRecordError('record_too_large',
-      `record_too_large: the record is ${bytes} bytes, above the ${limit} byte signing limit of the ${MAX_RECEIPT_BYTES} byte receipt`);
-  }
-  return bytes;
 }
 
 const regenerated = (entry, snapshot) => snapshot.sources[entry.source].content.split('\n').slice(entry.start - 1, entry.end).join('\n');
@@ -101,21 +96,32 @@ function checked(subject, run) {
 }
 
 function checkOwnership(snapshot, plan) {
-  const owner = new Map(); const ids = new Set();
+  const owners = new Map(); const ids = new Set();
   for (const unit of plan.units) {
     need(unit && typeof unit.id === 'string' && !ids.has(unit.id), `unit id ${named(unit?.id)} is missing or repeated`);
     ids.add(unit.id);
     need(Array.isArray(unit.owned) && unit.owned.length > 0 && Array.isArray(unit.context_ids), `unit ${unit.id} has no owned paths`);
+    const parts = unit.parts ?? {};
+    need(parts && typeof parts === 'object' && !Array.isArray(parts) && Object.entries(parts).every(([path, part]) => unit.owned.includes(path) &&
+      part && Number.isSafeInteger(part.index) && Number.isSafeInteger(part.count) && part.index >= 0 && part.index < part.count),
+    `unit ${unit.id} names a malformed segment`);
     for (const path of unit.owned) {
       need(snapshot.paths.includes(path), `unit ${unit.id} owns ${named(path)}, which is not a changed path`);
-      need(!owner.has(path), `duplicate ownership: ${named(path)} is owned by units ${owner.get(path)} and ${unit.id}`);
-      owner.set(path, unit.id);
+      const seen = owners.get(path) ?? [];
+      need(!seen.length || (parts[path] && seen[0].part), `duplicate ownership: ${named(path)} is owned by units ${seen[0]?.unit} and ${unit.id}`);
+      owners.set(path, [...seen, {unit: unit.id, part: parts[path]}]);
     }
     need(new Set(unit.context_ids).size === unit.context_ids.length &&
       unit.context_ids.every(id => Object.hasOwn(snapshot.sources, id)), `unit ${unit.id} lists unknown or repeated context sources`);
   }
-  const unowned = snapshot.paths.filter(path => !owner.has(path));
+  const unowned = snapshot.paths.filter(path => !owners.has(path));
   need(unowned.length === 0, `changed path ${named(unowned[0])} is owned by no unit`);
+  // A split file is covered by each of its segments exactly once.
+  for (const [path, list] of owners) {
+    const count = list[0].part?.count;
+    need(count === undefined || (list.length === count && list.every(item => item.part.count === count) &&
+      new Set(list.map(item => item.part.index)).size === count), `changed path ${named(path)} is not covered by each of its segments exactly once`);
+  }
 }
 
 function unitReportsOf(review, plan, views, role) {
@@ -179,13 +185,11 @@ function chunkedVerifier(record, chunked) {
   const {snapshot, result, partition} = record;
   need(partition && typeof partition === 'object' && Object.keys(partition).sort().join(',') === 'params,plan_digest,scheme,units' && partition.scheme === SCHEME,
     `unknown or malformed partition scheme ${named(partition?.scheme)}`);
-  assertRecordSize(record);
   return {
-    snapshotDigest: () => snapshotDigest(snapshot, params.cap),
+    snapshotDigest: () => snapshotDigest(snapshot),
     reviews: () => {
       need(digest(partition.params) === digest(planParams(params)), 'partition parameters differ from the protected configuration');
-      need(Array.isArray(partition.units) && partition.units.length > 0 && partition.units.length <= params.max_units,
-        `partition has no units or more than the protected ${params.max_units} units`);
+      need(Array.isArray(partition.units) && partition.units.length > 0, 'partition has no units');
       checkOwnership(snapshot, partition);
       const views = new Map();
       for (const unit of partition.units) {
@@ -216,4 +220,4 @@ function chunkedVerifier(record, chunked) {
   };
 }
 
-module.exports = {SCHEME, RECORD_LIMIT, ChunkedRecordError, parseParams, snapshotDigest, assertRecordSize, elideQuotes, rehydrateQuotes, chunkedVerifier};
+module.exports = {SCHEME, RECORD_LIMIT, ChunkedRecordError, parseParams, snapshotDigest, elideQuotes, rehydrateQuotes, chunkedVerifier};

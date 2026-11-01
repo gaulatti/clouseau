@@ -4,15 +4,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
 const {digest, patchOf} = require('./acceptance.cjs');
-const {safePath, refresh, evidenceSize, BUDGET} = require('./acceptance-sources.cjs');
+const {safePath, refresh, evidenceSize, BUDGET, UNBOUNDED} = require('./acceptance-sources.cjs');
 
 // Room kept free of the optional engine seed for sources a reviewer asks for later.
 const SEED_RESERVE = 150000;
 const {coverageParts} = require('./coverage-plan.cjs');
 const {MAX_BYTES, LOCKFILE_PATCH, LockfileError, isLockfile, lockfileEvidence, lockfileError} = require('./lockfile-summary.cjs');
 
-function git(directory, args, input) {
-  return cp.execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', input, maxBuffer: 2000000});
+const FILE_LIMIT = 300000;
+
+function git(directory, args, input, maxBuffer = 2000000) {
+  return cp.execFileSync('git', ['-C', directory, ...args], {encoding: 'utf8', input, maxBuffer});
 }
 
 // Exact blob bytes, decoded as strict UTF-8 like the hosted review does, so both compute one summary.
@@ -41,7 +43,13 @@ function githubRepository(directory) {
   return {owner: match[1], repo: match[2]};
 }
 
-function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null, installation = null, engineRoot = path.join(__dirname, '..')}) {
+// `unbounded` is the collector of a chunked review (design: chunked review): a changed file or patch of any size is read
+// whole, and the combined snapshot has no size cap, because it is reviewed as bounded segments in bounded units and
+// stored as a multi-part receipt. Without it nothing changes: one snapshot of at most 900,000 characters.
+function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null, installation = null, unbounded = false,
+  engineRoot = path.join(__dirname, '..')}) {
+  const read = (...args) => (unbounded ? git(directory, args, undefined, Infinity) : git(directory, args));
+  const cap = unbounded ? UNBOUNDED : BUDGET;
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const baseSha = git(directory, ['rev-parse', '--verify', `${base}^{commit}`]).trim();
   const repo = githubRepository(directory);
@@ -78,8 +86,8 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     }
     const id = `${ref}:${filename}`;
     if (snapshot.sources[id]) return id;
-    const content = git(directory, ['show', `${ref}:${filename}`]);
-    if (content.includes('\0') || Buffer.byteLength(content) > 300000) throw new Error('Binary or oversized local evidence');
+    const content = read('show', `${ref}:${filename}`);
+    if (content.includes('\0') || (!unbounded && Buffer.byteLength(content) > FILE_LIMIT)) throw new Error('Binary or oversized local evidence');
     const contract = (ref === baseSha || (installation && ref === head)) && [config.readme, config.repository_policy].includes(filename);
     snapshot.sources[id] = {path: filename, ref, authority: contract ? 'trusted' : 'untrusted',
       kind: contract ? 'contract' : 'source', content};
@@ -113,7 +121,7 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     const item = {path: file.filename, status: file.status, patch: LOCKFILE_PATCH};
     if (lockfile) { snapshot.sources[lockfile.id] = lockfile.source; item.lockfile = true; }
     try {
-      if (!lockfile) item.patch = git(directory, ['diff', '--no-ext-diff', '--no-textconv', baseSha, head, '--', file.previous_filename, file.filename]);
+      if (!lockfile) item.patch = read('diff', '--no-ext-diff', '--no-textconv', baseSha, head, '--', file.previous_filename, file.filename);
       if (file.status !== 'added') {
         item.base_source = lockfile ? lockfile.id : source(file.previous_filename, baseSha);
         snapshot.history.push({path: file.filename, commits: git(directory,
@@ -137,18 +145,18 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     let id;
     try {id = source(filename, head);} catch (error) {if (error.code !== 'ENGINE_PATH_ABSENT') throw error; continue;}
     // The seed is optional context: beyond the reserve it is omitted with a stated reason, never a failed review.
-    if (evidenceSize(snapshot) > BUDGET - SEED_RESERVE) {
+    if (!unbounded && evidenceSize(snapshot) > BUDGET - SEED_RESERVE) {
       delete snapshot.sources[id];
       snapshot.omitted_sources = [...(snapshot.omitted_sources || []), {path: filename, reason: 'would exceed the evidence budget reserved for requested sources'}];
     }
   }
-  refresh(snapshot);
+  refresh(snapshot, cap);
   const addSources = async paths => {
     if (!Array.isArray(paths) || !paths.length || paths.length > 8 || new Set(paths).size !== paths.length) {
       throw new Error('Local source requests require one to eight distinct paths');
     }
     for (const filename of paths) source(filename, head);
-    refresh(snapshot);
+    refresh(snapshot, cap);
   };
   return {snapshot, localConfig, addSources};
 }
