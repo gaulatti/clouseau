@@ -15,13 +15,11 @@ const ATTEMPTS = 4;
 async function conflicting({github, repo, number, headSha, wait, known = null}) {
   const read = async () => (await readPull(github, repo, number)).data;
   let pr = known ?? await read();
-  for (let attempt = 1; ; attempt++) {
-    if (pr.head.sha !== headSha) return false;
-    if (pr.mergeable !== null) return pr.mergeable === false && pr.mergeable_state === 'dirty';
-    if (attempt === ATTEMPTS) return false;
+  for (let attempt = 1; attempt < ATTEMPTS && pr.head.sha === headSha && pr.mergeable === null; attempt++) {
     await wait(1000 * 2 ** attempt);
     pr = await read();
   }
+  return pr.head.sha === headSha && pr.mergeable === false && pr.mergeable_state === 'dirty';
 }
 
 const reasonFor = baseBranch => `Merge conflict with ${baseBranch}: GitHub does not run PR verification for a pull request that cannot be merged, so none exists for this revision.`;
