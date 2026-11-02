@@ -399,3 +399,70 @@ test('source screening ignores a receipt whose signed sources, diff or inventory
   await assert.rejects(screenSources({...options, github: outage}), error => error.status === 502);
   await assert.rejects(screenSources({...options, files: files.map(({patch, ...file}) => file)}), /Changed-file evidence is incomplete/);
 });
+
+test('a receipt may carry a signed review-semantics claim; a different engine is accepted only when the running engine vouches for it', async () => {
+  const {SOURCE} = require('./central-version.cjs');
+  const f = await fixture();
+  const claim = 'c'.repeat(64);
+  const bundle = issueReceipt({...f.issue, reviewerSemantics: claim});
+  assert.equal(bundle.payload.reviewer_semantics, claim);
+  assert.equal(Object.hasOwn(issueReceipt(f.issue).payload, 'reviewer_semantics'), false);
+  assert.throws(() => issueReceipt({...f.issue, reviewerSemantics: 'abc'}), /invalid runner/);
+  // The same engine still verifies exactly as before, with or without the claim and with or without a hook.
+  assert.equal(verifyReceipt(bundle, f.expected).decision, 'auto_approve');
+  // A malformed claim is a malformed receipt (resigned so only the field is wrong).
+  const forge = payload => {
+    const key = crypto.createPrivateKey(f.issue.privateKey);
+    return {payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`), key).toString('base64url')};
+  };
+  assert.throws(() => verifyReceipt(forge({...bundle.payload, reviewer_semantics: 'abc'}), f.expected), /unknown receipt type or fields/);
+
+  // Engine Y is a different protected revision than the one that issued the receipt.
+  const trust = {...f.trust, central_source: {...SOURCE}};
+  delete trust.reviewer_digest;
+  const other = {...SOURCE, sha: 'd'.repeat(40), digest: 'e'.repeat(64)};
+  const options = {...f.expected, trust, engine: other, reviewerSha: undefined, reviewerDigest: other.digest};
+  const seen = [];
+  const vouch = answer => value => {seen.push(value); return answer;};
+  const refused = (b, o) => assert.throws(() => verifyReceipt(b, o), error => error.reason === 'engine' && /engine mismatch/.test(error.message));
+  assert.equal(verifyReceipt(bundle, {...options, compatible: vouch(true)}).decision, 'auto_approve');
+  assert.deepEqual(seen, [claim]);
+  // Every doubt keeps today's refusal.
+  refused(bundle, options);
+  refused(bundle, {...options, compatible: null});
+  refused(bundle, {...options, compatible: vouch(false)});
+  refused(bundle, {...options, compatible: vouch('yes')});
+  refused(bundle, {...options, compatible: vouch(true), reviewerSha: 'f'.repeat(40)});
+  refused(bundle, {...options, compatible: vouch(true), reviewerDigest: 'f'.repeat(64)});
+  refused(bundle, {...options, compatible: vouch(true), engine: null});
+  refused(bundle, {...options, compatible: vouch(true), engine: {...other, repository: 'other/repo'}});
+  refused(bundle, {...options, compatible: vouch(true), trust: f.trust});
+  refused(issueReceipt(f.issue), {...options, compatible: vouch(true)});
+  refused(bundle, {...options, compatible: vouch(true), engine: {...other, digest: 'invalid'}});
+  refused(forge({...bundle.payload, reviewer_digest: 'abc'}), {...options, compatible: vouch(true)});
+  assert.equal(verifyReceipt(bundle, {...options, compatible: vouch(true), reviewerSha: f.issue.reviewerSha}).decision, 'auto_approve');
+  // A different engine never excuses any other check.
+  assert.throws(() => verifyReceipt(bundle, {...options, compatible: vouch(true), headSha: '0'.repeat(40)}), /changed/);
+  assert.throws(() => verifyReceipt(bundle, {...options, compatible: vouch(true), author: 'unregistered-contributor'}), /PR author/);
+});
+
+test('by default the running protected engine statement decides whether a receipt of another revision is accepted', async () => {
+  const {SOURCE} = require('./central-version.cjs');
+  const semantics = require('./review-semantics.cjs');
+  const f = await fixture();
+  const trust = {...f.trust, central_source: {...SOURCE}};
+  delete trust.reviewer_digest;
+  const other = {...SOURCE, sha: 'd'.repeat(40), digest: 'e'.repeat(64)};
+  const options = {...f.expected, trust, engine: other, reviewerSha: undefined, reviewerDigest: other.digest};
+  const statement = semantics.readStatement();
+  const earlier = statement.compatible[0] ?? 'a'.repeat(64);
+  const issue = reviewerSemantics => issueReceipt({...f.issue, reviewerSemantics});
+  // Semantics of this very engine: accepted although the revision and exact digest differ.
+  assert.equal(verifyReceipt(issue(semantics.semanticsDigest()), options).decision, 'auto_approve');
+  // Semantics the statement lists are accepted; unlisted or absent claims are ignored as before.
+  if (statement.compatible.length) assert.equal(verifyReceipt(issue(earlier), options).decision, 'auto_approve');
+  assert.throws(() => verifyReceipt(issue('0'.repeat(64)), options), /engine mismatch/);
+  assert.throws(() => verifyReceipt(issueReceipt(f.issue), options), /engine mismatch/);
+  // Fixed-digest trust never takes this path.
+  assert.throws(() => verifyReceipt(issue(semantics.semanticsDigest()), {...options, trust: f.trust}), /engine mismatch/);
+});

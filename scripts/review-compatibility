@@ -1,0 +1,3 @@
+#!/usr/bin/env node
+'use strict';
+process.exitCode = require('../src/review-compatibility-cli.cjs').main(process.argv.slice(2));
