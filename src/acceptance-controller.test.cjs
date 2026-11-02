@@ -1504,6 +1504,7 @@ test('the hosted fallback after an unusable receipt never reads the receipt, rev
   const held = await required.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ignoreReceipt: true});
   assert.equal(held.cause, 'local_receipt_required', 'a repository that requires receipts is never reviewed by the fallback');
   assert.equal(artifactReads, reads);
+}));
 
 test('optional local review on the receipt-only route names the real condition instead of claiming a receipt is required', () => fixture(async f => {
   const keys = require('node:crypto').generateKeyPairSync('ed25519');
