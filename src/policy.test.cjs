@@ -1247,3 +1247,29 @@ test('finalizing a manual merge retries a transient disarm', async () => {
   assert.equal(calls, 2);
   assert.deepEqual(f.waits, [2000]);
 });
+
+test('a pull request that conflicts with its base is named at once, not after the whole queue grace', async () => {
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const never = async () => assert.fail('a conflict is not waited out');
+  try {
+    const f = fixture({run: null}); Object.assign(f.state.pr, {mergeable: false, mergeable_state: 'dirty'});
+    const held = await policy.assessWhenReady({github: f.github, context, wait: never});
+    assert.deepEqual({decision: held.decision, verification: held.verification, cause: held.cause, head: held.head_sha},
+      {decision: 'pending_technical', verification: 'absent', cause: 'branch_conflict', head: SHA});
+    assert.match(held.reason, /^Merge conflict with main: /);
+    const outputs = {};
+    const core = {info() {}, setOutput: (name, value) => {outputs[name] = value;}};
+    const waited = await policy.awaitVerification({github: f.github, context, core, expectedHead: SHA, wait: never});
+    assert.deepEqual(waited, {pending: true, state: 'branch_conflict'}); assert.equal(outputs.verified, 'false');
+    assert.deepEqual({...JSON.parse(outputs.assessment)}, {version: 2, number: 8, head_sha: SHA, base_sha: BASE, decision: 'pending_technical',
+      verification: 'absent', cause: 'branch_conflict', reason: held.reason});
+    // A mergeable pull request whose verification has not started is still waited on for the grace, as before.
+    const clean = fixture({run: null}); clean.state.pr.mergeable = true;
+    await assert.rejects(policy.assessWhenReady({github: clean.github, context, maxPolls: 1, wait: async () => {}}), /deadline/);
+    const waits = [];
+    const stalled = await policy.awaitVerification({github: clean.github, context, core: {info() {}, setOutput() {}}, expectedHead: SHA, wait: async ms => waits.push(ms), queuedGraceSeconds: 20});
+    assert.equal(stalled.state, 'absent'); assert.ok(waits.length > 0);
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});

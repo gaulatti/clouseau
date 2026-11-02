@@ -6,7 +6,7 @@ Every refusal or hold that Clouseau shows on a pull request, in a check summary 
 2. one sentence that says what is wrong, with the concrete values that are safe to show: a short commit id, the engine revision, the base that moved, the rule that held, or a file of the pull request itself;
 3. **numbered next steps** the customer can run, with exact commands where one exists.
 
-A notice never contains a secret, the contents of a receipt, or a provider's response. A cause class is a key of a closed table in the source (`src/receipt-rejection.cjs`, `src/incomplete.cjs`, `src/gate-notice.cjs`, `src/merge-protection.cjs`, `src/branch-update.cjs`); text from a run is never promoted to a class. `src/notice-causes.test.cjs` fails when a class is added without a sentence, a numbered step and a row on this page.
+A notice never contains a secret, the contents of a receipt, or a provider's response. A cause class is a key of a closed table in the source (`src/receipt-rejection.cjs`, `src/incomplete.cjs`, `src/gate-notice.cjs`, `src/merge-protection.cjs`, `src/branch-update.cjs`, `src/branch-conflict.cjs`); text from a run is never promoted to a class. `src/notice-causes.test.cjs` fails when a class is added without a sentence, a numbered step and a row on this page.
 
 Commands in steps use `clouseau`, the global launcher of the shared agent installation (`bash scripts/install-agent`), and the GitHub CLI `gh`. `BASE_BRANCH`, `PR_NUMBER`, `REQUIREMENT_FILE` and `RECEIPT_FILE` are placeholders for values only you know.
 
@@ -100,6 +100,10 @@ A provider that refuses a request is told apart by its status: 401 or 403 is `pr
 ## Branch update needed
 
 Cause class `base_moved`. The base branch moved after the revision was assessed, so the assessment, any receipt and the exact-head approval are bound to the old base. The comment names both short commit ids and numbers three steps: `gh pr update-branch PR_NUMBER` (or merge the base; never rebase), wait for the automatic re-review, and, only where a receipt is required, review and publish again on the new head.
+
+## Merge conflict with the base
+
+Cause class `branch_conflict`. GitHub does not start `pull_request` workflows for a pull request that has a merge conflict with its base, so PR verification (tests, exact coverage and package build) never exists for the revision and the pull request would otherwise show nothing. The `pull_request_target` run still starts; while it waits for a verification run that is absent, it reads the pull request's mergeability from GitHub. Only a definite `mergeable: false` in state `dirty` on the assessed head is a conflict: a value still being computed (`mergeable: null`) is re-read up to four times, with waits of 2, 4 and 8 seconds, and if it is still unknown nothing is posted and the ordinary wait continues. A conflict ends the wait at once instead of after the queue grace and replaces the generic pending notice with one comment, `Clouseau: merge conflict`, bound by a hidden marker to the head and the base commit: a rerun posts nothing, a base that moves again updates the same comment, and a new head gets its own. The comment names the base branch (GitHub does not expose which files conflict; the merge in step 1 lists them) and numbers three steps: merge the base and resolve (`git fetch origin && git merge origin/BASE_BRANCH`; never rebase), refresh the review evidence and push once (`clouseau refresh --pr PR_NUMBER ...`, or review, publish, update the marker and push by hand), and wait: verification starts only after the conflict is resolved and pushed.
 
 ## Merge not armed (repository settings)
 

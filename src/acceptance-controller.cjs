@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const {readPull} = require('./pull-read.cjs');
+const branchConflict = require('./branch-conflict.cjs');
 const {noticeText, noticeLine, describe} = require('./receipt-rejection.cjs');
 const path = require('node:path');
 const {digest, validateApproval, approvalHold, importsOf, LINKABLE_PATH} = require('./acceptance.cjs');
@@ -346,7 +347,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const schedule = pollSchedule(queuedGraceSeconds);
     for (let attempt = 0; attempt < maxPolls; attempt++) {
       let result;
-      try {result = await withRateLimit(() => assess(options), {wait, report: options.report});}
+      try {result = await withRateLimit(async () => branchConflict.mark(await assess(options), {github: options.github, repo: options.context.repo, baseBranch: config.base_branch, wait}), {wait, report: options.report});}
       catch (error) {
         if (!(error instanceof RateLimitHold)) throw error;
         // The shared budget is exhausted until reset: an explicit, classified hold; the next verification
@@ -354,7 +355,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         return {version: 2, number: numberFor(options.context), head_sha: headShaOf(options.context),
           decision: 'review_incomplete', cause: 'github_rate_limit', reason: heldReason(error), retry_after: new Date(error.resetAt).toISOString()};
       }
-      if (result.decision !== 'pending_technical') return result;
+      if (result.decision !== 'pending_technical' || result.cause === branchConflict.CAUSE) return result;
       const {stalled, delay} = schedule(result.verification);
       if (stalled) return {...result, reason: WAITING_REASON};
       await wait(delay);
@@ -367,7 +368,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) {
       if (assessment.decision === 'review_incomplete') await require('./incomplete.cjs').post({github, context, assessment});
-      if (assessment.decision === 'pending_technical') await require('./incomplete.cjs').postPending({github, context, assessment});
+      if (assessment.decision === 'pending_technical' && assessment.cause === branchConflict.CAUSE) {
+        await branchConflict.surface({github, repo: context.repo, assessment, baseBranch: config.base_branch});
+      } else if (assessment.decision === 'pending_technical') await require('./incomplete.cjs').postPending({github, context, assessment});
       else await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
       return hold(`${assessment.reason} This run produced no acceptance record (decision: ${assessment.decision}), so it cannot approve or merge. ` +
         'It is reassessed automatically when PR verification completes where the workflow has the verification trigger; otherwise re-run it ' +

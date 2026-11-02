@@ -1768,3 +1768,27 @@ test('exact_revert is revalidated at the private owner merge write boundary', ()
   assert.deepEqual(f.state.writes.filter(w => ['approve', 'atomic'].includes(w.name)).map(w => w.name), ['approve', 'atomic']);
   assert.ok(world.reads >= 3);
 }));
+
+test('a merge conflict with the base is named by one idempotent notice, immediately, and the gate still holds', () => fixture(async f => {
+  f.github.rest.actions.listWorkflowRuns = async () => ({data: {workflow_runs: []}});
+  Object.assign(f.state.pr, {mergeable: false, mergeable_state: 'dirty'});
+  const held = await f.policy.assessWhenReady({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, wait: async () => assert.fail('a conflict is not waited out')});
+  assert.deepEqual({decision: held.decision, verification: held.verification, cause: held.cause, number: held.number},
+    {decision: 'pending_technical', verification: 'absent', cause: 'branch_conflict', number: 3});
+  assert.equal(f.state.calls, 0, 'no AI request');
+  await assert.rejects(f.gate(held), /cannot approve or merge/);
+  const notice = f.state.writes.find(item => item.name === 'create-ledger');
+  assert.ok(notice.args.body.startsWith(`<!-- clouseau-branch-conflict:${held.head_sha}:${held.base_sha} -->\n`));
+  assert.match(notice.args.body, /\*\*Cause:\*\* `branch_conflict`: this pull request has a merge conflict with `main`/);
+  assert.ok(!f.state.writes.some(item => item.args?.body?.includes('clouseau-review-pending')), 'the conflict replaces the generic pending notice');
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+  f.state.comments.push({id: 5, user: {login: 'github-actions[bot]'}, body: notice.args.body}); f.state.writes.length = 0;
+  await assert.rejects(f.gate(held), /cannot approve or merge/);
+  assert.equal(f.state.writes.filter(item => item.name === 'create-ledger' || item.name === 'update-ledger').length, 0, 'a rerun never spams');
+  // Mergeable (or not yet computed after the bounded re-reads): the ordinary pending notice and wait remain.
+  for (const mergeable of [true, null]) {
+    f.state.pr.mergeable = mergeable; f.state.writes.length = 0; f.state.comments.length = 0;
+    await assert.rejects(f.policy.assessWhenReady({github: f.github, context: f.context, maxPolls: 1, wait: async () => {}}), /deadline/);
+    assert.equal((await f.assess()).cause, undefined);
+  }
+}));
