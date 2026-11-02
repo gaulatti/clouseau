@@ -34,7 +34,7 @@ function hostedForm(patch, live) {
   const lines = patch.split('\n');
   const found = lines.findIndex(line => line.startsWith('@@'));
   // A change that shows no text (an empty file, a pure rename) is a header and no hunk: the hosted patch is then empty.
-  const start = found < 0 ? lines.length - (lines[lines.length - 1] === '' ? 1 : 0) : found;
+  const start = found < 0 ? lines.length - Number(lines[lines.length - 1] === '') : found;
   const head = lines.slice(0, start); const allowed = headerLines(live);
   if ((found < 0 && !head.length) || !head.every(line => allowed.has(line) || HEADER.some(rule => rule.test(line))) ||
     new Set(head).size !== head.length) return null;

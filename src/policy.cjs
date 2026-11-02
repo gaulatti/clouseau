@@ -123,7 +123,7 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
     if (linked.repository.pullRequest.closingIssuesReferences.pageInfo.hasNextPage) return hold('Linked-ticket context is incomplete');
     const input = JSON.stringify({head_sha: pr.head.sha, title: pr.title, description: pr.body,
       tickets: linked.repository.pullRequest.closingIssuesReferences.nodes, precedent,
-      patches: files.map(file => ({path: file.filename, status: file.status, previous_path: file.previous_filename, patch: file.patch ?? ''}))});
+      patches: files.map(file => ({path: file.filename, status: file.status, previous_path: file.previous_filename, patch: file.patch}))});
     if (input.length > 320000) return hold('Review context exceeds the complete-review limit');
     const policy = fs.readFileSync(require('node:path').join(__dirname, '../policy/intent-review.md'), 'utf8') + '\n\nTrusted repository contract:\n' + fs.readFileSync(config.repository_policy, 'utf8');
     const readme = fs.readFileSync(config.readme, 'utf8');

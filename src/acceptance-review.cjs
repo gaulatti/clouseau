@@ -12,7 +12,10 @@ function template(snapshot) {
   const sources = Object.keys(snapshot.sources);
   const trusted = sources.find(id => snapshot.sources[id].authority === 'trusted' && snapshot.sources[id].kind === 'contract');
   // The side that holds a line: a file the change emptied is cited from its base.
-  const holding = file => [file.head_source, file.base_source].find(id => id && citable(snapshot.sources[id])) || file.head_source || file.base_source;
+  const holding = file => {
+    const sides = [file.head_source, file.base_source].filter(Boolean);
+    return sides.find(id => citable(snapshot.sources[id])) ?? sides[0];
+  };
   const changed = new Map(snapshot.files.map(file => [file.path, holding(file)]));
   const named = [trusted, ...snapshot.paths.map(filename => changed.get(filename))].map(id => {
     const start = snapshot.sources[id].content.split('\n').findIndex(line => line.trim()) + 1;
