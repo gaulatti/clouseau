@@ -571,6 +571,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
       restore();
       assert.equal(blocked.decision, 'blocked_technical', name);
       assert.equal(blocked.receipt_notice, 'source', name); assert.equal(blocked.review_source, undefined, name);
+      assert.equal(blocked.receipt_notice_file, name === 'patch' ? files[0].filename : undefined, `${name}: only a patch mismatch names its file`);
     }
     f.state.failed = false;
     f.github.rest.repos.getContent = async args => {
@@ -1488,6 +1489,8 @@ test('the hosted fallback after an unusable receipt never reads the receipt, rev
   const run = extra => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ...extra});
   await run({});
   assert.ok(artifactReads > 0, 'the ordinary route reads the claimed receipt');
+  const routed = await run({receiptOnly: true});
+  assert.equal(routed.cause, 'local_receipt_unusable'); assert.equal(routed.record_digest, undefined, 'the receipt-only route yields no record for the gate');
   const reads = artifactReads; const lines = []; const calls = f.state.calls;
   const hosted = await run({ignoreReceipt: true, report: line => lines.push(line)});
   assert.equal(artifactReads, reads, 'the secret-bearing fallback never reads the receipt');
@@ -1501,4 +1504,18 @@ test('the hosted fallback after an unusable receipt never reads the receipt, rev
   const held = await required.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ignoreReceipt: true});
   assert.equal(held.cause, 'local_receipt_required', 'a repository that requires receipts is never reviewed by the fallback');
   assert.equal(artifactReads, reads);
+
+test('optional local review on the receipt-only route names the real condition instead of claiming a receipt is required', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const optional = createPolicy({...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
+    max_age_seconds: 172800, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}});
+  const assessment = await optional.assess({github: f.github, context: f.context, recordPath: f.recordPath, receiptOnly: true});
+  assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, 'local_receipt_unusable');
+  assert.doesNotMatch(assessment.reason, /requires/); assert.match(assessment.reason, /optional/);
+  const {body, NEXT_STEPS} = require('./incomplete.cjs');
+  assert.match(NEXT_STEPS.local_receipt_unusable, /remove the `clouseau-local-review` marker/);
+  const text = body({...assessment, receipt_notice: 'source'}, 'u');
+  assert.match(text, /this receipt-only run did not review the change itself/); assert.doesNotMatch(text, /CI reviewed this change itself|requires a valid receipt/);
+  assert.doesNotMatch(body(assessment, 'u'), /Local review receipt ignored/);
 }));

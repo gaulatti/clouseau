@@ -129,7 +129,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       artifact: record.local_artifact, bundle, discovery: record.discovery});
   }
 
-  async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false, ignoreReceipt = false}) {
+  async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly: receiptRoute = false, ignoreReceipt = false}) {
+    // Only a repository that does not make local review optional treats the receipt-only route as requiring a receipt.
+    const receiptOnly = receiptRoute && config.local_review?.mode !== 'optional';
     const repo = context.repo;
     const number = numberFor(context);
     const {data: pr} = await readPull(github, repo, number);
@@ -155,10 +157,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         configDigest: digest(config), policyDigest: policyDigest()});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;
-      const ignore = reason => {
+      const ignore = (reason, file) => {
         receiptRef = null;
         identity.receipt_notice = reason;
-        if (report) report(noticeText(reason, receiptOnly || config.local_review?.mode === 'required'));
+        if (file) identity.receipt_notice_file = file;
+        if (report) report(noticeText(reason, receiptOnly || config.local_review?.mode === 'required', file));
       };
       if (screened.rejected) ignore(screened.rejected);
       // A signed local quality review is reusable even when independent CI
@@ -170,7 +173,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
       let discovery;
       if (receiptRef) {
-        let rejected = await receipts.screenSources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
+        let file;
+        let rejected = await receipts.screenSources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha,
+          note: path => {file = path;}});
         if (!rejected) {
           // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
           // is reused only when hosted approval's affirmative-evidence rule also holds.
@@ -179,7 +184,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           if (held.hold) rejected = 'held';
         }
         if (rejected) {
-          ignore(rejected);
+          ignore(rejected, file);
           if (technicalBlock) return {...identity, ...technicalBlock};
         }
       }
@@ -214,6 +219,13 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         return {...identity, decision: authorization ? 'owner_decision' : 'auto_approve', record_digest: digest(record),
           record_reference_digest: digest(compact), review_source: 'authenticated_local', provider_api_calls: 0,
           reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
+      }
+      if (receiptRoute && !receiptOnly) {
+        // The receipt-only route is chosen by the workflow when the PR description carries a receipt marker, and it holds no
+        // provider credential. Local review is optional here, so the repository does not require a receipt; this run simply
+        // cannot review the change itself.
+        return {...identity, decision: 'review_incomplete', cause: 'local_receipt_unusable',
+          reason: 'The local review receipt named in the pull request description cannot be used, and this run is the receipt-only route, which does not run the CI AI review. Local review is optional for this repository.'};
       }
       if (receiptOnly || config.local_review?.mode === 'required') {
         return {...identity, decision: 'review_incomplete', cause: 'local_receipt_required',
