@@ -413,7 +413,7 @@ repository and branch: every accepted review stores its requirement text byte fo
 branch (`requirements/`) names the newest. The command refuses, and asks for `--request-file`, when nothing is recorded for the
 branch, when the record is unusable (pointer and record name different repositories, branches, heads or cache ids; the text no
 longer hashes to the recorded digest; a part is a link, empty or over 20,000 characters), when the recorded head is not an
-ancestor of the pull request head (the branch name was reused for another pull request), or when that review also used
+ancestor of the pull request head, or is already in the base (the branch name was reused after another pull request merged), or when that review also used
 `--additional-checks` (they are part of its input and are not stored; pass both again). It never guesses among candidates.
 Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`. In order, and never otherwise:
 

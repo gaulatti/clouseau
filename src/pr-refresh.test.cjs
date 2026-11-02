@@ -106,6 +106,7 @@ test('the pull request body keeps exactly one marker: replaced where it was, app
 
 test('refresh refuses before it changes anything: arguments, harness, dirty worktree, pull request facts, head, conflicts', async () => {
   await pullRepository(async f => {
+    f.advance('docs.md', 'moved\n');  // a refresh has something to do, so it gets as far as needing a requirement
     const before = f.head(); const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-refresh-empty-'));
     const dependencies = {...stub(), execute: f.execute, available: () => true, state: empty};
     const refuses = (given, pattern, dependency = dependencies) => assert.rejects(refreshPull(given, dependency), pattern);
@@ -359,12 +360,10 @@ test('through the command, refresh defaults to the requirement of the last accep
   const {state, config, calls, runtime, refresh} = signedFixture(t);
   await pullRepository(async f => {
     const requestFile = request(f.root, 'Reject missing input.\n');
-    f.advance('docs.md', 'moved\n');
-    const before = f.head();
-    await assert.rejects(refresh(f, {request: null}), /No accepted review of example\/local-fixture branch feature is recorded.*--request-file/);
-    assert.equal(f.head(), before, 'refused before anything changed');
     const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], runtime(f));
     assert.equal(first.decision, 'auto_approve');
+    f.advance('docs.md', 'moved\n');
+    const before = f.head();
     const reviews = path.join(state, 'reviews'); const [cacheId] = fs.readdirSync(reviews);
     assert.equal(fs.readFileSync(path.join(reviews, cacheId, 'request.txt'), 'utf8'), 'Reject missing input.\n', 'stored with the record, byte for byte');
     const pointer = path.join(state, 'requirements', fs.readdirSync(path.join(state, 'requirements'))[0]);
@@ -378,7 +377,12 @@ test('through the command, refresh defaults to the requirement of the last accep
     const foreign = git(f.other, ['rev-parse', 'HEAD']).trim();
     fs.writeFileSync(pointer, JSON.stringify({...JSON.parse(pointerText), head_sha: foreign}));
     fs.writeFileSync(requirementFile, JSON.stringify({...JSON.parse(requirementText), head_sha: foreign}));
-    await assert.rejects(refresh(f, {request: null}), /was of head [0-9a-f]{12}, which is not part of this pull request/);
+    await assert.rejects(refresh(f, {request: null}), /was of head [0-9a-f]{12}, which is not part of this pull request alone/);
+    // A branch name reused after an earlier pull request merged: the recorded head is in this pull request's history too, but in the base as well.
+    const merged = git(f.work, ['merge-base', 'HEAD', 'origin/main']).trim();
+    fs.writeFileSync(pointer, JSON.stringify({...JSON.parse(pointerText), head_sha: merged}));
+    fs.writeFileSync(requirementFile, JSON.stringify({...JSON.parse(requirementText), head_sha: merged}));
+    await assert.rejects(refresh(f, {request: null}), /was of head [0-9a-f]{12}, which is not part of this pull request alone/);
     fs.writeFileSync(pointer, pointerText); fs.writeFileSync(requirementFile, requirementText);
     fs.rmSync(textFile); fs.symlinkSync(requestFile, textFile);
     await assert.rejects(refresh(f, {request: null}), /request\.txt is not a regular file/);

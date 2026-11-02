@@ -61,7 +61,7 @@ function readRequirement({state, repository, branch, contains}) {
     throw new Error('The last accepted review also used additional local checks, which are part of its input and are not stored; pass --request-file and --additional-checks');
   }
   if (!contains(pointer.head_sha)) {
-    throw new Error(`The last accepted review of branch ${branch} was of head ${pointer.head_sha.slice(0, 12)}, which is not part of this pull request; pass --request-file`);
+    throw new Error(`The last accepted review of branch ${branch} was of head ${pointer.head_sha.slice(0, 12)}, which is not part of this pull request alone (it is missing from its history or already in the base); pass --request-file`);
   }
   return {file: path.join(cache, 'request.txt'), head_sha: pointer.head_sha};
 }

@@ -47,7 +47,7 @@ test('nothing recorded, or another repository or branch, means there is no requi
 
 test('a record whose head is not part of this pull request is refused, never guessed', () => withState(state => {
   record(state);
-  assert.throws(() => read(state, {contains: () => false}), /head a{12}.* is not part of this pull request.*--request-file/);
+  assert.throws(() => read(state, {contains: () => false}), /head a{12}.* is not part of this pull request alone.*--request-file/);
 }));
 
 test('a review that used additional checks cannot be defaulted: the checks are part of the input', () => withState(state => {

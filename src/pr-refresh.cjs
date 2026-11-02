@@ -96,9 +96,6 @@ async function refreshPull(args, {review, publish, state, execute = cp.execFileS
   const config = readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json'])));
   if (pull.base !== config.base_branch) throw new Error(`Pull request ${number} is against ${pull.base}, not the configured base ${config.base_branch}`);
   const remoteBase = `origin/${pull.base}`;
-  // Without a file, the requirement is the one of the last accepted review of this branch, if it provably belongs to this pull request.
-  const requestFile = args['request-file'] ||
-    readRequirement({state, repository: slug, branch, contains: sha => ancestor(directory, sha, pull.head)}).file;
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const resuming = head !== pull.head;
   if (resuming && !resumable({directory, head, pullHead: pull.head, remoteBase})) {
@@ -111,8 +108,13 @@ async function refreshPull(args, {review, publish, state, execute = cp.execFileS
       return {status: 'up_to_date', pull_request: number, head_sha: head, base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: false,
         note: `Pull request ${number} already contains ${remoteBase}; nothing to refresh`};
     }
-    merge({directory, remoteBase, branch});
   }
+  // Without a file, the requirement is the one of the last accepted review of this branch, if its head provably belongs to this
+  // pull request alone: in the pull request's history and not in the base. (A branch name reused after an earlier pull request
+  // merged has that pull request's head in the base too.) Nothing has been changed yet when this refuses.
+  const requestFile = args['request-file'] || readRequirement({state, repository: slug, branch,
+    contains: sha => ancestor(directory, sha, pull.head) && !ancestor(directory, sha, remoteBase)}).file;
+  if (!resuming) merge({directory, remoteBase, branch});
   const result = await review({directory, base: remoteBase, 'request-file': requestFile, harness: args.harness, agent: args.agent,
     identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine}, {title: pull.title});
   // A review continued on a pinned engine runs this very command there, publishes and pushes; its result is the final one.
