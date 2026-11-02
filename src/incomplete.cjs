@@ -13,6 +13,8 @@ const NEXT_STEPS = Object.freeze({
   provider_rejected: 'The provider refused the credential. Replace the secret with a valid, active key, then re-run the failed jobs.',
   provider_unavailable: 'The provider did not answer successfully. Re-run the failed jobs later; no change to this PR is needed.',
   local_receipt_required: 'Run the local Clouseau review on this exact head and put its receipt marker in the PR description.',
+  local_receipt_unusable: 'Either run the local Clouseau review again on this exact head and update the receipt marker in the PR description, ' +
+    'or remove the `clouseau-local-review` marker from the PR description (editing the description re-runs this check through the CI AI reviewer).',
   review_output_invalid: 'The reviewer model answered in an invalid form on every bounded attempt. Re-run the failed jobs; if it repeats, report it with the assessment diagnostic.',
   provider_incomplete: 'The reviewer model did not finish its answer within the bounded budget. Re-run the failed jobs.',
   evidence_budget: 'Split the change so that the changed files fit the review evidence budget, then push a new revision.',
@@ -86,13 +88,17 @@ function classify(error) {
   return {cause: 'evidence_incomplete', reason: GENERIC};
 }
 
+// On the receipt-only route no CI review follows an ignored receipt, so the usual closing clause would be false.
+const notice = assessment => assessment.cause === 'local_receipt_unusable' ?
+  noticeLine(assessment).replace('CI reviewed this change itself.', 'this receipt-only run did not review the change itself.') : noticeLine(assessment);
+
 function body(assessment, runUrl) {
   const step = (NEXT_STEPS[assessment.cause] || NEXT_STEPS.evidence_incomplete).replaceAll('{head}', String(assessment.head_sha));
   const reason = String(assessment.reason).replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500);
   return `${MARKER}\n## Clouseau review incomplete\n\n` +
     `Revision \`${String(assessment.head_sha).slice(0, 12)}\` was not approved or merged because no review decision could be reached.\n\n` +
     `**Reason:** ${reason}\n\n**Next step:** ${step}\n\n` +
-    `Workflow run: ${runUrl}${noticeLine(assessment)}\n\nThis notice contains no secret values.`;
+    `Workflow run: ${runUrl}${notice(assessment)}\n\nThis notice contains no secret values.`;
 }
 
 async function post({github, context, assessment}) {
