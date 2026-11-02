@@ -160,6 +160,11 @@ The configured verification workflow, review controls, and repository-purpose
 contract remain protected. Their changes still receive an AI integrity assessment
 and require explicit owner confirmation.
 
+`managed_agents` is an opt-in, default-off exception for one protected path: an
+`AGENTS.md` change whose managed block is byte-identical to a digest enrolled in the
+protected configuration, with every byte outside the block unchanged, is not held for
+owner confirmation. See [managed-standard AGENTS.md updates](docs/managed-agents.md).
+
 The native protected merge path requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing

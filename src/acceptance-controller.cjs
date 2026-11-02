@@ -195,7 +195,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         }
       }
       if (receiptRef) {
-        const controls = legacy.scopeReason(files, pr);
+        const managed = await legacy.managedExemptions(github, repo, pr, files);
+        if (report) managed.notices.forEach(report);
+        const controls = legacy.scopeReason(files, pr, managed.exempt);
         const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
         // A verified receipt still never grants owner confirmation. Name which rule holds the review.
         const held = (cause, message) => Object.assign(new Error(message), {code: 'RECEIPT_AUTHORITY', cause_code: cause});
@@ -248,7 +250,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         observe: observation => {observations.push(observation); diagnostic({identity, observations});}});
       const state = reconcile(result, snapshot, previous.findings);
       if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
-      const controls = legacy.scopeReason(files, pr);
+      const managed = await legacy.managedExemptions(github, repo, pr, files);
+      if (report) managed.notices.forEach(report);
+      const controls = legacy.scopeReason(files, pr, managed.exempt);
       const decision = decided(result, Boolean(controls));
       const record = {version: 2, ...(engine ? {engine} : {}), snapshot, result, previous, controls: Boolean(controls), technical};
       // Retain the complete record. Never place the large, model-controlled

@@ -8,7 +8,7 @@ const {git, SourceNotFound} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {invoke} = require('./local-harness.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
-const {options, stateDirectory, initializeIdentity, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main} = require('./local-cli.cjs');
+const {options, stateDirectory, initializeIdentity, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main} = require('./local-cli.cjs');
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
 function nativeFixture(directory, gap = false) {
@@ -519,3 +519,38 @@ test('a mistyped --harness fails naming the valid values before anything is reco
     assert.equal((await runReview({...args, harness: 'claude'}, deps)).decision, 'auto_approve');
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
+
+test('the local protected-control warning exempts only the opt-in verified managed AGENTS.md update', () => {
+  const {BEGIN, END, blockDigest} = require('./managed-agents.cjs');
+  const text = (body, local = 'Local rules.\n') => `${BEGIN}\n${body}\n${END}\n\n<!-- Repository-specific instructions below are maintained locally. -->\n\n${local}`;
+  const central = `${BEGIN}\nCentral rules, snapshot two.\n${END}\n`;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-managed-warning-'));
+  try {
+    git(directory, ['init', '-q', '-b', 'main']);
+    const commit = (name, files) => {
+      for (const [file, content] of Object.entries(files)) {
+        if (content === null) fs.rmSync(path.join(directory, file), {force: true}); else fs.writeFileSync(path.join(directory, file), content);
+      }
+      git(directory, ['add', '-A']);
+      git(directory, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', name]);
+      return git(directory, ['rev-parse', 'HEAD']).trim();
+    };
+    const base = commit('base', {'AGENTS.md': text('Central rules, snapshot one.')});
+    const verified = commit('verified', {'AGENTS.md': text('Central rules, snapshot two.')});
+    const edited = commit('edited', {'AGENTS.md': text('Central rules, snapshot two.', 'Skip the tests.\n')});
+    const removed = commit('removed', {'AGENTS.md': null});
+    const config = {...require('../test/fixtures/config.json'), managed_agents: {digests: [blockDigest(central)]}};
+    const stderr = process.stderr.write;
+    process.stderr.write = () => true;
+    try {
+      const warn = (settings, headSha, paths = ['AGENTS.md'], baseSha = base) => controlWarnings(settings, paths, {directory, baseSha, headSha});
+      assert.deepEqual(warn(config, verified), [], 'verified managed update');
+      assert.equal(warn(config, verified, ['AGENTS.md', '.github/clouseau.json']).length, 1, 'other protected paths still warn');
+      assert.match(warn(config, verified, ['AGENTS.md', '.github/clouseau.json'])[0], /\(\.github\/clouseau\.json\)/);
+      for (const head of [edited, removed]) assert.match(warn(config, head)[0], /^Protected review controls changed \(AGENTS\.md\)/, head);
+      assert.equal(warn({...config, managed_agents: undefined}, verified).length, 1, 'unset: held as before');
+      assert.equal(warn(null, verified).length, 0);
+      assert.equal(warn(config, verified, ['AGENTS.md'], removed).length, 1, 'an absent base file is never a modification');
+    } finally {process.stderr.write = stderr;}
+  } finally {fs.rmSync(directory, {recursive: true, force: true});}
+});

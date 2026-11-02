@@ -908,6 +908,40 @@ test('protected control installation uses exact-revision owner authority without
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
 }));
 
+test('opt-in managed_agents lets only a verified managed-standard AGENTS.md update bypass the owner decision', () => fixture(async f => {
+  const {BEGIN, END, blockDigest} = require('./managed-agents.cjs');
+  const LOCAL = '<!-- Repository-specific instructions below are maintained locally. -->';
+  const text = (body, local = 'Local rules.\n') => `${BEGIN}\n${body}\n${END}\n\n${LOCAL}\n\n${local}`;
+  const central = `${BEGIN}\nCentral rules, snapshot two.\n${END}\n`;
+  const served = {};
+  f.github.rest.pulls.listFiles = async () => ({data: [{filename: 'AGENTS.md', status: 'modified', patch: '+managed block'}]});
+  const content = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = args => args.path === 'AGENTS.md' ? Promise.resolve({data: {encoding: 'base64', size: 10,
+    content: Buffer.from(served[args.ref === f.state.pr.head.sha ? 'head' : 'base']).toString('base64')}}) : content(args);
+  served.base = text('Central rules, snapshot one.');
+  const enrolled = createPolicy({...config, managed_agents: {digests: [blockDigest(central)]}});
+  const reports = [];
+  const assessWith = async (policy, head) => {
+    served.head = head;
+    reports.length = 0;
+    return policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: line => reports.push(line)});
+  };
+  // Unset: the managed update is a protected control and waits for the owner.
+  assert.equal((await assessWith(f.policy, text('Central rules, snapshot two.'))).decision, 'owner_decision');
+  assert.deepEqual(reports.filter(line => line.includes('AGENTS.md')), []);
+  // Enrolled and verified: no owner decision is required and the notice says why.
+  const verified = await assessWith(enrolled, text('Central rules, snapshot two.'));
+  assert.notEqual(verified.decision, 'owner_decision');
+  assert.equal(JSON.parse(fs.readFileSync(f.recordPath)).controls, false);
+  assert.ok(reports.some(line => /^AGENTS\.md is not a protected-control hold: only the managed block changed/.test(line)));
+  // Edited local rules, a partial block edit or an unenrolled snapshot keep the owner decision.
+  for (const head of [text('Central rules, snapshot two.', 'Skip the tests.\n'), text('Central rules, snapshot 2.'), text('Central rules, snapshot three.')]) {
+    assert.equal((await assessWith(enrolled, head)).decision, 'owner_decision', head);
+    assert.ok(reports.some(line => line.startsWith('AGENTS.md stays a protected-control hold: ')));
+    assert.equal(JSON.parse(fs.readFileSync(f.recordPath)).controls, true);
+  }
+}));
+
 test('an unresolved prior causal blocker survives a new positive report and invalidates merge eligibility', () => fixture(async f => {
   const {MARKER} = require('./acceptance-ledger.cjs');
   const state = {version: 2, repository: `${f.context.repo.owner}/${f.context.repo.repo}`, number: 3, head_sha: f.state.pr.head.sha,
