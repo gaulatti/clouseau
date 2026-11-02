@@ -75,17 +75,21 @@ function reviewDecision(record, {chunked = null} = {}) {
   return {decision, reviews};
 }
 
-function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), now = Date.now(), lifetime = 172800,
+function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
   nonce = crypto.randomBytes(32).toString('hex'), chunked = null}) {
   requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
-    lifetime > 0 && lifetime <= 172800, 'invalid runner revision, challenge or lifetime');
+    lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
+  'invalid runner revision, challenge or lifetime');
   const key = crypto.createPrivateKey(privateKey);
   requireReceipt(key.asymmetricKeyType === 'ed25519', 'Ed25519 signing key required');
   // A partitioned record too large for one receipt is signed as a root over consecutive parts (receipt-parts.cjs); the
   // bundle then also carries the parts, which publishing stores as separate files. Any other record is signed as before.
   const split = Object.hasOwn(record, 'partition') && Buffer.byteLength(JSON.stringify(record)) > RECORD_LIMIT ? splitRecord(record) : null;
   const payload = {type: DOMAIN, key_id: keyId, issuer, reviewer_sha: reviewerSha, reviewer_digest: reviewerDigest,
+    // Optional signed claim of the issuing engine's review semantics (review-semantics.cjs). Receipts without it are
+    // accepted only under the exact engine, as before.
+    ...(reviewerSemantics === undefined ? {} : {reviewer_semantics: reviewerSemantics}),
     issued_at: Math.floor(now / 1000), expires_at: Math.floor(now / 1000) + lifetime,
     nonce, record_digest: digest(record), record: split ? split.root : record};
   const signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(payload)}`), key).toString('base64url');
@@ -101,8 +105,9 @@ function signingKey(bundle, trust) {
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
     Buffer.byteLength(JSON.stringify({payload: bundle.payload, signature: bundle.signature})) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
   const p = bundle.payload;
-  reject(p && Object.keys(p).sort().join(',') ===
-    'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type' && p.type === DOMAIN,
+  const fields = 'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest';
+  reject(p && [`${fields},reviewer_sha,type`, `${fields},reviewer_semantics,reviewer_sha,type`].includes(Object.keys(p).sort().join(',')) &&
+    p.type === DOMAIN && (!Object.hasOwn(p, 'reviewer_semantics') || /^[a-f0-9]{64}$/.test(p.reviewer_semantics)),
   'unknown receipt type or fields', 'malformed');
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
   reject(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
@@ -111,7 +116,7 @@ function signingKey(bundle, trust) {
 }
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = undefined}) {
+  now = Date.now(), engine = null, chunked = undefined, compatible = null}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;
@@ -146,7 +151,14 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     (engine || trust.reviewer_digest === reviewerDigest);
   if (!engineMatches) {
     reject(record.result.decision === 'auto_approve', 'review did not pass', 'not_passing');
-    reject(false, 'engine mismatch; the receipt predates the current protected engine and is never accepted as evidence', 'engine');
+    // A different revision is accepted only when the protected engine that is running vouches for the receipt's review
+    // semantics (`compatible` reads nothing but that engine's own checkout). Without a vouching decision, or for a
+    // fixed-digest trust, the exact comparison above stands and the receipt is ignored.
+    reject(compatible !== null && Boolean(trust.central_source) && Boolean(engine) && acceptsEngine(trust, engine) &&
+      engine.digest === reviewerDigest && /^[a-f0-9]{64}$/.test(p.reviewer_digest) &&
+      (!reviewerSha || p.reviewer_sha === reviewerSha) && Object.hasOwn(p, 'reviewer_semantics') &&
+      compatible(p.reviewer_semantics) === true,
+    'engine mismatch; the receipt predates the current protected engine and is never accepted as evidence', 'engine');
   }
   // A chunked record is verified against the protected parameters of the trust policy unless the caller supplies its own.
   // An invalid protected chunked configuration means this receipt cannot be checked, so it is ignored like any other.
