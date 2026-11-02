@@ -9,6 +9,7 @@ const PHRASES = Object.freeze({
   unavailable: 'it could not be read from its immutable reference',
   signature: 'its signature is not from an enrolled, active key',
   author: 'its signer is not enrolled for this pull request author',
+  attestation: 'it is not a maintainer attestation permitted by the protected configuration for this pull request and author',
   expired: 'it is expired or not yet valid',
   revision: 'it was issued for a different repository, head or base',
   changed: 'the policy or configuration changed after it was issued',

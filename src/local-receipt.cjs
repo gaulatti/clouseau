@@ -16,11 +16,26 @@ const DOMAIN = 'clouseau.local-review.v1';
 const MAX_RECEIPT_BYTES = 3000000;
 const MARKER = /<!-- clouseau-local-review:v1 ([a-f0-9]{40}) -->/g;
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
+const ACTOR = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/;
+// A pull request author may be an app account such as dependabot[bot]; only the allowlist and the attestation use this.
+const AUTHOR = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}(\[bot\])?$/;
 const fail = message => {throw new Error(`Invalid local review receipt: ${message}`);};
 const requireReceipt = (value, message) => {if (!value) fail(message);};
 
 // A failed receipt check carries a fixed class (see receipt-rejection.cjs); configuration and issuance failures do not.
 const reject = (value, message, reason) => {if (!value) throw new ReceiptRejected(reason, message);};
+
+// Opt-in, protected: which pull request authors an enrolled maintainer key may attest for. Either an explicit nonempty
+// list of exact logins or the explicit value "any". Anything else, including an empty list, is a configuration error.
+function validateAttest(attest) {
+  requireReceipt(attest && typeof attest === 'object' && Object.keys(attest).join(',') === 'authors' &&
+    (attest.authors === 'any' || Array.isArray(attest.authors) && attest.authors.length > 0 &&
+      attest.authors.every(item => typeof item === 'string' && AUTHOR.test(item)) && new Set(attest.authors).size === attest.authors.length),
+  'maintainer attestation needs authors: "any" or a nonempty list of exact distinct logins');
+}
+
+// Whether the protected configuration lets an enrolled maintainer key attest for this exact pull request author.
+const attestable = (trust, author) => Boolean(trust.attest && (trust.attest.authors === 'any' || trust.attest.authors.includes(author)));
 
 function validateTrust(trust) {
   requireReceipt(trust && (centralSource(trust.central_source) && trust.reviewer_digest === undefined ||
@@ -28,11 +43,12 @@ function validateTrust(trust) {
     Array.isArray(trust.keys) && trust.keys.length > 0 &&
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
     trust.max_age_seconds <= 172800, 'explicit trust policy and maximum age required');
+  if (trust.attest !== undefined) validateAttest(trust.attest);
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
       !ids.has(key.id) && typeof key.issuer === 'string' && key.issuer.length > 0 &&
-      typeof key.github_actor === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(key.github_actor) &&
+      typeof key.github_actor === 'string' && ACTOR.test(key.github_actor) &&
       typeof key.public_key === 'string' && key.public_key.length < 1000 &&
       typeof key.revoked === 'boolean', 'invalid or repeated trusted issuer');
     const publicKey = crypto.createPublicKey(key.public_key);
@@ -76,11 +92,14 @@ function reviewDecision(record, {chunked = null} = {}) {
 }
 
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
-  nonce = crypto.randomBytes(32).toString('hex'), chunked = null}) {
+  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation}) {
   requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
   'invalid runner revision, challenge or lifetime');
+  requireReceipt(attestation === undefined || attestation && Object.keys(attestation).sort().join(',') === 'author,number,signer' &&
+    AUTHOR.test(attestation.author) && ACTOR.test(attestation.signer) && Number.isSafeInteger(attestation.number) && attestation.number > 0,
+  'invalid maintainer attestation');
   const key = crypto.createPrivateKey(privateKey);
   requireReceipt(key.asymmetricKeyType === 'ed25519', 'Ed25519 signing key required');
   // A partitioned record too large for one receipt is signed as a root over consecutive parts (receipt-parts.cjs); the
@@ -90,6 +109,9 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
     // Optional signed claim of the issuing engine's review semantics (review-semantics.cjs). Receipts without it are
     // accepted only under the exact engine, as before.
     ...(reviewerSemantics === undefined ? {} : {reviewer_semantics: reviewerSemantics}),
+    // Optional signed claim that a maintainer reviewed someone else's pull request: it names the signer, the exact
+    // pull request author and the pull request number. Receipts without it are bound to the signer's own login, as before.
+    ...(attestation === undefined ? {} : {attestation}),
     issued_at: Math.floor(now / 1000), expires_at: Math.floor(now / 1000) + lifetime,
     nonce, record_digest: digest(record), record: split ? split.root : record};
   const signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(payload)}`), key).toString('base64url');
@@ -105,8 +127,8 @@ function signingKey(bundle, trust) {
     typeof bundle.signature === 'string' && /^[a-zA-Z0-9_-]{86}$/.test(bundle.signature) &&
     Buffer.byteLength(JSON.stringify({payload: bundle.payload, signature: bundle.signature})) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
   const p = bundle.payload;
-  const fields = 'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest';
-  reject(p && [`${fields},reviewer_sha,type`, `${fields},reviewer_semantics,reviewer_sha,type`].includes(Object.keys(p).sort().join(',')) &&
+  const fields = 'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type';
+  reject(p && Object.keys(p).filter(name => !['attestation', 'reviewer_semantics'].includes(name)).sort().join(',') === fields &&
     p.type === DOMAIN && (!Object.hasOwn(p, 'reviewer_semantics') || /^[a-f0-9]{64}$/.test(p.reviewer_semantics)),
   'unknown receipt type or fields', 'malformed');
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
@@ -119,11 +141,18 @@ function signingKey(bundle, trust) {
 const engineVouches = claim => require('./review-semantics.cjs').acceptor()(claim);
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches}) {
+  pullNumber, now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;
-  reject(key.github_actor === author, 'signing identity is not enrolled for this PR author', 'author');
+  if (Object.hasOwn(p, 'attestation')) {
+    // A maintainer attesting for another author's pull request: only when the protected configuration opted in for that exact
+    // author, and only for the signer and pull request the signature names. Nothing here widens what a receipt may authorize.
+    const claim = p.attestation;
+    reject(attestable(trust, author) && claim && Object.keys(claim).sort().join(',') === 'author,number,signer' && claim.author === author &&
+      claim.signer === key.github_actor && Number.isSafeInteger(claim.number) && claim.number === pullNumber,
+    'signing identity is not permitted to attest this pull request author', 'attestation');
+  } else reject(key.github_actor === author, 'signing identity is not enrolled for this PR author', 'author');
   const timestamp = Math.floor(now / 1000);
   reject(Number.isSafeInteger(p.issued_at) && Number.isSafeInteger(p.expires_at) &&
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
@@ -170,7 +199,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const chunkedOptions = chunked !== undefined ? chunked : (Object.hasOwn(record, 'partition') ? wiring.verifierOptions(trust) : null);
   const result = reviewDecision(record, {chunked: chunkedOptions});
   reject(result.decision === 'auto_approve', 'review did not pass', 'not_passing');
-  return {record, ...result};
+  return {record, ...result, attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
 }
 
 function verifyReceipt(bundle, options) {
@@ -359,7 +388,7 @@ async function screenReceipt({github, repo, pr, engine, trust, configDigest, pol
     return {ref: null, rejected: reason};
   }
   try {
-    const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login,
+    const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, pullNumber: pr.number,
       headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest});
     return {ref, bundle, verified, rejected: null};
   } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed'};}
@@ -380,4 +409,4 @@ async function screenSources(options) {
   }
 }
 
-module.exports = {screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, validateAttest, attestable, AUTHOR, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};

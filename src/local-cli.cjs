@@ -9,7 +9,7 @@ const {digest} = require('./acceptance.cjs');
 const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
 const {askHarness, assertHarness} = require('./local-harness.cjs');
-const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
+const {issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
@@ -30,7 +30,7 @@ function options(argv) {
   const [command, ...args] = argv;
   const parsed = {command};
   const allowed = ['directory', 'base', 'harness', 'agent', 'request-file', 'output', 'identity', 'receipt', 'additional-checks',
-    'agent-request', 'answer', 'session', 'engine'];
+    'agent-request', 'answer', 'session', 'engine', 'pr'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
     if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) {
@@ -152,7 +152,21 @@ function readHistory(filename, repository, branch) {
   return value;
 }
 
-async function runReview(args, {ask = askHarness, verify = executeVerification, state = stateDirectory(), installed = installation,
+// The live facts about someone else's pull request that a maintainer attestation is bound to. GitHub, not the checkout,
+// says who the author is; the checked-out HEAD must be exactly the pull request head the author published.
+function readPull({repo, number, base, head, execute}) {
+  const pull = JSON.parse(execute('gh', ['api', `repos/${repo.owner}/${repo.repo}/pulls/${number}`, '--jq',
+    '{author: .user.login, head: .head.sha, base: .base.ref, state: .state}'], {encoding: 'utf8'}));
+  if (pull.state !== 'open' || pull.base !== base) throw new Error(`Pull request ${number} is not open against ${base}`);
+  if (typeof pull.author !== 'string' || !AUTHOR.test(pull.author)) throw new Error(`Pull request ${number} has no usable author login`);
+  if (pull.head !== head) {
+    throw new Error(`Local HEAD ${head} is not the head of pull request ${number} (${pull.head}); check out exactly that commit ` +
+      `(for a fork: git fetch origin refs/pull/${number}/head && git checkout --detach FETCH_HEAD) and review again`);
+  }
+  return {author: pull.author, number: Number(number)};
+}
+
+async function runReview(args, {ask = askHarness, execute = cp.execFileSync, verify = executeVerification, state = stateDirectory(), installed = installation,
   cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
@@ -190,12 +204,20 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     if (available.length > 1) throw new Error('Multiple enrolled identities are installed; select one explicitly');
     identityPath = available[0];
   }
+  // Opt-in maintainer attestation of another author's pull request (docs/local-review.md). Without --pr nothing changes.
+  let pull = null;
+  if (args.pr !== undefined) {
+    if (!/^[1-9][0-9]{0,8}$/.test(args.pr)) throw new Error('--pr takes a pull request number');
+    if (!ciConfig?.local_review?.attest) throw new Error('Maintainer attestation is not enabled: the protected CI configuration needs local_review.attest');
+    if (!identityPath) throw new Error('Attesting a pull request needs an enrolled signing identity');
+    pull = readPull({repo, number: args.pr, base: config.base_branch, head, execute});
+  }
   if (identityPath && !reviewer.clean) throw new Error('Signing requires an unmodified Clouseau checkout');
   const baseSha = git(directory, ['rev-parse', base]).trim();
-  const branch = git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  const branch = pull ? `pull/${pull.number}` : git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   // An in-flight agent review stays on the engine revision that began it until it completes or --engine latest is given.
   if (args.engine && args.engine !== 'latest') throw new Error('--engine accepts only "latest"');
-  const pinId = pinning.pinKey({repository, head, baseSha, requestDigest, agent: agent || null});
+  const pinId = pinning.pinKey({repository, head, baseSha, requestDigest, agent: agent || null, ...(pull ? {pr: pull.number} : {})});
   if (args.engine === 'latest') pinning.clearPin(state, pinId);
   const pin = pinning.readPin(state, pinId);
   if (pin && pin.reviewer_sha !== reviewer.sha) {
@@ -211,7 +233,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
-    request, config, ciConfig, harness: agent ? `agent:${agent}` : args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {})});
+    request, config, ciConfig, harness: agent ? `agent:${agent}` : args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {}), ...(pull ? {attest: pull} : {})});
   if (sameRevision && previous.reviewer_sha === reviewerSha && previous.request_digest === requestDigest) cacheId = previous.cache_id;
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
@@ -220,13 +242,13 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     const bundle = JSON.parse(fs.readFileSync(cachedReceipt, 'utf8'));
     const key = ciConfig.local_review.keys.find(item => item.id === bundle.payload.key_id);
     const verified = verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
-      author: key?.github_actor, headSha: head, baseSha: git(directory, ['rev-parse', base]).trim(),
+      author: pull ? pull.author : key?.github_actor, pullNumber: pull?.number, headSha: head, baseSha: git(directory, ['rev-parse', base]).trim(),
       reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
       policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))});
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
-      provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths, {baseSha: verified.record.snapshot.base_sha, headSha: head})};
+      provider_api_calls: 0, harness_invocations: 0, reused: true, ...attested(verified.attestation), ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths, {baseSha: verified.record.snapshot.base_sha, headSha: head})};
   }
   const agentDirectory = path.join(cache, 'agent');
   // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
@@ -238,7 +260,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   if (fs.existsSync(journal) && !resuming) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
   const output = path.resolve(args.output || path.join(cache, 'record.json'));
   if (output.startsWith(directory + path.sep)) throw new Error('Store review evidence outside the source checkout');
-  let identity = null;
+  let identity = null; let attestation;
   if (identityPath) {
     if (fs.statSync(identityPath).mode & 0o077) throw new Error('Signing identity permissions must be private');
     identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
@@ -246,6 +268,12 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
       !ciConfig.local_review.keys.some(key => !key.revoked && key.id === identity.id &&
         key.issuer === identity.issuer && key.github_actor === identity.github_actor && key.public_key === identity.public_key)) {
       throw new Error('The signer and reviewer revision must already be enrolled in the protected CI configuration');
+    }
+    if (pull && pull.author !== identity.github_actor) {
+      if (!attestable(ciConfig.local_review, pull.author)) {
+        throw new Error(`Pull request author ${pull.author} is not permitted by the protected local_review.attest configuration`);
+      }
+      attestation = {author: pull.author, number: pull.number, signer: identity.github_actor};
     }
   }
   const technicalPath = path.join(agentDirectory, 'technical.json');
@@ -346,8 +374,8 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
       reviewerSemantics: require('./review-semantics.cjs').semanticsDigest(),
-      lifetime: ciConfig.local_review.max_age_seconds, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null});
-    verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
+      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null});
+    verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: pull ? pull.author : identity.github_actor, pullNumber: pull?.number,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
     receipt = path.join(cache, 'receipt.json');
@@ -358,9 +386,11 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     reviewer_sha: reviewerSha, reviewer_digest: reviewer.digest, request_digest: requestDigest, cache_id: cacheId,
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
-    base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,
+    base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0, ...attested(attestation),
     harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head})};
 }
+
+const attested = attestation => attestation ? {maintainer_attested: {author: attestation.author, pull_request: attestation.number}} : {};
 
 // A receipt that touches protected review controls verifies but cannot carry owner confirmation, so CI holds the review.
 // Say so while the author can still act, naming only repository paths.
@@ -402,7 +432,7 @@ function publishReceipt({directory, receipt}) {
   const commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
     `Authenticated local review of ${record.snapshot.head_sha}\n`).trim();
   git(directory, ['push', 'origin', `${commit}:refs/tags/clouseau-review/${payload.nonce}`]);
-  return {artifact_commit: commit, marker: `<!-- clouseau-local-review:v1 ${commit} -->`, ...(warnings.length ? {warnings} : {})};
+  return {artifact_commit: commit, ...attested(payload.attestation), marker: `<!-- clouseau-local-review:v1 ${commit} -->`, ...(warnings.length ? {warnings} : {})};
 }
 
 async function main(argv, runtime = {}) {

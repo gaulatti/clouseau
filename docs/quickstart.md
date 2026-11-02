@@ -100,6 +100,12 @@ needs the provider secret and never reads the receipt; you do not have to remove
 marker. Workflows installed before this job existed carry a copy and must be upgraded
 (see [automatic CI upgrades](automatic-ci-upgrades.md#receipt-route-fallback-upgrade)).
 
+Pull requests by Dependabot or outside contributors cannot carry your receipt by
+default. To opt in, add `"attest": {"authors": ["dependabot[bot]"]}` (or `"any"`) to
+`local_review` in the protected configuration, check out that pull request's head and
+add `--pr N` to `clouseau review`; CI then reports a `Maintainer-attested` review
+(see [maintainer attestation](local-review.md#maintainer-attestation-of-another-authors-pull-request-opt-in)).
+
 Changes to review controls (`.github/clouseau.*`, workflows, `.clouseau-local.json`,
 `sensitive_paths`) cannot be approved by a receipt alone. The PR then shows
 `Local receipt cannot replace changed review history or protected-control

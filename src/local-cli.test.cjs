@@ -554,3 +554,73 @@ test('the local protected-control warning exempts only the opt-in verified manag
     } finally {process.stderr.write = stderr;}
   } finally {fs.rmSync(directory, {recursive: true, force: true});}
 });
+
+// Opt-in maintainer attestation (docs/local-review.md): an enrolled key signs a receipt for another author's pull request.
+test('--pr attests another author\'s pull request only when the protected configuration allows that author, and binds author and number', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-attest-fixture-'));
+  try {
+    const identity = initializeIdentity(state, 'fixture-maintainer');
+    const configFor = attest => ({...require('../test/fixtures/config.json'), version: 2, repository_policy: 'AGENTS.md', readme: 'README.md',
+      acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
+      local_review: {mode: 'optional', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity],
+        ...(attest ? {attest} : {})}});
+    const setup = attest => directory => {
+      fs.mkdirSync(path.join(directory, '.github'));
+      fs.writeFileSync(path.join(directory, '.github/clouseau.json'), JSON.stringify(configFor(attest)));
+    };
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const installed = () => ({sha: 'e'.repeat(40), digest: 'e'.repeat(64), clean: true});
+    const pullFor = (directory, change = {}) => ({author: 'dependabot[bot]', state: 'open', base: 'main',
+      head: git(directory, ['rev-parse', 'HEAD']).trim(), ...change});
+    const gh = (directory, change) => (program, args) => {
+      assert.equal(program, 'gh'); assert.deepEqual(args.slice(0, 2), ['api', 'repos/example/local-fixture/pulls/7']);
+      return JSON.stringify(pullFor(directory, change));
+    };
+    const unreachable = async () => {throw new Error('Must not invoke a harness');};
+    const run = (f, extra, deps) => runReview({directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file, pr: '7', ...extra},
+      {state: fs.mkdtempSync(path.join(state, 'run-')), ask: unreachable, verify: () => ({}), installed, execute: gh(f.directory), ...deps});
+
+    // Default off: --pr without the protected opt-in is refused and no review runs.
+    await repository(async f => {
+      await assert.rejects(run(f), /Maintainer attestation is not enabled/);
+    }, setup(undefined));
+    // Opt-in with an allowlist that does not name the author: refused before any review.
+    await repository(async f => {
+      await assert.rejects(run(f), /not permitted by the protected local_review\.attest/);
+      await assert.rejects(run(f, {pr: '0'}), /--pr takes a pull request number/);
+      await assert.rejects(run(f, {pr: '7x'}), /--pr takes a pull request number/);
+      await assert.rejects(run(f, {identity: undefined}), /needs an enrolled signing identity/);
+    }, setup({authors: ['someone-else']}));
+    await repository(async f => {
+      for (const [change, message] of [[{state: 'closed'}, /not open against main/], [{base: 'other'}, /not open against main/],
+        [{author: 'bad/author'}, /no usable author/], [{author: undefined}, /no usable author/], [{head: 'a'.repeat(40)}, /not the head of pull request 7.*refs\/pull\/7\/head/]]) {
+        await assert.rejects(run(f, {}, {execute: gh(f.directory, change)}), message);
+      }
+      // The allowlisted author is attested; the receipt names signer, author and number.
+      const reviewState = fs.mkdtempSync(path.join(state, 'review-'));
+      const result = await run(f, {}, {ask: fakeHarness(), state: reviewState});
+      assert.equal(result.decision, 'auto_approve');
+      assert.deepEqual(result.maintainer_attested, {author: 'dependabot[bot]', pull_request: 7});
+      const payload = JSON.parse(fs.readFileSync(result.receipt)).payload;
+      assert.deepEqual(payload.attestation, {author: 'dependabot[bot]', number: 7, signer: 'fixture-maintainer'});
+      // Same inputs reuse the cached attested receipt (verified against the live author and number); another number is a new review.
+      const base = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};
+      const reuse = await runReview({...base, pr: '7'}, {state: reviewState, ask: unreachable, verify: () => ({}), installed, execute: gh(f.directory)});
+      assert.equal(reuse.reused, true); assert.deepEqual(reuse.maintainer_attested, {author: 'dependabot[bot]', pull_request: 7});
+      const other = await runReview({...base, pr: '8'}, {state: reviewState, ask: fakeHarness(), verify: () => ({}), installed,
+        execute: () => JSON.stringify(pullFor(f.directory))});
+      assert.equal(other.reused, undefined); assert.equal(other.maintainer_attested.pull_request, 8);
+      // The published artifact reports the attestation.
+      const bare = path.join(state, 'attest-artifacts.git'); git(state, ['init', '-q', '--bare', bare]);
+      git(f.directory, ['config', `url.${bare}.insteadOf`, 'https://github.com/example/local-fixture.git']);
+      const published = await main(['publish', '--directory', f.directory, '--receipt', result.receipt]);
+      assert.deepEqual(published.maintainer_attested, {author: 'dependabot[bot]', pull_request: 7});
+    }, setup({authors: ['dependabot[bot]']}));
+    // A pull request the signer authored is signed as before, without an attestation, even with "any".
+    await repository(async f => {
+      const result = await run(f, {}, {ask: fakeHarness(), execute: gh(f.directory, {author: 'fixture-maintainer'})});
+      assert.equal(result.maintainer_attested, undefined);
+      assert.equal(JSON.parse(fs.readFileSync(result.receipt)).payload.attestation, undefined);
+    }, setup({authors: 'any'}));
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+});
