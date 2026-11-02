@@ -189,8 +189,11 @@ or session that sees only those files, has it write a JSON answer to the request
 clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session SESSION_ID
 ```
 
-`respond` validates the answer against the request schema (the supported subset
-fails closed on unknown keywords), refuses a session identifier already used for
+The schema file is compact JSON Schema that states each repeated subschema (chiefly the
+proof-ID enumeration every citation site shares) once under `$defs` and points at it with
+`"$ref": "#/$defs/NAME"`; it is the same constraint as the full inline schema, a few KB
+instead of hundreds. `respond` validates the answer against the request schema (the
+supported subset, with only those `$defs` references, fails closed on unknown keywords), refuses a session identifier already used for
 another request in the exchange, and allows three attempts per request. Repeating
 the identical `review` command then resumes: it reuses the one recorded
 verification, requires the same frozen evidence digest, replays accepted answers
@@ -261,11 +264,17 @@ ledger rather than dropping its findings.
 
 ## Evidence size
 
+The review cache's `snapshot.json`, the `record` output and the signed `receipt.json` are
+written as compact JSON, without indentation (about 15% of a typical receipt); they parse
+identically and the published artifact was already compact.
+
 Serialized local evidence is capped at 900,000 characters. To keep large changes inside the cap
 without dropping anything a reviewer judges, the local collector stores a file added whole once:
 its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
 the head source with every line prefixed `+` (consumers restore the identical patch). The pinned
-engine seed for workflow changes is optional context: seed files that would use the last 150,000
+engine seed (roughly 380 KB) is collected only when a workflow change adds or changes a
+`gaulatti/clouseau/scripts/resolve@<sha>` pin; an ordinary edit of a workflow that keeps its pin
+carries no engine source, and a reviewer can still request any of it. The seed is optional context: seed files that would use the last 150,000
 characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
 Changed files, their base and head sources and contracts are never omitted; a change that exceeds
 the cap with only that evidence is reviewed in bounded units (see "Chunked local review") unless the protected configuration disabled chunked review, in which case it fails closed.

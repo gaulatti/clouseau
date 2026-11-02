@@ -293,14 +293,14 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   let result; let chunkedRecord = null; let reviews;
   try {
     if (chunking) {
-      fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+      fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot) + '\n', {mode: 0o600});
       ({record: chunkedRecord, reviews} = await chunkedWiring.review({snapshot: collected.snapshot, active, ask: session, agent: Boolean(agent),
         journal: exchange ? undefined : chunkedWiring.fileJournal(path.join(chunkedDirectory, 'journal')), scope: cacheId,
         technical, priorFindings}));
       result = chunkedRecord.result;
     } else {
       result = await localReview({...collected, ask: async task => {
-        fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+        fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot) + '\n', {mode: 0o600});
         return session(task);
       }});
     }
@@ -329,7 +329,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
   const record = chunkedRecord || {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
     local_previous: {findings: priorFindings}, controls: false, technical};
   fs.mkdirSync(path.dirname(output), {recursive: true});
-  fs.writeFileSync(output, JSON.stringify(record, null, 2) + '\n', {mode: 0o600});
+  fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
   let receipt = null;
   if (result.decision === 'auto_approve' && identity) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
@@ -340,7 +340,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
     receipt = path.join(cache, 'receipt.json');
-    fs.writeFileSync(receipt, JSON.stringify(bundle, null, 2) + '\n', {mode: 0o600});
+    fs.writeFileSync(receipt, JSON.stringify(bundle) + '\n', {mode: 0o600});
   }
   fs.mkdirSync(path.dirname(historyPath), {recursive: true, mode: 0o700});
   fs.writeFileSync(historyPath, JSON.stringify({version: 1, repository, branch, head_sha: head, base_sha: baseSha,
