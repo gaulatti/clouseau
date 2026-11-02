@@ -34,13 +34,20 @@ function validateMode(coverage) {
 function parseDiff(text) {
   const files = new Map();
   let current = null;
+  // Body rows still owed by the current hunk. A row inside a hunk is content, never a file header, even when an
+  // added line itself begins with "++ ".
+  let owed = 0;
   for (const row of text.split('\n')) {
-    if (row.startsWith('+++ ')) {
-      const name = row.slice(4);
+    if (owed > 0) {
+      if (row.startsWith('-') || row.startsWith('+')) owed--;
+    } else if (row.startsWith('+++ ')) {
+      // git ends a header path that contains a space with a tab.
+      const name = row.slice(4).replace(/\t$/, '');
       if (name.startsWith('"')) fail('Changed-line coverage cannot read a quoted path in the diff');
       current = name === '/dev/null' ? null : (files.get(name.slice(2)) ?? files.set(name.slice(2), new Set()).get(name.slice(2)));
     } else if (current && row.startsWith('@@ ')) {
-      const [, start, length = '1'] = /^@@ -\S+ \+(\d+)(?:,(\d+))? @@/.exec(row) ?? fail('Malformed diff hunk header');
+      const [, old = '1', start, length = '1'] = /^@@ -\d+(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/.exec(row) ?? fail('Malformed diff hunk header');
+      owed = Number(old) + Number(length);
       for (let line = Number(start); line < Number(start) + Number(length); line++) current.add(line);
     }
   }

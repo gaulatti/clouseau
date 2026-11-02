@@ -52,20 +52,25 @@ test('the mode defaults to exact, is validated, and selects wording without alte
 });
 
 test('diffs yield added and modified lines only and reject what cannot be read exactly', () => {
-  const text = ['diff --git a/a.js b/a.js', '--- a/a.js', '+++ b/a.js', '@@ -1,2 +3,2 @@', '-x', '+y', '@@ -9 +11 @@', '+z', '@@ -20,2 +20,0 @@',
+  const text = ['diff --git a/a.js b/a.js', '--- a/a.js', '+++ b/a.js', '@@ -1,2 +3,2 @@', '-x', '-w', '+y', '+v', '@@ -9 +11 @@', '-a', '+z', '@@ -20,2 +20,0 @@', '-p', '-o',
     'diff --git a/gone.js b/gone.js', '--- a/gone.js', '+++ /dev/null', '@@ -1 +0,0 @@', '-q', ''].join('\n');
   assert.deepEqual([...changed.parseDiff(text)], [['a.js', new Set([3, 4, 11])]]);
   assert.deepEqual([...changed.parseDiff('')], []);
+  // A path with a space carries a trailing tab; an added line that looks like a header stays content.
+  const spaced = ['--- a/my file.ts\t', '+++ b/my file.ts\t', '@@ -1,2 +1,3 @@', '-old', '-x', '++ b/sneaky.ts', '+++ b/other.ts', '\\ No newline at end of file',
+    '+more', '@@ -9,0 +12,1 @@', '+last', ''].join('\n');
+  assert.deepEqual([...changed.parseDiff(spaced)], [['my file.ts', new Set([1, 2, 3, 12])]]);
   assert.throws(() => changed.parseDiff('+++ "b/odd\\tname.js"\n@@ -1 +1 @@\n'), /quoted path/);
   assert.throws(() => changed.parseDiff('+++ b/a.js\n@@ nonsense @@\n'), /Malformed diff hunk/);
 });
 
 test('changed lines come from the real diff against the base revision and bad references fail', () => repository(
-  {'a.js': 'one\ntwo\nthree\n', 'drop.js': 'x\n'}, {'a.js': 'one\nTWO\nthree\nfour\n', 'drop.js': null, 'b/n.js': 'n\n'}, directory => {
+  {'a.js': 'one\ntwo\nthree\n', 'drop.js': 'x\n', 'my file.js': 'a\n'}, {'a.js': 'one\nTWO\nthree\nfour\n', 'drop.js': null, 'b/n.js': 'n\n', 'my file.js': 'b\n'}, directory => {
     sh(directory, 'git', 'branch', 'base', 'HEAD~1');
     const result = changed.changedLines(directory, 'base');
-    assert.deepEqual([...result].sort(), [[path.join(directory, 'a.js'), new Set([2, 4])], [path.join(directory, 'b/n.js'), new Set([1])]]);
-    assert.equal(changed.changedLines(directory, sh(directory, 'git', 'rev-parse', 'HEAD~1').trim()).size, 2);
+    assert.deepEqual([...result].sort(), [[path.join(directory, 'a.js'), new Set([2, 4])],
+      [path.join(directory, 'b/n.js'), new Set([1])], [path.join(directory, 'my file.js'), new Set([1])]]);
+    assert.equal(changed.changedLines(directory, sh(directory, 'git', 'rev-parse', 'HEAD~1').trim()).size, 3);
     for (const ref of ['', undefined, '-p', 'a..b', 'bad ref', 'x;y', 'x'.repeat(300)]) {
       assert.throws(() => changed.changedLines(directory, ref), /plain base revision/);
     }
