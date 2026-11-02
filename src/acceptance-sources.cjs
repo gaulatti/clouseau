@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {LockfileError, MAX_BYTES, LOCKFILE_PATCH, isLockfile, lockfileEvidence, lockfileError} = require('./lockfile-summary.cjs');
-const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, importsOf, coveringTests} = require('./acceptance.cjs');
+const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, importsOf, coveringTests, showsNoText} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
@@ -163,7 +163,8 @@ async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
 
 async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
-    !safePath(file.filename) || (!file.patch && !isLockfile(file.filename)) || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
+    !safePath(file.filename) || (!file.patch && !isLockfile(file.filename) && !['added', 'removed', 'renamed'].includes(file.status)) ||
+    !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     throw new Error('Changed-file evidence is incomplete');
   }
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
@@ -211,6 +212,13 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
       // The raw lockfile is the fallback evidence; when it does not fit either, say why the lockfile failed.
       if (error.unavailable && lockfile?.reason) throw lockfileError(file.filename, lockfile.reason);
       throw error;
+    }
+    // GitHub lists no patch for a change that shows no text. Only the immutable sources can prove that nothing was
+    // withheld (an empty file added or removed, a rename of identical content); otherwise the patch is unavailable.
+    if (!file.patch && !lockfile?.id) {
+      const text = id => snapshot.sources[id]?.content;
+      if (!showsNoText(file.status, text(item.base_source), text(item.head_source))) throw new Error('Changed-file evidence is incomplete');
+      item.patch = '';
     }
     snapshot.files.push(item);
   }

@@ -41,6 +41,7 @@ const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
 const MANUAL_REVIEWER = config.manual_reviewer;
 const VERIFY_STEPS = config.verification.steps;
+const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
 const NEVER_ARMED = Object.freeze(['review_incomplete', 'repair_required', 'blocked_technical', 'blocked_integrity']);
 const REVIEW_CONTROL_REASON = 'Review controls or a protected repository-purpose contract changed';
 const DISABLE_AUTO_MERGE = 'mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }';
@@ -61,7 +62,9 @@ function scopeReason(files, pr, exempt = new Set()) {
   if (files.some(file => protectedFile(file.filename) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
-  if (files.some(file => !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
+  // GitHub lists no patch for an empty added file. Its empty blob id is the proof that no text was withheld.
+  const emptyAdded = file => file.status === 'added' && file.sha === EMPTY_BLOB && file.changes === 0;
+  if (files.some(file => (!file.patch && !emptyAdded(file)) || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     return 'Incomplete patch or unsupported file change';
   }
   return null;
@@ -120,7 +123,7 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
     if (linked.repository.pullRequest.closingIssuesReferences.pageInfo.hasNextPage) return hold('Linked-ticket context is incomplete');
     const input = JSON.stringify({head_sha: pr.head.sha, title: pr.title, description: pr.body,
       tickets: linked.repository.pullRequest.closingIssuesReferences.nodes, precedent,
-      patches: files.map(file => ({path: file.filename, status: file.status, previous_path: file.previous_filename, patch: file.patch}))});
+      patches: files.map(file => ({path: file.filename, status: file.status, previous_path: file.previous_filename, patch: file.patch ?? ''}))});
     if (input.length > 320000) return hold('Review context exceeds the complete-review limit');
     const policy = fs.readFileSync(require('node:path').join(__dirname, '../policy/intent-review.md'), 'utf8') + '\n\nTrusted repository contract:\n' + fs.readFileSync(config.repository_policy, 'utf8');
     const readme = fs.readFileSync(config.readme, 'utf8');

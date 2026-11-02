@@ -470,6 +470,13 @@ No file name or diff content is forwarded. GitHub supplies no `patch` for very l
 hosted collector already refuses those (`changed_files_incomplete`), and CI refuses
 the same changes with that cause rather than verifying a receipt with a weaker rule.
 
+GitHub also supplies no `patch` for a change that shows no text: an empty file added or removed (a Python
+`__init__.py`), or a rename of identical content. Both collectors accept that, and only that, when the immutable
+sources prove it (the head source of an added file is empty, the base source of a removed file is empty, or the
+two sides of a rename are equal). A signed `git diff` of such a file is a header without a hunk and equals the absent
+hosted patch. An empty source has no line to cite, so the review accounts for it without a citation, a finding is
+anchored in the next changed file that has a line, and any other missing patch still fails closed.
+
 Only after actual CI tests and exact coverage pass may the controller emit an
 approval assessment. It revalidates the receipt at the write gate and uses the
 existing native approval, merge-authority and protection checks. Missing, stale,
