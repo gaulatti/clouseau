@@ -29,7 +29,7 @@ inputs:
     description: "Base revision for changed-line coverage (coverage); used only when the protected config sets coverage.mode to changed_lines. Needs a checkout with that revision's history"
     default: ''
   coverage-baseline:
-    description: "JSON totals {lines:[total,covered],branches:[total,covered]} measured on the base revision with the `totals` command (coverage, changed_lines mode)"
+    description: "Path to a file of JSON totals {lines:[total,covered],branches:[total,covered]} measured on the base revision with the `totals` command; a path, never inline JSON (coverage, changed_lines mode)"
     default: ''
   pull-request:
     description: PR number for manual reassessment

@@ -37,7 +37,7 @@ else runs the exact gate, which is the stricter direction.
 | --- | --- |
 | `config` | The protected configuration. Pass the **base** revision's file (for example `git show "$BASE_SHA:.github/clouseau.json"`), never the contributor's. |
 | `coverage-base-ref` | Base revision to diff against, for example the PR base SHA. The checkout needs its history (`fetch-depth: 0`). |
-| `coverage-baseline` | JSON totals measured on the base revision: `{"lines":[total,covered],"branches":[total,covered]}`. |
+| `coverage-baseline` | **Path to a file** of JSON totals measured on the base revision (`baseline.json` below): `{"lines":[total,covered],"branches":[total,covered]}`. Inline JSON is rejected as an unreadable baseline. |
 
 Produce the baseline by running the same tests on the base checkout and then:
 
