@@ -101,7 +101,7 @@ test('the wait step publishes a precise incomplete assessment for a real failure
     {decision: 'review_incomplete', cause: 'verification_failed', number: 3, head: SHA});
   assert.match(assessment.reason, /^Required verification step ".+" concluded failure$/);
   const notice = body({...assessment}, 'https://github.com/example/gateway/actions/runs/1');
-  assert.ok(notice.includes(`**Reason:** ${assessment.reason}`) && notice.includes(NEXT_STEPS.verification_failed));
+  assert.ok(notice.includes(`**Reason:** ${assessment.reason}`) && notice.includes(NEXT_STEPS.verification_failed[0].split('{')[0]));
   // A transient snapshot that never settles ends pending within the grace and is reassessed, not failed.
   const pending = await policy.awaitVerification({github: make([[]]), context, core, expectedHead: SHA, wait: async () => {}, queuedGraceSeconds: 0});
   assert.equal(pending.pending, true); assert.equal(pending.state, 'finalizing'); assert.equal(outputs.verified, 'false');

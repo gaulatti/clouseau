@@ -352,33 +352,34 @@ test('screening classifies every receipt failure with a fixed class and propagat
   const accepted = await screen(content(bundle));
   assert.equal(accepted.ref, ref); assert.equal(accepted.rejected, null); assert.equal(accepted.verified.decision, 'auto_approve');
   assert.deepEqual(await screen(content(bundle), {body: 'no claim'}), {ref: null, rejected: null});
-  assert.deepEqual(await screen(content(bundle), {body: `<!-- clouseau-local-review:v1 ${ref} -->\n<!-- clouseau-local-review:v1 ${'d'.repeat(40)} -->`}), {ref: null, rejected: 'malformed'});
-  assert.deepEqual(await screen(content('not json')), {ref: null, rejected: 'malformed'});
-  assert.deepEqual(await screen(content({unexpected: true})), {ref: null, rejected: 'malformed'});
-  assert.deepEqual(await screen(content(bundle), {user: {login: 'someone-else'}}), {ref: null, rejected: 'author'});
+  assert.deepEqual(await screen(content(bundle), {body: `<!-- clouseau-local-review:v1 ${ref} -->\n<!-- clouseau-local-review:v1 ${'d'.repeat(40)} -->`}), {ref: null, rejected: 'malformed', detail: {}});
+  assert.deepEqual(await screen(content('not json')), {ref: null, rejected: 'malformed', detail: {}});
+  assert.deepEqual(await screen(content({unexpected: true})), {ref: null, rejected: 'malformed', detail: {}});
+  assert.deepEqual(await screen(content(bundle), {user: {login: 'someone-else'}}), {ref: null, rejected: 'author', detail: {}});
   // A bundle that is not even an object cannot be verified; the receipt is ignored, not a crash.
-  assert.deepEqual(await screen(content(null)), {ref: null, rejected: 'malformed'});
-  assert.deepEqual(await screen(() => {throw Object.assign(new Error('Not Found'), {status: 404});}), {ref: null, rejected: 'unavailable'});
-  assert.deepEqual(await screen(() => ({data: {encoding: 'none', type: 'dir'}})), {ref: null, rejected: 'unavailable'});
+  assert.deepEqual(await screen(content(null)), {ref: null, rejected: 'malformed', detail: {}});
+  assert.deepEqual(await screen(() => {throw Object.assign(new Error('Not Found'), {status: 404});}), {ref: null, rejected: 'unavailable', detail: {}});
+  assert.deepEqual(await screen(() => ({data: {encoding: 'none', type: 'dir'}})), {ref: null, rejected: 'unavailable', detail: {}});
   for (const status of [500, 403, 429]) {
     await assert.rejects(screen(() => {throw Object.assign(new Error('GitHub failed'), {status});}), error => error.status === status);
   }
-  assert.deepEqual(await screen(content(bundle), {head: {sha: 'd'.repeat(40)}}), {ref: null, rejected: 'revision'});
+  assert.deepEqual(await screen(content(bundle), {head: {sha: 'd'.repeat(40)}}),
+    {ref: null, rejected: 'revision_head', detail: {receipt_head: f.expected.headSha, current_head: 'd'.repeat(40)}});
   // An invalid protected chunked configuration cannot check any receipt, so the receipt is ignored, never a crash.
   const badSettings = await screenReceipt({github: github(content(bundle)), pr, ...options, trust: {...options.trust, chunked: {unknown: 1}},
     repo: {owner: f.expected.repository.split('/')[0], repo: f.expected.repository.split('/')[1]}});
-  assert.deepEqual(badSettings, {ref: null, rejected: 'settings'});
+  assert.deepEqual(badSettings, {ref: null, rejected: 'settings', detail: {}});
   // A chunked record that does not verify is the receipt's own failure too.
   const chunked = structuredClone(f.record); chunked.partition = {scheme: 'unknown'};
   const payload = {...bundle.payload, record: chunked, record_digest: digest(chunked)};
   const signed = {payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
     crypto.createPrivateKey(f.privateKey)).toString('base64url')};
-  assert.deepEqual(await screen(content(signed)), {ref: null, rejected: 'record'});
+  assert.deepEqual(await screen(content(signed)), {ref: null, rejected: 'record', detail: {}});
   // A signed payload whose record is not an object throws inside the verifier itself; that is still only an ignored receipt.
   const hollow = {...bundle.payload, record: null, record_digest: digest(null)};
   const hollowSigned = {payload: hollow, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(hollow)}`),
     crypto.createPrivateKey(f.privateKey)).toString('base64url')};
-  assert.deepEqual(await screen(content(hollowSigned)), {ref: null, rejected: 'malformed'});
+  assert.deepEqual(await screen(content(hollowSigned)), {ref: null, rejected: 'malformed', detail: {}});
 });
 
 test('source screening ignores a receipt whose signed sources, diff or inventory differ and propagates every other failure', async () => {
@@ -536,6 +537,6 @@ test('an attested receipt binds signer, author and pull request and is refused e
     trust, configDigest: f.expected.configDigest, policyDigest: f.expected.policyDigest});
   const accepted = await screen({});
   assert.equal(accepted.ref, ref); assert.deepEqual(accepted.verified.attestation, signed);
-  assert.deepEqual(await screen({number: 13}), {ref: null, rejected: 'attestation'});
-  assert.deepEqual(await screen({user: {login: 'other-contributor'}}), {ref: null, rejected: 'attestation'});
+  assert.deepEqual(await screen({number: 13}), {ref: null, rejected: 'attestation', detail: {}});
+  assert.deepEqual(await screen({user: {login: 'other-contributor'}}), {ref: null, rejected: 'attestation', detail: {}});
 });

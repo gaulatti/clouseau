@@ -23,7 +23,10 @@ const fail = message => {throw new Error(`Invalid local review receipt: ${messag
 const requireReceipt = (value, message) => {if (!value) fail(message);};
 
 // A failed receipt check carries a fixed class (see receipt-rejection.cjs); configuration and issuance failures do not.
-const reject = (value, message, reason) => {if (!value) throw new ReceiptRejected(reason, message);};
+// `detail` holds only values that are safe to show in a notice (receipt-rejection.cjs re-validates them when it renders).
+const reject = (value, message, reason, detail) => {if (!value) throw new ReceiptRejected(reason, message, detail);};
+// An expiry time that can be shown; anything outside the Date range is not a time at all.
+const instant = seconds => Number.isSafeInteger(seconds) && Math.abs(seconds) < 8.64e12 ? new Date(seconds * 1000).toISOString() : undefined;
 
 // Opt-in, protected: which pull request authors an enrolled maintainer key may attest for. Either an explicit nonempty
 // list of exact logins or the explicit value "any". Anything else, including an empty list, is a configuration error.
@@ -157,7 +160,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   reject(Number.isSafeInteger(p.issued_at) && Number.isSafeInteger(p.expires_at) &&
     p.issued_at <= timestamp && p.expires_at > timestamp && p.expires_at > p.issued_at &&
     p.expires_at - p.issued_at <= trust.max_age_seconds && timestamp - p.issued_at <= trust.max_age_seconds &&
-    typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge', 'expired');
+    typeof p.nonce === 'string' && /^[a-f0-9]{64}$/.test(p.nonce), 'expired, future or invalid challenge', 'expired', {expires: instant(p.expires_at)});
   reject(isRoot(p.record) === Object.hasOwn(bundle, 'parts'), 'a multi-part receipt needs its parts, and only it has them', 'malformed');
   let record = p.record;
   if (isRoot(record)) {
@@ -171,9 +174,11 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const snapshot = record.snapshot;
   const changed = 'repository, revisions, policy, configuration or record changed';
   reject(p.record_digest === digest(record) && sha(p.reviewer_sha) && Boolean(snapshot && record.result), changed, 'record');
-  reject(snapshot.repository === repository && sha(headSha) && snapshot.head_sha === headSha &&
-    sha(baseSha) && snapshot.base_sha === baseSha, changed, 'revision');
-  reject(snapshot.config_digest === configDigest && snapshot.policy_digest === policyDigest, changed, 'changed');
+  reject(snapshot.repository === repository, changed, 'revision_repository');
+  reject(sha(headSha) && snapshot.head_sha === headSha, changed, 'revision_head', {receipt_head: snapshot.head_sha, current_head: headSha});
+  reject(sha(baseSha) && snapshot.base_sha === baseSha, changed, 'revision_base', {receipt_base: snapshot.base_sha, current_base: baseSha});
+  reject(snapshot.config_digest === configDigest, changed, 'changed', {changed: 'configuration'});
+  reject(snapshot.policy_digest === policyDigest, changed, 'changed', {changed: 'policy'});
   // The engine comparison happens after every identity, trust, challenge and binding check. A different engine is
   // only reported once the receipt is otherwise proven bound to this exact change; it is never accepted. Another
   // engine's scoring cannot be re-validated here, so its signed claim must still be a pass.
@@ -190,7 +195,8 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
       engine.digest === reviewerDigest && /^[a-f0-9]{64}$/.test(p.reviewer_digest) &&
       (!reviewerSha || p.reviewer_sha === reviewerSha) && Object.hasOwn(p, 'reviewer_semantics') &&
       compatible(p.reviewer_semantics) === true,
-    'engine mismatch; the receipt predates the current protected engine and is never accepted as evidence', 'engine');
+    'engine mismatch; the receipt predates the current protected engine and is never accepted as evidence', 'engine',
+    {receipt_engine: p.reviewer_sha, current_engine: engine?.sha ?? reviewerSha});
   }
   // A chunked record is verified against the protected parameters of the trust policy unless the caller supplies its own.
   // An invalid protected chunked configuration means this receipt cannot be checked, so it is ignored like any other.
@@ -374,24 +380,25 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
 // Only the receipt's own verdict is ignored. A GitHub failure other than a missing object (outage, rate limit, permission) is
 // something CI itself could not do and keeps its ordinary classification.
 const rejection = error => error instanceof ReceiptRejected ? error.reason : error instanceof ChunkedRecordError ? 'record' : null;
+const detailOf = error => error instanceof ReceiptRejected ? error.detail : {};
 
 // The one decision for a claimed receipt: `ref` is set only when it verifies in every respect. Any other outcome returns
 // the fixed class in `rejected` (or neither, when no receipt is claimed) and the receipt is never consulted again.
 async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest}) {
   let ref;
-  try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason};}
+  try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason, detail: error.detail};}
   if (!ref) return {ref: null, rejected: null};
   let bundle;
   try {bundle = await loadReceipt({github, repo, ref, trust});} catch (error) {
     const reason = rejection(error) ?? (error.status === 404 ? 'unavailable' : null);
     if (!reason) throw error;
-    return {ref: null, rejected: reason};
+    return {ref: null, rejected: reason, detail: detailOf(error)};
   }
   try {
     const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, pullNumber: pr.number,
       headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest});
     return {ref, bundle, verified, rejected: null};
-  } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed'};}
+  } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed', detail: detailOf(error)};}
 }
 
 // The same decision for the live repository: the signed sources, inventory and patches must equal what GitHub reports.

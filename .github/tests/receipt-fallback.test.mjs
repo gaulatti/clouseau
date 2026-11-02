@@ -24,7 +24,7 @@ function evaluate(source, context) {
   return new Evaluator(ast, typed(context), new Map([['always', always]])).evaluate();
 }
 const REVIEW_EVENT = {github: {event_name: 'pull_request_target', ref: 'refs/heads/x', event: {deleted: false, pull_request: {draft: false}}}};
-const unusable = {decision: 'review_incomplete', cause: 'local_receipt_unusable', receipt_notice: 'revision'};
+const unusable = {decision: 'review_incomplete', cause: 'local_receipt_unusable', receipt_notice: 'revision_head'};
 const trusted = {decision: 'auto_approve', record_digest: 'a'.repeat(64), review_source: 'authenticated_local', provider_api_calls: 0};
 const hostedDecision = {decision: 'auto_approve', record_digest: 'b'.repeat(64)};
 

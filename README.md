@@ -12,6 +12,7 @@ requires its own tests and exact coverage before approval/merge. See
 [local review, installation and trust boundaries](docs/local-review.md).
 New to Clouseau? Start with the [quickstart](docs/quickstart.md).
 How a receipt stays valid across engine revisions: [receipt compatibility](docs/receipt-compatibility.md).
+Every refusal or hold notice names its cause class and numbered next steps: [notices and their causes](docs/notices.md).
 Consumers without accepted recipe/enrollment/workflows use the separate
 [initial owner-authorized trust installation](docs/initial-installation.md).
 Its signed evidence cannot approve ordinary changes or automatically merge.

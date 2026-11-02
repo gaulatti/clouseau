@@ -376,6 +376,9 @@ test('a PR changed during CI cannot receive an approval', async () => {
   f.state.run.status = 'in_progress';
   await assert.rejects(f.run({wait: async () => {f.state.pr.head.sha = BASE;}, maxPolls: 2}), /PR changed/);
   assert.ok(!f.writes.some(write => write.name === 'review'));
+  // The stopped gate names its cause class and a numbered next step in the check summary.
+  const summary = f.writes.filter(write => write.name === 'updateCheck').at(-1).args.output.summary;
+  assert.match(summary, /\*\*Cause:\*\* `revision_changed`/); assert.match(summary, /\*\*Next steps:\*\*\n\n1\. /);
 });
 
 test('AI-identified unsupported product scope waits for an owner decision', async () => {
@@ -385,6 +388,8 @@ test('AI-identified unsupported product scope waits for an owner decision', asyn
   assert.ok(f.writes.some(write => write.name === 'arm'));
   assert.ok(f.writes.some(write => write.args.conclusion === 'action_required'));
   assert.ok(f.writes.some(write => write.name === 'comment' && write.args.body.includes(`/approve-intent ${SHA}`)));
+  const asked = f.writes.find(write => write.name === 'comment').args.body;
+  assert.match(asked, /\*\*Cause:\*\* `intent_owner_decision`/); assert.match(asked, /\*\*Next steps:\*\*\n\n1\. Read the review above/);
   assert.ok(!f.writes.some(write => write.name === 'review'));
 });
 

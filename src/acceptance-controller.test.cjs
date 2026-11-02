@@ -11,7 +11,10 @@ const {digest} = require('./acceptance.cjs');
 const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
-const {noticeText} = require('./receipt-rejection.cjs');
+const {describe} = require('./receipt-rejection.cjs');
+// The one notice a run reports for an ignored receipt: its header names the cause class and its lead says what the run did.
+const isNotice = (reason, mode = 'optional') => line => line.startsWith(`Local review receipt not used (cause: \`receipt_${reason}\`): `) &&
+  line.includes(describe(reason, {mode}).lead) && /\n\n1\. /.test(line);
 const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: '.github/clouseau.md', readme: 'README.md', acceptance: {
   examiner: 'deepseek-flash', challenger: 'deepseek-flash', grader: 'deepseek', grading_model: 'deepseek-flash', repair_attempts: 2,
 }};
@@ -248,7 +251,7 @@ test('optional local review ignores every malformed receipt claim, shows a fixed
     const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: line => lines.push(line)});
     assert.equal(result.decision, 'auto_approve', `${body}: ${result.reason}`);
     assert.equal(result.receipt_notice, 'malformed');
-    assert.ok(lines.includes(noticeText('malformed', false)));
+    assert.ok(lines.some(isNotice('malformed')));
     assert.ok(f.state.calls > calls, 'the ordinary CI review ran instead of the claimed receipt');
     assert.notEqual(result.review_source, 'authenticated_local');
     assert.equal(artifactReads, 0, 'ambiguous or unsupported claims are ignored before fetching an artifact');
@@ -436,7 +439,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
   }
   if (central === true) {
     const newerEngine = {...engine, sha: 'd'.repeat(40)};
-    const NOTICE = noticeText('engine', false); const REQUIRED_NOTICE = noticeText('engine', true);
+    const NOTICE = isNotice('engine'); const REQUIRED_NOTICE = isNotice('engine', 'required');
     const kept = fs.readFileSync(f.recordPath);
     const writes = f.state.writes.length;
     const callsBefore = f.state.calls;
@@ -450,7 +453,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     assert.equal(required.cause, 'local_receipt_required');
     assert.equal(required.provider_api_calls, undefined);
     assert.equal(required.receipt_notice, 'engine');
-    assert.ok(hostedReports.includes(REQUIRED_NOTICE));
+    assert.ok(hostedReports.some(REQUIRED_NOTICE));
     // Optional mode: the valid-but-older receipt is ignored and the normal CI review runs and approves on its own evidence.
     const optionalConfig = {...trusted, local_review: {...trusted.local_review, mode: 'optional'}};
     const newer = createPolicy(optionalConfig, {engine: newerEngine});
@@ -469,12 +472,12 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     assert.ok(f.state.calls > callsBefore, 'the hosted reviewer ran');
     const hostedRecord = JSON.parse(fs.readFileSync(f.recordPath));
     assert.ok(!hostedRecord.local_receipt_reference && !hostedRecord.local_receipt, 'the old receipt is not carried as evidence');
-    assert.ok(hostedReports.filter(line => line === NOTICE).length === 1);
+    assert.ok(hostedReports.filter(NOTICE).length === 1);
     await newer.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: hosted, nativeGate: true,
       wait: async () => {}});
     const posted = f.state.writes.slice(writes);
     assert.equal(posted.filter(item => item.name === 'approve').length, 1);
-    assert.ok(posted.some(item => item.name === 'create-ledger' && item.args.body.includes(NOTICE)), 'the PR shows the one-line notice');
+    assert.ok(posted.some(item => item.name === 'create-ledger' && item.args.body.includes('Local review receipt not used (cause: `receipt_engine`)')), 'the PR shows the cause');
     assert.ok(!posted.some(item => String(item.args?.body).includes('CI AI review calls: 0')));
     // While CI is blocked an ignored receipt behaves exactly like an unstamped change.
     for (const [pending, failed, decision] of [[true, false, 'pending_technical'], [false, true, 'blocked_technical']]) {
@@ -508,7 +511,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
       try {
         assert.equal(result.decision, 'auto_approve', `${reason}: ${result.reason}`);
         assert.equal(result.receipt_notice, reason);
-        assert.ok(lines.includes(noticeText(reason, false)), `${reason}: the fixed sentence is reported`);
+        assert.ok(lines.some(isNotice(reason)), `${reason}: the cause is reported`);
         assert.ok(f.state.calls > before, `${reason}: the hosted reviewer ran`);
         assert.notEqual(result.review_source, 'authenticated_local');
         const written = JSON.parse(fs.readFileSync(f.recordPath));
@@ -523,9 +526,9 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     const author = f.state.pr.user.login;
     await reviewed('author', current, () => {f.state.pr.user.login = 'another-author';}, () => {f.state.pr.user.login = author;});
     const head = f.state.pr.head.sha;
-    await reviewed('revision', current, () => {f.state.pr.head.sha = 'e'.repeat(40);}, () => {f.state.pr.head.sha = head;});
+    await reviewed('revision_head', current, () => {f.state.pr.head.sha = 'e'.repeat(40);}, () => {f.state.pr.head.sha = head;});
     const base = f.state.pr.base.sha;
-    await reviewed('revision', current, () => {f.state.pr.base.sha = 'e'.repeat(40);}, () => {f.state.pr.base.sha = base;});
+    await reviewed('revision_base', current, () => {f.state.pr.base.sha = 'e'.repeat(40);}, () => {f.state.pr.base.sha = base;});
     const expiredBundle = issueReceipt({record: optionalRecord, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
       keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha, now: Date.now() - 400000 * 1000});
     await reviewed('expired', current, () => {served = expiredBundle;}, () => {served = optionalBundle;});
@@ -571,7 +574,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
       restore();
       assert.equal(blocked.decision, 'blocked_technical', name);
       assert.equal(blocked.receipt_notice, 'source', name); assert.equal(blocked.review_source, undefined, name);
-      assert.equal(blocked.receipt_notice_file, name === 'patch' ? files[0].filename : undefined, `${name}: only a patch mismatch names its file`);
+      assert.equal(blocked.receipt_notice_detail.file, name === 'patch' ? files[0].filename : undefined, `${name}: only a patch mismatch names its file`);
     }
     f.state.failed = false;
     f.github.rest.repos.getContent = async args => {
@@ -803,7 +806,7 @@ test('a malformed provider key stops before any request and every incomplete out
       const [notice] = f.state.writes;
       assert.deepEqual(f.state.writes.map(item => item.name), ['create-ledger', 'disable-auto']); assert.equal(notice.name, 'create-ledger');
       assert.match(notice.args.body, /Clouseau review incomplete/); assert.match(notice.args.body, /DEEPSEEK_API_KEY/);
-      assert.match(notice.args.body, /Next step:/); assert.ok(!notice.args.body.includes('sk-fictional-secret'));
+      assert.match(notice.args.body, /Next steps:/); assert.ok(!notice.args.body.includes('sk-fictional-secret'));
       f.state.comments.push({id: 55, user: {login: 'github-actions[bot]'}, body: notice.args.body});
       await assert.rejects(f.gate(assessment), /DEEPSEEK_API_KEY/);
       assert.equal(f.state.writes[2].name, 'update-ledger', 'a rerun updates the one notice');
@@ -821,7 +824,7 @@ test('a repository that requires local receipts announces the missing receipt on
   const assessment = await f.assess({receiptOnly: true});
   assert.equal(assessment.cause, 'local_receipt_required');
   await assert.rejects(f.gate(assessment), /authenticated local Clouseau review receipt/);
-  assert.match(f.state.writes[0].args.body, /Run the local Clouseau review/);
+  assert.match(f.state.writes[0].args.body, /review this exact head: `clouseau review /);
 }));
 
 test('malformed provider JSON retains the exact undecodable response and cannot reach approval', () => fixture(async f => {
@@ -1270,7 +1273,7 @@ test('signed local quality with incomplete coverage is reused on red CI without 
     await ignored('signature', createPolicy(revoked, {engine: p.engine}));
     const head = f.state.pr.head.sha;
     f.state.pr.head.sha = (head[0] === 'd' ? 'c' : 'd').repeat(40);
-    await ignored('revision');
+    await ignored('revision_head');
     f.state.pr.head.sha = head;
     const content = f.github.rest.repos.getContent;
     f.github.rest.repos.getContent = args => args.path === 'src/upload.test.js' && args.ref === head ? Promise.resolve({data: {
@@ -1535,6 +1538,7 @@ test('the hosted fallback after an unusable receipt never reads the receipt, rev
   const required = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'required'}});
   const held = await required.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ignoreReceipt: true});
   assert.equal(held.cause, 'local_receipt_required', 'a repository that requires receipts is never reviewed by the fallback');
+  assert.equal(held.receipt_notice, 'unread'); assert.match(held.reason, /does not read receipts/);
   assert.equal(artifactReads, reads);
 }));
 
@@ -1546,11 +1550,15 @@ test('optional local review on the receipt-only route names the real condition i
   const assessment = await optional.assess({github: f.github, context: f.context, recordPath: f.recordPath, receiptOnly: true});
   assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, 'local_receipt_unusable');
   assert.doesNotMatch(assessment.reason, /requires/); assert.match(assessment.reason, /optional/);
+  // No marker at all is a cause of its own, named in the reason, the cause line and the steps.
+  assert.equal(assessment.receipt_notice, 'absent');
+  assert.match(assessment.reason, /carries no `clouseau-local-review:` marker/);
   const {body, NEXT_STEPS} = require('./incomplete.cjs');
-  assert.match(NEXT_STEPS.local_receipt_unusable, /remove the `clouseau-local-review` marker/);
+  assert.ok(NEXT_STEPS.local_receipt_unusable.some(step => /remove the `clouseau-local-review` marker/.test(step)));
   const text = body({...assessment, receipt_notice: 'source'}, 'u');
-  assert.match(text, /this receipt-only run did not review the change itself/); assert.doesNotMatch(text, /CI reviewed this change itself|requires a valid receipt/);
-  assert.doesNotMatch(body(assessment, 'u'), /Local review receipt ignored/);
+  assert.match(text, /This receipt-only run did not review the change itself/); assert.doesNotMatch(text, /CI reviewed this change itself|requires a valid receipt/);
+  assert.match(body(assessment, 'u'), /\*\*Cause:\*\* `local_receipt_unusable` \(`receipt_absent`\)/);
+  assert.doesNotMatch(body(assessment, 'u'), /Local review receipt not used/, 'the cause is shown once, not repeated');
 }));
 
 // Opt-in maintainer attestation: an enrolled maintainer's receipt for a pull request by someone else (docs/local-review.md).

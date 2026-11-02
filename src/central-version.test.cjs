@@ -143,29 +143,46 @@ test('every receipt failure carries one fixed class, and an engine mismatch is r
   delete trust.reviewer_digest;
   const bundle = issueReceipt(f.issue);
   const newer = {...engine, sha: second};
+  let lastDetail;
   const reason = (options, source = bundle, base = {engine: newer}) => {
     try {verifyReceipt(source, {...f.expected, trust, ...base, ...options});} catch (error) {
       assert.ok(error instanceof ReceiptRejected && error instanceof Error && error.code === 'RECEIPT_REJECTED');
       assert.match(error.message, /^Invalid local review receipt: /);
+      lastDetail = error.detail;
       return error.reason;
     }
     return assert.fail('the receipt was accepted');
   };
   assert.equal(reason({}), 'engine');
+  assert.deepEqual(lastDetail, {receipt_engine: f.issue.reviewerSha, current_engine: second});
+  assert.equal(reason({engine: null, reviewerSha: second}), 'engine');
+  assert.deepEqual(lastDetail, {receipt_engine: f.issue.reviewerSha, current_engine: second}, 'without a frozen engine the expected revision is named');
   assert.equal(reason({engine: {...engine, digest: '0'.repeat(64)}}), 'engine');
   // Every other failure keeps its own class, even though the engine also differs.
   assert.equal(reason({}, {...bundle, signature: `${bundle.signature[0] === 'a' ? 'b' : 'a'}${bundle.signature.slice(1)}`}), 'signature');
   assert.equal(reason({trust: {...trust, keys: [{...trust.keys[0], revoked: true}]}}), 'signature');
   assert.equal(reason({author: 'another-author'}), 'author');
   assert.equal(reason({now: 10000000 + 200000 * 1000}), 'expired');
-  for (const change of [{headSha: 'd'.repeat(40)}, {baseSha: 'd'.repeat(40)}, {repository: 'other/repository'}]) assert.equal(reason(change), 'revision');
-  for (const change of [{configDigest: 'x'}, {policyDigest: 'x'}]) assert.equal(reason(change), 'changed');
+  assert.match(lastDetail.expires, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, 'the time the receipt stopped being valid is named');
+  for (const [change, expected, detail] of [
+    [{headSha: 'd'.repeat(40)}, 'revision_head', {receipt_head: f.expected.headSha, current_head: 'd'.repeat(40)}],
+    [{baseSha: 'd'.repeat(40)}, 'revision_base', {receipt_base: f.expected.baseSha, current_base: 'd'.repeat(40)}],
+    [{repository: 'other/repository'}, 'revision_repository', undefined]]) {
+    assert.equal(reason(change), expected); assert.deepEqual(lastDetail, detail ?? {});
+  }
+  for (const [change, what] of [[{configDigest: 'x'}, 'configuration'], [{policyDigest: 'x'}, 'policy']]) {
+    assert.equal(reason(change), 'changed'); assert.deepEqual(lastDetail, {changed: what});
+  }
   const sign = payload => ({payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
     crypto.createPrivateKey(f.privateKey)).toString('base64url')});
   const retarget = change => {
     const record = structuredClone(f.record); change(record);
     return sign({...bundle.payload, record, record_digest: digest(record)});
   };
+  // An expiry that is not a time (not an integer, or beyond the Date range) is refused as expired and named nowhere.
+  for (const expires_at of ['soon', 1e15]) {
+    assert.equal(reason({}, sign({...bundle.payload, expires_at})), 'expired'); assert.deepEqual(lastDetail, {expires: undefined});
+  }
   const notPassing = retarget(record => {record.result.decision = 'repair_required';});
   assert.equal(reason({}, notPassing), 'not_passing');
   assert.equal(reason({engine}, notPassing, {}), 'record', 'a current-engine receipt whose claimed decision is false is a record failure');
