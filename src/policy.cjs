@@ -592,7 +592,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     }
     if (controllerManaged) {
       if (!currentProtection.controllerManaged) throw new Error('Private-plan acceptance mode changed before approval');
-      pr = await require('./private-owner-merge.cjs').finalizePrivateOwner({github, repo, pr, assessment,
+      pr = await require('./private-owner-merge.cjs').finalizePrivateOwner({github, repo, pr, assessment, wait,
         baseBranch: config.base_branch, verify: async () => {
           await verifyAcceptance();
           const current = await protection();

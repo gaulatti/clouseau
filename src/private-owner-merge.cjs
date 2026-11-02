@@ -2,7 +2,13 @@
 
 // An exact-head/base transaction for the narrow private-plan exception only.
 // Callers must first validate the acceptance record and all technical gates.
-async function finalizePrivateOwner({github, repo, pr, assessment, baseBranch, verify}) {
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+// GitHub serves the merged pull request and the moved branch from different replicas, so the exact audit can
+// trail the atomic write by seconds. It is polled for a bounded time (about two minutes) before the merge is
+// reported as unobservable; a merge that landed a different head or merge commit is never waited for.
+const AUDIT_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 15000, 15000, 15000, 15000, 15000];
+
+async function finalizePrivateOwner({github, repo, pr, assessment, baseBranch, verify, wait = sleep, delays = AUDIT_DELAYS_MS}) {
   const exact = value => value.state === 'open' && !value.draft &&
     value.head.sha === assessment.head_sha && value.base.sha === assessment.base_sha && value.base.ref === baseBranch;
   const branchUpdate = require('./branch-update.cjs');
@@ -52,12 +58,19 @@ async function finalizePrivateOwner({github, repo, pr, assessment, baseBranch, v
       {name: `refs/heads/${pr.head.ref}`, beforeOid: assessment.head_sha, afterOid: assessment.head_sha, force: false},
     ],
   }});
-  const {data: merged} = await github.rest.pulls.get({...repo, pull_number: pr.number});
-  const {data: mergedBase} = await github.rest.repos.getBranch({...repo, branch: baseBranch});
-  if (!merged.merged || merged.head?.sha !== assessment.head_sha || merged.merge_commit_sha !== assessment.head_sha || mergedBase.commit.sha !== assessment.head_sha) {
-    throw new Error('Atomic owner merge submitted but exact merged PR audit is not yet observable; inspect before retrying');
+  const {withRateLimit} = require('./verification-wait.cjs');
+  for (let attempt = 0; ; attempt++) {
+    const {data: merged} = await withRateLimit(() => github.rest.pulls.get({...repo, pull_number: pr.number}), {wait});
+    const {data: mergedBase} = await withRateLimit(() => github.rest.repos.getBranch({...repo, branch: baseBranch}), {wait});
+    if (merged.merged && merged.head?.sha === assessment.head_sha && merged.merge_commit_sha === assessment.head_sha && mergedBase.commit.sha === assessment.head_sha) return merged;
+    if (merged.merged && (merged.head?.sha !== assessment.head_sha || (merged.merge_commit_sha && merged.merge_commit_sha !== assessment.head_sha))) {
+      throw new Error('Atomic owner merge landed a different head or merge commit than the assessed one; inspect before retrying');
+    }
+    if (attempt >= delays.length) {
+      throw new Error('Atomic owner merge submitted but exact merged PR audit is not yet observable; inspect before retrying');
+    }
+    await wait(delays[attempt]);
   }
-  return merged;
 }
 
 module.exports = {finalizePrivateOwner};
