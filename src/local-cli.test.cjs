@@ -93,6 +93,27 @@ test('local verifier records real command outcomes and native coverage gaps inde
   assert.equal(missing.verification_status, 'failed'); assert.equal(missing.commands[0].error.code, 'ENOENT');
 }));
 
+test('verification evidence keeps a bounded tail of each stream and binds the whole output by digest', () => repository(f => {
+  const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
+  const verbose = (lines, code) => [process.execPath, '-e',
+    `for (let i = 0; i < ${lines}; i++) process.stderr.write('test_case_' + i + ' ... ok\\n'); process.stdout.write('Ran ${lines} tests\\nDONE'); process.exitCode = ${code}`];
+  const lines = 300; const full = Array.from({length: lines}, (_, i) => `test_case_${i} ... ok\n`).join('');
+  const passed = executeVerification({directory: f.directory, config: {...config, verification: [verbose(lines, 0)]}}).commands[0];
+  assert.equal(passed.stderr, full.slice(-128)); assert.equal(passed.stderr_bytes, Buffer.byteLength(full));
+  assert.equal(passed.stderr_digest, digest(full), 'the digest still covers the complete stream');
+  assert.equal(passed.stdout, `Ran ${lines} tests\nDONE`); assert.equal(passed.stdout_bytes, undefined, 'a short stream is kept whole and unmarked');
+  const failed = executeVerification({directory: f.directory, config: {...config, verification: [verbose(lines, 1)]}}).commands[0];
+  assert.equal(failed.exit_code, 1); assert.equal(failed.stderr, full.slice(-4096)); assert.equal(failed.stderr_bytes, Buffer.byteLength(full));
+  const emoji = executeVerification({directory: f.directory, config: {...config, verification: [[process.execPath, '-e',
+    "process.stdout.write('\\u{1F600}'.repeat(200) + 'y')"]]}}).commands[0];
+  assert.equal(emoji.stdout, '\u{1F600}'.repeat(63) + 'y', 'a cut inside an emoji drops its orphaned half');
+  const missing = executeVerification({directory: f.directory, config: {...config, verification: [['/nonexistent-fixture-command']]}}).commands[0];
+  assert.equal(missing.stderr, ''); assert.equal(missing.error.code, 'ENOENT');
+  // Regression ceiling: forty green suites of 14 KB of verbose output used to put ~560 KB into the prompt and the receipt twice.
+  const suites = executeVerification({directory: f.directory, config: {...config, verification: Array.from({length: 40}, () => verbose(lines, 0))}});
+  assert.ok(Buffer.byteLength(JSON.stringify(suites)) < 40 * 1100, `verification evidence ${Buffer.byteLength(JSON.stringify(suites))} bytes`);
+}));
+
 test('v2 local verification binds every native artifact and allows only aggregate-measured branches', () => repository(f => {
   const original = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
   const frontend = path.join(f.directory, 'frontend'); fs.mkdirSync(frontend);

@@ -113,7 +113,9 @@ Go is measured only through the `go` adapter, whose lines are statements and
 branches are basic blocks ([native Go coverage](go-coverage.md)).
 
 The accepted base supplies the complete recipe in normal local review. Local
-evidence records actual command outcomes and output, native counters when valid,
+evidence records actual command outcomes, the digest of each command's complete stdout
+and stderr and their tails (the last 128 characters of a command that succeeded, the last
+4,096 of one that failed, with `stdout_bytes`/`stderr_bytes` stating the full length wherever a stream was cut), native counters when valid,
 artifact digests and freshness, unavailable-coverage diagnostics, and the accepted
 configuration digest. A nonzero command is not assumed to have failed only
 because of coverage. One frozen engine checks every part throughout the review.
