@@ -10,6 +10,7 @@ const {CAUSES, describe, noticeText, noticeLine, numbered, modeOf} = require('./
 const {NEXT_STEPS, PENDING_STEPS, body, pendingBody} = require('./incomplete.cjs');
 const {INTENT, FAILURES, GENERIC, intentCause, intentBlock, failureBlock} = require('./gate-notice.cjs');
 const {GAP_STEPS} = require('./merge-protection.cjs');
+const conflict = require('./branch-conflict.cjs');
 
 const SHA_A = 'a1b2c3d4e5f6'.padEnd(40, '0'); const SHA_B = 'f6e5d4c3b2a1'.padEnd(40, '9');
 const URL = 'https://github.com/example/product/actions/runs/9';
@@ -171,7 +172,7 @@ test('docs/notices.md lists every cause class a customer can see', () => {
     ...Object.keys(CAUSES).map(name => `receipt_${name}`),
     ...Object.keys(NEXT_STEPS), ...Object.keys(PENDING_STEPS).map(state => `verification_pending_${state}`),
     ...Object.keys(INTENT), ...FAILURES.map(([, cause]) => cause), GENERIC[0],
-    'base_moved', 'merge_protection_insufficient',
+    'base_moved', 'merge_protection_insufficient', ...Object.keys(conflict.STEPS),
   ];
   for (const code of codes) assert.ok(docs.includes(`\`${code}\``), `docs/notices.md lists ${code}`);
   for (const gap of Object.keys(GAP_STEPS)) assert.ok(docs.includes(gap), `docs/notices.md lists the protection gap ${gap}`);
