@@ -1644,6 +1644,7 @@ for (const controls of [false, true]) test(`controls=${controls}: a maintainer-a
   assert.equal(blocked.decision, 'blocked_technical'); assert.equal(blocked.review_source, 'maintainer_attested');
   assert.ok(reports.some(line => line.startsWith('Maintainer-attested local Clouseau quality review verified.')));
   assert.equal(providerCalls, 0);
+}));
 
 // Exact revert (opt-in `exact_revert`): trees are judged by the engine from base-repository history, never by a model.
 function revertWorld(f, {trees = ['2', '1', '0'], headTree = '1'} = {}) {
