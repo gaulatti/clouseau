@@ -682,6 +682,8 @@ No argument or environment variable changes them. A unit that misses the deadlin
 ceiling to use; lower `params.C` in the protected configuration and review again. A crashed headless review resumes from its journal
 (`<cache>/chunked/journal`) without sampling a finished call again. Rollback is unsetting `force` or setting `enabled: false`.
 
+The hosted CI review has its own dark, opt-in counterpart for a pull request that has no usable receipt: see `docs/chunked-hosted.md` (`acceptance.chunked_hosted`).
+
 ## Review partition
 
 `src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
