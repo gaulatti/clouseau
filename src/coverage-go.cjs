@@ -120,7 +120,7 @@ function blocks(text, modulePath, moduleRoot, root, sources, cwd) {
   return files;
 }
 
-function counters(text, sourceDirectory, cwd) {
+function counters(text, sourceDirectory, cwd, detail) {
   if (typeof text !== 'string') fail('Expected a Go cover profile as text');
   const root = realPath(sourceDirectory, cwd);
   const {modulePath, moduleRoot} = moduleOf(root);
@@ -129,6 +129,8 @@ function counters(text, sourceDirectory, cwd) {
   const counts = emptyCounts();
   for (const [file, known] of files) {
     const ordered = [...known.values()].sort((a, b) => a.start[0] - b.start[0] || a.start[1] - b.start[1]);
+    const lineMap = new Map();
+    const branchItems = [];
     ordered.forEach((block, index) => {
       const before = ordered[index - 1];
       if (before && (before.end[0] > block.start[0] || (before.end[0] === block.start[0] && before.end[1] > block.start[1]))) {
@@ -138,7 +140,13 @@ function counters(text, sourceDirectory, cwd) {
       if (block.hit) counts.lines[1] += block.statements;
       counts.branches[0]++;
       if (block.hit) counts.branches[1]++;
+      if (detail) {
+        // A block is the finest unit Go records: every line it spans is covered only if the block ran.
+        for (let line = block.start[0]; line <= block.end[0]; line++) lineMap.set(line, (lineMap.get(line) ?? true) && block.hit);
+        branchItems.push({from: block.start[0], to: block.end[0], covered: block.hit});
+      }
     });
+    if (detail) detail.set(file, {lines: lineMap, branches: branchItems});
   }
   const missing = [...sources].filter(([file, source]) => !files.has(file) && source.mustAppear).map(([file]) => file);
   if (missing.length) {

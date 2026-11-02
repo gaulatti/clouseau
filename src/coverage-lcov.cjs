@@ -16,6 +16,7 @@ const integer = value => /^[0-9]+$/.test(value) && Number.isSafeInteger(Number(v
 function parseRecord(rows) {
   const lines = new Map();
   const branches = [];
+  const branchLines = [];
   const totals = {};
   for (const row of rows) {
     const [tag, ...rest] = row.split(':');
@@ -25,8 +26,9 @@ function parseRecord(rows) {
       const known = lines.get(integer(number)) ?? 0;
       lines.set(Number(number), Math.max(known, integer(hits)));
     } else if (tag === 'BRDA') {
-      const [, , , taken] = value.split(',');
+      const [line, , , taken] = value.split(',');
       branches.push(taken === '-' ? 0 : integer(taken));
+      branchLines.push(line);
     } else if (['LF', 'LH', 'BRF', 'BRH'].includes(tag)) totals[tag] = integer(value);
     else if (!IGNORED.test(row)) fail(`Unsupported LCOV record: ${tag}`);
   }
@@ -34,10 +36,10 @@ function parseRecord(rows) {
   const covered = values => values.filter(count => count > 0).length;
   if (totals.LF !== measured.lines.length || totals.LH !== covered(measured.lines) ||
       totals.BRF !== branches.length || totals.BRH !== covered(branches)) fail('LCOV totals do not match its records');
-  return measured;
+  return {...measured, lineMap: lines, branchLines};
 }
 
-function counters(text, sourceDirectory, cwd) {
+function counters(text, sourceDirectory, cwd, detail) {
   if (typeof text !== 'string') fail('Expected an LCOV report as text');
   const root = realPath(sourceDirectory, cwd);
   const found = candidates(root);
@@ -59,6 +61,13 @@ function counters(text, sourceDirectory, cwd) {
     if (!sources.has(file) || seen.has(file)) fail(`Unexpected or duplicate application coverage: ${name}`);
     seen.add(file);
     const measured = parseRecord(rows);
+    if (detail) {
+      detail.set(file, {lines: new Map([...measured.lineMap].map(([line, hits]) => [line, hits > 0])),
+        branches: measured.branches.map((hits, index) => {
+          const line = integer(measured.branchLines[index]);
+          return {from: line, to: line, covered: hits > 0};
+        })});
+    }
     for (const metric of Object.keys(counts)) {
       counts[metric][0] += measured[metric].length;
       counts[metric][1] += measured[metric].filter(value => value > 0).length;

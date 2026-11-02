@@ -53,6 +53,10 @@ branch (for example `install/clouseau`) add:
   and the `initial-trust` workflow from [initial installation](initial-installation.md#independent-ci-and-initial-owner-acceptance),
   both pinned to the `reviewer_sha`.
 
+A repository far below 100% coverage can add `"coverage": {"mode": "changed_lines"}`
+to `.github/clouseau.json` to gate changed lines instead; see
+[changed-line coverage](changed-line-coverage.md). The default stays exact 100%.
+
 ## 3. Initial trust PR
 
 Follow [initial installation](initial-installation.md): `installation-prepare`,

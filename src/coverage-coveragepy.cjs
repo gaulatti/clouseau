@@ -190,10 +190,12 @@ function nativeCounts(entry, {limit, executable}) {
   if (Object.entries(expected).some(([key, count]) => !isInt(summary[key]) || summary[key] !== count)) {
     fail('Coverage.py native summary disagrees with exact line/branch measurements');
   }
-  return {lines: [summary.num_statements, summary.covered_lines], branches: [exits.size, taken.size]};
+  return {lines: [summary.num_statements, summary.covered_lines], branches: [exits.size, taken.size],
+    lineMap: new Map([...[...executed].map(line => [line, true]), ...[...missing].map(line => [line, false])]),
+    branchItems: [...exits].map(([key, [origin]]) => ({from: origin, to: origin, covered: taken.has(key)}))};
 }
 
-function counters(report, sourceDirectory, cwd) {
+function counters(report, sourceDirectory, cwd, detail) {
   const root = realPath(sourceDirectory, cwd);
   const sources = inventory(root, cwd);
   const meta = get(report, 'meta');
@@ -214,6 +216,7 @@ function counters(report, sourceDirectory, cwd) {
     if (!sources.has(file) || seen.has(file)) fail(`Unexpected or duplicate Python application coverage: ${filename}`);
     seen.add(file);
     const measured = nativeCounts(entry, sources.get(file));
+    if (detail) detail.set(file, {lines: measured.lineMap, branches: measured.branchItems});
     for (const metric of Object.keys(counts)) {
       counts[metric][0] += measured[metric][0];
       counts[metric][1] += measured[metric][1];

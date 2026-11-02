@@ -55,7 +55,7 @@ for the version 2 policy configuration.
 | --- | --- | --- |
 | `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
 | `test` | none | Run Clouseau's Node regression suite |
-| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
+| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive. A repository can opt in to [changed-line coverage](docs/changed-line-coverage.md) with `coverage.mode` in its protected config plus `coverage-base-ref` and `coverage-baseline` |
 | `await-verification` | `config`, `pull-request` for non-PR events | Wait for the exact-head PR verification run without deadlocking a single-slot runner pool: ends cleanly with `verified=false` when verification has not started within `verification_queue_grace_seconds` (default 900), to be reassessed when the verification run completes |
 | `assess` | `config`, optional `pull-request`, `provider-key`, optional `ignore-receipt: 'true'` (never read the PR's receipt; for the hosted fallback after an unusable receipt) | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |

@@ -38,7 +38,13 @@ function pairedMaps(entry, locations, hits) {
   return left;
 }
 
-function measureEntry(entry) {
+// The decision's own source line: the branch location, else the legacy line, else the first outcome's start.
+function decisionLine(location) {
+  const line = get(get(location.loc, 'start'), 'line') ?? location.line ?? get(get(location.locations[0], 'start'), 'line');
+  return Number.isSafeInteger(line) && line >= 1 ? line : fail('Invalid Istanbul branch line');
+}
+
+function measureEntry(entry, wantDetail) {
   const lines = new Map();
   const statements = pairedMaps(entry, 'statementMap', 's');
   for (const [key, location] of Object.entries(statements)) {
@@ -48,6 +54,7 @@ function measureEntry(entry) {
     lines.set(line, Math.max(lines.get(line) ?? 0, hit(entry.s[key])));
   }
   const branchHits = [];
+  const branchItems = [];
   for (const [key, location] of Object.entries(pairedMaps(entry, 'branchMap', 'b'))) {
     const values = entry.b[key];
     if (!isObject(location) || location.skip || !Array.isArray(location.locations) ||
@@ -55,11 +62,15 @@ function measureEntry(entry) {
       fail('Invalid or skipped branch measurement');
     }
     branchHits.push(...values.map(hit));
+    if (wantDetail) {
+      const line = decisionLine(location);
+      branchItems.push(...values.map(value => ({from: line, to: line, covered: value > 0})));
+    }
   }
-  return {lines: [...lines.values()], branches: branchHits};
+  return {lines: [...lines.values()], branches: branchHits, lineMap: lines, branchItems};
 }
 
-function counters(report, sourceDirectory, cwd) {
+function counters(report, sourceDirectory, cwd, detail) {
   const root = realPath(sourceDirectory, cwd);
   const found = candidates(root);
   if (found.some(({file, symbolic}) => symbolic || !isInside(realPath(file, cwd), root))) fail('Symbolic or escaped JS/TS application source');
@@ -79,7 +90,9 @@ function counters(report, sourceDirectory, cwd) {
     if (!sources.has(file) || seen.has(file)) fail(`Unexpected or duplicate application coverage: ${filename}`);
     if (!isObject(entry) || entry.path !== filename) fail(`Mismatched Istanbul source path: ${filename}`);
     seen.add(file);
-    const measured = measureEntry(entry);
+    const measured = measureEntry(entry, Boolean(detail));
+    // Changed-line gating detail: line -> covered, and each branch outcome as an inclusive line range.
+    if (detail) detail.set(file, {lines: new Map([...measured.lineMap].map(([line, count]) => [line, count > 0])), branches: measured.branchItems});
     for (const metric of Object.keys(counts)) {
       counts[metric][0] += measured[metric].length;
       counts[metric][1] += measured[metric].filter(value => value > 0).length;
