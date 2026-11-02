@@ -66,7 +66,7 @@ test('every failure path of the AI step ends in a classified hold that names the
     assert.notEqual(classified.reason, GENERIC, name);
     const notice = body({number: 1, head_sha: 'a'.repeat(40), ...classified}, 'https://github.com/o/r/actions/runs/1');
     assert.ok(notice.includes(`**Reason:** ${classified.reason.replaceAll('@', '').replace(/\s+/g, ' ').slice(0, 500)}`), `${name}: the visible comment names the item`);
-    assert.ok(notice.includes(NEXT_STEPS[cause]), `${name}: and a specific next step`);
+    assert.ok(notice.includes(`**Cause:** \`${cause}\``) && notice.includes(`1. ${NEXT_STEPS[cause][0].split('{')[0]}`), `${name}: and its cause class with a numbered next step`);
   }
   const named = classify(await capture(() => collectSnapshot(unreadable)));
   assert.match(named.reason, /Changed file \S+ cannot be read as complete text/);
