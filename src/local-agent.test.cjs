@@ -245,6 +245,20 @@ function inflate(node, definitions) {
   return Object.fromEntries(Object.entries(node).filter(([key]) => key !== '$defs').map(([key, value]) => [key, inflate(value, definitions)]));
 }
 
+test('schema validation follows only well-formed references to shared definitions', () => {
+  const schema = {$defs: {word: {type: 'string', enum: ['a', 'b']}, loop: {$ref: '#/$defs/loop'}},
+    type: 'object', properties: {one: {$ref: '#/$defs/word'}, many: {type: 'array', items: {$ref: '#/$defs/word'}},
+      either: {anyOf: [{$ref: '#/$defs/word'}, {type: 'null'}]}}, required: ['one'], additionalProperties: false};
+  validateValue(schema, {one: 'a', many: ['b'], either: null});
+  validateValue(schema, {one: 'a', either: 'b'});
+  for (const bad of [{one: 'c'}, {one: 'a', many: ['c']}, {one: 'a', either: 'c'}]) assert.throws(() => validateValue(schema, bad), Error, JSON.stringify(bad));
+  for (const ref of ['#/$defs/missing', '#/$defs/', 'elsewhere', '#/$defs/loop', '#/$defs/word/x']) {
+    assert.throws(() => validateValue({...schema, properties: {one: {$ref: ref}}}, {one: 'a'}), /Unsupported schema reference/, ref);
+  }
+  assert.throws(() => validateValue({...schema, properties: {one: {$ref: '#/$defs/word', type: 'string'}}}, {one: 'a'}), /Unsupported schema reference/);
+  assert.throws(() => validateValue({type: 'object', properties: {one: {$ref: '#/$defs/word'}}}, {one: 'a'}), /Unsupported schema reference/);
+});
+
 test('shared schema definitions inflate to exactly the original schema, descend only into schema positions and skip small or unique nodes', () => {
   const ids = Array.from({length: 60}, (_, i) => `proof-${i}-1`);
   const citation = {type: 'array', items: {type: 'string', enum: ids}};
@@ -258,8 +272,8 @@ test('shared schema definitions inflate to exactly the original schema, descend 
   required: ['first'], additionalProperties: false};
   const shared = shareSchema(schema);
   assert.deepEqual(inflate(shared, shared.$defs), schema);
-  assert.ok(JSON.stringify(shared).length < JSON.stringify(schema).length / 2);
-  assert.equal(Object.keys(shared.$defs).length, 2);
+  assert.ok(JSON.stringify(schema).length - JSON.stringify(shared).length > 2 * JSON.stringify(finding).length * 0.8, 'three copies of the finding become one');
+  assert.equal(Object.keys(shared.$defs).length, 1);
   assert.deepEqual(shared.properties.small, schema.properties.small);
   assert.ok(shared.properties.unique.properties.note.enum.length === 60);
   assert.equal(shared.properties.first.$ref, shared.properties.second.anyOf[0].$ref);

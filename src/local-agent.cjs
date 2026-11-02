@@ -76,10 +76,17 @@ function shareSchema(schema) {
 const padded = sequence => String(sequence).padStart(4, '0');
 const fail = message => {throw new Error(message);};
 
-function validateValue(schema, value, where = '$') {
+function validateValue(schema, value, where = '$', root = schema) {
   if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) fail(`Unsupported schema at ${where}`);
+  if (schema.$ref !== undefined) {
+    // Only the shared definitions this module writes: a bare reference to a definition that is not itself a reference.
+    const name = /^#\/\$defs\/([A-Za-z0-9]+)$/.exec(schema.$ref)?.[1];
+    const target = Object.hasOwn(root.$defs || {}, name) ? root.$defs[name] : null;
+    if (Object.keys(schema).length !== 1 || target === null || target.$ref !== undefined) fail(`Unsupported schema reference at ${where}`);
+    return validateValue(target, value, where, root);
+  }
   const supported = new Set(['type', 'enum', 'const', 'anyOf', 'properties', 'required', 'additionalProperties',
-    'items', 'maxItems', 'minimum', 'maximum']);
+    'items', 'maxItems', 'minimum', 'maximum', '$defs']);
   for (const keyword of Object.keys(schema)) {
     if (!supported.has(keyword) && !INFORMATIONAL.has(keyword)) fail(`Unsupported schema keyword ${keyword} at ${where}`);
   }
@@ -87,7 +94,7 @@ function validateValue(schema, value, where = '$') {
     if (!Array.isArray(schema.anyOf) || !schema.anyOf.length) fail(`Unsupported schema at ${where}`);
     const failures = [];
     for (const option of schema.anyOf) {
-      try {validateValue(option, value, where); return;} catch (error) {failures.push(error.message);}
+      try {validateValue(option, value, where, root); return;} catch (error) {failures.push(error.message);}
     }
     fail(`${where} matches no allowed alternative (${failures.join('; ').slice(0, 400)})`);
   }
@@ -110,13 +117,13 @@ function validateValue(schema, value, where = '$') {
   }
   if (Array.isArray(value)) {
     if (schema.maxItems !== undefined && value.length > schema.maxItems) fail(`${where} has too many items`);
-    if (schema.items !== undefined) value.forEach((item, index) => validateValue(schema.items, item, `${where}[${index}]`));
+    if (schema.items !== undefined) value.forEach((item, index) => validateValue(schema.items, item, `${where}[${index}]`, root));
   }
   if (kinds.object(value)) {
     const properties = schema.properties || {};
     for (const name of schema.required || []) if (!Object.hasOwn(value, name)) fail(`${where}.${name} is required`);
     for (const [name, item] of Object.entries(value)) {
-      if (Object.hasOwn(properties, name)) validateValue(properties[name], item, `${where}.${name}`);
+      if (Object.hasOwn(properties, name)) validateValue(properties[name], item, `${where}.${name}`, root);
       else if (schema.additionalProperties === false) fail(`${where}.${name} is not allowed`);
     }
   }

@@ -189,8 +189,11 @@ or session that sees only those files, has it write a JSON answer to the request
 clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session SESSION_ID
 ```
 
-`respond` validates the answer against the request schema (the supported subset
-fails closed on unknown keywords), refuses a session identifier already used for
+The schema file is compact JSON Schema that states each repeated subschema (chiefly the
+proof-ID enumeration every citation site shares) once under `$defs` and points at it with
+`"$ref": "#/$defs/NAME"`; it is the same constraint as the full inline schema, a few KB
+instead of hundreds. `respond` validates the answer against the request schema (the
+supported subset, with only those `$defs` references, fails closed on unknown keywords), refuses a session identifier already used for
 another request in the exchange, and allows three attempts per request. Repeating
 the identical `review` command then resumes: it reuses the one recorded
 verification, requires the same frozen evidence digest, replays accepted answers
