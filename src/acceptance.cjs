@@ -184,7 +184,7 @@ function ancestors(from) {
   const found = [];
   for (let dir = path.posix.dirname(from); ; dir = path.posix.dirname(dir)) {
     found.push(dir === '.' ? '' : dir);
-    if (dir === '.' || dir === '/') return found;
+    if (dir === '.') return found;
   }
 }
 

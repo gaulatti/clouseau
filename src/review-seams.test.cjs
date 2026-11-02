@@ -107,6 +107,11 @@ test('a non-JavaScript test is linked to its subject by stem, with the test_ and
     {path: 'pkg/engine.py', unit: 'u1', head: 'x = 1\n', patch: '+x\n'},
   ]);
   assert.deepEqual(kinds(seamsOf({snapshot, plan})), ['test_subject:tests/engine_test.py>pkg/engine.py', 'test_subject:tests/test_engine.py>pkg/engine.py']);
+  const go = change([
+    {path: 'pkg/engine_test.go', unit: 'u0', base: 'x\n', patch: '-x\n', status: 'removed'},
+    {path: 'pkg/engine.go', unit: 'u1', head: 'package pkg\n', patch: '+x\n'},
+  ]);
+  assert.deepEqual(kinds(seamsOf(go)), ['test_subject:pkg/engine_test.go>pkg/engine.go'], 'a language the linker does not follow pairs by stem only');
   const stem = change([
     {path: 'tests/engine.spec.py', unit: 'u0', base: 'assert 1\n', patch: '-assert 1\n', status: 'removed'},
     {path: 'pkg/engine.py', unit: 'u1', head: 'x = 1\n', patch: '+x\n'},
