@@ -48,6 +48,38 @@ function hostedForm(patch, live) {
 // no body line is ever touched, and line numbers, headers and bodies still have to match byte for byte.
 const withoutHeading = patch => patch.replace(/^(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@).*$/gm, '$1');
 
+// `git diff` leaves two hunks apart when exactly one unchanged line separates their context; GitHub's `patch` joins them
+// and shows that line. The signed patch is therefore compared by line, with its hunk numbering: every line must equal
+// GitHub's at the same old and new position, and the only line GitHub may add is a single unchanged line between two
+// signed hunks. Any other difference, including whitespace, remains a mismatch.
+function lineEntries(patch) {
+  const entries = [];
+  let hunk = -1; let old = 0; let now = 0;
+  for (const line of patch.split('\n')) {
+    const head = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(line);
+    if (head) {hunk++; old = Number(head[1]); now = Number(head[2]); continue;}
+    if (hunk < 0 || !' +-\\'.includes(line[0] ?? '#')) return null;
+    entries.push({hunk, kind: line[0], old, now, line});
+    if (line[0] !== '+' && line[0] !== '\\') old++;
+    if (line[0] !== '-' && line[0] !== '\\') now++;
+  }
+  return entries;
+}
+
+const sameEntry = (a, b) => a && b && a.kind === b.kind && a.old === b.old && a.now === b.now && a.line === b.line;
+
+function joinsSingleGaps(signed, hosted) {
+  const a = lineEntries(signed); const b = lineEntries(hosted);
+  if (!a || !b) return false;
+  let next = 0;
+  for (let index = 0; index < b.length; index++) {
+    if (sameEntry(a[next], b[index])) {next++; continue;}
+    const between = next > 0 && a[next] && a[next].hunk !== a[next - 1].hunk && b[index].kind === ' ' && sameEntry(a[next], b[index + 1]);
+    if (!between) return false;
+  }
+  return next === a.length;
+}
+
 // A file added whole is stored as its header plus a marker that the body is its head source; the
 // restored text is what the reviewers saw. A marker without that source restores nothing.
 function signedPatch(snapshot, item) {
@@ -73,7 +105,10 @@ function verifyPatches({snapshot, files}) {
       if (item.status !== live.status) throw new ReceiptPatchMismatch(live.filename);
       continue;
     }
-    if (!item || item.status !== live.status || withoutHeading(hostedForm(signedPatch(snapshot, item), live) ?? '') !== withoutHeading(live.patch)) throw new ReceiptPatchMismatch(live.filename);
+    if (!item || item.status !== live.status) throw new ReceiptPatchMismatch(live.filename);
+    const signedText = withoutHeading(hostedForm(signedPatch(snapshot, item), live) ?? '');
+    const hostedText = withoutHeading(live.patch);
+    if (signedText !== hostedText && !joinsSingleGaps(signedText, hostedText)) throw new ReceiptPatchMismatch(live.filename);
   }
 }
 
