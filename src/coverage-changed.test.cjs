@@ -105,8 +105,8 @@ test('every changed line and branch must be covered and totals must not regress'
   assert.deepEqual(enforce({detail: detail([[1, false]]), changed: new Map([['/w/a.js', new Set([7])]])}), {lines: [0, 0], branches: [0, 0]});
   assert.throws(() => enforce({detail: detail([[2, false], [3, true]], branches)}), /lines: 1 changed uncovered; uncovered: a\.js:2 line$/);
   assert.throws(() => enforce({detail: detail(lines, [{from: 3, to: 5, covered: false}])}), /branches: 1 changed uncovered; uncovered: a\.js:3 branch$/);
-  assert.throws(() => enforce({detail: detail(lines), totals: {lines: [10, 4], branches: [4, 2]}}), /lines: repository-wide coverage fell/);
-  assert.throws(() => enforce({detail: detail(lines), totals: {lines: [10, 5], branches: [8, 3]}}), /branches: repository-wide coverage fell/);
+  assert.throws(() => enforce({detail: detail(lines), totals: {lines: [10, 4], branches: [4, 2]}}), /lines: repository-wide coverage fell below the base revision \(base 5\/10, now 4\/10\)/);
+  assert.throws(() => enforce({detail: detail(lines), totals: {lines: [10, 5], branches: [8, 3]}}), /branches: repository-wide coverage fell below the base revision \(base 2\/4, now 3\/8\)/);
   assert.deepEqual(enforce({detail: detail(lines), totals: {lines: [20, 11], branches: [4, 3]}}), {lines: [2, 2], branches: [0, 0]});
   const many = Array.from({length: 25}, (_, index) => [index + 1, false]);
   assert.throws(() => enforce({detail: detail(many), changed: new Map([['/w/a.js', new Set(many.map(([line]) => line))]])}), /a\.js:20 line, \.\.\.$/);

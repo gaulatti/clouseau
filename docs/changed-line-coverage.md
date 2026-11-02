@@ -37,7 +37,7 @@ else runs the exact gate, which is the stricter direction.
 | --- | --- |
 | `config` | The protected configuration. Pass the **base** revision's file (for example `git show "$BASE_SHA:.github/clouseau.json"`), never the contributor's. |
 | `coverage-base-ref` | Base revision to diff against, for example the PR base SHA. The checkout needs its history (`fetch-depth: 0`). |
-| `coverage-baseline` | JSON totals measured on the base revision: `{"lines":[total,covered],"branches":[total,covered]}`. |
+| `coverage-baseline` | **Path to a file** of JSON totals measured on the base revision (`baseline.json` below): `{"lines":[total,covered],"branches":[total,covered]}`. Inline JSON is rejected as an unreadable baseline. |
 
 Produce the baseline by running the same tests on the base checkout and then:
 
@@ -79,6 +79,7 @@ rejected exactly as in the exact gate, because the same adapters measure first.
 
 For lines and for branches, `covered/total` of the pull request must be at least
 `covered/total` of the baseline, compared exactly with integer arithmetic. A
+failure prints both fractions, for example `(base 5/10, now 4/10)`. A
 baseline total of zero is accepted for a metric the repository does not have.
 
 ## Limits

@@ -108,7 +108,7 @@ function enforceChanged({detail, changed, totals, baseline, directory}) {
   const failures = [];
   for (const metric of METRICS) {
     if (out[metric][0] !== out[metric][1]) failures.push(`${metric}: ${out[metric][0] - out[metric][1]} changed uncovered`);
-    if (below(totals[metric], baseline[metric])) failures.push(`${metric}: repository-wide coverage fell below the base revision`);
+    if (below(totals[metric], baseline[metric])) failures.push(`${metric}: repository-wide coverage fell below the base revision (base ${baseline[metric][1]}/${baseline[metric][0]}, now ${totals[metric][1]}/${totals[metric][0]})`);
   }
   if (failures.length) {
     fail(failures.join('; ') + (missed.length ? `; uncovered: ${missed.slice(0, SAMPLE).join(', ')}${missed.length > SAMPLE ? ', ...' : ''}` : ''));
