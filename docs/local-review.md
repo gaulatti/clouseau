@@ -383,6 +383,58 @@ it does not change the reviewed source commit or checkout. Include the returned
 artifact follows the repository's visibility and contains reviewed source and
 the requirement text; those inputs must be appropriate for publication there.
 
+## Maintainer attestation of another author's pull request (opt-in)
+
+By default the enrolled signing key's `github_actor` must equal the pull request
+author exactly, so a pull request by Dependabot or an outside contributor can never
+carry a receipt. A repository can opt in, in the protected base configuration only:
+
+```json
+"local_review": {"...": "...", "attest": {"authors": ["dependabot[bot]", "a-named-contributor"]}}
+```
+
+`authors` is either a nonempty list of distinct, exact logins (an app account keeps
+its `[bot]` suffix; matching is exact and case-sensitive) or the explicit string
+`"any"`. An empty list, a missing `authors`, any other value or any other field makes
+the configuration invalid. Without `attest` nothing changes: behavior is byte-identical
+and the author must equal the signer's login. The setting lives in the protected
+configuration, so a pull request cannot enable it for itself, and it is part of the
+configuration digest every receipt binds.
+
+The maintainer checks out exactly the pull request head (`git fetch origin
+pull/N/head && git checkout --detach FETCH_HEAD`, the same ref for forks) and runs
+the ordinary review with the extra option `--pr N`:
+
+```bash
+clouseau review --directory . --base origin/main --request-file req.txt --agent claude --pr N
+clouseau publish --directory . --receipt PATH_FROM_THE_REVIEW_OUTPUT
+```
+
+The CLI asks GitHub (`gh api`) for the pull request's author, open state, base branch
+and head. It refuses unless attestation is enabled, the pull request is open against
+the base branch, HEAD is exactly the pull request head and the author is allowed. A
+pull request the signer authored needs no attestation and is signed as before. The
+signer runs the repository's verification commands on code the author wrote;
+review the change before running it on a workstation you care about.
+
+The signed payload then carries `attestation: {author, number, signer}`. CI accepts
+it only when all of these hold: the key is enrolled and active, the protected
+configuration allows that pull request's author, the signed author equals the pull
+request author, the signed signer equals the key's enrolled login, and the signed
+number equals the pull request number. A receipt signed for one author or pull
+request therefore cannot be replayed for another, and a verifier without `attest`
+(including installation trust) rejects every attested receipt. Reasons use the fixed
+class `attestation`. The pull request comment and job summary say
+`Maintainer-attested`, name the signer and author, and the assessment's
+`review_source` is `maintainer_attested`.
+
+An attested receipt is exactly as strong as any other: it never authorizes a change
+to protected review controls (`/approve-intent` is still required and unchanged),
+tests and exact coverage still must pass, and a push to the pull request head makes
+it stale. A bot that rewrites the pull request body or rebases (Dependabot does)
+removes the marker or the matching head, so publish for the final head and place the
+marker last.
+
 ## CI consumes evidence without repeating AI
 
 An opted-in protected workflow loads configuration and Clouseau from trusted
@@ -479,6 +531,7 @@ untrusted text:
 | `unavailable` | The immutable artifact is missing, oversized, truncated or substituted |
 | `signature` | Unknown, revoked or invalid signing key or signature |
 | `author` | The signing identity is not enrolled for the PR author |
+| `attestation` | An attested receipt the protected `local_review.attest` setting does not permit for this author and pull request |
 | `expired` | Expired, not yet valid or an invalid challenge |
 | `revision` | Different repository, head or base |
 | `changed` | The policy or configuration changed after issue |

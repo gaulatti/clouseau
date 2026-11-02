@@ -1553,6 +1553,99 @@ test('optional local review on the receipt-only route names the real condition i
   assert.doesNotMatch(body(assessment, 'u'), /Local review receipt ignored/);
 }));
 
+// Opt-in maintainer attestation: an enrolled maintainer's receipt for a pull request by someone else (docs/local-review.md).
+for (const controls of [false, true]) test(`controls=${controls}: a maintainer-attested receipt is accepted only for the exact signed author and pull request and never authorizes protected controls`, () => fixture(async f => {
+  const crypto = require('node:crypto');
+  const {issueReceipt} = require('./local-receipt.cjs');
+  const {refresh} = require('./acceptance-sources.cjs');
+  await f.assess();
+  const seed = JSON.parse(fs.readFileSync(f.recordPath));
+  const maintainer = crypto.generateKeyPairSync('ed25519');
+  const outsider = crypto.generateKeyPairSync('ed25519');
+  const pem = key => key.privateKey.export({type: 'pkcs8', format: 'pem'});
+  const author = f.state.pr.user.login; const number = f.state.pr.number;
+  const engine = {...require('./central-version.cjs').SOURCE, sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest()};
+  // A receipt signed for exactly this configuration; `sign` picks the key and the attestation it carries.
+  const mint = (trusted, {key = maintainer, attestation} = {}) => {
+    const record = structuredClone(seed);
+    record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted); refresh(record.snapshot);
+    record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
+    record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
+      ({role, phase, harness: 'codex', session: `fictional-${role}-${phase}`, request_digest: digest(role),
+        response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
+    record.result.execution_digest = digest(record.result.usage);
+    for (const item of record.result.reviews) item.report.snapshot = record.snapshot.digest;
+    return issueReceipt({record, privateKey: pem(key), keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: 'e'.repeat(40), attestation: structuredClone(attestation)});
+  };
+  const trustFor = attest => ({...config, ...(controls ? {sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js']} : {}),
+    local_review: {mode: 'required', reviewer_sha: 'e'.repeat(40), central_source: {...require('./central-version.cjs').SOURCE}, max_age_seconds: 172800,
+      keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'maintainer', revoked: false, public_key: maintainer.publicKey.export({type: 'spki', format: 'pem'})}],
+      ...(attest ? {attest} : {})}});
+  const signed = {author, number, signer: 'maintainer'};
+  const original = f.github.rest.repos.getContent;
+  let served;
+  f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
+    encoding: 'base64', content: Buffer.from(JSON.stringify(served)).toString('base64'), size: JSON.stringify(served).length}} : original(args);
+  f.state.pr.body = `Dependency update.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  if (controls) f.state.comments = [{id: 87, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+  let providerCalls = 0; const reports = [];
+  const assess = trusted => createPolicy(trusted, {engine}).assess({github: f.github, context: f.context, recordPath: f.recordPath,
+    report: line => reports.push(line), fetchImpl: async () => {providerCalls++; throw new Error('CI AI must not be called');}});
+  // Each attack is an ordinary ignored receipt with one fixed class; the PR is then reviewed by CI (here: required, so held).
+  const ignored = async (trusted, bundle, reason) => {
+    served = bundle; fs.rmSync(f.recordPath, {force: true});
+    const result = await assess(trusted);
+    assert.equal(result.receipt_notice, reason); assert.equal(result.review_source, undefined);
+    assert.equal(result.decision, 'review_incomplete'); assert.equal(result.cause, 'local_receipt_required');
+  };
+  const trusted = trustFor({authors: [author]});
+  // Default off: a receipt whose signer is not the author, with or without the claim, is ignored without the opt-in.
+  await ignored(trustFor(undefined), mint(trustFor(undefined), {attestation: signed}), 'attestation');
+  await ignored(trustFor(undefined), mint(trustFor(undefined)), 'author');
+  // Allowlist that does not name this author, and an unrelated author's replay of this receipt.
+  await ignored(trustFor({authors: ['someone-else']}), mint(trustFor({authors: ['someone-else']}), {attestation: signed}), 'attestation');
+  f.state.pr.user.login = 'another-author';
+  await ignored(trustFor({authors: [author, 'another-author']}), mint(trustFor({authors: [author, 'another-author']}), {attestation: signed}), 'attestation');
+  await ignored(trustFor({authors: 'any'}), mint(trustFor({authors: 'any'}), {attestation: signed}), 'attestation');
+  f.state.pr.user.login = author;
+  // Wrong pull request number, forged signer, malformed claim, and a key that is not enrolled.
+  await ignored(trusted, mint(trusted, {attestation: {...signed, number: number + 1}}), 'attestation');
+  await ignored(trusted, mint(trusted, {attestation: {...signed, signer: 'someone-else'}}), 'attestation');
+  await ignored(trusted, mint(trusted, {key: outsider, attestation: signed}), 'signature');
+  const forged = mint(trusted, {attestation: signed}); forged.payload.attestation.author = 'another-author';
+  await ignored(trusted, forged, 'signature');
+  const extra = mint(trusted, {attestation: signed}); extra.payload.attestation.extra = true;
+  await ignored(trusted, extra, 'signature');
+  // The exact signed author and number are accepted, with zero CI AI calls and a maintainer-attested notice.
+  served = mint(trusted, {attestation: signed}); fs.rmSync(f.recordPath, {force: true});
+  const assessment = await assess(trusted);
+  assert.equal(providerCalls, 0);
+  if (controls) {
+    // A receipt never authorizes protected controls; only the exact-head owner confirmation does, as for any receipt.
+    assert.equal(assessment.decision, 'owner_decision');
+    f.state.comments = [];
+    fs.rmSync(f.recordPath, {force: true});
+    const held = await assess(trusted);
+    assert.equal(held.decision, 'review_incomplete'); assert.equal(held.cause, 'receipt_protected_controls');
+    return;
+  }
+  assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+  assert.equal(assessment.review_source, 'maintainer_attested');
+  assert.match(assessment.reason, /^Maintainer-attested passing local review/);
+  assert.ok(reports.some(line => line === 'Maintainer-attested local Clouseau review verified. Signed by `maintainer` for the pull request by `contributor`. CI AI calls: 0.'));
+  const summaries = [];
+  const core = {info() {}, summary: {addRaw(text) {summaries.push(text); return this;}, async write() {}}};
+  await createPolicy(trusted, {engine}).gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}});
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  assert.ok(summaries.some(text => text.includes('Maintainer-attested local review (signed by `maintainer` for the pull request by `contributor`)')));
+  // While independent CI is blocked the attested review is still named as such and approves nothing.
+  f.state.failed = true; fs.rmSync(f.recordPath, {force: true});
+  const blocked = await assess(trusted);
+  assert.equal(blocked.decision, 'blocked_technical'); assert.equal(blocked.review_source, 'maintainer_attested');
+  assert.ok(reports.some(line => line.startsWith('Maintainer-attested local Clouseau quality review verified.')));
+  assert.equal(providerCalls, 0);
+}));
+
 // Exact revert (opt-in `exact_revert`): trees are judged by the engine from base-repository history, never by a model.
 function revertWorld(f, {trees = ['2', '1', '0'], headTree = '1'} = {}) {
   const sha = letter => letter.repeat(39) + '7';
