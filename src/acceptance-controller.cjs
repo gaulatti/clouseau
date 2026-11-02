@@ -310,7 +310,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         result: chunking ? {...stored.result, decision: result.decision} : result, previous, controls: Boolean(controls), technical};
       // Retain the complete record. Never place the large, model-controlled
       // ledger in workflow outputs or interpolate it into shell commands.
-      fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
+      const text = JSON.stringify(record, null, 2) + '\n';
+      if (chunking) hostedChunked.checkTransport(process.env.CLOUSEAU_RECORD_TRANSPORT, text);
+      fs.writeFileSync(recordPath, text);
       publication({...result, decision}, snapshot, state);
       const assessment = {...identity, decision, record_digest: digest(record),
         reason: controls && decision === 'owner_decision' ? controls : `Evidence-bound product and technical acceptance: ${decision}.`};

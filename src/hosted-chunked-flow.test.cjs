@@ -243,3 +243,43 @@ test('a unit that asks for more source is held with a named cause, not failed', 
   assert.match(assessment.reason, /Held, not failed: the chunked review stopped/);
 }, {config: on({enabled: true, force: true, params: {C: 3000, S: 2000}}), count: 3, size: 2000,
   provider: {respond: () => ({kind: 'source_request', report: null, request_sources: ['src/other.cjs']})}}));
+
+test('a record the job-output transport cannot carry is held with the fix named, and the artifact transport carries it', async () => {
+  const old = process.env.CLOUSEAU_RECORD_TRANSPORT;
+  try {
+    await largeFixture(async f => {
+      process.env.CLOUSEAU_RECORD_TRANSPORT = 'job-output';
+      const held = await f.assess();
+      assert.equal(held.decision, 'review_incomplete');
+      assert.equal(held.cause, 'chunked_record_transport');
+      assert.match(held.reason, /Held, not failed.*record-transport to artifact/);
+      assert.equal(fs.existsSync(f.recordPath), false);
+      process.env.CLOUSEAU_RECORD_TRANSPORT = 'artifact';
+      assert.equal((await f.assess()).decision, 'auto_approve');
+    }, {config: ENABLED});
+    const { checkTransport } = require('./hosted-chunked.cjs');
+    assert.doesNotThrow(() => checkTransport('job-output', 'small'));
+    assert.throws(() => checkTransport('job-output', 'x'.repeat(2 * 1024 * 1024 + 1)), /job-output/);
+    const noisy = Array.from({length: 40000}, (_, i) => require('node:crypto').createHash('sha256').update(String(i)).digest('hex')).join('');
+    assert.throws(() => checkTransport('job-output', noisy), /job-output/);
+    assert.doesNotThrow(() => checkTransport(undefined, noisy));
+  } finally {
+    if (old === undefined) delete process.env.CLOUSEAU_RECORD_TRANSPORT; else process.env.CLOUSEAU_RECORD_TRANSPORT = old;
+  }
+});
+
+// The cost model of docs/chunked-hosted.md: the recorded usage of a fake run priced with the published tariffs of review-cost.cjs,
+// assuming no cache hits (the upper end of the estimate also doubles the lower end).
+test('the default caps hold a 4 MB change under $8 and a 1.2 MB change under $2 without holding either', async () => {
+  const {estimate} = require('./review-cost.cjs');
+  for (const [count, ceiling] of [[40, 2], [134, 8]]) {
+    await largeFixture(async f => {
+      const assessment = await f.assess();
+      assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+      const cost = estimate(f.read().result.usage);
+      assert.equal(cost.complete, true);
+      assert.ok(cost.known_cost_max < ceiling, `${count} modules: ${cost.known_cost_max}`);
+      if (process.env.CLOUSEAU_PRINT_COST) console.log(count, f.read().partition.units.length, cost);
+    }, {config: ENABLED, count, size: 30000});
+  }
+});

@@ -139,7 +139,7 @@ function fakeProvider(state) {
     const task = {tool: tool.name, model: body.model, prompt, chars: prompt.length, state};
     state.calls.push(task);
     const input = () => JSON.parse(prompt.slice(prompt.lastIndexOf('\n{"') + 1));
-    const reply = value => ({ok: true, json: async () => ({model: body.model, usage: {prompt_tokens: Math.ceil(prompt.length / 4), completion_tokens: 10},
+    const reply = value => ({ok: true, json: async () => ({model: body.model, usage: {prompt_tokens: Math.ceil(prompt.length / 4), prompt_cache_hit_tokens: 0, completion_tokens: task.phase === 'investigation' ? 4000 : 500},
       choices: [{finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: tool.name, arguments: JSON.stringify(value)}}]}}]})});
     const properties = tool.parameters.properties;
     if (state.provider.fail?.(task)) {task.failed = true; return {ok: false, status: 400};}

@@ -9,6 +9,7 @@
 // Size never fails a review here. A cost cap that the change would exceed HOLDS the pull request with a notice that names
 // the cap and how to raise it; it never skips evidence and never reviews a part of the change.
 
+const zlib = require('node:zlib');
 const wiring = require('./chunked-wiring.cjs');
 const {chunkedReview, ChunkedReviewRefusal} = require('./chunked-review.cjs');
 const {requestJSON} = require('./review-provider.cjs');
@@ -16,7 +17,7 @@ const {digest} = require('./acceptance.cjs');
 
 // Cost caps, protected configuration only. A cap may be raised as well as lowered: raising it is how a maintainer accepts the
 // cost of a very large change. Input tokens are estimated from prompt characters.
-const CAPS = Object.freeze({max_units: 32, max_input_tokens: 4000000});
+const CAPS = Object.freeze({max_units: 32, max_input_tokens: 6000000});
 const CHARS_PER_TOKEN = 4;
 const TOOL = 'chunked_review_result';
 const ATTEMPTS = 3;
@@ -69,6 +70,19 @@ function verifierOptions(acceptance) {
 // Only the two ways a change can be too large for one snapshot start a chunked review. Anything else is a real failure.
 const oversize = error => error.message === BUDGET_MESSAGE || (error.unavailable === true && error.reason === 'size');
 
+// The `job-output` record transport (record-transport.cjs) carries at most 2 MiB expanded and 300,000 bytes gzipped. A chunked
+// record may exceed that; the artifact transport has no such limit. Hitting it is a hold that names the fix, never a failure.
+const JOB_OUTPUT_EXPANDED = 2 * 1024 * 1024;
+const JOB_OUTPUT_COMPRESSED = 300000;
+function checkTransport(mode, text) {
+  if (mode !== 'job-output') return;
+  if (Buffer.byteLength(text) > JOB_OUTPUT_EXPANDED || zlib.gzipSync(text).length > JOB_OUTPUT_COMPRESSED) {
+    throw new HostedChunkedHold('chunked_record_transport', 'Held, not failed: the chunked review record is larger than the job-output record transport ' +
+      'carries (2 MiB expanded, 300,000 bytes compressed). Nothing was skipped. Set record-transport to artifact (the default) in the ' +
+      'workflow for this repository, then re-run.');
+  }
+}
+
 const held = (cause, message) => new HostedChunkedHold(cause, message);
 const raise = 'A maintainer can raise it in the protected base-branch Clouseau configuration';
 
@@ -94,7 +108,9 @@ function preflight(plan, active) {
 function hostedAsk({config, charge, fetchImpl, wait, log, observe = () => {}}) {
   return async task => {
     const model = task.phase === 'grading' ? config.grading_model : config[task.role];
-    for (let attempt = 1; ; attempt++) {
+    let attempt = 0;
+    for (;;) {
+      attempt++;
       charge(task.prompt);
       const result = await requestJSON({model, schemas: {[TOOL]: task.schema}, thinking: false, fetchImpl, wait, report: log,
         messages: [{role: 'user', content: task.prompt}]});
@@ -106,9 +122,9 @@ function hostedAsk({config, charge, fetchImpl, wait, log, observe = () => {}}) {
         if (log) log(`Chunked reviewer output invalid (${error.message}); retry ${attempt}/${ATTEMPTS - 1} with the same prompt`);
         continue;
       }
-      return {value: result.value, provenance: {provider: 'deepseek', requested_model: model, role: task.role, phase: task.phase,
-        request_digest: digest({schema: task.schema, prompt: task.prompt}), response_digest: digest(result.value),
-        tokens: result.usage.map(item => item.tokens), attempts: attempt}};
+      // The provider's own usage entry (provider, requested_model, tokens), so the cost estimator prices the run from the record.
+      return {value: result.value, provenance: {...result.usage.at(-1), role: task.role, phase: task.phase,
+        request_digest: digest({schema: task.schema, prompt: task.prompt}), response_digest: digest(result.value), attempts: attempt}};
     }
   };
 }
@@ -146,4 +162,4 @@ async function review({snapshot, active, config, fetchImpl, wait, log, observe, 
   }
 }
 
-module.exports = {CAPS, CHARS_PER_TOKEN, HostedChunkedHold, problem, settings, verifierOptions, oversize, preflight, hostedAsk, meter, review};
+module.exports = {checkTransport, CAPS, CHARS_PER_TOKEN, HostedChunkedHold, problem, settings, verifierOptions, oversize, preflight, hostedAsk, meter, review};

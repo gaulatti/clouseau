@@ -16,13 +16,13 @@ how to raise it.
 "acceptance": {
   "examiner": "deepseek-flash", "challenger": "deepseek-v4-pro", "grader": "deepseek", "grading_model": "deepseek-flash",
   "repair_attempts": 2,
-  "chunked_hosted": {"enabled": true, "max_units": 32, "max_input_tokens": 4000000}
+  "chunked_hosted": {"enabled": true, "max_units": 32, "max_input_tokens": 6000000}
 }
 ```
 
 * `enabled` (required boolean): the feature is off unless it is `true`. An invalid object is a configuration error, never
   a silent "off".
-* `max_units` (default 32) and `max_input_tokens` (default 4,000,000, estimated as prompt characters divided by 4) are the
+* `max_units` (default 32) and `max_input_tokens` (default 6,000,000, estimated as prompt characters divided by 4) are the
   **cost cap**. They are positive integers and may be raised as well as lowered: raising one is how a maintainer accepts the
   cost of a very large change. They live only in protected configuration read from the base branch; nothing in the pull
   request, its description or the workflow can change them.
@@ -72,9 +72,10 @@ and the atomic write boundary (`verifyAcceptance`) call the same `verifyRecord`,
 * validates each unit report against its own view, recomputes the merge and the grades, and runs the usual approval hold.
 
 The record travels as a workflow artifact, which has no 3 MB limit, so the signed multi-part receipt logic
-(`docs/receipt-compatibility.md`) is not needed. The `job-output` record transport (`docs/record-transport.md`) is bounded
-at 2 MiB expanded and cannot carry a record above that; use the default `artifact` transport for repositories that enable
-this feature. A chunked record produces no automatic repair proposal.
+(`docs/receipt-compatibility.md`) is not needed. The `job-output` record transport (`docs/record-transport.md`) carries at
+most 2 MiB expanded and 300,000 bytes gzipped. When the workflow selects `job-output` and a chunked record exceeds either
+limit, `assess` does not write the record: the pull request is held (`review_incomplete`, cause `chunked_record_transport`)
+with a notice saying to set `record-transport` to `artifact` (the default) and re-run. It is never a size failure. A chunked record produces no automatic repair proposal.
 
 ## Notices
 
@@ -93,13 +94,24 @@ finished call again.
 
 ## Cost
 
-Measured cost of the single-snapshot review: about $0.015 for the two calls of a 20 to 30 KB prompt, so about $0.30 per MB
-of prompt. The synthetic 1.2 MB change of the end-to-end test produced 14 calls and 5.9 MB of prompts (4.9 characters of
-prompt per character of changed source: each unit prompt carries its source, patch, proofs and the policy, and both roles
-review it). That is about $1.50 per MB of changed source, and 1.5 million estimated input tokens per 1.2 MB. The default cap
-(4,000,000 tokens, about 16 MB of prompts) holds a change above roughly 3 MB of added source and costs at most about
-$5 per run. A challenger on `deepseek-v4-pro` costs more per token than `deepseek-flash`; scale the figure to your models.
-Cost grows linearly with the number of units, which is why the unit count and the token estimate are the caps.
+Measured from the recorded usage of the end-to-end fake runs (`src/hosted-chunked-flow.test.cjs`), priced with the published
+tariffs in `src/review-cost.cjs` (as of 2026-10-18; USD per million tokens: `deepseek-flash` miss 0.15 and output 0.60,
+`deepseek-v4-pro` miss 0.66 and output 1.98), examiner on flash, challenger on v4-pro, no cache hits assumed, 4,000 output
+tokens per investigation call and 500 for the others. `review-cost` reports a lower and an upper estimate (the upper is twice
+the lower):
+
+| change (added source) | units | estimated input | estimated cost |
+| --- | --- | --- | --- |
+| 1.2 MB (40 modules and tests) | 6 | 1.5 M tokens | $0.66 to $1.33 |
+| 4 MB (134 modules and tests) | 20 | 5.0 M tokens | $2.30 to $4.60 |
+
+So about $0.55 per MB of changed source (upper $1.10). Prompt characters are about 4.9 times the changed source (each unit prompt
+carries its source, patch, proofs and the policy, and both roles review it). Cost is linear in the units.
+
+The default caps (`max_units` 32, `max_input_tokens` 6,000,000) are sized from this: a 4 MB change (20 units, 5.0 M tokens)
+and a 1.2 MB change pass without a hold; the worst case under the cap, every token priced as a v4-pro miss with the upper
+estimate, is 6 M x $0.66 x 2, about $7.9, below $8. A test asserts both ceilings ($2 and $8) against the upper estimate. Scale
+the figures to your own models and raise the caps in protected configuration to accept a larger change.
 
 ## Limits
 
