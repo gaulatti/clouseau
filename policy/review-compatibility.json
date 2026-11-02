@@ -1,5 +1,7 @@
 {
   "version": 1,
-  "current": "98dad750f510116726529db9673e95a0635eee4b01dfa2d644b9ae68a1cb5c68",
-  "compatible": []
+  "current": "5e0e5ed2c79d1d17509e66061ee6a6a94550a1c370bcc1be076a23259ef99304",
+  "compatible": [
+    "98dad750f510116726529db9673e95a0635eee4b01dfa2d644b9ae68a1cb5c68"
+  ]
 }

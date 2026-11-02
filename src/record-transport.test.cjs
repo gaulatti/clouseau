@@ -56,10 +56,24 @@ test('a compact local record travels by its own digest and cannot carry or stand
   assert.throws(() => transport.encode({...f, assessment: {...f.assessment, record_reference_digest: 'invalid'}}), /invalid assessment digest/);
 });
 
+test('a re-run of failed jobs reads the record of an earlier attempt of the same run, never a later one or a forged attempt', () => {
+  const f = fixture(); const payload = transport.encode(f);
+  for (const runAttempt of ['2', '3', '10']) assert.deepEqual(transport.decode({...f, runAttempt, payload}), {record: f.record, repair: null});
+  assert.throws(() => transport.decode({...f, runAttempt: '1', payload}), /foreign or stale/);
+  for (const forged of ['3', '02', 'x', '', 3, null]) {
+    const value = envelope(payload); value.binding.run_attempt = forged;
+    assert.throws(() => transport.decode({...f, payload: raw(value)}), /foreign or stale/);
+  }
+  const other = envelope(payload); other.binding.run_id = '457';
+  assert.throws(() => transport.decode({...f, runAttempt: '3', payload: raw(other)}), /foreign or stale/);
+  const head = envelope(payload); head.binding.head_sha = 'c'.repeat(40);
+  assert.throws(() => transport.decode({...f, runAttempt: '3', payload: raw(head)}), /foreign or stale/);
+});
+
 test('every repository, run, attempt, revision and assessment digest is bound at receipt', () => {
   const f = fixture(); const payload = transport.encode(f);
   for (const mutate of [
-    o => {o.context.repo.repo = 'foreign';}, o => {o.context.runId++;}, o => {o.runAttempt = '3';},
+    o => {o.context.repo.repo = 'foreign';}, o => {o.context.runId++;}, o => {o.runAttempt = '1';},
     o => {o.assessment.head_sha = 'c'.repeat(40);}, o => {o.assessment.base_sha = 'c'.repeat(40);},
     o => {o.assessment.record_digest = 'c'.repeat(64);}, o => {o.assessment.repair_digest = 'c'.repeat(64);},
   ]) {
