@@ -129,7 +129,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       artifact: record.local_artifact, bundle, discovery: record.discovery});
   }
 
-  async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false}) {
+  async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly = false, ignoreReceipt = false}) {
     const repo = context.repo;
     const number = numberFor(context);
     const {data: pr} = await readPull(github, repo, number);
@@ -150,7 +150,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const receipts = require('./local-receipt.cjs');
       // One rule: a receipt that verifies in every respect is trusted; any other is ignored and never consulted again.
       // CI then reviews the change itself (or, where a receipt is required, asks for a new one) and shows a fixed notice.
-      const screened = await receipts.screenReceipt({github, repo, pr, engine, trust: config.local_review,
+      // The hosted fallback after an unusable receipt holds the provider credential, so it never reads the receipt at all.
+      const screened = ignoreReceipt ? {ref: null} : await receipts.screenReceipt({github, repo, pr, engine, trust: config.local_review,
         configDigest: digest(config), policyDigest: policyDigest()});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;

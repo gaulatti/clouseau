@@ -62,6 +62,37 @@ edit. If a consumer ever pins an affected revision, the minimal workaround is
 `process.env.DEEPSEEK_API_KEY ??= 'fictional-test-key';` at the top of the test,
 and the upgrade path is to advance to the fixed `main`.
 
+## Receipt route fallback upgrade
+
+The reference `examples/consumer-ci.yml` sends a PR whose description carries a
+`clouseau-local-review` marker to a receipt-only `verify-local` step that holds no provider
+secret. Before this change an unusable receipt there ended `review_incomplete` and the owner had to
+delete the marker by hand. The reference now continues in the same run with an `assess-hosted`
+job. A consumer carries a copy of the workflow, so a consumer that wants the behavior applies
+these edits (a normal reviewed workflow PR; workflow files are protected controls and need the
+exact-head `/approve-intent`). The copy keeps working unchanged without them.
+
+1. `assess-intent`: add the job output `hosted: ${{ steps.fallback.outputs.hosted }}` and the step
+   `fallback` after the `local-review` step (`if: steps.review-route.outputs.local == 'true'`, a
+   `github-script` that sets `hosted` to `'true'` only when the parsed assessment has decision
+   `review_incomplete` and cause `local_receipt_unusable`).
+2. Add the `assess-hosted` job exactly as in the reference: `needs: [assess-intent, resolve-clouseau]`,
+   `if: needs.assess-intent.outputs.hosted == 'true'`, a checkout of `main`, the frozen engine, and one
+   `assess` step with `ignore-receipt: 'true'`, `record-transport: job-output`,
+   `pull-request: ${{ needs.assess-intent.outputs.number }}` and the provider keys. It must read no other
+   output of `assess-intent`.
+3. `approve-and-merge`, `apply-repair` and `finalize-merge`: add `assess-hosted` to `needs`, and replace every
+   `needs.assess-intent.outputs.assessment` / `.review-record` with
+   `needs.assess-hosted.outputs.<name> || needs.assess-intent.outputs.<name>` so one record is consumed
+   per head. Extend the "Require a completed assessment" guard with
+   `contains(fromJSON('["failure","cancelled"]'), needs.assess-hosted.result)` and let `apply-repair` accept a
+   skipped hosted job (`contains(fromJSON('["success","skipped"]'), needs.assess-hosted.result)`).
+4. Pin the engine to a revision that includes the `ignore-receipt` input before adding the job. GitHub only
+   warns about an unknown input, so an older engine would silently read the receipt in the secret-bearing job.
+   Rollback is reverting the workflow PR.
+
+`.github/tests/receipt-fallback.test.mjs` encodes this template.
+
 ## Repository-local receipt authorization
 
 Keep signer enrollment, author binding, maximum age and revocation in protected
