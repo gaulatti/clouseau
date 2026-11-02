@@ -528,9 +528,12 @@ anything, and CI then performs every check it would perform without a receipt
 (independent tests, exact coverage, source, policy and the full hosted review), so
 ignoring a receipt can never lower the bar.
 
-The notice is `Local review receipt ignored because <reason>; CI reviewed this
-change itself.` where the reason is one of a fixed set of classes, never
-untrusted text:
+The notice is `Local review receipt not used (cause: \`receipt_<class>\`): <sentence>.`
+followed by what the run did instead and numbered steps. The class is one of a fixed
+set, and the sentence names only values that are safe to show (a short commit id, the
+engine revision, the base that moved, a changed file of the pull request, an expiry
+time), never receipt contents or untrusted text. [Notices and their causes](notices.md)
+lists every sentence and step:
 
 | Class | Receipt problem |
 | --- | --- |
@@ -540,19 +543,24 @@ untrusted text:
 | `author` | The signing identity is not enrolled for the PR author |
 | `attestation` | An attested receipt the protected `local_review.attest` setting does not permit for this author and pull request |
 | `expired` | Expired, not yet valid or an invalid challenge |
-| `revision` | Different repository, head or base |
-| `changed` | The policy or configuration changed after issue |
+| `revision_repository` | Issued for a different repository |
+| `revision_head` | Issued for a different head (both short ids are named) |
+| `revision_base` | Issued against a base that has since moved (both short ids are named; step: `gh pr update-branch N`) |
+| `changed` | The protected policy or configuration changed after issue (which one is named) |
 | `source` | Signed sources, file inventory or diff differ from the pull request (including a changed lockfile summary) |
 | `record` | The record, its digest, history, chunked structure or claimed decision is inconsistent or incomplete |
-| `engine` | Produced by a different engine revision than the protected one |
+| `engine` | Produced by a different engine revision than the protected one (both short ids are named) |
 | `not_passing` | The review it records did not pass |
 | `settings` | The protected chunked review configuration is invalid, so the receipt cannot be checked |
-| `held` | Its evidence does not meet hosted approval's affirmative-evidence rule |
+| `untested`, `integrity`, `completeness` | Its evidence does not meet hosted approval's affirmative-evidence rule; the rule and, where it applies, the files are named |
 
-Repositories in `required` mode have no hosted review to fall back to. The same
-notice then ends `this repository requires a valid receipt, so run the local
-review again.` and the outcome is `local_receipt_required`; no provider call is
-made. While tests are pending or failing, an ignored receipt behaves exactly like
+Two more classes are only ever shown when no receipt can be used at all:
+`absent` (the description carries no marker) and `unread` (a hosted fallback run
+does not read receipts). Repositories in `required` mode have no hosted review to
+fall back to. The notice then says `This repository requires a valid receipt, so
+nothing is approved until you do the following.` and the outcome is
+`local_receipt_required`; no provider call is made. On the receipt-only route
+(`local_receipt_unusable`) the reason itself carries the cause sentence. While tests are pending or failing, an ignored receipt behaves exactly like
 an unstamped change (the pending or blocked result carries the notice).
 
 #### Hosted review after an unusable receipt (reference consumer workflow)
@@ -569,7 +577,7 @@ assessment and review record replace the receipt-only job's in `approve-and-merg
 `apply-repair` and `finalize-merge`, so exactly one acceptance record is consumed per
 head. A valid receipt skips the job entirely and no provider call is made. A
 repository in `required` mode reports `local_receipt_required` and has no fallback.
-The fixed "receipt ignored" notice is not shown on the fallback path because the
+The "receipt not used" notice is not shown on the fallback path because the
 hosted job deliberately does not know why the receipt was unusable; the receipt-only
 job log still carries the warning annotation naming the cause. The owner no longer
 needs to remove the marker to obtain the CI review.

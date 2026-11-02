@@ -460,14 +460,14 @@ check. Manual mode continues to require manual merge.
 
 Every `review_incomplete` assessment carries a fixed `cause` (for example
 `provider_key_missing`, `provider_key_invalid`, `provider_rejected`,
-`provider_unavailable`, `local_receipt_required`,
-`evidence_incomplete`). The `receipt_protected_controls` notice states the exact
+`provider_payment_required` (HTTP 402), `provider_unavailable`, `local_receipt_required`,
+`evidence_incomplete`; every class is listed in [notices and their causes](notices.md)). The `receipt_protected_controls` notice states the exact
 command a maintainer posts, `/approve-intent <full head SHA>`. Notices never name
-an artifact; the diagnostic is in the assessment job log. A local receipt that does not verify is never a cause: it is
-ignored with a fixed one-line notice and CI reviews the change itself (see
+an artifact; the diagnostic is in the assessment job log. A local receipt that does not verify is never a cause by itself: it is
+ignored with a notice that names the receipt's own cause class and numbered steps, and CI reviews the change itself (see
 [local review](local-review.md#a-receipt-that-does-not-verify-is-ignored)). The `assess` step raises a warning annotation, and the
 `gate` creates (or updates in place) one `<!-- clouseau-review-incomplete -->`
-comment with the specific reason and a next step. Raw error text, provider
+comment with the cause class, the specific reason and numbered next steps. Raw error text, provider
 responses and credentials are never forwarded: only fixed causes, HTTP status
 digits and variable names appear. Provider credentials are validated for shape
 (`DEEPSEEK_API_KEY`, `TYPESAFE_API_KEY`: no whitespace or line break, printable

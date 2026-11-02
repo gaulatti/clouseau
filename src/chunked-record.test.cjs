@@ -239,7 +239,7 @@ test('a record above the single-receipt limit is signed as a multi-part receipt 
   assert.equal(digest(verified.record), digest(f.record));
   // The classification of a chunked record problem stays visible, with its own next step.
   const other = classify(new ChunkedRecordError('chunked_record_invalid', 'duplicate ownership'));
-  assert.ok(body({number: 1, head_sha: 'a'.repeat(40), ...other}, 'https://github.com/o/r/actions/runs/1').includes(NEXT_STEPS.chunked_record_invalid));
+  assert.ok(body({number: 1, head_sha: 'a'.repeat(40), ...other}, 'https://github.com/o/r/actions/runs/1').includes(NEXT_STEPS.chunked_record_invalid[0].split('{')[0]));
 });
 
 test('quote elision is lossless and only drops what the controller can regenerate', async () => {
