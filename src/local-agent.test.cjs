@@ -10,7 +10,7 @@ const {fixture} = require('../test/local-review-fixture.cjs');
 const {localReview} = require('./local-review.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {runReview, main} = require('./local-cli.cjs');
-const {validateValue, respond, createExchange} = require('./local-agent.cjs');
+const {validateValue, respond, createExchange, shareSchema} = require('./local-agent.cjs');
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
 // Stand-in for a fresh subagent: answers each frozen request from its own prompt and schema files.
@@ -236,4 +236,50 @@ test('an in-flight agent review stays pinned to its engine revision while main a
     assert.equal(result.decision, 'auto_approve');
     assert.equal(fs.readdirSync(path.join(state, 'pins')).length, 0);
   } finally {fs.rmSync(cacheHome, {recursive: true, force: true});}
+}));
+
+function inflate(node, definitions) {
+  if (Array.isArray(node)) return node.map(item => inflate(item, definitions));
+  if (node === null || typeof node !== 'object') return node;
+  if (node.$ref !== undefined) return inflate(definitions[node.$ref.replace('#/$defs/', '')], definitions);
+  return Object.fromEntries(Object.entries(node).filter(([key]) => key !== '$defs').map(([key, value]) => [key, inflate(value, definitions)]));
+}
+
+test('shared schema definitions inflate to exactly the original schema, descend only into schema positions and skip small or unique nodes', () => {
+  const ids = Array.from({length: 60}, (_, i) => `proof-${i}-1`);
+  const citation = {type: 'array', items: {type: 'string', enum: ids}};
+  const finding = {type: 'object', properties: {evidence: citation, reason: {type: 'string'}}, required: ['evidence', 'reason'], additionalProperties: false};
+  const schema = {type: 'object', properties: {
+    first: finding, second: {anyOf: [finding, {type: 'null'}]}, list: {type: 'array', items: finding},
+    unique: {type: 'object', properties: {note: {type: 'string', enum: ids.map(id => `${id}-x`)}}, additionalProperties: false},
+    small: {type: 'string', enum: ['a', 'b']}, other: {type: 'string', enum: ['a', 'b']},
+    // identical node text under data positions is data, never a shared schema
+    const: {type: 'object', properties: {data: {const: {type: 'array', items: {type: 'string', enum: ids}}}}, additionalProperties: false}},
+  required: ['first'], additionalProperties: false};
+  const shared = shareSchema(schema);
+  assert.deepEqual(inflate(shared, shared.$defs), schema);
+  assert.ok(JSON.stringify(shared).length < JSON.stringify(schema).length / 2);
+  assert.equal(Object.keys(shared.$defs).length, 2);
+  assert.deepEqual(shared.properties.small, schema.properties.small);
+  assert.ok(shared.properties.unique.properties.note.enum.length === 60);
+  assert.equal(shared.properties.first.$ref, shared.properties.second.anyOf[0].$ref);
+  const plain = {type: 'object', properties: {a: {type: 'string'}}, additionalProperties: false};
+  assert.deepEqual(shareSchema(plain), plain);
+  assert.equal(shareSchema(plain).$defs, undefined);
+});
+
+test('the schema file an agent reads is compact and shared, and still constrains answers exactly like the inline schema', () => withReview(async ({deps, argv}) => {
+  const first = await main(argv, deps);
+  const text = fs.readFileSync(first.schema_file, 'utf8');
+  assert.ok(!text.includes('\n'), 'the schema file carries no indentation');
+  const file = JSON.parse(text);
+  assert.ok(file.$defs && Object.keys(file.$defs).length > 0, 'repeated citation and evidence subschemas are stated once');
+  // Regression ceiling: this schema was 36,085 bytes when every citation site repeated its proof enumeration, indented.
+  assert.ok(text.length < 9000, `schema file ${text.length} bytes`);
+  const schema = inflate(file, file.$defs);
+  const answer = subagent(JSON.parse(fs.readFileSync(first.request_file, 'utf8')));
+  validateValue(schema, answer);
+  const bad = structuredClone(answer);
+  bad.report.findings.push({...bad.report.findings[0] || {}, evidence: ['proof-unknown-1']});
+  assert.throws(() => validateValue(schema, bad));
 }));
