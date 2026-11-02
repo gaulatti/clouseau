@@ -288,6 +288,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
       assert.equal(advanced.harness_invocations, 2); assert.equal(advanced.reviewer_sha, 'f'.repeat(40));
       assert.notEqual(advanced.receipt, result.receipt);
       assert.equal(JSON.parse(fs.readFileSync(result.receipt)).payload.reviewer_sha, reviewerSha);
+      assert.equal(JSON.parse(fs.readFileSync(result.receipt)).payload.reviewer_semantics, require('./review-semantics.cjs').semanticsDigest());
       assert.equal(JSON.parse(fs.readFileSync(advanced.receipt)).payload.reviewer_sha, 'f'.repeat(40));
       const advancedReused = await runReview(args, {...advancedDeps, ask: async () => {throw new Error('Exact current review must reuse');}});
       assert.equal(advancedReused.reused, true); assert.equal(advancedReused.harness_invocations, 0);

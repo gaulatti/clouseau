@@ -115,8 +115,11 @@ function signingKey(bundle, trust) {
   return key;
 }
 
+// The running engine is the protected checkout this run resolved; it alone decides (review-semantics.cjs).
+const engineVouches = claim => require('./review-semantics.cjs').acceptor()(claim);
+
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  now = Date.now(), engine = null, chunked = undefined, compatible = null}) {
+  now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;

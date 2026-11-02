@@ -445,3 +445,24 @@ test('a receipt may carry a signed review-semantics claim; a different engine is
   assert.throws(() => verifyReceipt(bundle, {...options, compatible: vouch(true), headSha: '0'.repeat(40)}), /changed/);
   assert.throws(() => verifyReceipt(bundle, {...options, compatible: vouch(true), author: 'unregistered-contributor'}), /PR author/);
 });
+
+test('by default the running protected engine statement decides whether a receipt of another revision is accepted', async () => {
+  const {SOURCE} = require('./central-version.cjs');
+  const semantics = require('./review-semantics.cjs');
+  const f = await fixture();
+  const trust = {...f.trust, central_source: {...SOURCE}};
+  delete trust.reviewer_digest;
+  const other = {...SOURCE, sha: 'd'.repeat(40), digest: 'e'.repeat(64)};
+  const options = {...f.expected, trust, engine: other, reviewerSha: undefined, reviewerDigest: other.digest};
+  const statement = semantics.readStatement();
+  const earlier = statement.compatible[0] ?? 'a'.repeat(64);
+  const issue = reviewerSemantics => issueReceipt({...f.issue, reviewerSemantics});
+  // Semantics of this very engine: accepted although the revision and exact digest differ.
+  assert.equal(verifyReceipt(issue(semantics.semanticsDigest()), options).decision, 'auto_approve');
+  // Semantics the statement lists are accepted; unlisted or absent claims are ignored as before.
+  if (statement.compatible.length) assert.equal(verifyReceipt(issue(earlier), options).decision, 'auto_approve');
+  assert.throws(() => verifyReceipt(issue('0'.repeat(64)), options), /engine mismatch/);
+  assert.throws(() => verifyReceipt(issueReceipt(f.issue), options), /engine mismatch/);
+  // Fixed-digest trust never takes this path.
+  assert.throws(() => verifyReceipt(issue(semantics.semanticsDigest()), {...options, trust: f.trust}), /engine mismatch/);
+});
