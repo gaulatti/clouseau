@@ -261,6 +261,10 @@ ledger rather than dropping its findings.
 
 ## Evidence size
 
+The review cache's `snapshot.json`, the `record` output and the signed `receipt.json` are
+written as compact JSON, without indentation (about 15% of a typical receipt); they parse
+identically and the published artifact was already compact.
+
 Serialized local evidence is capped at 900,000 characters. To keep large changes inside the cap
 without dropping anything a reviewer judges, the local collector stores a file added whole once:
 its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
