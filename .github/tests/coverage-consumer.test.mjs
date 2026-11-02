@@ -39,3 +39,31 @@ test('the actual composite coverage entry point accepts native Istanbul and reje
     env: {...process.env, CLOUSEAU_ROOT: root, COVERAGE_REPORT: report, SOURCE_DIRECTORY: directory, COVERAGE_FORMAT: 'istanbul'}});
   assert.notEqual(omittedFormat.status, 0); assert.match(omittedFormat.stderr, /Expected an LLVM coverage export/);
 });
+
+test('the composite coverage entry point switches to changed lines only for a protected opt-in plus a base revision', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'clouseau-changed-'));
+  t.after(() => rmSync(directory, {recursive: true, force: true}));
+  const git = (...args) => spawnSync('git', args, {cwd: directory, encoding: 'utf8'});
+  git('init', '-q', '-b', 'main'); git('config', 'user.email', 'a@example.test'); git('config', 'user.name', 'A');
+  const source = join(directory, 'source.ts'); const report = join(directory, 'coverage.json');
+  const entry = hits => ({[source]: {path: source, statementMap: {0: {start: {line: 1, column: 0}, end: {line: 1, column: 9}},
+    1: {start: {line: 2, column: 0}, end: {line: 2, column: 9}}}, s: {0: 1, 1: hits}, branchMap: {}, b: {}}});
+  writeFileSync(source, 'const a = 1;\nconst b = 1;\n'); git('add', '-A'); git('commit', '-q', '-m', 'base');
+  writeFileSync(source, 'const a = 1;\nconst b = 2;\n'); git('add', '-A'); git('commit', '-q', '-m', 'head');
+  const baseline = join(directory, 'base.json'); writeFileSync(baseline, JSON.stringify({lines: [2, 2], branches: [0, 0]}));
+  const config = mode => { const file = join(directory, `${mode}.json`); writeFileSync(file, JSON.stringify({...JSON.parse(readFileSync(join(root, 'examples/colombo.json'), 'utf8')), coverage: {mode}})); return file; };
+  const invoke = (hits, env) => {
+    writeFileSync(report, JSON.stringify(entry(hits)));
+    return spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', step.run], {cwd: directory, encoding: 'utf8',
+      env: {...process.env, CLOUSEAU_ROOT: root, COVERAGE_REPORT: report, SOURCE_DIRECTORY: directory, COVERAGE_FORMAT: 'istanbul', ...env}});
+  };
+  const changed = {COVERAGE_BASE_REF: git('rev-parse', 'HEAD~1').stdout.trim(), COVERAGE_BASELINE: baseline, CLOUSEAU_CONFIG: config('changed_lines')};
+  assert.match(invoke(1, {}).stderr, /No branches measured/);
+  assert.equal(invoke(1, changed).stdout, 'changed lines: 1/1\nchanged branches: 0/0\n');
+  assert.notEqual(invoke(0, changed).status, 0);
+  assert.match(invoke(0, changed).stderr, /Coverage gate failed: lines: 1 changed uncovered/);
+  // Exact stays in force without the base revision or when the protected config does not opt in.
+  assert.match(invoke(1, {...changed, COVERAGE_BASE_REF: ''}).stderr, /No branches measured/);
+  assert.match(invoke(1, {...changed, CLOUSEAU_CONFIG: config('exact')}).stderr, /No branches measured/);
+  assert.notEqual(invoke(1, {...changed, COVERAGE_BASELINE: ''}).status, 0);
+});
