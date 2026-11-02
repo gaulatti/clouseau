@@ -79,6 +79,7 @@ rejected exactly as in the exact gate, because the same adapters measure first.
 
 For lines and for branches, `covered/total` of the pull request must be at least
 `covered/total` of the baseline, compared exactly with integer arithmetic. A
+failure prints both fractions, for example `(base 5/10, now 4/10)`. A
 baseline total of zero is accepted for a metric the repository does not have.
 
 ## Limits

@@ -205,3 +205,30 @@ test('a patch rejection names the changed file to the caller, never a path taken
   assert.equal(await screenSources({...options, snapshot: foreign, note: path => named.push(path)}), 'source');
   assert.deepEqual(named, [files[0].filename], 'a path that only the receipt names is not reported');
 });
+
+test('GitHub joining two hunks that git leaves one unchanged line apart is the same patch; nothing broader is', () => {
+  const body = (from, to) => Array.from({length: to - from + 1}, (_, index) => ` line ${from + index}`);
+  // Changes at old lines 4 and 12: seven unchanged lines between them, so `git diff` shows 3 + 3 and skips line 8.
+  const first = ['@@ -1,6 +1,7 @@', ...body(1, 3), '-old four', '+new four', '+added', ...body(5, 7)];
+  const second = ['@@ -9,6 +10,6 @@ heading', ...body(9, 11), '-old twelve', '+new twelve', ...body(13, 14)];
+  const signed = `${GIT_HEADER}${[...first, ...second].join('\n')}\n`;
+  const joined = ['@@ -1,14 +1,15 @@', ...first.slice(1), ' line 8', ...second.slice(1)].join('\n');
+  const check = patch => verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', signed]), files: [live('src/a.js', 'modified', patch)]});
+  check(joined);
+  // The joining line is unchanged file content that no reviewer saw as part of the change; its text is not compared.
+  check(joined.replace(' line 8', ' other'));
+  const flaws = [
+    joined.replace(' line 8', '+line 8'), joined.replace(' line 8', ' line 8\n line 8b'),
+    joined.replace(' line 7\n line 8', ' line 7\n line 8\n line 8b').replace(' line 9', ' line 9b'),
+    joined.replace(' line 3\n', ' line 3\n line 3b\n'), joined.replace(' line 8', ' line 8\n').replace('@@ -1,14', '@@ -2,14'),
+    `${joined}\n line 15`, joined.slice(0, joined.lastIndexOf('\n')), joined.replace('-old twelve', '-old twelve '), 'not a patch',
+    ` line 8\n${joined}`,
+  ];
+  for (const flawed of flaws) mismatch(() => check(flawed), 'src/a.js');
+  // A hunk-less signed patch and a hosted patch that is not hunks never join.
+  mismatch(() => verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}x\n`]), files: [live('src/a.js', 'modified', joined)]}), 'src/a.js');
+  // The no-newline marker advances neither side.
+  const marker = `${first.join('\n')}\n\\ No newline at end of file\n${second.join('\n')}`;
+  const hosted = `${['@@ -1,14 +1,15 @@', ...first.slice(1)].join('\n')}\n\\ No newline at end of file\n line 8\n${second.slice(1).join('\n')}`;
+  verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${marker}\n`]), files: [live('src/a.js', 'modified', hosted)]});
+});
