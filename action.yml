@@ -25,6 +25,12 @@ inputs:
   source-directory:
     description: Application source directory to measure (coverage)
     default: ''
+  coverage-base-ref:
+    description: "Base revision for changed-line coverage (coverage); used only when the protected config sets coverage.mode to changed_lines. Needs a checkout with that revision's history"
+    default: ''
+  coverage-baseline:
+    description: "JSON totals {lines:[total,covered],branches:[total,covered]} measured on the base revision with the `totals` command (coverage, changed_lines mode)"
+    default: ''
   pull-request:
     description: PR number for manual reassessment
     default: ''
@@ -145,14 +151,34 @@ runs:
         SOURCE_DIRECTORY: ${{ inputs.source-directory }}
         COVERAGE_FORMAT: ${{ inputs.coverage-format }}
         COVERAGE_CONFIG: ${{ inputs.coverage-config }}
+        COVERAGE_BASE_REF: ${{ inputs.coverage-base-ref }}
+        COVERAGE_BASELINE: ${{ inputs.coverage-baseline }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
       run: |
-        if [[ -n "$COVERAGE_CONFIG" ]]; then
-          test -z "$COVERAGE_REPORT"
-          test -z "$SOURCE_DIRECTORY"
-          node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+        # Exact 100% unless a base revision is supplied AND the protected configuration opts in to changed_lines.
+        COVERAGE_MODE=exact
+        if [[ -n "$COVERAGE_BASE_REF" ]]; then
+          COVERAGE_MODE=$(node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" mode "$CLOUSEAU_CONFIG")
+        fi
+        if [[ "$COVERAGE_MODE" == exact ]]; then
+          if [[ -n "$COVERAGE_CONFIG" ]]; then
+            test -z "$COVERAGE_REPORT"
+            test -z "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+          else
+            test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+          fi
         else
-          test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-          node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+          test -n "$COVERAGE_BASELINE"
+          if [[ -n "$COVERAGE_CONFIG" ]]; then
+            test -z "$COVERAGE_REPORT"
+            test -z "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" changed-plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE" "$COVERAGE_BASE_REF" "$COVERAGE_BASELINE"
+          else
+            test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" changed-check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT" "$COVERAGE_BASE_REF" "$COVERAGE_BASELINE"
+          fi
         fi
     - name: Verify local review or assess repository intent
       id: assess

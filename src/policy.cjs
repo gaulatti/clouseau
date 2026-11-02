@@ -35,6 +35,7 @@ if (config.version === 2) {
   const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic'});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
+const COVERAGE = require('./coverage-changed.cjs').requirement(config);
 const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
 const MANUAL_REVIEWER = config.manual_reviewer;
@@ -89,7 +90,7 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   if (keyProblem) return hold(`AI assessment unavailable: DEEPSEEK_API_KEY ${keyProblem}`);
   // Do not spend provider credits on a PR whose technical gate is not green.
   const technical = await technicalRun(github, repo, pr);
-  if (technical.pending) return {...identity, decision: 'pending_technical', verification: technical.state, reason: 'Waiting for all tests and exact 100% coverage'};
+  if (technical.pending) return {...identity, decision: 'pending_technical', verification: technical.state, reason: `Waiting for all tests and ${COVERAGE.waiting}`};
   if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
 
   try {
@@ -525,7 +526,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       const selfReview = selfAuthored ? 'This PR was authored by the approval bot. A maintainer must first submit an approving review on this exact revision; the bot cannot approve its own PR.\n\n' : '';
       const summary = `A maintainer's second opinion is required.\n\n${selfReview}${reason}\n\n` +
         `To confirm this change belongs in this repository, comment:\n\n\`/approve-intent ${pr.head.sha}\`\n\n` +
-        'This confirms intent only. All tests and exact 100% line and branch coverage remain mandatory.';
+        `This confirms intent only. All tests and ${COVERAGE.full} remain mandatory.`;
       await finish('action_required', summary);
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pull_number, per_page: 100});
       if (!comments.some(comment => comment.user.type === 'Bot' && comment.body.includes(marker))) {
@@ -566,7 +567,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
         !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before manual-mode approval');
     if (!selfAuthored) {
       await github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
-        body: `All tests and exact 100% line and branch coverage passed: ${technical.url}\n\n` +
+        body: `All tests and ${COVERAGE.full} passed: ${technical.url}\n\n` +
           (humanRequired ? 'Repository intent confirmed by a maintainer.' : `Repository fit and supported intent assessed: ${assessment.reason}`)});
     }
     if (!ownership.automatic) {
@@ -576,17 +577,17 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
         if (nativeGate) throw new Error('A current-head code-owner approval is required; automatic merge is disabled');
         return;
       }
-      await finish('success', 'Tests, exact coverage and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.' +
+      await finish('success', `Tests, ${COVERAGE.brief} and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.` +
         (currentProtection && !currentProtection.enforced ? `\n\n${currentProtection.reason}` : ''));
       return;
     }
     if (protectionGaps) {
       await require('./merge-protection.cjs').postProtectionNotice({github, repo, pull_number, gaps: protectionGaps});
-      await finish('success', `Tests, exact coverage and approval recorded. Merge was not armed because repository settings are insufficient: ${protectionGaps.join(', ')}.`);
+      await finish('success', `Tests, ${COVERAGE.brief} and approval recorded. Merge was not armed because repository settings are insufficient: ${protectionGaps.join(', ')}.`);
       return;
     }
     if (manualMerge) {
-      await finish('success', 'Tests, exact coverage and review passed. Automatic merge is disabled; the code owner must merge manually.' +
+      await finish('success', `Tests, ${COVERAGE.brief} and review passed. Automatic merge is disabled; the code owner must merge manually.` +
         (currentProtection.enforced ? '' : `\n\n${currentProtection.reason}`));
       return;
     }
@@ -599,7 +600,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
           if (!current.controllerManaged) throw new Error('Private-plan acceptance mode changed before merge');
           if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
         }});
-      await finish('success', `Tests, exact coverage, validated acceptance and fresh approval passed. Controller-enforced owner merge completed: ${pr.merge_commit_sha}. Native branch protection is unavailable.`);
+      await finish('success', `Tests, ${COVERAGE.brief}, validated acceptance and fresh approval passed. Controller-enforced owner merge completed: ${pr.merge_commit_sha}. Native branch protection is unavailable.`);
       if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
       return;
     }

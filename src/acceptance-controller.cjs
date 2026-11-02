@@ -138,7 +138,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const identity = {version: 2, number, head_sha: pr.head.sha, base_sha: pr.base.sha, ...(engine ? {engine} : {})};
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
     const technical = await legacy.technicalRun(github, repo, pr, {receipt: true});
-    const technicalBlock = technical.pending ? {decision: 'pending_technical', verification: technical.state, reason: 'Waiting for all tests and exact 100% coverage'} :
+    const technicalBlock = technical.pending ? {decision: 'pending_technical', verification: technical.state, reason: `Waiting for all tests and ${require('./coverage-changed.cjs').requirement(config).waiting}`} :
       technical.failure ? {decision: 'blocked_technical', reason: technical.failure} : null;
     const observations = [];
     const snapshots = {};
