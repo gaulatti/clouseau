@@ -96,7 +96,7 @@ test('local verifier records real command outcomes and native coverage gaps inde
 test('verification evidence keeps a bounded tail of each stream and binds the whole output by digest', () => repository(f => {
   const config = JSON.parse(fs.readFileSync(path.join(f.directory, '.clouseau-local.json')));
   const verbose = (lines, code) => [process.execPath, '-e',
-    `for (let i = 0; i < ${lines}; i++) process.stderr.write('test_case_' + i + ' ... ok\\n'); process.stdout.write('Ran ${lines} tests\\nDONE'); process.exit(${code})`];
+    `for (let i = 0; i < ${lines}; i++) process.stderr.write('test_case_' + i + ' ... ok\\n'); process.stdout.write('Ran ${lines} tests\\nDONE'); process.exitCode = ${code}`];
   const lines = 300; const full = Array.from({length: lines}, (_, i) => `test_case_${i} ... ok\n`).join('');
   const passed = executeVerification({directory: f.directory, config: {...config, verification: [verbose(lines, 0)]}}).commands[0];
   assert.equal(passed.stderr, full.slice(-128)); assert.equal(passed.stderr_bytes, Buffer.byteLength(full));
