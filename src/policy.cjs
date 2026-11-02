@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const {readPull} = require('./pull-read.cjs');
+const branchConflict = require('./branch-conflict.cjs');
 const {requestReview} = require('./provider.cjs');
 const {retryTransient} = require('./transient-retry.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
@@ -155,9 +156,9 @@ async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGraceSeconds
   const schedule = pollSchedule(queuedGraceSeconds);
   for (let attempt = 0; attempt < maxPolls; attempt++) {
     let result;
-    try {result = await withRateLimit(() => assess(options), {wait, report: options.report});}
+    try {result = await withRateLimit(async () => branchConflict.mark(await assess(options), {github: options.github, repo: options.context.repo, baseBranch: config.base_branch, wait}), {wait, report: options.report});}
     catch (error) {if (error instanceof RateLimitHold) return rateLimited(options.context, error); throw error;}
-    if (result.decision !== 'pending_technical') return result;
+    if (result.decision !== 'pending_technical' || result.cause === branchConflict.CAUSE) return result;
     const {stalled, delay} = schedule(result.verification);
     if (stalled) return {...result, reason: WAITING_REASON};
     await wait(delay);
@@ -184,7 +185,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
     head_sha: pr?.head.sha ?? expected ?? payloadPr?.head?.sha ?? '', base_sha: pr?.base.sha ?? payloadPr?.base?.sha ?? '', ...extra}));
   let pr;
   for (let attempt = 0; attempt < maxPolls; attempt++) {
-    let result;
+    let result, conflict;
     try {
       ({data: pr} = await limited(() => conditionalGet(prCache, `${context.repo.owner}/${context.repo.repo}#${pull_number}`,
         headers => readPull(github, context.repo, pull_number, headers['if-none-match'] ? {headers} : {}))));
@@ -193,6 +194,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
         throw new Error('PR closed, became draft, or changed while verification was pending');
       }
       result = await limited(() => technicalRun(github, context.repo, pr, {wait}));
+      conflict = result.state === 'absent' && await limited(() => branchConflict.conflicting({github, repo: context.repo, number: pull_number, headSha: pr.head.sha, wait, known: pr}));
     } catch (error) {
       if (!(error instanceof RateLimitHold)) {
         // Any HTTP error from GitHub ends the wait visibly, with the status and endpoint, never as a silent crash.
@@ -223,6 +225,13 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
       core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
       core.setOutput('verified', 'true');
       return result;
+    }
+    if (conflict) {
+      const reason = branchConflict.reasonFor(config.base_branch);
+      core.info(reason);
+      publish(pr, {decision: 'pending_technical', verification: 'absent', cause: branchConflict.CAUSE, reason});
+      core.setOutput('verified', 'false');
+      return {pending: true, state: 'branch_conflict'};
     }
     const {stalled, delay} = schedule(result.state);
     if (stalled) {
