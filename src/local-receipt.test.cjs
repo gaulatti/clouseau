@@ -3,7 +3,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust, reviewDecision, marker, loadReceipt, verifySources,
-  screenReceipt, screenSources} = require('./local-receipt.cjs');
+  screenReceipt, screenSources, attestable} = require('./local-receipt.cjs');
 const {ChunkedRecordError} = require('./chunked-record.cjs');
 const {digest} = require('./acceptance.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
@@ -465,4 +465,77 @@ test('by default the running protected engine statement decides whether a receip
   assert.throws(() => verifyReceipt(issueReceipt(f.issue), options), /engine mismatch/);
   // Fixed-digest trust never takes this path.
   assert.throws(() => verifyReceipt(issue(semantics.semanticsDigest()), {...options, trust: f.trust}), /engine mismatch/);
+});
+
+test('maintainer attestation configuration is protected, explicit and default off', async () => {
+  const f = await fixture();
+  const {validateConfig} = require('./config.cjs');
+  const withAttest = attest => ({...f.trust, attest});
+  for (const attest of [{authors: ['dependabot[bot]', 'a-contributor']}, {authors: 'any'}, {authors: ['x']}]) assert.doesNotThrow(() => validateTrust(withAttest(attest)));
+  assert.doesNotThrow(() => validateTrust(f.trust), 'unset stays valid and unchanged');
+  // An empty allowlist, a missing or wrongly spelled "any", wildcards, duplicates, bad logins and extra fields are all invalid.
+  for (const attest of [null, 'any', true, {}, {authors: []}, {authors: 'ANY'}, {authors: '*'}, {authors: ['*']}, {authors: ['']}, {authors: [7]},
+    {authors: ['a', 'a']}, {authors: ['bad/login']}, {authors: ['bot[bot]x']}, {authors: ['-leading']}, {authors: 'any', extra: true}, {authors: {a: 1}}]) {
+    assert.throws(() => validateTrust(withAttest(attest)), /maintainer attestation/, JSON.stringify(attest));
+  }
+  assert.equal(attestable(withAttest({authors: ['dependabot[bot]']}), 'dependabot[bot]'), true);
+  assert.equal(attestable(withAttest({authors: ['dependabot[bot]']}), 'Dependabot[bot]'), false, 'matching is exact');
+  assert.equal(attestable(withAttest({authors: 'any'}), 'anyone'), true);
+  assert.equal(attestable(f.trust, 'dependabot[bot]'), false);
+  const base = {version: 2, base_branch: 'main', workflow: 'ci.yml', verification: {job: 'verify', steps: ['Enforce 100% line and branch coverage']},
+    manual_reviewer: 'owner', repository_policy: 'AGENTS.md', readme: 'README.md', sensitive_paths: [], deployment: null,
+    acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2}};
+  assert.deepEqual(validateConfig({...base, local_review: withAttest({authors: ['dependabot[bot]']})}).local_review.attest, {authors: ['dependabot[bot]']});
+  assert.throws(() => validateConfig({...base, local_review: withAttest({authors: []})}), /maintainer attestation/);
+});
+
+test('an attested receipt binds signer, author and pull request and is refused everywhere the opt-in or any binding is missing', async () => {
+  const f = await fixture();
+  const signed = {author: 'dependabot[bot]', number: 12, signer: 'fixture-author'};
+  const trust = {...f.trust, attest: {authors: ['dependabot[bot]']}};
+  const expected = {...f.expected, trust, author: 'dependabot[bot]', pullNumber: 12};
+  const bundle = issueReceipt({...f.issue, attestation: signed});
+  const verified = verifyReceipt(bundle, expected);
+  assert.deepEqual(verified.attestation, signed); assert.equal(verified.decision, 'auto_approve');
+  assert.equal(verifyReceipt(issueReceipt(f.issue), f.expected).attestation, null, 'an ordinary receipt is unchanged');
+  // The receipt does not authorize anything beyond an ordinary one.
+  const authority = structuredClone(f.record); authority.controls = true;
+  assert.throws(() => verifyReceipt(issueReceipt({...f.issue, record: authority, attestation: signed}), expected), /owner authority/);
+  const attacks = {
+    'no opt-in': {trust: f.trust}, 'allowlist names another author': {trust: {...f.trust, attest: {authors: ['someone-else']}}},
+    'replayed for another author': {author: 'other-contributor', trust: {...f.trust, attest: {authors: 'any'}}},
+    'replayed for another pull request': {pullNumber: 13}, 'no pull request number supplied': {pullNumber: undefined},
+  };
+  for (const [name, change] of Object.entries(attacks)) {
+    assert.throws(() => verifyReceipt(bundle, {...expected, ...change}), error => error.reason === 'attestation', name);
+  }
+  // Forged or malformed claims: signer that is not the key's enrolled login, and claims that are not exactly the three fields.
+  const resign = payload => ({payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
+    crypto.createPrivateKey(f.privateKey)).toString('base64url')});
+  for (const claim of [{...signed, signer: 'someone-else'}, {...signed, number: '12'}, {...signed, extra: 1}, {author: signed.author, number: 12},
+    null, 'dependabot[bot]', [], {...signed, number: 0}]) {
+    assert.throws(() => verifyReceipt(resign({...bundle.payload, attestation: claim}), expected), error => error.reason === 'attestation', JSON.stringify(claim));
+  }
+  // A claim added to a signed ordinary receipt breaks its signature, and an unenrolled key is never trusted.
+  const injected = structuredClone(issueReceipt(f.issue)); injected.payload.attestation = signed;
+  assert.throws(() => verifyReceipt(injected, expected), error => error.reason === 'signature');
+  const outsider = crypto.generateKeyPairSync('ed25519').privateKey.export({type: 'pkcs8', format: 'pem'});
+  assert.throws(() => verifyReceipt(issueReceipt({...f.issue, privateKey: outsider, attestation: signed}), expected), error => error.reason === 'signature');
+  // A revoked maintainer key stops attesting too.
+  const revoked = structuredClone(trust); revoked.keys[0].revoked = true;
+  assert.throws(() => verifyReceipt(bundle, {...expected, trust: revoked}), error => error.reason === 'signature');
+  // The signer may not claim another login than its enrolled one, and issuance validates the claim's shape.
+  for (const attestation of [null, {...signed, number: 0}, {...signed, number: 1.5}, {...signed, author: 'bad/author'}, {...signed, signer: 'bad/signer'},
+    {...signed, extra: 1}, {author: 'a', number: 1}]) assert.throws(() => issueReceipt({...f.issue, attestation}), /invalid maintainer attestation/);
+  // Screening classifies a refusal with the fixed class and the screened pull request carries its number.
+  const ref = 'c'.repeat(40);
+  const pr = {body: `<!-- clouseau-local-review:v1 ${ref} -->`, user: {login: 'dependabot[bot]'}, number: 12, head: {sha: f.expected.headSha}, base: {sha: f.expected.baseSha}};
+  const [owner, name] = f.expected.repository.split('/');
+  const served = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', size: 10, content: Buffer.from(JSON.stringify(issueReceipt({...f.issue, now: Date.now(), attestation: signed}))).toString('base64')}})}}};
+  const screen = change => screenReceipt({github: served, pr: {...pr, ...change}, repo: {owner, repo: name}, engine: null,
+    trust, configDigest: f.expected.configDigest, policyDigest: f.expected.policyDigest});
+  const accepted = await screen({});
+  assert.equal(accepted.ref, ref); assert.deepEqual(accepted.verified.attestation, signed);
+  assert.deepEqual(await screen({number: 13}), {ref: null, rejected: 'attestation'});
+  assert.deepEqual(await screen({user: {login: 'other-contributor'}}), {ref: null, rejected: 'attestation'});
 });

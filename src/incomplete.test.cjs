@@ -66,7 +66,7 @@ test('a patch rejection notice names the file and strips markup from it', () => 
 });
 
 test('every receipt rejection class has exactly one fixed single-line sentence', () => {
-  assert.deepEqual(Object.keys(PHRASES).sort(), ['author', 'changed', 'completeness', 'engine', 'expired', 'held', 'integrity', 'malformed', 'not_passing', 'record',
+  assert.deepEqual(Object.keys(PHRASES).sort(), ['attestation', 'author', 'changed', 'completeness', 'engine', 'expired', 'held', 'integrity', 'malformed', 'not_passing', 'record',
     'revision', 'settings', 'signature', 'source', 'unavailable', 'untested']);
   for (const reason of Object.keys(PHRASES)) for (const required of [false, true]) {
     const text = noticeText(reason, required);

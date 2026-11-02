@@ -5,7 +5,7 @@
 const LOCAL = [
   ['init-identity', 'Enroll a signing identity for the authenticated GitHub user', ''],
   ['review', 'Review the committed change against a requirement',
-    '--request-file FILE [--directory PATH] [--base REF] [--agent claude|codex|opencode | --harness codex|claude] [--identity FILE] [--additional-checks FILE] [--output FILE] [--engine latest]'],
+    '--request-file FILE [--directory PATH] [--base REF] [--agent claude|codex|opencode | --harness codex|claude] [--identity FILE] [--additional-checks FILE] [--output FILE] [--engine latest] [--pr N]'],
   ['respond', 'Answer one request of an agent-driven review', '--agent-request FILE --answer FILE --session ID'],
   ['publish', 'Publish a signed receipt for the current checkout', '--directory PATH --receipt FILE'],
 ];

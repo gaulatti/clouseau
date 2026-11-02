@@ -62,7 +62,7 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (record.local_receipt) {
     // The receipt's own record: for a multi-part receipt the signed payload holds only the root.
     const signed = require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
-      engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author,
+      engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author, pullNumber: assessment.number,
       headSha: assessment.head_sha, baseSha: assessment.base_sha,
       configDigest: digest(config), policyDigest: policyDigest(),
     });
@@ -122,7 +122,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const receipts = require('./local-receipt.cjs');
     const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact, trust: config.local_review});
     const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
-      repository: `${repo.owner}/${repo.repo}`, author: record.local_author, headSha: assessment.head_sha,
+      repository: `${repo.owner}/${repo.repo}`, author: record.local_author, pullNumber: assessment.number, headSha: assessment.head_sha,
       baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest()});
     return localRecord(verified.record, {engine: record.engine, authorization: record.local_authorization,
       previous: record.previous, technical: record.technical, author: record.local_author,
@@ -209,10 +209,14 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         if (digest(previous.findings) !== digest(verified.record.previous.findings)) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
         }
+        // A maintainer-attested receipt (an enrolled maintainer reviewed another author's pull request) is named as such.
+        const attested = verified.attestation;
+        const kind = attested ? 'Maintainer-attested' : 'Authenticated';
+        const signedBy = attested ? ` Signed by \`${attested.signer}\` for the pull request by \`${attested.author}\`.` : '';
         if (technicalBlock) {
-          if (report) report('Authenticated local Clouseau quality review verified. Independent CI acceptance remains blocked. CI AI calls: 0.');
-          return {...identity, ...technicalBlock, review_source: 'authenticated_local', provider_api_calls: 0,
-            reason: `Authenticated local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
+          if (report) report(`${kind} local Clouseau quality review verified.${signedBy} Independent CI acceptance remains blocked. CI AI calls: 0.`);
+          return {...identity, ...technicalBlock, review_source: attested ? 'maintainer_attested' : 'authenticated_local', provider_api_calls: 0,
+            reason: `${kind} local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
         const record = localRecord(verified.record, {engine, authorization, previous, technical, author: pr.user.login,
           artifact: receiptRef, bundle, discovery});
@@ -223,10 +227,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           local_author: pr.user.login, previous, technical, discovery, ...(engine ? {engine} : {}),
           ...(authorization ? {local_authorization: authorization} : {})};
         fs.writeFileSync(recordPath, JSON.stringify(compact, null, 2) + '\n');
-        if (report) report('Authenticated local Clouseau review verified. CI AI calls: 0.');
+        if (report) report(`${kind} local Clouseau review verified.${signedBy} CI AI calls: 0.`);
         return {...identity, decision: authorization ? 'owner_decision' : 'auto_approve', record_digest: digest(record),
-          record_reference_digest: digest(compact), review_source: 'authenticated_local', provider_api_calls: 0,
-          reason: 'Authenticated passing local review; source, scores and CI verification validated without an AI rerun.'};
+          record_reference_digest: digest(compact), review_source: attested ? 'maintainer_attested' : 'authenticated_local', provider_api_calls: 0,
+          reason: `${kind} passing local review; source, scores and CI verification validated without an AI rerun.`};
       }
       if (receiptRoute && !receiptOnly) {
         // The receipt-only route is chosen by the workflow when the PR description carries a receipt marker, and it holds no
@@ -351,7 +355,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     }
     let published = links.length ? `${body}\n\nComplete factor inputs and evidence citations: ${links.join(' · ')}` : body;
     published += noticeLine(assessment);
-    if (record.local_receipt) published += `\n\nAuthenticated local review: ` +
+    const attestation = record.local_receipt?.payload.attestation;
+    if (record.local_receipt) published += `\n\n${attestation ? `Maintainer-attested local review (signed by \`${attestation.signer}\` for the pull request by \`${attestation.author}\`)` : 'Authenticated local review'}: ` +
       `[signed evidence](https://github.com/${record.snapshot.repository}/blob/${record.local_artifact}/clouseau-review.json). ` +
       'CI verified the signature, source, scores and passing tests/coverage. **CI AI review calls: 0.**';
     if (current.comment === null) await github.rest.issues.createComment({...context.repo, issue_number: pr.number, body: published});
