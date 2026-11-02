@@ -142,6 +142,9 @@ test('refresh leaves the checkout alone on a conflict, an unrelated base and a r
   await pullRepository(async f => {
     const before = f.head(); const dependencies = {...stub(), execute: f.execute, available: () => true};
     assert.equal((await refreshPull(args(f), dependencies)).status, 'up_to_date');
+    const cwd = process.cwd(); process.chdir(f.work);
+    try {assert.equal((await refreshPull(args(f, {directory: undefined}), dependencies)).status, 'up_to_date', 'the checkout defaults to the current directory');}
+    finally {process.chdir(cwd);}
     f.advance('src/handler.js', 'module.exports = "main";\n');
     await assert.rejects(refreshPull(args(f), dependencies), error => {
       assert.match(error.message, /origin\/main cannot be merged cleanly \(conflicts in src\/handler\.js\)\. Nothing was changed/);
@@ -186,9 +189,20 @@ test('a refresh merges the base (never a rebase), reviews the merge commit, and 
     assert.equal(dependencies.seen.reviews.length, 1);
     assert.equal(dependencies.seen.reviews[0].base, 'origin/main'); assert.equal(dependencies.seen.reviews[0].harness, 'claude');
     assert.deepEqual(dependencies.seen.publishes, [{directory: f.work, receipt: '/receipt.json'}]);
+    assert.equal(result.warnings, undefined);
     assert.ok(f.pull.body.includes(MARKER('1'.repeat(40))) && f.pull.body.includes('Generated with'), 'the marker joins the existing body');
     assert.deepEqual(f.events.filter(event => event.startsWith('patch')), ['patch:before-push']);
     assert.equal(git(f.work, ['status', '--porcelain']), '');
+  });
+});
+
+test('publication warnings (protected controls changed) reach the result', async () => {
+  await pullRepository(async f => {
+    f.advance('docs.md', 'moved\n');
+    const dependencies = {...stub({head: () => f.head()}), execute: f.execute, available: () => true};
+    const publish = dependencies.publish;
+    dependencies.publish = async given => ({...await publish(given), warnings: ['Protected review controls changed (x)']});
+    assert.deepEqual((await refreshPull(args(f), dependencies)).warnings, ['Protected review controls changed (x)']);
   });
 });
 
@@ -244,16 +258,22 @@ test('a pass is not pushed when the checkout, the pull request or the push itsel
   });
 });
 
-test('through the command: identical evidence is not reviewed again, anything else is, and the signed receipt is published for the merged head', async t => {
+// A signed fixture: an enrolled identity, the protected configuration that trusts it, and a runtime with a counting reviewer.
+function signedFixture(t, localReview = {}) {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-refresh-state-'));
   t.after(() => fs.rmSync(state, {recursive: true, force: true}));
   const identity = initializeIdentity(state, 'fixture-author');
   const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: 'AGENTS.md', readme: 'README.md',
     acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
-    local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity]}};
+    local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity], ...localReview}};
   const calls = [];
   const runtime = f => ({state, ask: fakeHarness(calls), verify: () => ({fixture_execution_only: true}), installed, execute: f.execute, available: () => true});
   const refresh = (f, extra = {}) => main(['refresh', '--pr', '7', '--directory', f.work, '--request-file', extra.request || request(f.root), '--harness', 'claude'], runtime(f));
+  return {state, config, calls, runtime, refresh};
+}
+
+test('through the command: identical evidence is not reviewed again, anything else is, and the signed receipt is published for the merged head', async t => {
+  const {state, config, calls, runtime, refresh} = signedFixture(t);
   await pullRepository(async f => {
     const requestFile = request(f.root);
     // The earlier accepted review of the pull request head, as the author ran it.
@@ -292,5 +312,27 @@ test('through the command: identical evidence is not reviewed again, anything el
     f.pull.head = f.head(); f.advance('docs.md', 'moved a fourth time\n');
     asked = calls.length;
     assert.ok((await refresh(f, {request: request(f.root, 'A different requirement.')})).reused_calls >= 2); assert.equal(calls.length, asked);
+  }, {ciConfig: config});
+});
+
+test('through the command, a chunked review reuses every unit, integration pass and grading round while nothing it saw has changed', async t => {
+  const {state, config, calls, runtime, refresh} = signedFixture(t, {chunked: {force: true, params: {C: 1000, S: 20000}}});
+  await pullRepository(async f => {
+    const requestFile = request(f.root);
+    const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], runtime(f));
+    assert.equal(first.decision, 'auto_approve');
+    const plan = JSON.parse(fs.readFileSync(first.record, 'utf8'));
+    assert.equal(plan.version, 3); assert.ok(plan.partition.units.length >= 2, 'the change is reviewed in more than one unit');
+    const firstCalls = calls.length; assert.ok(firstCalls >= 4);
+    f.advance('docs.md', 'moved\n');
+    const refreshed = await refresh(f, {request: requestFile});
+    assert.equal(refreshed.status, 'refreshed'); assert.equal(refreshed.harness_invocations, 0); assert.equal(refreshed.reused_calls, firstCalls);
+    assert.equal(calls.length, firstCalls, 'no unit was asked again');
+    const record = JSON.parse(fs.readFileSync(refreshed.record, 'utf8'));
+    assert.equal(record.version, 3); assert.equal(record.snapshot.head_sha, f.head());
+    // The base changed a file the pull request changed: the change manifest every unit sees moved, so every unit is asked again.
+    f.pull.head = f.head(); f.advance('src/handler.js', handler('Boolean(input)', 'moved on main'));
+    const changed = await refresh(f, {request: requestFile});
+    assert.equal(changed.reused_calls, 0); assert.ok(calls.length > firstCalls);
   }, {ciConfig: config});
 });

@@ -22,7 +22,7 @@ const {assertHarness} = require('./local-harness.cjs');
 
 const MARKER = /<!-- clouseau-local-review:v1 [a-f0-9]{40} -->/;
 
-const first = error => String(error.stderr || error.message).trim().split('\n')[0];
+const first = error => String(error.stderr).trim().split('\n')[0];
 
 function ancestor(directory, candidate, descendant) {
   try {

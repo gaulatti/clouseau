@@ -434,8 +434,10 @@ digests, the subject of the head commit (the merge commit replaces it), and, for
 output tails and output digests (its argv, exit code, coverage counters and configuration digest stay in the key; a failed
 command is compared byte for byte). A reused answer is put through the same check as a fresh one against the new snapshot, and
 is asked again when that check fails; the receipt is signed over the new head, base and evidence, and CI verifies it exactly
-as before. In a chunked review the unit that owns an unchanged file is reused while a unit whose files, linked sources or
-seams changed is asked again. The result reports `reused_calls` and `harness_invocations` (calls actually made).
+as before. In a chunked review the same holds per call (every unit, integration pass and grading round), but every unit also
+sees the change manifest of the whole change (each changed path with its line counts and size), so a base movement that
+changes any changed file asks every unit again, while one that touches none of them reuses all of them. The result reports
+`reused_calls` and `harness_invocations` (calls actually made).
 
 Limits to expect: a changed requirement text, policy, contract, verification command or engine semantics reuses nothing; a
 verification that fails reuses nothing about its output; the store is not pruned and may be deleted at any time. See
