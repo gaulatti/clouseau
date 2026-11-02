@@ -27,7 +27,10 @@ function fixture() {
     getCollaboratorPermissionLevel: read('permission', () => ({permission: state.permission})),
     compareCommits: read('comparison', () => {if (state.compareError) throw new Error('comparison unavailable'); return structuredClone(state.comparison);}),
   }, pulls: {
-    get: read('pull', () => structuredClone(state.pr)),
+    get: read('pull', () => {
+      if (state.lag > 0 && state.atomicCalls > 0) {state.lag--; return {...structuredClone(state.pr), merged: false, state: 'open', merge_commit_sha: null};}
+      return structuredClone(state.pr);
+    }),
     listFiles: read('files', () => structuredClone(state.files)),
     listReviews: read('reviews', () => structuredClone(state.reviews)),
   }, issues: {
@@ -140,10 +143,12 @@ test('verification failure and either source or target racing the last checks ca
 
 test('an atomic result without the exact merged PR and target observation is never reported as success', async () => {
   const unobserved = fixture(); unobserved.state.noMergeObservation = true;
-  await assert.rejects(unobserved.check()); assert.equal(unobserved.state.mutations.length, 1);
+  const waits = [];
+  await assert.rejects(unobserved.check({wait: async ms => {waits.push(ms);}}), /not yet observable/); assert.equal(unobserved.state.mutations.length, 1);
+  assert.equal(waits.length, 10, 'the audit wait is bounded'); assert.ok(waits.reduce((sum, ms) => sum + ms, 0) <= 150000);
   for (const change of [f => {f.state.base = 'c'.repeat(40);}, f => {f.state.pr.head.sha = 'c'.repeat(40);},
     f => {f.state.pr.merge_commit_sha = 'c'.repeat(40);}]) {
-    const f = fixture(); f.state.postMutation = () => change(f); await assert.rejects(f.check());
+    const f = fixture(); f.state.postMutation = () => change(f); await assert.rejects(f.check({wait: async () => {}}));
     assert.equal(f.state.mutations.length, 1);
   }
 });
@@ -167,4 +172,29 @@ test('a base that moved after approval fails closed with one explicit needs-bran
   const protectedBranch = fixture(); protectedBranch.state.duringVerify = () => {protectedBranch.state.base = 'c'.repeat(40); protectedBranch.state.protected = true;};
   await assert.rejects(protectedBranch.check(), /head, base or protection changed before the atomic write/);
   assert.equal(protectedBranch.state.comments.length, 0);
+});
+
+test('a merge whose audit lags the atomic write is observed by a bounded wait and then succeeds', async () => {
+  const lagging = fixture(); lagging.state.lag = 3; const waits = [];
+  const merged = await lagging.check({wait: async ms => {waits.push(ms);}});
+  assert.equal(merged.merged, true); assert.equal(lagging.state.mutations.length, 1, 'the merge is never repeated while waiting');
+  assert.deepEqual(waits, [1000, 2000, 4000]);
+  // A lagging branch read (merged PR already visible) is waited for the same way.
+  const branch = fixture(); let reads = 0; const getBranch = branch.github.rest.repos.getBranch;
+  branch.github.rest.repos.getBranch = async args => {const result = await getBranch(args); if (branch.state.atomicCalls && reads++ < 2) result.data.commit.sha = branch.base; return result;};
+  assert.equal((await branch.check({wait: async () => {}})).merged, true);
+  // A rate-limited audit read waits through the shared rate-limit wrapper instead of failing.
+  const limited = fixture(); limited.state.lag = 0; const pull = limited.github.rest.pulls.get; let thrown = false;
+  limited.github.rest.pulls.get = async args => {
+    if (limited.state.atomicCalls && !thrown) {thrown = true; throw Object.assign(new Error('rate limit'), {status: 429});}
+    return pull(args);
+  };
+  assert.equal((await limited.check({wait: async () => {}})).merged, true);
+});
+
+test('a merged PR with a different head or merge commit fails at once instead of waiting', async () => {
+  for (const change of [f => {f.state.pr.head.sha = 'c'.repeat(40);}, f => {f.state.pr.merge_commit_sha = 'c'.repeat(40);}]) {
+    const f = fixture(); f.state.postMutation = () => change(f);
+    await assert.rejects(f.check({wait: async () => assert.fail('no waiting on a definitive mismatch')}), /different head or merge commit/);
+  }
 });
