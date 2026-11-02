@@ -232,6 +232,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           record_reference_digest: digest(compact), review_source: attested ? 'maintainer_attested' : 'authenticated_local', provider_api_calls: 0,
           reason: `${kind} passing local review; source, scores and CI verification validated without an AI rerun.`};
       }
+      // Opt-in (protected `exact_revert`): a tree byte-identical to an earlier tree of the base history needs no fresh review.
+      const exact = config.exact_revert ? await require('./exact-revert.cjs').assess({github, repo, pr, files, comments, technical, legacy,
+        config, engine, identity, recordPath, report}) : null;
+      if (exact) return exact;
       if (receiptRoute && !receiptOnly) {
         // The receipt-only route is chosen by the workflow when the PR description carries a receipt marker, and it holds no
         // provider credential. Local review is optional here, so the repository does not require a receipt; this run simply
@@ -313,6 +317,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         'once verification has completed, or push a new head if re-running does not produce a record.');
     }
     const record = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
+    if (record.exact_revert) return require('./exact-revert.cjs').gate({github, context, core, assessment, record, config, engine, legacy, numberFor, options});
     let verifiedRecord;
     try {verifiedRecord = verifyRecord(record, assessment, config, engine);} catch (error) {
       if (error.code !== 'DECISION_MISMATCH') throw error;

@@ -165,6 +165,11 @@ and require explicit owner confirmation.
 protected configuration, with every byte outside the block unchanged, is not held for
 owner confirmation. See [managed-standard AGENTS.md updates](docs/managed-agents.md).
 
+`exact_revert` is an opt-in, default-off exception for one review: a PR whose resulting tree is
+byte-identical to an earlier first-parent tree of the base history, within a window set in the protected
+configuration, is accepted without a fresh AI review; protected controls still need the exact-head owner
+confirmation and verification is unchanged. See [exact revert acceptance](docs/exact-revert.md).
+
 The native protected merge path requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
