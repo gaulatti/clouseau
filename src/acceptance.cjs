@@ -79,13 +79,16 @@ const isCodePath = name => CODE.test(name) && isExecutablePath(name) && !isTestP
 // a test title or an unrelated assertion in the same change is not linkage.
 function moduleStem(name) {
   const parts = name.split('/'); const base = parts.pop().replace(/\.[^.]+$/, '');
-  return base === 'index' && parts.length ? parts.pop() : base;
+  // A directory's entry file is named by the directory: index.* (JS), __init__.py (Python), mod.rs (Rust).
+  return (base === 'index' || (base === '__init__' && name.endsWith('.py')) || (base === 'mod' && name.endsWith('.rs'))) && parts.length ? parts.pop() : base;
 }
 
 // A statement that imports, not a title or comment that merely contains the word.
 const IMPORT = /^\s*(?:(?:export\b.*\s)?from\b|import\b|use\b|pub\s+use\b|mod\b|require(?:_relative)?\b|include\b|load\b)|\b(?:require|import)\(/;
 
 const JS_PATH = /\.[cm]?[jt]sx?$/;
+const PY_PATH = /\.py$/;
+const LINKABLE_PATH = /\.(?:[cm]?[jt]sx?|py)$/;
 const EXTENSION = /\.[cm]?[jt]sx?$/;
 
 // Module specifiers of a JavaScript/TypeScript source, from whole statements once comments are
@@ -116,13 +119,54 @@ function resolveSpecifier(from, specifier, known) {
   });
 }
 
+// Python import targets of a source, from whole statements once comments are removed: `import a.b`,
+// `from a.b import c, d` (the module and each name, since a name may be a submodule) and relative
+// `from . import x`, `from ..pkg import y`. A relative target keeps its leading dots.
+function pythonImports(content) {
+  const text = content.replace(/^[ \t]*#.*$/gm, '');
+  const found = [];
+  for (const match of text.matchAll(/^[ \t]*import[ \t]+([\w., \t]+)$/gm)) {
+    for (const item of match[1].split(',')) found.push(item.trim().split(/\s+/)[0]);
+  }
+  for (const match of text.matchAll(/^[ \t]*from[ \t]+(\.*)([\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n]*)/gm)) {
+    const base = `${match[1]}${match[2]}`;
+    found.push(base);
+    for (const item of match[3].replace(/[()]/g, '').split(',')) {
+      const name = item.trim().split(/\s+/)[0];
+      if (/^\w+$/.test(name)) found.push(/\.$/.test(base) ? `${base}${name}` : `${base}.${name}`);
+    }
+  }
+  return [...new Set(found.filter(Boolean))];
+}
+
+// One import extractor per language the linker follows (JavaScript/TypeScript and Python).
+const importsOf = (name, content) => PY_PATH.test(name) ? pythonImports(content) : specifiersOf(content);
+
+// Known Python files a target can name: `pkg.mod` is pkg/mod.py or pkg/mod/__init__.py. A relative target
+// is resolved from the importing file's directory; an absolute one is matched by path tail, since the
+// source roots are not supplied.
+function resolvePython(from, specifier, known) {
+  const dots = /^\.*/.exec(specifier)[0].length;
+  const module = specifier.slice(dots).split('.').join('/');
+  let base = path.posix.dirname(from);
+  for (let up = 1; up < dots; up++) base = path.posix.dirname(base);
+  const target = dots ? path.posix.join(base, module) : module;
+  return known.filter(candidate => {
+    if (!PY_PATH.test(candidate)) return false;
+    const full = candidate.replace(/(?:^|\/)__init__\.py$/, '').replace(PY_PATH, '');
+    return dots ? full === target.replace(/^\.$/, '').replace(/\/$/, '') : full === target || full.endsWith(`/${target}`);
+  });
+}
+
+const resolveImport = (from, specifier, known) => PY_PATH.test(from) ? resolvePython(from, specifier, known) : resolveSpecifier(from, specifier, known);
+
 // Principled coverage: a changed JS/TS file is covered when a supplied test imports it directly, or
 // imports a supplied file (a changed caller, a barrel) that imports it, transitively. Only supplied
 // files can be intermediates; a file with no path from any test is not covered.
 function reachedByTests(snapshot) {
-  const sources = Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha && source.kind === 'source' && JS_PATH.test(source.path));
+  const sources = Object.values(snapshot.sources).filter(source => source.ref === snapshot.head_sha && source.kind === 'source' && LINKABLE_PATH.test(source.path));
   const known = [...new Set([...sources.map(source => source.path), ...snapshot.files.map(file => file.path), ...(snapshot.test_imports || []).map(item => item.path)])];
-  const edges = new Map(sources.map(source => [source.path, specifiersOf(source.content)]));
+  const edges = new Map(sources.map(source => [source.path, importsOf(source.path, source.content)]));
   const roots = [...sources.filter(source => isTestPath(source.path)).map(source => source.path), ...(snapshot.test_imports || []).filter(item => isTestPath(item.path)).map(item => item.path)];
   for (const item of snapshot.test_imports || []) edges.set(item.path, item.specifiers);
   const reached = new Map();
@@ -130,7 +174,7 @@ function reachedByTests(snapshot) {
     const seen = new Set(); const queue = [root];
     while (queue.length) {
       const from = queue.shift();
-      for (const specifier of edges.get(from) || []) for (const target of resolveSpecifier(from, specifier, known)) {
+      for (const specifier of edges.get(from) || []) for (const target of resolveImport(from, specifier, known)) {
         if (seen.has(target)) continue;
         seen.add(target); if (!isTestPath(target)) queue.push(target);
         reached.set(target, [...(reached.get(target) || []), root]);
@@ -213,7 +257,7 @@ function nonBehavioural(patch) {
 }
 
 function linked(snapshot, name, reached) {
-  if (JS_PATH.test(name)) return reached.has(name);
+  if (LINKABLE_PATH.test(name)) return reached.has(name);
   const stem = moduleStem(name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const token = new RegExp(`(?:^|[\\s'"\`/.:])${stem}(?=$|[\\s'"\`.;,)/])`);
   return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' && isTestPath(source.path) &&
@@ -396,4 +440,4 @@ function validateApproval(report, snapshot, holdSnapshot = snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {patchOf, JS_PATH, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {patchOf, JS_PATH, LINKABLE_PATH, importsOf, pythonImports, resolvePython, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
