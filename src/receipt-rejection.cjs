@@ -29,14 +29,16 @@ class ReceiptRejected extends Error {
 }
 
 // The fixed one-line notice for a class; `required` repositories cannot be reviewed by CI instead.
-const noticeText = (reason, required) => `Local review receipt ignored because ${PHRASES[reason]}; ` +
+// A file name comes from the pull request's own changed files; it is shown inline and cannot carry markup or a mention.
+const nameOf = file => typeof file === 'string' && file ? ` (file: \`${file.replace(/[`@\r\n]/g, '').slice(0, 200)}\`)` : '';
+const noticeText = (reason, required, file) => `Local review receipt ignored because ${PHRASES[reason]}${nameOf(file)}; ` +
   (required ? 'this repository requires a valid receipt, so run the local review again.' : 'CI reviewed this change itself.');
 
 // The value comes from an earlier job's output, so only a known class is ever rendered.
 function noticeLine(assessment) {
   const reason = assessment.receipt_notice;
   return typeof reason === 'string' && Object.hasOwn(PHRASES, reason) ?
-    `\n\n${noticeText(reason, assessment.cause === 'local_receipt_required')}` : '';
+    `\n\n${noticeText(reason, assessment.cause === 'local_receipt_required', assessment.receipt_notice_file)}` : '';
 }
 
 module.exports = {PHRASES, ReceiptRejected, noticeText, noticeLine};

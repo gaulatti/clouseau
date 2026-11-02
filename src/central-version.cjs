@@ -104,17 +104,24 @@ function readEngineEvidence(filename, reviewerSha, root = path.join(__dirname, '
 }
 
 function engineContext(snapshot) {
-  const pins = new Set(); const legacy = new Set(); let wiki = false;
+  const pins = new Set(); const legacy = new Set(); let wiki = false; let pinChanged = false;
+  const resolverPins = content => [...content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau\/scripts\/resolve@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)].map(match => match[1]);
   for (const file of snapshot.files) {
     if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(file.path) || !file.head_source) continue;
     const content = snapshot.sources[file.head_source].content;
     if (content.includes('.clouseau-ci/src/wiki-git.cjs')) wiki = true;
-    for (const match of content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau\/scripts\/resolve@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)) pins.add(match[1]);
+    const before = file.base_source ? resolverPins(snapshot.sources[file.base_source].content) : [];
+    for (const pin of resolverPins(content)) {
+      pins.add(pin);
+      if (!before.includes(pin)) pinChanged = true;
+    }
     for (const source of [file.base_source, file.head_source].filter(Boolean)) {
       for (const match of snapshot.sources[source].content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)) legacy.add(match[1]);
     }
   }
-  if (!pins.size) return [];
+  // An ordinary edit of a workflow that merely carries an unchanged pin does not review the engine, so it must not pay
+  // for the whole seed; a change of the pin itself (or a new workflow carrying one) does.
+  if (!pinChanged) return [];
   // These are the actual source/test dependencies requested by the bounded
   // consumer installation investigations, not another executable engine.
   // This bounded seed is not a completeness claim: immutable dependencies not

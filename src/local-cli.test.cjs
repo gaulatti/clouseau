@@ -272,6 +272,12 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
       const result = await runReview(args, deps);
       assert.ok(result.receipt); assert.equal(result.decision, 'auto_approve'); warned(result);
       const issued = JSON.parse(fs.readFileSync(result.receipt)).payload; assert.equal(issued.expires_at - issued.issued_at, 3600);
+      // Local artifacts are compact JSON: indentation alone was ~15% of a receipt and of the cached record and snapshot.
+      for (const filename of [result.receipt, result.record, path.join(path.dirname(result.receipt), 'snapshot.json')]) {
+        const text = fs.readFileSync(filename, 'utf8');
+        assert.equal(text.indexOf('\n'), text.length - 1, `${path.basename(filename)} is a single line`);
+        assert.equal(text, JSON.stringify(JSON.parse(text)) + '\n');
+      }
       const reused = await runReview({...args, identity: undefined}, {...deps,
         ask: async () => {throw new Error('A verified cached review must not call AI');}});
       assert.equal(reused.reused, true); assert.equal(reused.harness_invocations, 0); warned(reused);

@@ -571,6 +571,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
       restore();
       assert.equal(blocked.decision, 'blocked_technical', name);
       assert.equal(blocked.receipt_notice, 'source', name); assert.equal(blocked.review_source, undefined, name);
+      assert.equal(blocked.receipt_notice_file, name === 'patch' ? files[0].filename : undefined, `${name}: only a patch mismatch names its file`);
     }
     f.state.failed = false;
     f.github.rest.repos.getContent = async args => {

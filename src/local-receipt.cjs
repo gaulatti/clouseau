@@ -358,6 +358,9 @@ async function screenSources(options) {
   } catch (error) {
     const reason = rejection(error) ?? (error.status === 404 ? 'source' : null);
     if (!reason) throw error;
+    // A patch mismatch names its file to the caller, but only a file the pull request itself changed: the path
+    // otherwise comes from the receipt, which is untrusted text.
+    if (error.code === 'RECEIPT_PATCH_MISMATCH' && options.files.some(file => file.filename === error.path)) options.note?.(error.path);
     return reason;
   }
 }

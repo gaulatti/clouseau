@@ -58,6 +58,13 @@ test('an ignored-receipt notice is one fixed line on incomplete and pending comm
   assert.ok(!NEXT_STEPS.engine_mismatch && !NEXT_STEPS.receipt_patch_mismatch);
 });
 
+test('a patch rejection notice names the file and strips markup from it', () => {
+  const line = noticeLine({receipt_notice: 'source', receipt_notice_file: 'tests/`a`@x\n.py', cause: 'evidence_incomplete'});
+  assert.equal(line, '\n\nLocal review receipt ignored because the reviewed sources or diff differ from the pull request (file: `tests/ax.py`); CI reviewed this change itself.');
+  assert.equal(noticeLine({receipt_notice: 'source', receipt_notice_file: 7}), noticeLine({receipt_notice: 'source'}));
+  assert.ok(!noticeLine({receipt_notice: 'source'}).includes('file:'));
+});
+
 test('every receipt rejection class has exactly one fixed single-line sentence', () => {
   assert.deepEqual(Object.keys(PHRASES).sort(), ['author', 'changed', 'engine', 'expired', 'held', 'malformed', 'not_passing', 'record',
     'revision', 'settings', 'signature', 'source', 'unavailable']);
