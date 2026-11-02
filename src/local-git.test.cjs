@@ -135,6 +135,21 @@ test('resolver installation preloads its actual pinned bootstrap and the current
   } finally {fs.rmSync(root, {recursive: true, force: true});}
 }));
 
+test('an ordinary edit of an already pinned workflow collects no engine source, so a two-line change stays small', () => repository(f => {
+  const pin = 'a'.repeat(40);
+  const workflow = path.join(f.directory, '.github/workflows/ci.yml');
+  fs.mkdirSync(path.dirname(workflow), {recursive: true});
+  fs.writeFileSync(workflow, `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${pin}\n      - run: echo one\n`);
+  git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: install automatic resolver']);
+  const base = git(f.directory, ['rev-parse', 'HEAD']).trim();
+  fs.writeFileSync(workflow, `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${pin}\n      - run: echo two\n`);
+  git(f.directory, ['commit', '-qam', 'ci: change an unrelated step']);
+  const {snapshot} = collectLocal({...f, base, request: 'Change one step.', technical: {fixture_only: true}, reviewerSha: 'b'.repeat(40)});
+  assert.deepEqual(Object.values(snapshot.sources).filter(source => source.path.startsWith('.clouseau-ci/')), []);
+  // Regression ceiling: this snapshot used to carry ~380 KB of engine source for any edit of a pinned workflow.
+  assert.ok(Buffer.byteLength(JSON.stringify(snapshot)) < 8000, 'a one-line workflow change keeps a small snapshot');
+}));
+
 test('a seeded engine file that a pinned legacy revision never had is skipped, while other seed failures still stop the review', () => repository(f => {
   const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'legacy-context-'));
   try {
@@ -248,7 +263,7 @@ test('a large, mostly new change with a pinned workflow fits the evidence budget
   const commit = message => { git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', message]); };
   modified.forEach((size, i) => write(`backend/m${i}.ts`, text(size, `m${i}`)));
   write('AGENTS.md', text(26000, 'agents')); write('README.md', text(22000, 'readme'));
-  write('.github/workflows/ci.yml', `steps:\n  - uses: gaulatti/clouseau/scripts/resolve@${pin}\n    image: postgres:17\n`);
+  write('.github/workflows/ci.yml', `steps:\n  - uses: gaulatti/clouseau/scripts/resolve@${'b'.repeat(40)}\n    image: postgres:17\n`);
   commit('chore: base');
   const base = git(f.directory, ['rev-parse', 'HEAD']).trim();
   modified.forEach((size, i) => write(`backend/m${i}.ts`, text(size, `m${i}`).replace('value', 'changed')));
