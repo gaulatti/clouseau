@@ -1471,3 +1471,18 @@ test('a record that carries its stored importer discovery derives the same decis
   const altered = structuredClone(stored); altered.discovery.test_imports = [];
   assert.throws(() => verifyRecord(altered, rebound, config), /Stale or altered/);
 }));
+
+test('optional local review on the receipt-only route names the real condition instead of claiming a receipt is required', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const optional = createPolicy({...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
+    max_age_seconds: 172800, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}});
+  const assessment = await optional.assess({github: f.github, context: f.context, recordPath: f.recordPath, receiptOnly: true});
+  assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, 'local_receipt_unusable');
+  assert.doesNotMatch(assessment.reason, /requires/); assert.match(assessment.reason, /optional/);
+  const {body, NEXT_STEPS} = require('./incomplete.cjs');
+  assert.match(NEXT_STEPS.local_receipt_unusable, /remove the `clouseau-local-review` marker/);
+  const text = body({...assessment, receipt_notice: 'source'}, 'u');
+  assert.match(text, /this receipt-only run did not review the change itself/); assert.doesNotMatch(text, /CI reviewed this change itself|requires a valid receipt/);
+  assert.doesNotMatch(body(assessment, 'u'), /Local review receipt ignored/);
+}));
