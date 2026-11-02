@@ -352,7 +352,7 @@ for (const central of [false, true, 'controls']) test(`central=${central}: authe
     const holdAssessment = await assess();
     assert.equal(holdAssessment.decision, 'review_incomplete');
     assert.equal(holdAssessment.cause, 'local_receipt_required', 'a receipt whose evidence does not meet the approval rule is ignored');
-    assert.equal(holdAssessment.receipt_notice, 'held');
+    assert.equal(holdAssessment.receipt_notice, 'completeness');
     assert.notEqual(holdAssessment.review_source, 'authenticated_local');
     assert.equal(fs.existsSync(f.recordPath), false);
     served = bundle; fs.writeFileSync(f.recordPath, kept);
