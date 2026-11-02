@@ -176,3 +176,13 @@ test('the first-parent chain stops at a parent outside the listing and tolerates
   assert.deepEqual(exact.chain(commits, id('q')), []);
   assert.deepEqual(exact.chain(history([{sha: BASE, tree: id('1')}]), BASE).length, 1);
 });
+
+test('a record or assessment from a different frozen engine is refused before anything is read', async () => {
+  const record = {exact_revert: {head_sha: HEAD, base_sha: BASE, window: 5}, snapshot: {repository: 'o/r'}, engine: {sha: 'a'}};
+  const assessment = {version: 2, review_source: 'exact_revert', decision: 'auto_approve', head_sha: HEAD, base_sha: BASE,
+    record_digest: digest(record), engine: {sha: 'a'}};
+  const input = {github: null, repo, config: {exact_revert: {window: 5}}, context: null, legacy: null, numberFor: null};
+  for (const [changed, engine] of [[{}, {sha: 'b'}], [{engine: {sha: 'b'}}, {sha: 'a'}]]) {
+    await assert.rejects(exact.verifyRecord({...input, record, assessment: {...assessment, ...changed}, engine}), /Stale or altered exact-revert record/);
+  }
+});
