@@ -453,7 +453,7 @@ function validateEvidence(report, snapshot) {
     // controller knows that from the immutable sources, so the reviewer is not asked for a citation that cannot exist.
     // A file with no source at all (a segment of a large file) still needs its evidence.
     const changed = snapshot.files.find(file => file.path === item.path);
-    const sides = [changed.base_source, changed.head_source].filter(Boolean);
+    const sides = [changed?.base_source, changed?.head_source].filter(Boolean);
     const barren = sides.length > 0 && !sides.some(id => citable(snapshot.sources[id]));
     requireThat(barren || item.evidence.some(id => snapshot.sources[evidence.get(id).source].path === item.path ||
       snapshot.files.some(file => file.path === item.path && [file.base_source, file.head_source].includes(evidence.get(id).source))),
