@@ -56,7 +56,7 @@ async function execute(step, options = {}) {
   const record = options.record || f.record;
   const policy = {
     async assess(args) {
-      state.assess++; state.receiptOnly = args.receiptOnly;
+      state.assess++; state.receiptOnly = args.receiptOnly; state.ignoreReceipt = args.ignoreReceipt;
       mkdirSync('work', {recursive: true}); writeFileSync(RECORD, JSON.stringify(record));
       if (options.bundle) writeFileSync(`${RECORD}.repair.json`, JSON.stringify(options.bundle));
       if (options.diagnostic) writeFileSync(`${RECORD}.diagnostic.json`, options.diagnostic);
@@ -111,6 +111,9 @@ test('packaged action defaults to artifacts and rejects ambiguous transport comb
     [{operation: 'test', 'record-transport': 'job-output'}, false],
     [{operation: 'gate', 'record-transport': 'Artifact'}, false],
     [{operation: 'unknown'}, false],
+    [{operation: 'assess', 'ignore-receipt': 'true'}, true], [{operation: 'assess', 'ignore-receipt': 'false'}, true],
+    [{operation: 'verify-local', 'ignore-receipt': 'true'}, false], [{operation: 'gate', 'ignore-receipt': 'true'}, false],
+    [{operation: 'assess', 'ignore-receipt': 'yes'}, false],
   ]) {
     const result = spawnSync('bash', ['-e', '-c', validation.run], {env: environment(validation, values), encoding: 'utf8'});
     assert.equal(result.status === 0, success, JSON.stringify(values));
@@ -154,6 +157,12 @@ test('actual packaged assessment emits a record reusable only by the same run an
   }
   const local = await execute(assess, {env: {CLOUSEAU_RECEIPT_ONLY: 'true', CLOUSEAU_WAIT_FOR_VERIFICATION: 'false'}});
   assert.equal(local.receiptOnly, true); assert.equal(local.waited, undefined);
+  assert.equal(local.ignoreReceipt, false, 'the receipt-only route still reads the receipt');
+  const hosted = await execute(assess, {inputs: {operation: 'assess', 'ignore-receipt': 'true'}});
+  assert.equal(hosted.ignoreReceipt, true); assert.equal(hosted.receiptOnly, false);
+  assert.equal(produced.ignoreReceipt, false, 'the ordinary hosted route is unchanged by default');
+  const confined = await execute(assess, {inputs: {operation: 'verify-local', 'ignore-receipt': 'true'}});
+  assert.equal(confined.ignoreReceipt, false, 'only assess can ignore a receipt');
 });
 
 test('packaged artifact mode leaves the existing artifact path and gate unchanged', async () => {

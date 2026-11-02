@@ -18,6 +18,9 @@ const PHRASES = Object.freeze({
   not_passing: 'the review it records did not pass',
   settings: 'the protected chunked review configuration is invalid',
   held: 'its evidence does not meet the approval evidence rule',
+  untested: 'no supplied test imports changed production code',
+  integrity: 'test integrity is unresolved',
+  completeness: 'review completeness is unresolved',
 });
 
 class ReceiptRejected extends Error {

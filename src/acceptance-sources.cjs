@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {LockfileError, MAX_BYTES, LOCKFILE_PATCH, isLockfile, lockfileEvidence, lockfileError} = require('./lockfile-summary.cjs');
-const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, specifiersOf, coveringTests} = require('./acceptance.cjs');
+const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, importsOf, coveringTests} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
@@ -144,7 +144,7 @@ async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
         const batch = group.slice(offset, offset + Math.min(10, 100 - scanned));
         scanned += batch.length;
         const found = await Promise.all(batch.map(async entry => {
-          try {return {path: entry.path, specifiers: specifiersOf(await fetchText({github, repo, snapshot, filename: entry.path, ref: headSha}))};}
+          try {return {path: entry.path, specifiers: importsOf(entry.path, await fetchText({github, repo, snapshot, filename: entry.path, ref: headSha}))};}
           catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
         }));
         snapshot.test_imports.push(...found.filter(item => item && item.specifiers.length));
@@ -152,7 +152,7 @@ async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
     }
     snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned};
     const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
-    for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)index\.[cm]?[jt]sx?$/.test(item.path) &&
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)(?:index\.[cm]?[jt]sx?|__init__\.py)$/.test(item.path) &&
       directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
       await readOptional({github, repo, snapshot, filename: entry.path});
     }

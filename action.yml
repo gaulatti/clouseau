@@ -31,6 +31,9 @@ inputs:
   assessment:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
+  ignore-receipt:
+    description: "'true' makes assess ignore the PR local review receipt entirely (never read, never verified); for the secret-bearing hosted fallback that follows an unusable receipt"
+    default: 'false'
   record-transport:
     description: artifact (default) or bounded job-output record transport for v2 assess, verify-local, gate, and repair
     default: artifact
@@ -92,7 +95,13 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
         CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
         CLOUSEAU_HAS_REVIEW_RECORD: ${{ inputs.review-record != '' }}
+        CLOUSEAU_IGNORE_RECEIPT: ${{ inputs.ignore-receipt }}
       run: |
+        case "$CLOUSEAU_IGNORE_RECEIPT" in
+          false) ;;
+          true) test "$CLOUSEAU_OPERATION" = assess || { echo 'ignore-receipt applies only to assess' >&2; exit 1; } ;;
+          *) echo 'ignore-receipt must be true or false' >&2; exit 1 ;;
+        esac
         case "$CLOUSEAU_OPERATION" in
           verify-engine|test|coverage|await-verification|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|reconcile-base|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
@@ -155,6 +164,7 @@ runs:
         DEEPSEEK_API_KEY: ${{ inputs.operation == 'assess' && inputs.provider-key || '' }}
         TYPESAFE_API_KEY: ${{ inputs.operation == 'assess' && inputs.typesafe-key || '' }}
         CLOUSEAU_RECEIPT_ONLY: ${{ inputs.operation == 'verify-local' }}
+        CLOUSEAU_IGNORE_RECEIPT: ${{ inputs.operation == 'assess' && inputs.ignore-receipt }}
         PR_NUMBER: ${{ inputs.pull-request }}
         CLOUSEAU_WAIT_FOR_VERIFICATION: ${{ inputs.wait-for-verification }}
         CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
@@ -171,7 +181,8 @@ runs:
           let assessment;
           try {
             assessment = await assess({github, context, report: core.info,
-              receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true'});
+              receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true',
+              ignoreReceipt: process.env.CLOUSEAU_IGNORE_RECEIPT === 'true'});
           } finally {transport.preserveDiagnostic({mode, core, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});}
           core.setOutput('assessment', JSON.stringify(assessment));
           require(path.join(root, 'src/incomplete.cjs')).annotate({core, assessment});
