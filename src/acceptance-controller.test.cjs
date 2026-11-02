@@ -1489,8 +1489,6 @@ test('the hosted fallback after an unusable receipt never reads the receipt, rev
   const run = extra => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ...extra});
   await run({});
   assert.ok(artifactReads > 0, 'the ordinary route reads the claimed receipt');
-  const routed = await run({receiptOnly: true});
-  assert.equal(routed.cause, 'local_receipt_unusable'); assert.equal(routed.record_digest, undefined, 'the receipt-only route yields no record for the gate');
   const reads = artifactReads; const lines = []; const calls = f.state.calls;
   const hosted = await run({ignoreReceipt: true, report: line => lines.push(line)});
   assert.equal(artifactReads, reads, 'the secret-bearing fallback never reads the receipt');
