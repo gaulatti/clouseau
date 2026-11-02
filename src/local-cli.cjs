@@ -19,6 +19,7 @@ const {coverageParts} = require('./coverage-plan.cjs');
 const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
 const gate = require('./coverage-gate.cjs');
 const pinning = require('./engine-pin.cjs');
+const {createReuse} = require('./review-reuse.cjs');
 
 const root = path.join(__dirname, '..');
 // Characters of each output stream kept as review evidence; the digests always cover the whole stream.
@@ -167,7 +168,7 @@ function readPull({repo, number, base, head, execute}) {
 }
 
 async function runReview(args, {ask = askHarness, execute = cp.execFileSync, verify = executeVerification, state = stateDirectory(), installed = installation,
-  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute} = {}) {
+  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, reuse = {}} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
   const agent = args.agent;
@@ -333,18 +334,29 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
     return response;
   };
+  // Every call of this review is remembered by its evidence once the review is accepted; `reuse.read` (the refresh command)
+  // lets a call whose evidence is byte-identical to a remembered one take that answer instead of asking again.
+  let unitDigests = null;
+  const reusing = createReuse({directory: path.join(state, 'unit-reuse'), read: reuse.read === true,
+    semantics: require('./review-semantics.cjs').semanticsDigest(), literals: () => {
+      if (chunking && !unitDigests) {
+        unitDigests = chunkedWiring.hooksFor(active.params).partition({snapshot: collected.snapshot}).units.map(unit => unit.view_digest);
+      }
+      return {base: baseSha, head, digests: [collected.snapshot.digest, ...(unitDigests || [])]};
+    }});
+  const asking = reusing.wrap(session);
   let result; let chunkedRecord = null; let reviews;
   try {
     if (chunking) {
       fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot) + '\n', {mode: 0o600});
-      ({record: chunkedRecord, reviews} = await chunkedWiring.review({snapshot: collected.snapshot, active, ask: session, agent: Boolean(agent),
+      ({record: chunkedRecord, reviews} = await chunkedWiring.review({snapshot: collected.snapshot, active, ask: asking, agent: Boolean(agent),
         journal: exchange ? undefined : chunkedWiring.fileJournal(path.join(chunkedDirectory, 'journal')), scope: cacheId,
         technical, priorFindings}));
       result = chunkedRecord.result;
     } else {
       result = await localReview({...collected, ask: async task => {
         fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot) + '\n', {mode: 0o600});
-        return session(task);
+        return asking(task);
       }});
     }
   } catch (error) {
@@ -369,6 +381,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(chunking ? {...result, reviews} : result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
+  reusing.commit(result.decision);
   const record = chunkedRecord || {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
     local_previous: {findings: priorFindings}, controls: false, technical};
   fs.mkdirSync(path.dirname(output), {recursive: true});
@@ -392,7 +405,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0, ...attested(attestation),
-    harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head}, technical)};
+    harness_invocations: result.usage.length - reusing.stats.reused, reused_calls: reusing.stats.reused, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head}, technical)};
 }
 
 const attested = attestation => attestation ? {maintainer_attested: {author: attestation.author, pull_request: attestation.number}} : {};
@@ -447,6 +460,10 @@ async function main(argv, runtime = {}) {
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
   if (args.command === 'review') return runReview(args, runtime);
+  if (args.command === 'refresh') {
+    return require('./pr-refresh.cjs').refreshPull(args, {review: reviewArgs => runReview(reviewArgs, {...runtime, reuse: {read: true}}),
+      publish: publishReceipt, execute: runtime.execute, available: runtime.available});
+  }
   if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
   throw new Error(require('./cli-usage.cjs').usage());
