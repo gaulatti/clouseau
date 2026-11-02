@@ -56,7 +56,7 @@ for the version 2 policy configuration.
 | `test` | none | Run Clouseau's Node regression suite |
 | `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
 | `await-verification` | `config`, `pull-request` for non-PR events | Wait for the exact-head PR verification run without deadlocking a single-slot runner pool: ends cleanly with `verified=false` when verification has not started within `verification_queue_grace_seconds` (default 900), to be reassessed when the verification run completes |
-| `assess` | `config`, optional `pull-request`, `provider-key` | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
+| `assess` | `config`, optional `pull-request`, `provider-key`, optional `ignore-receipt: 'true'` (never read the PR's receipt; for the hosted fallback after an unusable receipt) | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |

@@ -252,6 +252,35 @@ test('a root-level index module is named by itself, a nested one by its director
   assert.equal(moduleStem('src/ui/button.tsx'), 'button');
 });
 
+test('Python packages and modules link to the tests that import them, by any import path that resolves', () => {
+  const {pythonImports, resolvePython, importsOf, LINKABLE_PATH} = require('./acceptance.cjs');
+  assert.equal(moduleStem('services/api/experiment_store/__init__.py'), 'experiment_store');
+  assert.equal(moduleStem('src/net/mod.rs'), 'net');
+  assert.equal(moduleStem('__init__.py'), '__init__');
+  assert.equal(moduleStem('lib/__init__.js'), '__init__');
+  assert.ok(LINKABLE_PATH.test('a.py') && !LINKABLE_PATH.test('a.go'));
+  assert.deepEqual(pythonImports('# import hidden\nimport a.b, c as d\nfrom x.y import (p,\n  q as r)\nfrom . import s\nfrom ..t import u\nfrom v import *\nimport os'),
+    ['a.b', 'c', 'os', 'x.y', 'x.y.p', 'x.y.q', '.', '.s', '..t', '..t.u', 'v']);
+  assert.deepEqual(importsOf('t.py', 'import a'), ['a']);
+  assert.deepEqual(importsOf('t.ts', "import './a';"), ['./a']);
+  const known = ['services/api/experiment_store/__init__.py', 'services/api/experiment_store/store.py', 'services/api/other.py', 'services/api/__init__.py', 'x.js'];
+  assert.deepEqual(resolvePython('tests/test_x.py', 'services.api.experiment_store', known), [known[0]]);
+  assert.deepEqual(resolvePython('tests/test_x.py', 'services.api.experiment_store.store', known), [known[1]]);
+  assert.deepEqual(resolvePython('tests/test_x.py', 'services.api', known), [known[3]]);
+  assert.deepEqual(resolvePython('services/api/experiment_store/__init__.py', '.store', known), [known[1]]);
+  assert.deepEqual(resolvePython('services/api/experiment_store/store.py', '..other', known), [known[2]]);
+  assert.deepEqual(resolvePython('services/api/experiment_store/store.py', '.', known), [known[0]]);
+  assert.deepEqual(resolvePython('tests/test_x.py', 'experiment', known), [], 'a name that is only a fragment of a path segment is not a module');
+
+  const f = fixture();
+  const source = (path, content) => ({authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path, content});
+  f.snapshot.files = ['services/api/experiment_store/__init__.py', 'services/api/experiment_store/store.py', 'services/api/lonely.py'].map(path => ({path, status: 'added', patch: '@@ -0,0 +1 @@\n+x = 1'}));
+  const link = content => {f.snapshot.sources = {t: source('tests/test_it.py', content), p: source('services/api/experiment_store/__init__.py', 'from .store import Store\n')}; return approvalHold(f.report, f.snapshot);};
+  assert.equal(link('from services.api.experiment_store import Store\n'), 'no supplied test imports changed production code: services/api/lonely.py', 'the package and its re-exported module are linked');
+  assert.equal(link('import services.api.experiment_store\n'), 'no supplied test imports changed production code: services/api/lonely.py', 'a plain package import links the package and what it re-exports');
+  assert.match(link('# experiment_store lonely\ndef test_experiment_store(): pass\n'), /experiment_store\/__init__\.py, services\/api\/experiment_store\/store\.py, services\/api\/lonely\.py$/, 'a shared name is not an import');
+});
+
 test('only blank, comment-only, anchored type-only lines and identical normalized import sets are non-behavioural', () => {
   const {nonBehavioural} = require('./acceptance.cjs');
   const inert = patch => nonBehavioural(`@@\n${patch}`);
