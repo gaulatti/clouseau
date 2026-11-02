@@ -4,7 +4,7 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const {SCHEME, DEFAULTS, PartitionRefusal, atomKey, parameters, cost, threshold, inflate, checkOwnership, partition, render, main} = require('./review-partition.cjs');
+const {SCHEME, DEFAULTS, PartitionRefusal, atomKey, pairName, pairKeys, parameters, cost, threshold, inflate, checkOwnership, partition, render, main} = require('./review-partition.cjs');
 
 const file = (name, size = 1000, extra = {}) => ({path: name, base_size: 0, head_size: size, patch_chars: 0, ...extra});
 const table = JSON.parse(fs.readFileSync(path.join(__dirname, '../test/fixtures/alcantara-02618a9.json'), 'utf8'));
@@ -60,11 +60,13 @@ test('I1 holds on random trees: every changed path is owned by exactly one unit,
     assert.equal(checkOwnership(plan, files.map(entry => entry.path)), true);
     for (const unit of plan.units) {
       // A unit exceeds C only when one atom alone is bigger than C.
-      const atoms = new Set(unit.owned.map(atomKey));
+      const keys = pairKeys(files.map(entry => entry.path));
+      const atomOf = name => keys.get(name);
+      const atoms = new Set(unit.owned.map(atomOf));
       assert.ok(unit.cost <= 120000 || atoms.size === 1);
       assert.equal(unit.cost, unit.owned.reduce((sum, name) => sum + unit.costs[name], 0));
       // Atoms are never split across units.
-      for (const other of plan.units) if (other !== unit) for (const name of other.owned) assert.ok(!atoms.has(atomKey(name)));
+      for (const other of plan.units) if (other !== unit) for (const name of other.owned) assert.ok(!atoms.has(atomOf(name)));
     }
   }
   assert.deepEqual(partition([]).units, []);
@@ -173,7 +175,7 @@ test('random trees with huge files keep I1: every changed line is owned once, se
     const plan = partition(files, {unit_ceiling: 150000});
     assert.equal(checkOwnership(plan, files.map(entry => entry.path)), true);
     assert.equal(partition(shuffled(files, next), {unit_ceiling: 150000}).plan_digest, plan.plan_digest);
-    for (const unit of plan.units) assert.ok(unit.cost <= 150000 || unit.owned.length === 1 || new Set(unit.owned.map(atomKey)).size === 1);
+    for (const unit of plan.units) assert.ok(unit.cost <= 150000 || unit.owned.length === 1 || new Set(unit.owned.map(name => pairKeys(files.map(entry => entry.path)).get(name))).size === 1);
   }
 });
 
@@ -234,8 +236,8 @@ test('golden plans for the measured alcantara commit 02618a9: stored (compact) s
   // Stored size: a file added whole keeps only its patch header, the body lives once in head_source.
   const plan = partition(table.files);
   assert.deepEqual(plan.units.map(unit => [unit.id, unit.owned.length, unit.cost]),
-    [['u0', 36, 444565], ['u1', 22, 437671], ['u2', 12, 449538], ['u3', 15, 201175]]);
-  assert.equal(plan.plan_digest, 'e246174b65d762f16130be60b2607582724eb81279d922087db986f3090047d6');
+    [['u0', 36, 447217], ['u1', 23, 443555], ['u2', 12, 449538], ['u3', 14, 192639]]);
+  assert.equal(plan.plan_digest, 'ca864a11508a8edf338aa8ab9dfbf6ceec5ff2863c79ec837a8625293305f12e');
   assert.equal(plan.units.reduce((sum, unit) => sum + unit.owned.length, 0), 85);
   assert.ok(plan.units.every(unit => unit.cost <= DEFAULTS.unit_ceiling));
   assert.equal(checkOwnership(plan, table.files.map(entry => entry.path)), true);
@@ -244,14 +246,14 @@ test('golden plans for the measured alcantara commit 02618a9: stored (compact) s
   const full = table.files.map(entry => ({...entry, patch_chars: entry.full_patch_chars ?? entry.patch_chars}));
   const old = partition(full);
   assert.deepEqual(old.units.map(unit => [unit.id, unit.owned.length, unit.cost]),
-    [['u0', 29, 446973], ['u1', 12, 411607], ['u2', 15, 445158], ['u3', 8, 436455], ['u4', 21, 414161]]);
-  assert.equal(old.plan_digest, '720841d824b85e455cdd56f7c89ff5a47988785aeb90ec6beaf2ebaff5e25a7a');
+    [['u0', 28, 448747], ['u1', 14, 428356], ['u2', 15, 445158], ['u3', 8, 436455], ['u4', 20, 395638]]);
+  assert.equal(old.plan_digest, '31fa553fed95a7765b37bb6cf1f0be93962814104c0646150988e4d4080ecf43');
   // Without the derived summary the 538K lockfile is a file over the bound; with C=300K the plan grows.
   const raw = table.files.map(({derived_size, ...entry}) => entry);
   const rawPlan = partition(raw);
   assert.ok(rawPlan.units.filter(unit => unit.parts?.['pnpm-lock.yaml']).length >= 2);
   assert.equal(checkOwnership(rawPlan, raw.map(entry => entry.path)), true);
-  assert.equal(partition(table.files, {unit_ceiling: 300000}).units.length, 7);
+  assert.equal(partition(table.files, {unit_ceiling: 300000}).units.length, 6);
   assert.ok(partition(table.files, {unit_ceiling: 150000}).units.length > 6);
 });
 
@@ -263,10 +265,10 @@ test('the dry run prints the plan, the refusal, and rejects bad arguments', () =
   };
   const ok = run(['table.json'], table.files);
   assert.equal(ok.code, 0);
-  assert.ok(ok.text.startsWith(`${SCHEME} e246174b`));
+  assert.ok(ok.text.startsWith(`${SCHEME} ca864a11`));
   assert.match(ok.text, /^4 units, 85 files, ceiling 450000$/m);
-  assert.match(ok.text, /^u3 {2}cost 201175 {2}15 files$/m);
-  assert.equal(run(['table.json', '--ceiling', '300000'], table.files).text.split('\n')[1], '7 units, 85 files, ceiling 300000');
+  assert.match(ok.text, /^u3 {2}cost 192639 {2}14 files$/m);
+  assert.equal(run(['table.json', '--ceiling', '300000'], table.files).text.split('\n')[1], '6 units, 85 files, ceiling 300000');
   const refused = run(['table.json'], [{path: 'logo.png', base_size: 0, head_size: 10, patch_chars: 0, binary: true}]);
   assert.equal(refused.code, 2);
   assert.match(refused.text, /^refused unpartitionable_binary: binary change logo.png\n$/);
@@ -283,5 +285,36 @@ test('the dry run reads the table from disk and writes to stdout by default', ()
   try {
     assert.equal(main([path.join(__dirname, '../test/fixtures/alcantara-02618a9.json')]), 0);
   } finally { process.stdout.write = original; }
-  assert.match(written.join(''), /^clouseau-partition\/1 e246174b/);
+  assert.match(written.join(''), /^clouseau-partition\/1 ca864a11/);
+});
+
+test('a test in a separate tests tree stays with the source it names, only when that source is unambiguous', () => {
+  assert.equal(pairName('tests/test_foo.py'), 'foo');
+  assert.equal(pairName('tests/foo_test.py'), 'foo');
+  assert.equal(pairName('web/__tests__/foo.spec.ts'), 'foo');
+  assert.equal(pairName('pkg/foo/__init__.py'), 'foo');
+  assert.equal(pairName('src/ui/index.ts'), 'ui');
+  assert.equal(pairName('src/net/mod.rs'), 'net');
+  assert.equal(pairName('src/foo.ts'), 'foo');
+  assert.equal(pairName('tests/helpers.py'), 'helpers', 'a file without a test marker keeps its name');
+  assert.equal(pairName('lib/contest.py'), 'contest', 'a source is never stripped of test affixes');
+  const keys = pairKeys(['svc/api/store.py', 'tests/test_store.py', 'tests/store_test.py', 'svc/api/pkg/__init__.py', 'tests/test_pkg.py',
+    'a/dup.py', 'b/dup.py', 'tests/test_dup.py', 'tests/test_orphan.py', 'tests/helpers.py', 'svc/helpers.py', 'b/dup.test.py', 'c/lone.test.ts']);
+  const same = (x, y) => assert.equal(keys.get(x), keys.get(y), `${x} pairs with ${y}`);
+  const apart = (x, y) => assert.notEqual(keys.get(x), keys.get(y), `${x} does not pair with ${y}`);
+  same('tests/test_store.py', 'svc/api/store.py');
+  same('tests/store_test.py', 'svc/api/store.py');
+  same('tests/test_pkg.py', 'svc/api/pkg/__init__.py');
+  apart('tests/test_dup.py', 'a/dup.py');
+  apart('tests/test_dup.py', 'b/dup.py');
+  same('b/dup.test.py', 'b/dup.py');
+  apart('tests/test_orphan.py', 'svc/api/store.py');
+  apart('tests/helpers.py', 'svc/helpers.py');
+  assert.equal(keys.get('c/lone.test.ts'), 'c/lone');
+  assert.equal(keys.get('svc/api/store.py'), 'svc/api/store');
+  // Fill the first unit so only the pairing keeps the test with its source.
+  const files = [file('a/fill.py', 200000, {patch_chars: 200000}), file('svc/store.py', 30000), file('tests/test_store.py', 30000)];
+  assert.deepEqual(partition(files).units.map(unit => unit.owned), [['a/fill.py'], ['svc/store.py', 'tests/test_store.py']]);
+  const segmented = [file('svc/big.py', 800000, {segments: [400000, 400000]}), file('tests/test_big.py', 1000)];
+  assert.equal(checkOwnership(partition(segmented), segmented.map(entry => entry.path)), true);
 });

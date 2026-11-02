@@ -16,8 +16,8 @@
 // Nothing here is called by the review flow yet. The plan is the shape of review-partition.cjs
 // ({units: [{id, owned}]}); the unit summaries are the validated reports of review-units.cjs.
 
-const {digest, JS_PATH, isTestPath, specifiersOf, resolveSpecifier, patchOf} = require('./acceptance.cjs');
-const {atomKey} = require('./review-partition.cjs');
+const {digest, JS_PATH, LINKABLE_PATH, isTestPath, importsOf, resolveImport, patchOf} = require('./acceptance.cjs');
+const {pairName} = require('./review-partition.cjs');
 const {importerLines, calleeLines, removedLines, excerptOf} = require('./seam-excerpts.cjs');
 
 const DEFAULTS = Object.freeze({excerptCap: 2000, integrationCap: 250000, textCap: 2000});
@@ -43,7 +43,6 @@ function limits(options) {
 }
 
 const compare = (a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b));
-const stemOf = path => atomKey(path).split('/').pop();
 const bounded = (value, cap) => String(value).slice(0, cap);
 
 // Names a patch adds or removes as exports. A multi-line export list is only partly visible in a hunk; a name
@@ -103,16 +102,16 @@ function seamsOf({snapshot, plan}, options = {}) {
     found.set(id, {id, kind, a, b, ...extra, excerpts});
   };
 
-  for (const file of snapshot.files.filter(item => item.head_source && JS_PATH.test(item.path))) {
+  for (const file of snapshot.files.filter(item => item.head_source && LINKABLE_PATH.test(item.path))) {
     const content = snapshot.sources[file.head_source].content;
-    for (const specifier of specifiersOf(content)) {
-      for (const target of resolveSpecifier(file.path, specifier, live).filter(path => path !== file.path)) {
+    for (const specifier of importsOf(file.path, content)) {
+      for (const target of resolveImport(file.path, specifier, live).filter(path => path !== file.path)) {
         const callee = byPath.get(target);
-        const consumed = exportsOf(patchOf(snapshot, callee)).filter(name => mentions(content, name));
+        const consumed = !JS_PATH.test(callee.path) ? [] : exportsOf(patchOf(snapshot, callee)).filter(name => mentions(content, name));
         add(consumed.length ? 'export_consumer' : 'import', file, callee, consumed.length ? {exports: consumed} : {},
           [importerLines(content, specifier, consumed), consumed.length ? calleeLines(patchOf(snapshot, callee), consumed) : []]);
       }
-      for (const target of resolveSpecifier(file.path, specifier, [...dead.keys()])) add('removed_import', file, dead.get(target), {}, [importerLines(content, specifier, []), []]);
+      for (const target of resolveImport(file.path, specifier, [...dead.keys()])) add('removed_import', file, dead.get(target), {}, [importerLines(content, specifier, []), []]);
     }
   }
 
@@ -120,10 +119,10 @@ function seamsOf({snapshot, plan}, options = {}) {
   const subjects = snapshot.files.filter(file => !isTestPath(file.path));
   for (const test of snapshot.files.filter(file => isTestPath(file.path) && (file.status === 'removed' || /^-(?!--)/m.test(patchOf(snapshot, file))))) {
     const id = test.head_source || test.base_source;
-    const imported = JS_PATH.test(test.path)
-      ? specifiersOf(snapshot.sources[id].content).flatMap(specifier => resolveSpecifier(test.path, specifier, subjects.map(file => file.path)))
+    const imported = LINKABLE_PATH.test(test.path)
+      ? importsOf(test.path, snapshot.sources[id].content).flatMap(specifier => resolveImport(test.path, specifier, subjects.map(file => file.path)))
       : [];
-    for (const subject of subjects.filter(file => stemOf(file.path) === stemOf(test.path) || imported.includes(file.path))) {
+    for (const subject of subjects.filter(file => pairName(file.path) === pairName(test.path) || imported.includes(file.path))) {
       add('test_subject', test, subject, {}, [removedLines(patchOf(snapshot, test)), calleeLines(patchOf(snapshot, subject), [])]);
     }
   }

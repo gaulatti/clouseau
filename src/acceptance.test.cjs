@@ -281,6 +281,64 @@ test('Python packages and modules link to the tests that import them, by any imp
   assert.match(link('# experiment_store lonely\ndef test_experiment_store(): pass\n'), /experiment_store\/__init__\.py, services\/api\/experiment_store\/store\.py, services\/api\/lonely\.py$/, 'a shared name is not an import');
 });
 
+test('a trailing comment on a Python import line does not hide the import', () => {
+  const {pythonImports} = require('./acceptance.cjs');
+  assert.deepEqual(pythonImports('import a.b  # the b module\nimport c, d # both\nfrom e.f import (g,  # first\n  h)  # last\nfrom . import i  # sibling\nx = "# not a comment"\nimport j'),
+    ['a.b', 'c', 'd', 'j', 'e.f', 'e.f.g', 'e.f.h', '.', '.i']);
+  assert.deepEqual(pythonImports("s = '# import hidden'\nt = 'it\\'s'  # import also_hidden\n"), []);
+});
+
+test('Python modules loaded by file path, by name string or as a script are linked by exact resolution', () => {
+  const {pythonImports, resolvePython} = require('./acceptance.cjs');
+  const text = [
+    'spec = importlib.util.spec_from_file_location("run_corpus", ROOT / "scripts" / "run_corpus.py")',
+    'runpy.run_path(os.path.join("tools", "gen.py"), run_name="__main__")',
+    "subprocess.run([sys.executable, 'scripts/check.py', '--fast'])",
+    'subprocess.run([sys.executable, "-m", "pkg.cli"])',
+    'runpy.run_module("pkg.entry")',
+    'importlib.import_module("pkg.plug")',
+    'data = open("notes.py")',
+    'x = Path("scripts/decoy.py")  # not a load',
+    'subprocess.run(["echo", "not python"])',
+  ].join('\n');
+  assert.deepEqual(pythonImports(text), ['file:scripts/run_corpus.py', 'file:tools/gen.py', 'file:scripts/check.py', 'pkg.cli', 'pkg.entry', 'pkg.plug']);
+  const known = ['scripts/run_corpus.py', 'tools/gen.py', 'tests/scripts/run_corpus.py', 'tests/helper.py', 'other/scripts/check.py', 'scripts/check.py', 'tests/test_a.py', 'x.js'];
+  assert.deepEqual(resolvePython('tests/test_a.py', 'file:scripts/run_corpus.py', known), ['tests/scripts/run_corpus.py'], 'the nearest directory that holds the path wins');
+  assert.deepEqual(resolvePython('tests/test_a.py', 'file:scripts/check.py', known), ['scripts/check.py'], 'a path relative to the repository root');
+  assert.deepEqual(resolvePython('tests/test_a.py', 'file:helper.py', known), ['tests/helper.py'], 'a path next to the importing file');
+  assert.deepEqual(resolvePython('tests/test_a.py', 'file:../tools/gen.py', known), ['tools/gen.py']);
+  assert.deepEqual(resolvePython('tests/test_a.py', 'file:check.py', known), [], 'a bare name is not matched by a path tail');
+  assert.deepEqual(resolvePython('tests/test_a.py', 'file:x.js', known), [], 'only Python files are loaded this way');
+  assert.deepEqual(resolvePython('test_a.py', 'file:../outside.py', ['outside.py']), [], 'a path above the repository root is not a repository file');
+});
+
+test('an absolute Python import resolves exactly, against the importing file ancestors, src layouts and package roots, never a path tail', () => {
+  const {resolvePython} = require('./acceptance.cjs');
+  const known = ['backend/app/__init__.py', 'backend/app/models/__init__.py', 'backend/app/models/user.py', 'lib/vendor/models/user.py',
+    'src/core/engine.py', 'core/engine.py', 'svc/src/api/__init__.py', 'svc/src/api/routes.py', 'svc/tests/test_routes.py', 'tests/test_user.py', 'models/user.py'];
+  assert.deepEqual(resolvePython('tests/test_user.py', 'app.models.user', known), ['backend/app/models/user.py'], 'a package root inferred from __init__.py files');
+  assert.deepEqual(resolvePython('tests/test_user.py', 'models.user', known), ['models/user.py'], 'the repository root; a tail of lib/vendor/models/user.py is not a match');
+  assert.deepEqual(resolvePython('tests/test_user.py', 'core.engine', known), ['core/engine.py'], 'the root level wins before src/');
+  assert.deepEqual(resolvePython('tests/other.py', 'engine', known), [], 'no tail match for a bare module name');
+  assert.deepEqual(resolvePython('svc/tests/test_routes.py', 'api.routes', known), ['svc/src/api/routes.py'], 'src/ below an ancestor of the importer');
+  assert.deepEqual(resolvePython('tests/test_user.py', 'api.routes', known), ['svc/src/api/routes.py'], 'a package root inferred below src/');
+  assert.deepEqual(resolvePython('tests/test_user.py', 'app', known), ['backend/app/__init__.py']);
+  assert.deepEqual(resolvePython('tests/test_user.py', 'vendor.models.user', known), [], 'lib/ is not a root, its package has no __init__.py');
+  assert.deepEqual(resolvePython('t/test_a.py', 'pkg.mod', ['__init__.py', 'pkg/__init__.py', 'pkg/mod.py']), ['pkg/mod.py'], 'a package at the repository root terminates the root search');
+});
+
+test('a Python test that loads a script by path links it to the changed script', () => {
+  const f = fixture();
+  const source = (path, content) => ({authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path, content});
+  f.snapshot.files = [{path: 'scripts/run_corpus.py', status: 'added', patch: '@@ -0,0 +1 @@\n+x = 1'}];
+  f.snapshot.sources = {t: source('tests/test_corpus.py', 'spec = importlib.util.spec_from_file_location("run_corpus", ROOT / "scripts" / "run_corpus.py")\n')};
+  assert.equal(approvalHold(f.report, f.snapshot), null);
+  f.snapshot.sources = {t: source('tests/test_corpus.py', 'import scripts.run_corpus  # exercised\n')};
+  assert.equal(approvalHold(f.report, f.snapshot), null, 'a trailing comment keeps the import');
+  f.snapshot.sources = {t: source('tests/test_corpus.py', '# run_corpus\nx = "scripts/run_corpus.py"\n')};
+  assert.match(approvalHold(f.report, f.snapshot), /scripts\/run_corpus\.py$/, 'a path in data is not a load');
+});
+
 test('only blank, comment-only, anchored type-only lines and identical normalized import sets are non-behavioural', () => {
   const {nonBehavioural} = require('./acceptance.cjs');
   const inert = patch => nonBehavioural(`@@\n${patch}`);

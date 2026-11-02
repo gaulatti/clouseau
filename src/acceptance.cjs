@@ -119,11 +119,47 @@ function resolveSpecifier(from, specifier, known) {
   });
 }
 
+// Comments removed, strings kept: a `#` inside a string literal is text, a trailing comment is not code.
+const PY_TEXT = /("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*')|#.*$/gm;
+const pyStrings = content => content.replace(PY_TEXT, (match, string) => string ?? '');
+
+// A Python file loaded by path or run as a script is linked like an import, by the `file:` target the file
+// names exactly. The path is read only from the arguments of a call that loads or runs code
+// (spec_from_file_location, run_path, subprocess), as a literal or a chain of literals joined by `/` or
+// os.path.join; a path in data, a log line or an open() is not a load.
+const PY_LOADERS = /\b(?:spec_from_file_location|run_path|(?:subprocess\.)?(?:run|Popen|call|check_call|check_output))\s*\(/g;
+const PY_PATH_LITERAL = /((?:(['"])[^'"\n]+\2\s*\/\s*)*)(['"])([^'"\n]+\.py)\3/g;
+const PY_JOIN = /\bjoin\s*\(\s*((?:(['"])[^'"\n]*\2\s*,\s*)*)(['"])([^'"\n]+\.py)\3\s*\)/g;
+const PY_QUOTED = /(['"])([^'"\n]*)\1/g;
+function callArguments(text, from) {
+  let depth = 1; let at = from;
+  while (at < text.length && depth) {
+    if (text[at] === '(') depth++;
+    else if (text[at] === ')') depth--;
+    at++;
+  }
+  return text.slice(from, at);
+}
+function pythonLoads(text) {
+  const found = [];
+  const quoted = chain => [...chain.matchAll(PY_QUOTED)].map(item => item[2]);
+  for (const call of text.matchAll(PY_LOADERS)) {
+    const args = callArguments(text, call.index + call[0].length);
+    for (const item of args.matchAll(PY_JOIN)) found.push(`file:${[...quoted(item[1]), item[4]].join('/')}`);
+    const flat = args.replace(PY_JOIN, '');
+    for (const item of flat.matchAll(PY_PATH_LITERAL)) found.push(`file:${[...quoted(item[1]), item[4]].join('/')}`);
+    for (const item of flat.matchAll(/(['"])-m\1\s*,\s*(['"])([\w.]+)\2/g)) found.push(item[3]);
+  }
+  for (const item of text.matchAll(/\b(?:run_module|import_module|__import__)\s*\(\s*(['"])([\w.]+)\1/g)) found.push(item[2]);
+  return found;
+}
+
 // Python import targets of a source, from whole statements once comments are removed: `import a.b`,
 // `from a.b import c, d` (the module and each name, since a name may be a submodule) and relative
-// `from . import x`, `from ..pkg import y`. A relative target keeps its leading dots.
+// `from . import x`, `from ..pkg import y`. A relative target keeps its leading dots. Modules loaded by
+// path or name (see pythonLoads) are targets too.
 function pythonImports(content) {
-  const text = content.replace(/^[ \t]*#.*$/gm, '');
+  const text = pyStrings(content);
   const found = [];
   for (const match of text.matchAll(/^[ \t]*import[ \t]+([\w., \t]+)$/gm)) {
     for (const item of match[1].split(',')) found.push(item.trim().split(/\s+/)[0]);
@@ -136,26 +172,75 @@ function pythonImports(content) {
       if (/^\w+$/.test(name)) found.push(/\.$/.test(base) ? `${base}${name}` : `${base}.${name}`);
     }
   }
+  found.push(...pythonLoads(text));
   return [...new Set(found.filter(Boolean))];
 }
 
 // One import extractor per language the linker follows (JavaScript/TypeScript and Python).
 const importsOf = (name, content) => PY_PATH.test(name) ? pythonImports(content) : specifiersOf(content);
 
-// Known Python files a target can name: `pkg.mod` is pkg/mod.py or pkg/mod/__init__.py. A relative target
-// is resolved from the importing file's directory; an absolute one is matched by path tail, since the
-// source roots are not supplied.
+// Directories from the importing file's own up to the repository root, nearest first.
+function ancestors(from) {
+  const found = [];
+  let dir = path.posix.dirname(from);
+  while (dir !== '.') {
+    found.push(dir);
+    dir = path.posix.dirname(dir);
+  }
+  return [...found, ''];
+}
+
+// Import roots the file list proves: the parent of the outermost directory of each chain of __init__.py packages.
+const rootsCache = new WeakMap();
+function packageRoots(known) {
+  if (!rootsCache.has(known)) {
+    const packages = new Set(known.filter(name => /(?:^|\/)__init__\.py$/.test(name)).map(name => name.replace(/\/?__init__\.py$/, '')));
+    const roots = new Set();
+    const parent = dir => path.posix.dirname(dir).replace(/^\.$/, '');
+    for (const dir of packages) {
+      let top = dir;
+      while (top && packages.has(parent(top))) top = parent(top);
+      roots.add(parent(top));
+    }
+    rootsCache.set(known, [...roots].sort());
+  }
+  return rootsCache.get(known);
+}
+
+// Known Python files a target can name. Every match is exact against the file list, never a path tail.
+// `pkg.mod` is pkg/mod.py or pkg/mod/__init__.py. A relative target is resolved from the importing file's
+// directory. An absolute one is tried under the importing file's directories (nearest first, each also
+// with a `src/` below it) and then under the package roots the file list proves; the first location that
+// holds the module is the answer. `file:path` names a script by its path, found under the nearest
+// directory of the importing file that holds exactly that path.
 function resolvePython(from, specifier, known) {
+  const files = known.filter(candidate => PY_PATH.test(candidate));
+  const under = (root, relative) => path.posix.join(root, relative).replace(/^\.$/, '');
+  if (specifier.startsWith('file:')) {
+    const literal = specifier.slice(5);
+    for (const dir of ancestors(from)) {
+      const target = path.posix.normalize(path.posix.join(dir, literal));
+      const hits = files.filter(candidate => candidate === target);
+      if (hits.length) return hits;
+    }
+    return [];
+  }
   const dots = /^\.*/.exec(specifier)[0].length;
   const module = specifier.slice(dots).split('.').join('/');
-  let base = path.posix.dirname(from);
-  for (let up = 1; up < dots; up++) base = path.posix.dirname(base);
-  const target = dots ? path.posix.join(base, module) : module;
-  return known.filter(candidate => {
-    if (!PY_PATH.test(candidate)) return false;
-    const full = candidate.replace(/(?:^|\/)__init__\.py$/, '').replace(PY_PATH, '');
-    return dots ? full === target.replace(/^\.$/, '').replace(/\/$/, '') : full === target || full.endsWith(`/${target}`);
-  });
+  const modulesOf = candidate => candidate.replace(/(?:^|\/)__init__\.py$/, '').replace(PY_PATH, '');
+  if (dots) {
+    let base = path.posix.dirname(from);
+    for (let up = 1; up < dots; up++) base = path.posix.dirname(base);
+    const target = path.posix.join(base, module).replace(/^\.$/, '').replace(/\/$/, '');
+    return files.filter(candidate => modulesOf(candidate) === target);
+  }
+  const roots = ancestors(from).flatMap(dir => [dir, under(dir, 'src')]).concat(packageRoots(known));
+  for (const root of roots) {
+    const target = under(root, module);
+    const hits = files.filter(candidate => modulesOf(candidate) === target);
+    if (hits.length) return hits;
+  }
+  return [];
 }
 
 const resolveImport = (from, specifier, known) => PY_PATH.test(from) ? resolvePython(from, specifier, known) : resolveSpecifier(from, specifier, known);
@@ -440,4 +525,4 @@ function validateApproval(report, snapshot, holdSnapshot = snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {patchOf, JS_PATH, LINKABLE_PATH, importsOf, pythonImports, resolvePython, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {patchOf, JS_PATH, LINKABLE_PATH, importsOf, pythonImports, resolvePython, resolveImport, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
