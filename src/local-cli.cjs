@@ -182,7 +182,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     const parsed = JSON.parse(git(directory, ['show', `${base}:.github/clouseau.json`]));
     ciConfig = require('./config.cjs').validateConfig(parsed);
   }
-  const warn = paths => {const warnings = controlWarnings(ciConfig, paths); return warnings.length ? {warnings} : {};};
+  const warn = (paths, shas) => {const warnings = controlWarnings(ciConfig, paths, {directory, ...shas}); return warnings.length ? {warnings} : {};};
   let identityPath = args.identity;
   if (!identityPath && ciConfig?.local_review) {
     const available = ciConfig.local_review.keys.filter(key => !key.revoked)
@@ -226,7 +226,7 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
-      provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths)};
+      provider_api_calls: 0, harness_invocations: 0, reused: true, ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths, {baseSha: verified.record.snapshot.base_sha, headSha: head})};
   }
   const agentDirectory = path.join(cache, 'agent');
   // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
@@ -359,18 +359,28 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,
-    harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths)};
+    harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head})};
 }
 
 // A receipt that touches protected review controls verifies but cannot carry owner confirmation, so CI holds the review.
 // Say so while the author can still act, naming only repository paths.
-function controlWarnings(config, paths) {
-  const hits = config ? require('./policy.cjs').protectedChanges(config, paths.map(filename => ({filename}))) : [];
+function controlWarnings(config, paths, {directory, baseSha, headSha}) {
+  const protectedHits = config ? require('./policy.cjs').protectedChanges(config, paths.map(filename => ({filename}))) : [];
+  // The opt-in managed-standard update is judged on the same base and head bytes CI reads (managed-agents.cjs).
+  const hits = protectedHits.filter(name => !(name === 'AGENTS.md' && config.managed_agents && managedUpdate(config, directory, baseSha, headSha)));
   if (!hits.length) return [];
   const warning = `Protected review controls changed (${hits.slice(0, 5).join(', ')}): CI cannot accept a local receipt for this change ` +
     'without the exact-head owner confirmation (/approve-intent) and will report review_incomplete. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.';
   process.stderr.write(`warning: ${warning}\n`);
   return [warning];
+}
+
+function managedUpdate(config, directory, baseSha, headSha) {
+  const read = ref => {try {return git(directory, ['show', `${ref}:AGENTS.md`]);} catch {return null;}};
+  const baseText = read(baseSha);
+  const headText = read(headSha);
+  return baseText !== null && headText !== null &&
+    require('./managed-agents.cjs').judge({baseText, headText, digests: config.managed_agents.digests}).exempt;
 }
 
 function publishReceipt({directory, receipt}) {
@@ -383,7 +393,8 @@ function publishReceipt({directory, receipt}) {
   assertUnchanged(directory, record.snapshot);
   const configured = git(directory, ['ls-tree', record.snapshot.base_sha, '--', '.github/clouseau.json']).trim();
   const warnings = controlWarnings(configured ? require('./config.cjs').validateConfig(JSON.parse(
-    git(directory, ['show', `${record.snapshot.base_sha}:.github/clouseau.json`]))) : null, record.snapshot.paths);
+    git(directory, ['show', `${record.snapshot.base_sha}:.github/clouseau.json`]))) : null, record.snapshot.paths,
+  {directory, baseSha: record.snapshot.base_sha, headSha: record.snapshot.head_sha});
   const files = [['clouseau-review.json', JSON.stringify(envelope) + '\n'],
     ...parts.map((part, index) => [partName(index), Buffer.from(part, 'base64')])];
   const entries = files.map(([name, content]) => `100644 blob ${git(directory, ['hash-object', '-w', '--stdin'], content).trim()}\t${name}\n`);
@@ -406,4 +417,4 @@ async function main(argv, runtime = {}) {
   throw new Error(require('./cli-usage.cjs').usage());
 }
 
-module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, main};
+module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main};

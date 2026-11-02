@@ -34,6 +34,7 @@ function validateConfig(config) {
       throw new Error('Invalid Clouseau acceptance configuration; explicit qualified roles and two bounded repair attempts are required');
     }
   }
+  if (config.managed_agents !== undefined) require('./managed-agents.cjs').validate(config.managed_agents);
   if (config.coverage !== undefined) require('./coverage-changed.cjs').validateMode(config.coverage);
   if (config.local_review !== undefined) {
     require('./local-receipt.cjs').validateTrust(config.local_review);

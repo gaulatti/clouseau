@@ -539,6 +539,9 @@ the repository paths. This includes the mandatory agent-standard updater commit
 (`chore(agents): sync managed rules ...`), which rewrites `AGENTS.md`: keep it
 local and unpushed, or push it on its own PR with a maintainer confirmation,
 rather than riding on an ordinary change.
+A repository that enrolls `managed_agents` in its protected configuration is exempt for
+that file when the update is verifiably only the central managed block; see
+[managed-standard AGENTS.md updates](managed-agents.md).
 
 Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
 engine. The collector records that engine revision as untrusted source evidence

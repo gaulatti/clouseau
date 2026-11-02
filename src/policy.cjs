@@ -51,16 +51,23 @@ function numberFor(context) {
   return Number(value);
 }
 
-function scopeReason(files, pr) {
+// `exempt` names the protected files whose change was verified as the opt-in managed-standard update (managed-agents.cjs).
+function scopeReason(files, pr, exempt = new Set()) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
   const sensitive = controlPaths(config);
-  if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
+  const protectedFile = name => matchesPath(name, sensitive) && !exempt.has(name);
+  if (files.some(file => protectedFile(file.filename) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
   if (files.some(file => !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     return 'Incomplete patch or unsupported file change';
   }
   return null;
+}
+
+// Verified managed-standard AGENTS.md changes. Without `managed_agents` this reads nothing and exempts nothing.
+function managedExemptions(github, repo, pr, files) {
+  return require('./managed-agents.cjs').exemptions({github, repo, pr, files, config});
 }
 
 function assessmentResult(raw, sha) {
@@ -84,7 +91,8 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
   if (pr.user?.login === 'github-actions[bot]') return hold('The approval bot cannot review its own PR; an independent maintainer review is required');
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
-  const reason = scopeReason(files, pr);
+  const {exempt} = await managedExemptions(github, repo, pr, files);
+  const reason = scopeReason(files, pr, exempt);
   if (reason && reason !== REVIEW_CONTROL_REASON) return hold(reason);
   const keyProblem = require('./provider-key.cjs').keyProblem(process.env.DEEPSEEK_API_KEY);
   if (keyProblem) return hold(`AI assessment unavailable: DEEPSEEK_API_KEY ${keyProblem}`);
@@ -511,7 +519,9 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     if (assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity') throw new Error(assessment.reason);
     const intentPending = assessment.decision === 'pending_technical';
     if (nativeGate && intentPending) throw new Error('AI assessment must finish after successful verification before the native policy job can pass');
-    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr));
+    const managed = await managedExemptions(github, repo, pr, files);
+    for (const notice of managed.notices) core.info(notice);
+    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt));
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) {
       if (!pr.assignees?.some(user => user.login === MANUAL_REVIEWER)) {
         await github.rest.issues.addAssignees({...repo, issue_number: pull_number, assignees: [MANUAL_REVIEWER]});
@@ -670,7 +680,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 

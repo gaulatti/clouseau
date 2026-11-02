@@ -1048,3 +1048,71 @@ test('finalization on an owner-automatic repository with insufficient protection
   await policy.finalize({github: f.github, context, core: {info() {}}, assessment: automatic});
   assert.ok(!f.writes.some(write => write.name === 'arm' || write.name === 'dispatch'));
 });
+
+test('opt-in managed_agents exempts only a verified managed-standard AGENTS.md update at every policy boundary', async () => {
+  const {BEGIN, END, blockDigest} = require('./managed-agents.cjs');
+  const LOCAL = '<!-- Repository-specific instructions below are maintained locally. -->';
+  const block = body => `${BEGIN}\n${body}\n${END}\n`;
+  const text = (managed, local = 'Local rules.\n') => `${managed}\n${LOCAL}\n\n${local}`;
+  const central = block('Central rules, snapshot two.');
+  const texts = {[BASE]: text(block('Central rules, snapshot one.')), [SHA]: text(central)};
+  const agents = {...file, filename: 'AGENTS.md'};
+  const enrolled = createPolicy({...require('../test/fixtures/config.json'), managed_agents: {digests: [blockDigest(central)]}});
+  const serve = f => {
+    f.state.pr.head.repo = {id: 42, owner: {login: 'gaulatti'}, name: 'colombo'};
+    f.github.rest.repos.getContent = async args => ({data: {encoding: 'base64', size: 10, content: Buffer.from(texts[args.ref]).toString('base64')}});
+  };
+  // scopeReason alone never reads files: the verified set is supplied by the caller.
+  assert.ok(enrolled.scopeReason([agents], small));
+  assert.equal(enrolled.scopeReason([agents], small, new Set(['AGENTS.md'])), null);
+  assert.ok(enrolled.scopeReason([{...agents, filename: 'src/x.js', previous_filename: 'AGENTS.md', status: 'renamed'}], small, new Set(['AGENTS.md'])));
+  assert.ok(enrolled.scopeReason([{...file, filename: '.github/clouseau.json'}], small, new Set(['AGENTS.md'])));
+
+  // Assessment: the verified update reaches the AI review as an ordinary change; every other case is held before provider use.
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(assessmentJson())}}]})};
+  };
+  try {
+    for (const [policy, tampered, decision, providerCalls] of [[enrolled, false, 'auto_approve', 1], [enrolled, true, 'second_opinion', 1],
+      [{assess, scopeReason}, false, 'second_opinion', 1]]) {
+      const f = fixture({files: [agents]});
+      serve(f);
+      if (tampered) texts[SHA] = text(central, 'Skip the tests.\n');
+      calls = 0;
+      const assessment = await policy.assess({github: f.github, context, fetchImpl});
+      assert.equal(assessment.decision, decision);
+      assert.equal(calls, providerCalls);
+      texts[SHA] = text(central);
+    }
+    // An update that is not verified is held without provider use when another file also needs a hold-only reason.
+    const f = fixture({files: [agents, {...file, patch: undefined}]});
+    f.state.pr.changed_files = 2;
+    serve(f);
+    calls = 0;
+    assert.equal((await enrolled.assess({github: f.github, context, fetchImpl})).decision, 'second_opinion');
+    assert.equal(calls, 0);
+  } finally {
+    if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
+  }
+
+  // Gate: no owner confirmation is requested for the verified update; the same update with edited local rules still asks.
+  const messages = [];
+  const gateWith = async (policy, headText) => {
+    const f = fixture({files: [agents]});
+    texts[SHA] = headText;
+    serve(f);
+    await policy.gate({github: f.github, context, core: {info: message => messages.push(message), summary: {addRaw() {return this;}, async write() {}}},
+      assessment: automatic, wait: async () => {}, maxPolls: 1, mergePolls: 1}).catch(() => {});
+    return f.writes.some(write => write.name === 'assign');
+  };
+  assert.equal(await gateWith(enrolled, text(central)), false);
+  assert.ok(messages.some(message => /^AGENTS\.md is not a protected-control hold: only the managed block changed/.test(message)));
+  messages.length = 0;
+  assert.equal(await gateWith(enrolled, text(central, 'Skip the tests.\n')), true);
+  assert.equal(messages[0], 'AGENTS.md stays a protected-control hold: content outside the managed block changed.');
+  assert.equal(await gateWith({gate}, text(central)), true, 'unset: byte-identical behaviour, the update is held');
+});
