@@ -306,10 +306,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       if (report) managed.notices.forEach(report);
       const controls = legacy.scopeReason(files, pr, managed.exempt);
       const decision = decided(result, Boolean(controls));
-      const record = chunking ?
-        {version: 3, ...(engine ? {engine} : {}), snapshot, partition: stored.partition, seams: stored.seams, result: {...stored.result, decision: result.decision},
-          previous, controls: Boolean(controls), technical} :
-        {version: 2, ...(engine ? {engine} : {}), snapshot, result, previous, controls: Boolean(controls), technical};
+      const record = {version: chunking ? 3 : 2, ...(engine ? {engine} : {}), snapshot, ...(chunking ? {partition: stored.partition, seams: stored.seams} : {}),
+        result: chunking ? {...stored.result, decision: result.decision} : result, previous, controls: Boolean(controls), technical};
       // Retain the complete record. Never place the large, model-controlled
       // ledger in workflow outputs or interpolate it into shell commands.
       fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
