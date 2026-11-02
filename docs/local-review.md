@@ -493,6 +493,25 @@ review again.` and the outcome is `local_receipt_required`; no provider call is
 made. While tests are pending or failing, an ignored receipt behaves exactly like
 an unstamped change (the pending or blocked result carries the notice).
 
+#### Hosted review after an unusable receipt (reference consumer workflow)
+
+A workflow that routes a PR whose description carries a receipt marker to a
+`verify-local` job holds no provider credential in that job: the secret must not
+be exposed to a job that runs on a contributor-supplied receipt. When that job finds
+an optional-mode receipt unusable (decision `review_incomplete`, cause
+`local_receipt_unusable`) the same run continues in a separate `assess-hosted` job
+that holds the provider secrets. It runs `assess` with `ignore-receipt: 'true'`, so
+the receipt is never read there, and it receives only the PR number and the frozen
+engine, never an assessment, notice or record from the receipt-only job. Its
+assessment and review record replace the receipt-only job's in `approve-and-merge`,
+`apply-repair` and `finalize-merge`, so exactly one acceptance record is consumed per
+head. A valid receipt skips the job entirely and no provider call is made. A
+repository in `required` mode reports `local_receipt_required` and has no fallback.
+The fixed "receipt ignored" notice is not shown on the fallback path because the
+hosted job deliberately does not know why the receipt was unusable; the receipt-only
+job log still carries the warning annotation naming the cause. The owner no longer
+needs to remove the marker to obtain the CI review.
+
 Deliberately unchanged, because they are intent and infrastructure rather than
 receipt verification: a verified receipt still cannot replace changed review
 history or supply protected-control owner authorization (the controller holds,

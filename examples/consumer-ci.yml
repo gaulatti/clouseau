@@ -126,6 +126,8 @@ jobs:
       assessment: ${{ steps.local-review.outputs.assessment || steps.assess.outputs.assessment }}
       review-record: ${{ steps.local-review.outputs.review-record || steps.assess.outputs.review-record }}
       number: ${{ steps.install.outputs.number || github.event.pull_request.number }}
+      # 'true' only when the receipt-only route found the receipt unusable; the only data that leaves this job towards assess-hosted
+      hosted: ${{ steps.fallback.outputs.hosted }}
     needs: resolve-clouseau
     env:
       CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
@@ -207,6 +209,16 @@ jobs:
           record-transport: job-output
           pull-request: ${{ steps.install.outputs.number }}
           wait-for-verification: 'false'
+      - name: Hand an unusable receipt to the separate hosted review
+        if: steps.review-route.outputs.local == 'true'
+        id: fallback
+        uses: actions/github-script@v7
+        env:
+          ASSESSMENT: ${{ steps.local-review.outputs.assessment }}
+        with:
+          script: |
+            const assessment = JSON.parse(process.env.ASSESSMENT);
+            core.setOutput('hosted', String(assessment.decision === 'review_incomplete' && assessment.cause === 'local_receipt_unusable'));
       - name: Review unstamped PR through the installed CI AI reviewer
         if: steps.review-route.outputs.local != 'true'
         uses: ./.clouseau-ci
@@ -219,9 +231,53 @@ jobs:
           provider-key: ${{ secrets.DEEPSEEK_API_KEY }}
           typesafe-key: ${{ secrets.TYPESAFE_API_KEY }}
 
+  # Runs in this same workflow run only when the receipt-only job above found the receipt unusable. This is
+  # the only job that holds the provider secrets for a PR that carries a receipt marker, and it never reads the
+  # receipt (ignore-receipt) or any value derived from it: it receives just the PR number and the frozen engine.
+  assess-hosted:
+    if: needs.assess-intent.outputs.hosted == 'true'
+    needs: [assess-intent, resolve-clouseau]
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: read
+    outputs:
+      assessment: ${{ steps.assess.outputs.assessment }}
+      review-record: ${{ steps.assess.outputs.review-record }}
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      # Never load the controller or its configuration from the PR.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - name: Review the change through the installed CI AI reviewer, ignoring the receipt
+        uses: ./.clouseau-ci
+        id: assess
+        with:
+          operation: assess
+          ignore-receipt: 'true'
+          record-transport: job-output
+          pull-request: ${{ needs.assess-intent.outputs.number }}
+          wait-for-verification: 'false'
+          provider-key: ${{ secrets.DEEPSEEK_API_KEY }}
+          typesafe-key: ${{ secrets.TYPESAFE_API_KEY }}
+
   approve-and-merge:
     name: ${{ ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) || (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) && 'approve-and-merge' || 'metadata-only-approval' }}
-    needs: [assess-intent, resolve-clouseau]
+    needs: [assess-intent, assess-hosted, resolve-clouseau]
     # Always resolve the job name; only trusted, ready PR events run its steps.
     # A failed assessment must still fail the required native approval check.
     if: always()
@@ -243,7 +299,7 @@ jobs:
         if: >-
           ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
           (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) &&
-          needs.assess-intent.result != 'success'
+          (needs.assess-intent.result != 'success' || contains(fromJSON('["failure","cancelled"]'), needs.assess-hosted.result))
         run: exit 1
       - uses: actions/checkout@v4
         if: *review-event
@@ -263,18 +319,20 @@ jobs:
         with:
           operation: gate
           record-transport: job-output
-          review-record: ${{ needs.assess-intent.outputs.review-record }}
+          # Exactly one acceptance record per head: the hosted review's when it ran, otherwise the receipt-only job's.
+          review-record: ${{ needs.assess-hosted.outputs.review-record || needs.assess-intent.outputs.review-record }}
           pull-request: ${{ needs.assess-intent.outputs.number }}
           native-gate: 'true'
-          assessment: ${{ needs.assess-intent.outputs.assessment }}
+          assessment: ${{ needs.assess-hosted.outputs.assessment || needs.assess-intent.outputs.assessment }}
 
   apply-repair:
-    needs: [assess-intent, approve-and-merge, resolve-clouseau]
+    needs: [assess-intent, assess-hosted, approve-and-merge, resolve-clouseau]
     if: >-
       always() && github.event_name == 'pull_request_target' && !github.event.pull_request.draft &&
       github.event.pull_request.head.repo.full_name == github.repository &&
-      needs.assess-intent.result == 'success' && needs.approve-and-merge.result == 'failure' &&
-      fromJSON(needs.assess-intent.outputs.assessment).repair_digest != ''
+      needs.assess-intent.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.assess-hosted.result) &&
+      needs.approve-and-merge.result == 'failure' &&
+      fromJSON(needs.assess-hosted.outputs.assessment || needs.assess-intent.outputs.assessment).repair_digest != ''
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -304,12 +362,12 @@ jobs:
         with:
           operation: repair
           record-transport: job-output
-          review-record: ${{ needs.assess-intent.outputs.review-record }}
-          assessment: ${{ needs.assess-intent.outputs.assessment }}
+          review-record: ${{ needs.assess-hosted.outputs.review-record || needs.assess-intent.outputs.review-record }}
+          assessment: ${{ needs.assess-hosted.outputs.assessment || needs.assess-intent.outputs.assessment }}
           repair-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}
 
   finalize-merge:
-    needs: [assess-intent, approve-and-merge, resolve-clouseau]
+    needs: [assess-intent, assess-hosted, approve-and-merge, resolve-clouseau]
     if: *review-event
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -336,7 +394,7 @@ jobs:
         with:
           operation: finalize
           pull-request: ${{ needs.assess-intent.outputs.number }}
-          assessment: ${{ needs.assess-intent.outputs.assessment }}
+          assessment: ${{ needs.assess-hosted.outputs.assessment || needs.assess-intent.outputs.assessment }}
 
   request-reassessment:
     if: >-

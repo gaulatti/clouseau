@@ -1473,6 +1473,37 @@ test('a record that carries its stored importer discovery derives the same decis
   assert.throws(() => verifyRecord(altered, rebound, config), /Stale or altered/);
 }));
 
+test('the hosted fallback after an unusable receipt never reads the receipt, reviews the change itself and yields one acceptance record', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const trusted = {...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
+    max_age_seconds: 172800, keys: [{id: 'marker-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  const policy = createPolicy(trusted);
+  f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  const readContent = f.github.rest.repos.getContent;
+  let artifactReads = 0;
+  f.github.rest.repos.getContent = async args => {
+    if (args.path === 'clouseau-review.json') artifactReads++;
+    return readContent(args);
+  };
+  const run = extra => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ...extra});
+  await run({});
+  assert.ok(artifactReads > 0, 'the ordinary route reads the claimed receipt');
+  const reads = artifactReads; const lines = []; const calls = f.state.calls;
+  const hosted = await run({ignoreReceipt: true, report: line => lines.push(line)});
+  assert.equal(artifactReads, reads, 'the secret-bearing fallback never reads the receipt');
+  assert.equal(hosted.receipt_notice, undefined); assert.ok(!lines.some(line => /receipt/i.test(line)));
+  assert.equal(hosted.decision, 'auto_approve', hosted.reason); assert.notEqual(hosted.review_source, 'authenticated_local');
+  assert.ok(f.state.calls > calls, 'the hosted AI review ran');
+  await policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+    recordPath: f.recordPath, assessment: hosted, nativeGate: true, wait: async () => {}});
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1, 'exactly one acceptance record is consumed');
+  const required = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'required'}});
+  const held = await required.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ignoreReceipt: true});
+  assert.equal(held.cause, 'local_receipt_required', 'a repository that requires receipts is never reviewed by the fallback');
+  assert.equal(artifactReads, reads);
+}));
+
 test('optional local review on the receipt-only route names the real condition instead of claiming a receipt is required', () => fixture(async f => {
   const keys = require('node:crypto').generateKeyPairSync('ed25519');
   const optional = createPolicy({...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
