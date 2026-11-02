@@ -5,7 +5,10 @@ const {readPull} = require('./pull-read.cjs');
 const {noticeText, noticeLine, describe} = require('./receipt-rejection.cjs');
 const path = require('node:path');
 const {digest, validateApproval, approvalHold, importsOf, LINKABLE_PATH} = require('./acceptance.cjs');
-const {collectSnapshot, refresh, supplyTests} = require('./acceptance-sources.cjs');
+const {collectSnapshot, refresh, supplyTests, UNBOUNDED} = require('./acceptance-sources.cjs');
+const hostedChunked = require('./hosted-chunked.cjs');
+const wiring = require('./chunked-wiring.cjs');
+const {chunkedVerifier, ChunkedRecordError} = require('./chunked-record.cjs');
 const {reviewChange, combine, validateInspection} = require('./acceptance-review.cjs');
 const {priorState, reconcile, publication} = require('./acceptance-ledger.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf} = require('./verification-wait.cjs');
@@ -55,6 +58,23 @@ class DecisionMismatch extends Error {
   }
 }
 
+// A hosted chunked record (docs/chunked-hosted.md) stores per-unit reports and the integration entries, never a merged
+// report. The reviews are derived here, from the signed-in-place evidence and the protected parameters, by the same
+// verifier the chunked local receipts use; the approval hold is then applied exactly as for a single-snapshot record.
+function chunkedReviews(record, config) {
+  const verifier = chunkedVerifier(record, hostedChunked.verifierOptions(config.acceptance));
+  if (record.snapshot.digest !== verifier.snapshotDigest()) throw new ChunkedRecordError('chunked_record_invalid', 'altered evidence snapshot');
+  // The single-snapshot approval hold needs a source recorded as missing. A seam the integration pass left open is missing
+  // evidence of the same kind (chunked-review.cjs marks the completeness gate; this makes it hold), so it holds approval too.
+  const stored = new Map(record.result.reviews.map(review => [review.role, review]));
+  return verifier.reviews().map(review => {
+    const view = validateInspection(review.report, record.snapshot, review.drafts);
+    const scores = validateApproval(review.report, view);
+    const open = stored.get(review.role).integration.some(entry => entry.dispositions.some(row => row.state !== 'checked'));
+    return {...review, scores: open && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold: 'integration left seams open'} : scores};
+  });
+}
+
 function verifyRecord(record, assessment, config, engine = null) {
   if (engine && (digest(record.engine) !== digest(engine) || digest(assessment.engine) !== digest(engine))) {
     throw new Error('Acceptance record belongs to a different frozen engine');
@@ -71,24 +91,27 @@ function verifyRecord(record, assessment, config, engine = null) {
     }
     if (digest(record.previous.findings) !== digest(signed.record.previous.findings)) throw new Error('Local review history was substituted');
   }
+  // New shape if present, else current. A local receipt record keeps its own path.
+  const chunked = !record.local_receipt && Object.hasOwn(record, 'partition');
   if (assessment.version !== 2 || digest(record) !== assessment.record_digest ||
       record.snapshot.config_digest !== digest(config) || record.snapshot.policy_digest !== policyDigest() ||
       record.snapshot.head_sha !== assessment.head_sha || record.snapshot.base_sha !== assessment.base_sha ||
-      (!record.local_receipt && record.snapshot.number !== assessment.number) || record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest) {
+      (!record.local_receipt && record.snapshot.number !== assessment.number) || (!chunked && record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest)) {
     throw new Error('Stale or altered acceptance record');
   }
-  const reviews = record.result.reviews;
+  const reviews = chunked ? chunkedReviews(record, config) : record.result.reviews;
+  const result = chunked ? {...record.result, reviews} : record.result;
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
-  for (const review of reviews) {
+  if (!chunked) for (const review of reviews) {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
     review.scores = validateApproval(review.report, view, record.discovery ? withDiscovery(view, record.discovery) : view);
   }
-  record.result.decision = combine(reviews);
-  const state = reconcile(record.result, record.snapshot, record.previous.findings);
-  if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(record.result.decision)) record.result.decision = 'review_incomplete';
-  const derived = decided(record.result, record.controls || Boolean(record.local_authorization));
+  result.decision = combine(reviews);
+  const state = reconcile(result, record.snapshot, record.previous.findings);
+  if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
+  const derived = decided(result, record.controls || Boolean(record.local_authorization));
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
-  return {state, ...publication({...record.result, decision: assessment.decision},
+  return {state, ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
@@ -257,28 +280,52 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           reason: `This repository requires an authenticated local Clouseau review receipt, and none can be used (${why.sentence}).`};
       }
       const intentConfirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
-      snapshot = await collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation});
+      // The hosted chunked review is dark: with it absent or off this is the one collection it always was. When it is on, a
+      // change whose evidence does not fit one snapshot is collected again without the size cap and reviewed in bounded units.
+      const chunkedActive = hostedChunked.settings(config.acceptance);
+      const collect = unbounded => collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation, unbounded});
+      let chunking = false;
+      if (chunkedActive?.force) {
+        snapshot = await collect(true); chunking = true;
+      } else {
+        try {snapshot = await collect(false);} catch (error) {
+          if (!chunkedActive || !hostedChunked.oversize(error)) throw error;
+          snapshot = await collect(true); chunking = true;
+        }
+      }
       snapshot.prior_findings = previous.findings;
       const repair = require('./acceptance-repair.cjs');
       const reservations = repair.history(comments, snapshot.repository, number);
       snapshot.repair_history = reservations;
-      refresh(snapshot);
-      const result = await reviewChange({github, repo, snapshot, config: config.acceptance, fetchImpl, wait: retryWait, log: report,
-        observe: observation => {observations.push(observation); diagnostic({identity, observations});}});
+      refresh(snapshot, chunking ? UNBOUNDED : undefined);
+      const observe = observation => {observations.push(observation); diagnostic({identity, observations});};
+      let stored; let result;
+      if (chunking) {
+        const run = await hostedChunked.review({snapshot, active: chunkedActive, config: config.acceptance, fetchImpl, wait: retryWait, log: report,
+          observe, scope: snapshot.digest, journal: wiring.fileJournal(`${recordPath}.journal`)});
+        stored = {snapshot, partition: run.partition, seams: run.seams, result: run.result};
+        result = {...run.result, reviews: chunkedReviews(stored, config)};
+        result.decision = combine(result.reviews);
+      } else {
+        result = await reviewChange({github, repo, snapshot, config: config.acceptance, fetchImpl, wait: retryWait, log: report, observe});
+      }
       const state = reconcile(result, snapshot, previous.findings);
       if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
       const managed = await legacy.managedExemptions(github, repo, pr, files);
       if (report) managed.notices.forEach(report);
       const controls = legacy.scopeReason(files, pr, managed.exempt);
       const decision = decided(result, Boolean(controls));
-      const record = {version: 2, ...(engine ? {engine} : {}), snapshot, result, previous, controls: Boolean(controls), technical};
+      const record = {version: chunking ? 3 : 2, ...(engine ? {engine} : {}), snapshot, ...(chunking ? {partition: stored.partition, seams: stored.seams} : {}),
+        result: chunking ? {...stored.result, decision: result.decision} : result, previous, controls: Boolean(controls), technical};
       // Retain the complete record. Never place the large, model-controlled
       // ledger in workflow outputs or interpolate it into shell commands.
-      fs.writeFileSync(recordPath, JSON.stringify(record, null, 2) + '\n');
+      const text = JSON.stringify(record, null, 2) + '\n';
+      if (chunking) hostedChunked.checkTransport(process.env.CLOUSEAU_RECORD_TRANSPORT, text);
+      fs.writeFileSync(recordPath, text);
       publication({...result, decision}, snapshot, state);
       const assessment = {...identity, decision, record_digest: digest(record),
         reason: controls && decision === 'owner_decision' ? controls : `Evidence-bound product and technical acceptance: ${decision}.`};
-      if (!record.controls && ['repair_required', 'blocked_integrity'].includes(result.decision)) {
+      if (!chunking && !record.controls && ['repair_required', 'blocked_integrity'].includes(result.decision)) {
         try {
           const proposal = await repair.propose({record, reservations, fetchImpl, wait: retryWait, log: report});
           fs.writeFileSync(`${recordPath}.repair.json`, JSON.stringify(proposal, null, 2) + '\n');
@@ -289,7 +336,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     } catch (error) {
       diagnostic({identity, observations, failure: error.message, details: error.details || null});
       if (report) report(`Acceptance investigation stopped: ${error.message}`);
-      const {cause, reason} = require('./incomplete.cjs').classify(error);
+      // A cost cap or a stopped chunked review names itself; it is a hold with a stated way forward, never a size failure.
+      const {cause, reason} = error.code === 'HOSTED_CHUNKED_HELD' ? {cause: error.cause_code, reason: error.message} : require('./incomplete.cjs').classify(error);
       return {...identity, decision: 'review_incomplete', cause, reason};
     }
   }

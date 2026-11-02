@@ -26,6 +26,7 @@ const BUDGET = 900000;
 // The combined snapshot of a chunked review (design: chunked review) has no size cap: it is reviewed in bounded unit
 // views, and its record is stored as a multi-part receipt. Only the views are capped, by `BUDGET`.
 const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+const CHANGED_FILE_LIMIT = 1000000;
 function evidenceSize(snapshot) {
   const value = {...snapshot}; delete value.digest;
   return JSON.stringify(value).length;
@@ -77,10 +78,10 @@ async function summarizeChangedLockfile({github, repo, snapshot, file, baseSha, 
   }
 }
 
-async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
+async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source', limit}) {
   const id = `${ref}:${filename}`;
   if (snapshot.sources[id]) return id;
-  snapshot.sources[id] = {path: filename, ref, authority, kind, content: await fetchText({github, repo, snapshot, filename, ref})};
+  snapshot.sources[id] = {path: filename, ref, authority, kind, content: await fetchText({github, repo, snapshot, filename, ref, limit})};
   return id;
 }
 
@@ -96,10 +97,10 @@ function contributorClaim(body) {
 // Optional evidence (an existing test, a source a reviewer asked for) that is missing, not
 // textual, too large or beyond the evidence budget is omitted with a stated reason that the
 // reviewers see. Files that actually changed never take this path: they fail closed.
-async function readOptional({github, repo, snapshot, filename}) {
+async function readOptional({github, repo, snapshot, filename, cap = BUDGET}) {
   try {
     const id = await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
-    if (evidenceSize(snapshot) > BUDGET) {delete snapshot.sources[id]; throw Object.assign(new Error('over budget'), {omitted: 'would exceed the total evidence budget'});}
+    if (evidenceSize(snapshot) > cap) {delete snapshot.sources[id]; throw Object.assign(new Error('over budget'), {omitted: 'would exceed the total evidence budget'});}
   } catch (error) {
     const reason = error.omitted || (error.status === 404 ? 'not found at the head revision' : error.unavailable ? 'not available as complete text within the evidence budget' : null);
     if (!reason) throw error;
@@ -110,7 +111,7 @@ async function readOptional({github, repo, snapshot, filename}) {
 // Supplies what pins the changed code: tests that name a changed module, importers found by content, and barrels.
 // `files` are {filename, status}. The hosted review and the check of a signed local receipt use this one
 // discovery, so neither applies a weaker or a stronger rule.
-async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
+async function supplyTests({github, repo, snapshot, files, baseSha, headSha, cap}) {
   // Existing tests are not part of the change, so a reviewer cannot see what pins a changed
   // module unless the controller supplies them. Tests whose path names a changed production
   // module are read at the head revision; a model's later source_request may add the rest.
@@ -124,7 +125,7 @@ async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
       item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
       if (entry.size > budget) break;
       budget -= entry.size;
-      await readOptional({github, repo, snapshot, filename: entry.path});
+      await readOptional({github, repo, snapshot, filename: entry.path, cap});
     }
     // Tests rarely carry the module's name (utils.test.ts imports attention-color), so importers are
     // also found by content: other small tests are read once and only their import specifiers are
@@ -154,14 +155,18 @@ async function supplyTests({github, repo, snapshot, files, baseSha, headSha}) {
     const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
     for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)(?:index\.[cm]?[jt]sx?|__init__\.py)$/.test(item.path) &&
       directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
-      await readOptional({github, repo, snapshot, filename: entry.path});
+      await readOptional({github, repo, snapshot, filename: entry.path, cap});
     }
   }
   snapshot.covering_tests = coveringTests(snapshot);
   return snapshot;
 }
 
-async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
+// `unbounded` is the hosted chunked review (docs/chunked-hosted.md): the combined snapshot has no size cap, because it is
+// reviewed in bounded unit views, and a changed file may be as large as the GitHub contents API returns (1,000,000 bytes).
+async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null, unbounded = false}) {
+  const cap = unbounded ? UNBOUNDED : BUDGET;
+  const limit = unbounded ? CHANGED_FILE_LIMIT : undefined;
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
     !safePath(file.filename) || (!file.patch && !isLockfile(file.filename) && !['added', 'removed', 'renamed'].includes(file.status)) ||
     !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
@@ -200,13 +205,13 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
       if (file.status !== 'added') {
         const filename = file.previous_filename || file.filename;
         if (lockfile?.id) item.base_source = lockfile.id;
-        else item.base_source = await readSource({github, repo, snapshot, filename, ref: pr.base.sha});
+        else item.base_source = await readSource({github, repo, snapshot, filename, ref: pr.base.sha, limit});
         const {data} = await github.rest.repos.listCommits({...repo, path: filename, sha: pr.base.sha, per_page: 3});
         snapshot.history.push({path: filename, commits: data.map(commit => ({sha: commit.sha, message: commit.commit.message}))});
       }
       if (file.status !== 'removed') {
         if (lockfile?.id) item.head_source = lockfile.id;
-        else item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha});
+        else item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha, limit});
       }
     } catch (error) {
       // The raw lockfile is the fallback evidence; when it does not fit either, say why the lockfile failed.
@@ -222,7 +227,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     }
     snapshot.files.push(item);
   }
-  await supplyTests({github, repo, snapshot, files, baseSha: pr.base.sha, headSha: pr.head.sha});
+  await supplyTests({github, repo, snapshot, files, baseSha: pr.base.sha, headSha: pr.head.sha, cap});
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
     repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
       closingIssuesReferences(first:10) { nodes { number title body url author { login } } pageInfo { hasNextPage } }
@@ -237,7 +242,7 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
       authority: 'untrusted', kind: 'requirement', content: JSON.stringify(ticket, null, 2)};
   }
   snapshot.claims = {title: pr.title, description: contributorClaim(pr.body)};
-  return refresh(snapshot);
+  return refresh(snapshot, cap);
 }
 
 async function additionalSources({github, repo, snapshot, paths}) {
