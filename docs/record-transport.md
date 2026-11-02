@@ -98,9 +98,13 @@ exact binding to repository, workflow run ID, run attempt, head SHA, base SHA,
 the existing canonical `assessment.record_digest`, and optional repair digest.
 Gate and repair compare these values against their current context and supplied
 assessment before materializing JSON in the existing fixed work paths. A
-foreign repository, previous run or previous attempt fails even when the source
-revision is unchanged. This binding supplies data integrity and run isolation;
-it is not a replacement signature or a new source of review authority.
+foreign repository, a different run, or an envelope that claims a later attempt
+than the consuming one fails even when the source revision is unchanged. The
+producing attempt may be the consuming attempt or an earlier one: `gh run rerun
+--failed` starts a new attempt that reads the job outputs the successful
+assessment produced in the earlier attempt, and it must not discard that review.
+This binding supplies data integrity and run isolation; it is not a replacement
+signature or a new source of review authority.
 
 The unchanged verifier then checks source/configuration/policy identity,
 authenticated receipts when present, independent roles, scores, findings,

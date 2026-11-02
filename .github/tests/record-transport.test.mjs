@@ -142,7 +142,7 @@ test('actual Actions expressions keep a 400k record in four bounded env values a
   }
 });
 
-test('actual packaged assessment emits a record reusable only by the same run and attempt', async () => {
+test('actual packaged assessment emits a record reusable only by the same run and the same or a later attempt', async () => {
   const produced = await execute(assess);
   assert.equal(produced.assess, 1); assert.equal(produced.waited, true);
   assert.equal(produced.receiptOnly, false);
@@ -150,7 +150,9 @@ test('actual packaged assessment emits a record reusable only by the same run an
   assert.equal(JSON.parse(value).length, 4);
   const passed = await execute(gate, {inputs: {'assessment': produced.outputs.assessment, 'review-record': value}});
   assert.equal(passed.gate, 1);
-  for (const options of [{env: {GITHUB_RUN_ATTEMPT: '3'}}, {context: {...fixture().context, runId: 457}},
+  const rerun = await execute(gate, {env: {GITHUB_RUN_ATTEMPT: '3'}, inputs: {'assessment': produced.outputs.assessment, 'review-record': value}});
+  assert.equal(rerun.gate, 1, 'a re-run of failed jobs reads the earlier attempt record');
+  for (const options of [{context: {...fixture().context, runId: 457}},
     {context: {repo: {owner: 'foreign', repo: 'radio'}, runId: 456}}]) {
     await assert.rejects(execute(gate, {...options, inputs: {assessment: produced.outputs.assessment, 'review-record': value}}),
       error => {assert.equal(error.transportState.gate, 0); return /foreign or stale/.test(error.message);});

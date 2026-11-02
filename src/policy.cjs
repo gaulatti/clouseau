@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const {readPull} = require('./pull-read.cjs');
 const {requestReview} = require('./provider.cjs');
+const {retryTransient} = require('./transient-retry.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
@@ -42,6 +43,7 @@ const MANUAL_REVIEWER = config.manual_reviewer;
 const VERIFY_STEPS = config.verification.steps;
 const NEVER_ARMED = Object.freeze(['review_incomplete', 'repair_required', 'blocked_technical', 'blocked_integrity']);
 const REVIEW_CONTROL_REASON = 'Review controls or a protected repository-purpose contract changed';
+const DISABLE_AUTO_MERGE = 'mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function numberFor(context) {
@@ -454,6 +456,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   const repo = context.repo;
   const pull_number = numberFor(context);
   const getPr = async () => (await readPull(github, repo, pull_number)).data;
+  const transient = (operation, call) => retryTransient(call, {operation, head: assessment.head_sha, wait, report: message => core.info(message)});
   let pr = await getPr();
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
     core.info('PR is not ready for the protected base branch; no review or merge action is needed.');
@@ -505,12 +508,16 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     // A review that reached no approvable decision never arms native auto-merge, even before the gate fails on it.
     const nativeAutomatic = automatic && !controllerManaged && !protectionGaps && !NEVER_ARMED.includes(assessment.decision);
     if (!nativeAutomatic && pr.auto_merge) {
-      await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+      await transient('disabling auto-merge', () => github.graphql(DISABLE_AUTO_MERGE, {id: pr.node_id}));
     }
     if (nativeAutomatic && !pr.auto_merge) {
-      await github.graphql(`mutation($id:ID!) { enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH}) {
-        pullRequest { autoMergeRequest { enabledAt } }
-      } }`, {id: pr.node_id});
+      // A retry first re-reads the PR: an attempt that GitHub reported as failed may have armed it.
+      await transient('enabling auto-merge', async attempt => {
+        if (attempt > 0 && (await getPr()).auto_merge) return;
+        await github.graphql(`mutation($id:ID!) { enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH}) {
+          pullRequest { autoMergeRequest { enabledAt } }
+        } }`, {id: pr.node_id});
+      });
     }
     pr = await getPr();
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha || nativeAutomatic && !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
@@ -576,9 +583,9 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     if (manualMerge && ownership.automatic && codeownersRequired &&
         !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before manual-mode approval');
     if (!selfAuthored) {
-      await github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
+      await transient('submitting the approval', () => github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
         body: `All tests and ${COVERAGE.full} passed: ${technical.url}\n\n` +
-          (humanRequired ? 'Repository intent confirmed by a maintainer.' : `Repository fit and supported intent assessed: ${assessment.reason}`)});
+          (humanRequired ? 'Repository intent confirmed by a maintainer.' : `Repository fit and supported intent assessed: ${assessment.reason}`)}));
     }
     if (!ownership.automatic) {
       if (!await codeowners.approved({github, repo, pr, ownership})) {
@@ -635,7 +642,10 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
     throw new Error('PR changed before merge finalization');
   }
   if (manualMerge) {
-    if (pr.auto_merge) await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+    if (pr.auto_merge) {
+      await retryTransient(() => github.graphql(DISABLE_AUTO_MERGE, {id: pr.node_id}), {operation: 'disabling auto-merge',
+        head: assessment.head_sha, wait, report: message => core.info(message)});
+    }
     core.info('Manual merge mode never arms auto-merge or dispatches deployment. A code owner must merge manually.');
     return;
   }

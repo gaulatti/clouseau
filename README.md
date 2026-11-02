@@ -257,8 +257,26 @@ verdict, both reviewers' 100/100 product scores and no technical findings. This
 is an offline display fixture, never a substitute for fresh review or CI evidence.
 
 Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
-bound artifact and downloads it into `work/` in the separate approval and repair
-jobs. Select examiner, challenger and grader explicitly in `acceptance`; see
+bound artifact (`clouseau-acceptance-<run id>-<attempt>`) and downloads it into
+`work/` in the separate approval and repair jobs. The download resolves the
+artifact by run id with `src/acceptance-artifact.cjs` (a `actions/github-script`
+step named `Locate this run's acceptance record`, see this repository's
+`.github/workflows/ci.yml`), taking the newest attempt that is not later than the
+current one, because `gh run rerun --failed` re-runs only the failed approval job
+as a new attempt while the successful assessment job's artifact keeps its
+original attempt number. The lookup accepts only artifacts of this run id and
+this revision of the workflow that have not expired; the gate still compares
+the record against the assessment's digests, head, base and frozen engine.
+**A consumer that copied the artifact-transport workflow must update its copy**
+(add the lookup step after the engine checkout and download the name it outputs)
+before a failed-jobs re-run can find the assessment; `record-transport:
+job-output` consumers need only the engine update. Once the review is accepted
+the merge step is safe to repeat: enabling auto-merge and submitting the approval
+retry transient GitHub failures (GraphQL "Something went wrong", HTTP 5xx and
+short secondary rate limits) after 2, 6 and 15 s. Validation, permission and
+"not mergeable" errors fail at once with GitHub's message. If the transient
+failure persists the job fails with a notice that the review was already
+accepted and that re-running the failed job is safe and repeats no AI review. Select examiner, challenger and grader explicitly in `acceptance`; see
 [the self-hosting configuration](.github/clouseau.json). `typesafe-key` is needed
 only when the explicit Jev/DeepSeek grading route is selected. Failure never
 silently changes that choice. A separate repair job receives an independent

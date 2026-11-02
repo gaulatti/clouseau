@@ -359,15 +359,26 @@ jobs:
           ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
           path: .clouseau-ci
           persist-credentials: false
-      - name: Load this run's acceptance record
+      # `gh run rerun --failed` keeps the assessment job's artifact under the attempt that produced it.
+      - name: Locate this run's acceptance record
+        id: acceptance-artifact
         if: >-
           ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
           (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/'))) &&
           ((needs.assess-intent.result == 'success' && fromJSON(needs.assess-intent.outputs.assessment).record_digest != '') ||
           (needs.assess-installation.result == 'success' && fromJSON(needs.assess-installation.outputs.assessment).record_digest != ''))
+        uses: actions/github-script@v7
+        env:
+          ENGINE_ROOT: ${{ github.event_name == 'push' && '.' || '.clouseau-ci' }}
+        with:
+          script: |
+            const resolver = require(require('node:path').join(process.env.GITHUB_WORKSPACE, process.env.ENGINE_ROOT, 'src/acceptance-artifact.cjs'));
+            core.setOutput('name', await resolver.resolveArtifactName({github, context, attempt: process.env.GITHUB_RUN_ATTEMPT}));
+      - name: Load this run's acceptance record
+        if: steps.acceptance-artifact.outcome == 'success'
         uses: actions/download-artifact@v4
         with:
-          name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.acceptance-artifact.outputs.name }}
           path: work
       - if: github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/')
         uses: ./
@@ -418,9 +429,16 @@ jobs:
           ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
           path: .clouseau-ci
           persist-credentials: false
+      - name: Locate this run's acceptance record
+        id: acceptance-artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const resolver = require(require('node:path').join(process.env.GITHUB_WORKSPACE, '.clouseau-ci/src/acceptance-artifact.cjs'));
+            core.setOutput('name', await resolver.resolveArtifactName({github, context, attempt: process.env.GITHUB_RUN_ATTEMPT}));
       - uses: actions/download-artifact@v4
         with:
-          name: clouseau-acceptance-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ steps.acceptance-artifact.outputs.name }}
           path: work
       - uses: ./.clouseau-ci
         with:

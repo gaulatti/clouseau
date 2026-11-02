@@ -95,8 +95,12 @@ function decode({payload, assessment, context, runAttempt}) {
   const value = parseJson(unpack(payload));
   requireThat(value && Object.keys(value).sort().join(',') === 'binding,record,repair,version' && value.version === 1,
     'invalid envelope');
+  // A re-run of failed jobs is a later attempt of the same run and reads the earlier attempt's job outputs, so the
+  // producing attempt may be this one or an earlier one. Every other fact must match exactly.
   requireThat(value.binding && Object.keys(value.binding).sort().join(',') === Object.keys(expected).sort().join(',') &&
-    Object.entries(expected).every(([name, item]) => value.binding[name] === item), 'foreign or stale run binding');
+    Object.entries(expected).every(([name, item]) => name === 'run_attempt' || value.binding[name] === item) &&
+    /^[1-9][0-9]*$/.test(value.binding.run_attempt) && Number(value.binding.run_attempt) <= Number(expected.run_attempt),
+  'foreign or stale run binding');
   verifyData(value.record, value.repair, expected);
   return {record: value.record, repair: value.repair};
 }

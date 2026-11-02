@@ -1116,3 +1116,129 @@ test('opt-in managed_agents exempts only a verified managed-standard AGENTS.md u
   assert.equal(messages[0], 'AGENTS.md stays a protected-control hold: content outside the managed block changed.');
   assert.equal(await gateWith({gate}, text(central)), true, 'unset: byte-identical behaviour, the update is held');
 });
+
+// A GitHub GraphQL failure with no cause, exactly as seen when enabling auto-merge on a reviewed PR.
+const graphqlBlip = () => Object.assign(new Error('Request failed due to following response errors:\n - Something went wrong while executing your query. Please include `EC12:AAAA` when reporting this issue.'),
+  {errors: [{message: 'Something went wrong while executing your query. Please include `EC12:AAAA` when reporting this issue.'}]});
+const statusError = (status, message = 'failure', headers = {}) => Object.assign(new Error(message), {status, response: {headers}});
+
+function transientFixture() {
+  const f = fixture();
+  f.state.pr.auto_merge = null; f.state.pr.node_id = 'N';
+  const waits = []; const messages = [];
+  const core = {info: message => messages.push(message), summary: {
+    addRaw(text) {f.writes.push({name: 'summary', text}); return this;}, async write() {}}};
+  const run = (options = {}) => gate({github: f.github, context, core, assessment: automatic, wait: async ms => {if (ms !== 4000) waits.push(ms);}, maxPolls: 1, mergePolls: 1, ...options});
+  return {...f, waits, messages, run};
+}
+
+test('a transient GraphQL error while enabling auto-merge is retried with bounded backoff and the review proceeds', async () => {
+  const f = transientFixture();
+  let calls = 0;
+  const graphql = f.github.graphql;
+  f.github.graphql = async (query, args) => {
+    if (query.includes('enablePullRequestAutoMerge') && ++calls <= 2) throw graphqlBlip();
+    return graphql(query, args);
+  };
+  await f.run();
+  assert.equal(calls, 3);
+  assert.deepEqual(f.waits, [2000, 6000]);
+  assert.equal(f.writes.filter(write => write.name === 'arm').length, 1);
+  assert.ok(f.writes.some(write => write.name === 'review'));
+  assert.ok(f.messages.some(message => /Transient GitHub failure while enabling auto-merge.*retry 1\/3 in 2 s/.test(message)));
+});
+
+test('a retry that finds auto-merge already armed does not arm it again', async () => {
+  const f = transientFixture();
+  let calls = 0;
+  f.github.graphql = async () => {
+    calls++;
+    f.state.pr.auto_merge = {};
+    throw graphqlBlip();
+  };
+  await f.run();
+  assert.equal(calls, 1);
+  assert.deepEqual(f.waits, [2000]);
+  assert.ok(f.writes.some(write => write.name === 'review'));
+});
+
+test('a final transient failure says the review was accepted and a retry is safe, and approves nothing', async () => {
+  const f = transientFixture();
+  let calls = 0;
+  f.github.graphql = async () => {calls++; throw graphqlBlip();};
+  await assert.rejects(f.run(), error => error.code === 'TRANSIENT_GITHUB' && error.attempts === 4 &&
+    error.message.includes(`head ${SHA} was already accepted`) && /Retrying it is safe/.test(error.message) && /EC12/.test(error.message));
+  assert.equal(calls, 4);
+  assert.deepEqual(f.waits, [2000, 6000, 15000]);
+  assert.ok(!f.writes.some(write => write.name === 'review'));
+  const check = f.writes.find(write => write.name === 'updateCheck');
+  assert.equal(check.args.conclusion, 'failure');
+  assert.match(check.args.output.summary, /already accepted[\s\S]*re-run only the failed job/);
+});
+
+test('deterministic arming errors fail at once with their own message and are never retried', async () => {
+  for (const error of [
+    Object.assign(new Error('Pull request is not mergeable'), {errors: [{type: 'UNPROCESSABLE', message: 'Pull request is not mergeable'}]}),
+    statusError(422, 'Validation Failed'), statusError(403, 'Resource not accessible by integration'), statusError(404, 'Not Found'),
+    statusError(429, 'rate limited', {'retry-after': '600'}),
+  ]) {
+    const f = transientFixture();
+    f.github.graphql = async () => {throw error;};
+    await assert.rejects(f.run(), caught => caught === error);
+    assert.deepEqual(f.waits, []);
+    assert.ok(!f.writes.some(write => write.name === 'review'));
+  }
+});
+
+test('5xx and short secondary rate limits are transient and honor the requested wait', async () => {
+  for (const [error, expected] of [[statusError(502), [2000]], [statusError(503, 'unavailable'), [2000]],
+    [statusError(403, 'You have exceeded a secondary rate limit', {'retry-after': '30'}), [30000]],
+    [statusError(403, 'You have exceeded a secondary rate limit', {'retry-after': '1'}), [2000]]]) {
+    const f = transientFixture();
+    let failed = false;
+    const graphql = f.github.graphql;
+    f.github.graphql = async (query, args) => {
+      if (!failed) {failed = true; throw error;}
+      return graphql(query, args);
+    };
+    await f.run();
+    assert.deepEqual(f.waits, expected);
+    assert.ok(f.writes.some(write => write.name === 'review'));
+  }
+});
+
+test('the approval review and the disarm are retried on transient failures and fail fast otherwise', async () => {
+  const approval = transientFixture();
+  let attempts = 0;
+  const createReview = approval.github.rest.pulls.createReview;
+  approval.github.rest.pulls.createReview = async args => {if (++attempts === 1) throw statusError(502); return createReview(args);};
+  await approval.run();
+  assert.equal(approval.writes.filter(write => write.name === 'review').length, 1);
+  assert.deepEqual(approval.waits, [2000]);
+
+  const denied = transientFixture();
+  denied.github.rest.pulls.createReview = async () => {throw statusError(422, 'Unprocessable');};
+  await assert.rejects(denied.run(), /Unprocessable/);
+  assert.deepEqual(denied.waits, []);
+
+  const disarm = transientFixture();
+  disarm.state.pr.auto_merge = {};
+  disarm.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  let disarms = 0;
+  const graphql = disarm.github.graphql;
+  disarm.github.graphql = async (query, args) => {if (++disarms === 1) throw graphqlBlip(); return graphql(query, args);};
+  await disarm.run();
+  assert.equal(disarms, 2);
+  assert.deepEqual(disarm.waits, [2000]);
+});
+
+test('finalizing a manual merge retries a transient disarm', async () => {
+  const manual = createPolicy(require('../test/fixtures/config.json'), {manualMerge: true});
+  const f = transientFixture();
+  f.state.pr.auto_merge = {};
+  let calls = 0;
+  f.github.graphql = async () => {if (++calls === 1) throw graphqlBlip(); f.state.pr.auto_merge = null; return {};};
+  await manual.finalize({github: f.github, context, core: {info() {}}, assessment: automatic, wait: async ms => {f.waits.push(ms);}});
+  assert.equal(calls, 2);
+  assert.deepEqual(f.waits, [2000]);
+});
