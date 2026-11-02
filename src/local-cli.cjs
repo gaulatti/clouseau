@@ -21,6 +21,9 @@ const gate = require('./coverage-gate.cjs');
 const pinning = require('./engine-pin.cjs');
 
 const root = path.join(__dirname, '..');
+// Characters of each output stream kept as review evidence; the digests always cover the whole stream.
+const PASSED_OUTPUT_TAIL = 128;
+const FAILED_OUTPUT_TAIL = 4096;
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
 
 function options(argv) {
@@ -81,8 +84,15 @@ function executeVerification({directory, config, additional = [], run = cp.spawn
     const stdout = result.stdout || ''; const stderr = result.stderr || '';
     // Signing material must never become model evidence, including on failure.
     if (/-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/.test(stdout + stderr)) throw new Error('Private signing material appeared in verification output; it cannot enter review evidence');
+    // The digests bind the complete output. Evidence carries its tail: a short one when the command succeeded (its
+    // summary line), a longer one when it failed (its diagnosis), so a green suite's per-test lines do not cost the
+    // reviewer and the receipt hundreds of kilobytes. `*_bytes` appears only where the text was cut.
+    const limit = result.status === 0 && !result.error && !result.signal ? PASSED_OUTPUT_TAIL : FAILED_OUTPUT_TAIL;
+    // A tail never starts inside a surrogate pair, so it may be one unit shorter than the limit.
+    const tail = (text, name) => text.length <= limit ? {[name]: text} :
+      {[name]: text.slice(-limit).replace(/^[\uDC00-\uDFFF]/, ''), [`${name}_bytes`]: Buffer.byteLength(text)};
     commands.push({argv, exit_code: Number.isInteger(result.status) ? result.status : null,
-      stdout_digest: digest(stdout), stderr_digest: digest(stderr), stdout, stderr,
+      stdout_digest: digest(stdout), stderr_digest: digest(stderr), ...tail(stdout, 'stdout'), ...tail(stderr, 'stderr'),
       ...(result.error ? {error: {code: result.error.code || null, message: result.error.message}} : {}),
       ...(result.signal ? {signal: result.signal} : {})});
   };
