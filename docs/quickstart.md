@@ -89,7 +89,12 @@ clouseau publish --directory . --receipt PATH_FROM_THE_REVIEW_OUTPUT
 ```
 
 Put the returned `clouseau-local-review:v1` marker in the PR body. When `verify`
-and the review pass, the bot approves, arms auto-merge and the PR merges.
+and the review pass, the bot approves, arms auto-merge and the PR merges. If the
+receipt is unusable (older engine, expired, stale head, different patch), the same
+workflow run reviews the change in CI through the separate `assess-hosted` job, which
+needs the provider secret and never reads the receipt; you do not have to remove the
+marker. Workflows installed before this job existed carry a copy and must be upgraded
+(see [automatic CI upgrades](automatic-ci-upgrades.md#receipt-route-fallback-upgrade)).
 
 Changes to review controls (`.github/clouseau.*`, workflows, `.clouseau-local.json`,
 `sensitive_paths`) cannot be approved by a receipt alone. The PR then shows
