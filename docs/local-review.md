@@ -383,6 +383,65 @@ it does not change the reviewed source commit or checkout. Include the returned
 artifact follows the repository's visibility and contains reviewed source and
 the requirement text; those inputs must be appropriate for publication there.
 
+## Refreshing a pull request after its base moved
+
+Every merge to the base leaves the other open pull requests behind it: GitHub reports `branch update needed`, and each
+receipt, assessment and approval is bound to the old base. `clouseau refresh` does the author's manual routine for one
+pull request, in the pull request's own checkout:
+
+```bash
+clouseau refresh --pr N --request-file req.txt --agent claude      # inside an AI harness
+clouseau refresh --pr N --request-file req.txt --harness claude    # headless
+```
+
+`--request-file` is the file the earlier review used. Optional: `--directory`, `--identity`, `--additional-checks`,
+`--engine latest`. In order, and never otherwise:
+
+1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, stop with
+   `up_to_date`;
+2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
+   `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
+3. run the ordinary local review of the new head (`clouseau review`, including its verification) with the answers reused as
+   described below, and sign the receipt;
+4. `clouseau publish` the receipt (this pushes only the artifact tag `clouseau-review/<nonce>`);
+5. replace the `clouseau-local-review:v1` marker in the pull request body (appended when there is none);
+6. `git push origin HEAD:<pull request branch>`, once, as the last step.
+
+It refuses, with a message that names the cause and before pushing anything, when: the worktree has uncommitted or untracked
+changes; HEAD is not the head GitHub reports for the pull request; the pull request is closed, comes from a fork, is not the
+checked-out branch, or is not against the configured `base_branch`; the harness is unknown or its program is not installed;
+the base conflicts with the branch (the checkout is left untouched and the conflicting paths are listed); a hook refuses the
+merge (it is aborted). It never pushes when the review does not pass (`repair_required`, `review_incomplete`, ...), when a
+passing review produced no signed receipt (no enrolled identity), when the checkout changed during the review, when the
+pull request closed or got another head during the review, or when the push is rejected (the body is then restored). After
+a review that does not pass, the merge commit stays in the local branch: repair, commit and refresh again, or run `git reset
+--hard <old head>` to discard it. An agent-driven refresh that returns `awaiting_agent` is repeated with the identical
+command; it recognises its own merge commit (the pull request head and a commit of the base as parents), does not merge or
+fetch again, and continues on the base it began with.
+
+### What is reused
+
+A review asks the harness one question at a time (each unit investigation, each integration pass, each grading round). A review
+that ends `auto_approve` remembers every answer in `~/.local/share/clouseau/unit-reuse/`, under the digest of the question's
+complete input. `refresh` (and only `refresh`) lets a question take a remembered answer instead of asking again, when its input
+is **byte-identical** to the remembered one except for the values that name the revision rather than describe it. The input
+covers the policy and stage text, the schema, role and phase, every changed patch, every base and head source, every
+source that was requested or linked, the change manifest and seams, the requirement, the prior findings, the verification
+record, the configuration and policy digests, the commit ids of each file's recent history and the review semantics of the
+engine (`review-semantics.cjs`). Any change to any of them is a different key and the question is asked. The excluded values,
+replaced by placeholders on both sides of the comparison, are: the base and head commit ids, the snapshot and unit-view
+digests, the subject of the head commit (the merge commit replaces it), and, for a verification command that passed, its
+output tails and output digests (its argv, exit code, coverage counters and configuration digest stay in the key; a failed
+command is compared byte for byte). A reused answer is put through the same check as a fresh one against the new snapshot, and
+is asked again when that check fails; the receipt is signed over the new head, base and evidence, and CI verifies it exactly
+as before. In a chunked review the unit that owns an unchanged file is reused while a unit whose files, linked sources or
+seams changed is asked again. The result reports `reused_calls` and `harness_invocations` (calls actually made).
+
+Limits to expect: a changed requirement text, policy, contract, verification command or engine semantics reuses nothing; a
+verification that fails reuses nothing about its output; the store is not pruned and may be deleted at any time. See
+[base-drift receipts](base-drift-receipts.md) for the separate, unimplemented question of letting CI keep a receipt when
+the base moved.
+
 ## Maintainer attestation of another author's pull request (opt-in)
 
 By default the enrolled signing key's `github_actor` must equal the pull request
