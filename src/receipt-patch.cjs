@@ -42,6 +42,12 @@ function hostedForm(patch, live) {
   return lines.slice(start).join('\n').replace(/\n$/, '');
 }
 
+// git appends a function-name heading (`@@ -1,2 +1,2 @@ def run():`) to a hunk header when the local `git diff` runs;
+// GitHub's `patch` omits it. The heading is derived text with no line numbers, so only the text after the second `@@`
+// of a hunk header line is dropped, on both sides. A hunk body line always starts with a space, `+`, `-` or `\`, so
+// no body line is ever touched, and line numbers, headers and bodies still have to match byte for byte.
+const withoutHeading = patch => patch.replace(/^(@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@).*$/gm, '$1');
+
 // A file added whole is stored as its header plus a marker that the body is its head source; the
 // restored text is what the reviewers saw. A marker without that source restores nothing.
 function signedPatch(snapshot, item) {
@@ -67,7 +73,7 @@ function verifyPatches({snapshot, files}) {
       if (item.status !== live.status) throw new ReceiptPatchMismatch(live.filename);
       continue;
     }
-    if (!item || item.status !== live.status || hostedForm(signedPatch(snapshot, item), live) !== live.patch) throw new ReceiptPatchMismatch(live.filename);
+    if (!item || item.status !== live.status || withoutHeading(hostedForm(signedPatch(snapshot, item), live) ?? '') !== withoutHeading(live.patch)) throw new ReceiptPatchMismatch(live.filename);
   }
 }
 
