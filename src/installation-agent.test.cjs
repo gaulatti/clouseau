@@ -13,7 +13,7 @@ function subagent(request) {
   const prompt = fs.readFileSync(request.prompt_file, 'utf8');
   const schema = JSON.parse(fs.readFileSync(request.schema_file, 'utf8'));
   if (request.phase === 'investigation') {
-    const report = JSON.parse(prompt.slice(prompt.lastIndexOf('\n') + 1)).template;
+    const report = JSON.parse(prompt.slice(prompt.search(/\n\{\n/) + 1)).template;
     report.gates.forEach(gate => {gate.state = 'satisfied';});
     return {kind: 'report', report, request_sources: []};
   }

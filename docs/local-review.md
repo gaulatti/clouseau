@@ -191,6 +191,16 @@ or session that sees only those files, has it write a JSON answer to the request
 clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session SESSION_ID
 ```
 
+The `awaiting_agent` output already prints this command with a valid, unused session identifier in place of
+`SESSION_ID`, and a `session_rule` field that states the rule: 8 to 128 characters, letters, digits and `. _ : -`
+only, starting with a letter or digit, never reused for another request. Any identifier that satisfies the rule may
+replace the suggested one.
+
+`prompt-NNNN.txt` is the policy text followed by the evidence, laid out over many lines instead of one line of up to hundreds of
+kilobytes. The layout is applied only when printing the parsed evidence compactly gives back the original bytes exactly (so no
+number or string is altered); otherwise the file is the original prompt. The request digest, the reuse key and answer
+validation always use the original prompt, never the file.
+
 The schema file is compact JSON Schema that states each repeated subschema (chiefly the
 proof-ID enumeration every citation site shares) once under `$defs` and points at it with
 `"$ref": "#/$defs/NAME"`; it is the same constraint as the full inline schema, a few KB
@@ -207,14 +217,16 @@ launcher still refreshes protected main before every call, but a continuation of
 same head, base and requirement re-executes the recorded revision from the local
 cache (`~/.cache/clouseau/revisions/<sha>`; the installer never prunes revisions, and
 a pin under `~/.local/share/clouseau/pins/` is the reference that names one) and
-prints one line stating the pinned revision and the newer one. The pinned checkout
+prints one line stating the pinned revision and the newer one, once per newer revision (the pin remembers that it said so; a
+still newer revision is announced again). The pinned checkout
 must be an unmodified worktree of the installer's own cached source whose engine
 digest equals the one recorded when the pin was made; otherwise the command fails and
 nothing from it runs. A receipt is issued under the pinned revision, so CI, which
 ignores a receipt whose engine differs from protected main, reviews the PR itself.
 A new review (different head or requirement) uses the newest revision. Pass
 `--engine latest` to drop the pin and restart on the newest revision; the pin is also
-released when the review completes. `respond` needs no pinning: it validates against
+released when the review completes. A failure of the pinned engine is reported with the engine's own error message (its last 2,000
+characters), not a bare exit status. `respond` needs no pinning: it validates against
 the schema stored with the request.
 
 Usage records for these sessions carry `harness` (`claude`, `codex` or `opencode`),
@@ -390,19 +402,28 @@ receipt, assessment and approval is bound to the old base. `clouseau refresh` do
 pull request, in the pull request's own checkout:
 
 ```bash
-clouseau refresh --pr N --request-file req.txt --agent claude      # inside an AI harness
-clouseau refresh --pr N --request-file req.txt --harness claude    # headless
+clouseau refresh --pr N --agent claude                       # inside an AI harness
+clouseau refresh --pr N --harness claude                     # headless
+clouseau refresh --pr N --request-file req.txt --agent claude   # an explicit requirement
 ```
 
-`--request-file` is the file the earlier review used. Optional: `--directory`, `--identity`, `--additional-checks`,
-`--engine latest`. In order, and never otherwise:
+`--request-file` is optional. Without it the requirement is the one of the last accepted (`auto_approve`) review of this
+repository and branch: every accepted review stores its requirement text byte for byte as `request.txt` beside its record under
+`~/.local/share/clouseau/reviews/<cache id>/`, with a `requirement.json` that binds it, and one pointer per repository and
+branch (`requirements/`) names the newest. The command refuses, and asks for `--request-file`, when nothing is recorded for the
+branch, when the record is unusable (pointer and record name different repositories, branches, heads or cache ids; the text no
+longer hashes to the recorded digest; a part is a link, empty or over 20,000 characters), when the recorded head is not an
+ancestor of the pull request head, or is already in the base (the branch name was reused after another pull request merged), or when that review also used
+`--additional-checks` (they are part of its input and are not stored; pass both again). It never guesses among candidates.
+Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`. In order, and never otherwise:
 
 1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, stop with
    `up_to_date`;
 2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
    `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
 3. run the ordinary local review of the new head (`clouseau review`, including its verification) with the answers reused as
-   described below, and sign the receipt;
+   described below, and sign the receipt. The claimed title of the change is the pull request's own title (GitHub's), not the
+   subject of the merge commit, which is only `Merge origin/<base> into <branch>`; a pull request with no title is refused;
 4. `clouseau publish` the receipt (this pushes only the artifact tag `clouseau-review/<nonce>`);
 5. replace the `clouseau-local-review:v1` marker in the pull request body (appended when there is none);
 6. `git push origin HEAD:<pull request branch>`, once, as the last step.
@@ -417,7 +438,10 @@ pull request closed or got another head during the review, or when the push is r
 a review that does not pass, the merge commit stays in the local branch: repair, commit and refresh again, or run `git reset
 --hard <old head>` to discard it. An agent-driven refresh that returns `awaiting_agent` is repeated with the identical
 command; it recognises its own merge commit (the pull request head and a commit of the base as parents), does not merge or
-fetch again, and continues on the base it began with.
+fetch again, and continues on the base it began with. While Clouseau main advances, the continuation runs on the engine revision
+that started the exchange ([pinning](#agent-driven-review-inside-an-ai-harness)): through the `clouseau` launcher the pinned engine
+receives your own `refresh` command, resumes it and finishes it (review, publication, marker, push), and its result is what you
+see. If the pinned engine fails, its error message is shown.
 
 ### What is reused
 
@@ -430,7 +454,7 @@ source that was requested or linked, the change manifest and seams, the requirem
 record, the configuration and policy digests, the commit ids of each file's recent history and the review semantics of the
 engine (`review-semantics.cjs`). Any change to any of them is a different key and the question is asked. The excluded values,
 replaced by placeholders on both sides of the comparison, are: the base and head commit ids, the snapshot and unit-view
-digests, the subject of the head commit (the merge commit replaces it), and, for a verification command that passed, its
+digests, the claimed title of the change (a claim, never proof; a refresh uses the pull request's title) and, for a verification command that passed, its
 output tails and output digests (its argv, exit code, coverage counters and configuration digest stay in the key; a failed
 command is compared byte for byte). A reused answer is put through the same check as a fresh one against the new snapshot, and
 is asked again when that check fails; the receipt is signed over the new head, base and evidence, and CI verifies it exactly

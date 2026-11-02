@@ -16,10 +16,11 @@ const {reconcile} = require('./acceptance-ledger.cjs');
 const {refresh, safePath, UNBOUNDED} = require('./acceptance-sources.cjs');
 const chunkedWiring = require('./chunked-wiring.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
-const {AGENTS, AwaitingAgent, createExchange, respond} = require('./local-agent.cjs');
+const {AGENTS, AwaitingAgent, SESSION_RULE, suggestSession, createExchange, respond} = require('./local-agent.cjs');
 const gate = require('./coverage-gate.cjs');
 const pinning = require('./engine-pin.cjs');
 const {createReuse} = require('./review-reuse.cjs');
+const {recordRequirement} = require('./review-requirement.cjs');
 
 const root = path.join(__dirname, '..');
 // Characters of each output stream kept as review evidence; the digests always cover the whole stream.
@@ -168,7 +169,7 @@ function readPull({repo, number, base, head, execute}) {
 }
 
 async function runReview(args, {ask = askHarness, execute = cp.execFileSync, verify = executeVerification, state = stateDirectory(), installed = installation,
-  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, reuse = {}} = {}) {
+  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, reuse = {}, title, continued = pinning.argvFor(args)} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
   const agent = args.agent;
@@ -228,8 +229,13 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   const pin = pinning.readPin(state, pinId);
   if (pin && pin.reviewer_sha !== reviewer.sha) {
     const checkout = pinning.verifiedRevision(cacheRoot, pin);
-    process.stderr.write(`Clouseau review pinned to engine ${pin.reviewer_sha.slice(0, 12)}; newer ${reviewer.sha.slice(0, 12)} exists (pass --engine latest to restart on it)\n`);
-    return run(checkout, pinning.argvFor(args));
+    // Said once per newer revision: the pin remembers it, so a long exchange does not repeat it on every command.
+    if (pinning.noticeOwed(pin, reviewer.sha)) {
+      process.stderr.write(`Clouseau review pinned to engine ${pin.reviewer_sha.slice(0, 12)}; newer ${reviewer.sha.slice(0, 12)} exists (pass --engine latest to restart on it)\n`);
+      pinning.markNotified(state, pinId, pin, reviewer.sha);
+    }
+    // `continued` is the command the person typed: for a refresh that is the refresh itself, which the pinned engine resumes.
+    return run(checkout, continued);
   }
   const historyPath = path.join(state, 'ledgers', `${digest({repository, branch})}.json`);
   const previous = readHistory(historyPath, repository, branch);
@@ -300,7 +306,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   // snapshot is collected and reviewed exactly as before. One that does not (or that the configuration forces) is collected
   // without a size cap and reviewed in bounded units.
   const active = chunkedWiring.settings(ciConfig?.local_review);
-  const collect = unbounded => collectLocal({directory, base, request, technical, ciConfig, reviewerSha, unbounded});
+  const collect = unbounded => collectLocal({directory, base, request, technical, ciConfig, reviewerSha, unbounded, title});
   let collected; let chunking = false;
   if (active?.force) {collected = collect(true); chunking = true;}
   else {
@@ -362,7 +368,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   } catch (error) {
     if (error instanceof AwaitingAgent) {
       return {status: 'awaiting_agent', ...error.info, reviewer_sha: reviewerSha, provider_api_calls: 0, harness_invocations: 0,
-        respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session FRESH_SESSION_ID`,
+        respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session ${suggestSession(agent)}`, session_rule: SESSION_RULE,
         then: 'Repeat the identical review command. It continues on this pinned engine revision even if Clouseau main advances; pass --engine latest to restart on the newest.'};
     }
     if (error instanceof SourceNotFound) {
@@ -403,6 +409,8 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   fs.writeFileSync(historyPath, JSON.stringify({version: 1, repository, branch, head_sha: head, base_sha: baseSha,
     reviewer_sha: reviewerSha, reviewer_digest: reviewer.digest, request_digest: requestDigest, cache_id: cacheId,
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
+  // The requirement of an accepted review is what `refresh` defaults to when it is not given a file.
+  if (result.decision === 'auto_approve') recordRequirement({state, repository, branch, head, cacheId, cache, request, additional});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0, ...attested(attestation),
     harness_invocations: result.usage.length - reusing.stats.reused, reused_calls: reusing.stats.reused, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head}, technical)};
@@ -461,8 +469,10 @@ async function main(argv, runtime = {}) {
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
   if (args.command === 'review') return runReview(args, runtime);
   if (args.command === 'refresh') {
-    return require('./pr-refresh.cjs').refreshPull(args, {review: reviewArgs => runReview(reviewArgs, {...runtime, reuse: {read: true}}),
-      publish: publishReceipt, execute: runtime.execute, available: runtime.available});
+    const {state = stateDirectory()} = runtime;
+    return require('./pr-refresh.cjs').refreshPull(args, {
+      review: (reviewArgs, extra) => runReview(reviewArgs, {...runtime, reuse: {read: true}, continued: pinning.argvFor(args), ...extra}),
+      publish: publishReceipt, execute: runtime.execute, available: runtime.available, state});
   }
   if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);

@@ -19,6 +19,7 @@ const cp = require('node:child_process');
 const {git, githubRepository, readLocalConfig, assertUnchanged} = require('./local-git.cjs');
 const {AGENTS} = require('./local-agent.cjs');
 const {assertHarness} = require('./local-harness.cjs');
+const {readRequirement} = require('./review-requirement.cjs');
 
 const MARKER = /<!-- clouseau-local-review:v1 [a-f0-9]{40} -->/;
 
@@ -69,9 +70,8 @@ function merge({directory, remoteBase, branch}) {
   }
 }
 
-async function refreshPull(args, {review, publish, execute = cp.execFileSync, available = name => cp.spawnSync(name, ['--version'], {stdio: 'ignore'}).status === 0}) {
+async function refreshPull(args, {review, publish, state, execute = cp.execFileSync, available = name => cp.spawnSync(name, ['--version'], {stdio: 'ignore'}).status === 0}) {
   if (!/^[1-9][0-9]{0,8}$/.test(args.pr || '')) throw new Error('--pr takes a pull request number');
-  if (!args['request-file']) throw new Error('An explicit requirement file is required: pass the file the earlier review used, because reuse needs byte-identical input');
   if (Boolean(args.agent) === Boolean(args.harness)) throw new Error('Choose exactly one of --agent (inside an AI harness) or --harness (headless)');
   if (args.agent && !AGENTS.includes(args.agent)) throw new Error(`Supported agent harnesses: ${AGENTS.join(', ')}`);
   if (args.harness) {
@@ -87,11 +87,12 @@ async function refreshPull(args, {review, publish, execute = cp.execFileSync, av
   }
   const branch = git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   const readPull = () => JSON.parse(execute('gh', ['api', `repos/${slug}/pulls/${number}`, '--jq',
-    '{state: .state, base: .base.ref, head: .head.sha, ref: .head.ref, repository: .head.repo.full_name, body: (.body // "")}'], {encoding: 'utf8'}));
+    '{state: .state, base: .base.ref, head: .head.sha, ref: .head.ref, repository: .head.repo.full_name, title: .title, body: (.body // "")}'], {encoding: 'utf8'}));
   const pull = readPull();
   if (pull.state !== 'open') throw new Error(`Pull request ${number} is not open`);
   if (pull.repository !== slug) throw new Error(`Pull request ${number} comes from ${pull.repository}; refresh pushes only to a branch of ${slug}`);
   if (branch !== pull.ref) throw new Error(`The checked-out branch ${branch} is not the pull request branch ${pull.ref}`);
+  if (typeof pull.title !== 'string' || !pull.title.trim()) throw new Error(`Pull request ${number} has no title`);
   const config = readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json'])));
   if (pull.base !== config.base_branch) throw new Error(`Pull request ${number} is against ${pull.base}, not the configured base ${config.base_branch}`);
   const remoteBase = `origin/${pull.base}`;
@@ -107,10 +108,17 @@ async function refreshPull(args, {review, publish, execute = cp.execFileSync, av
       return {status: 'up_to_date', pull_request: number, head_sha: head, base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: false,
         note: `Pull request ${number} already contains ${remoteBase}; nothing to refresh`};
     }
-    merge({directory, remoteBase, branch});
   }
-  const result = await review({directory, base: remoteBase, 'request-file': args['request-file'], harness: args.harness, agent: args.agent,
-    identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine});
+  // Without a file, the requirement is the one of the last accepted review of this branch, if its head provably belongs to this
+  // pull request alone: in the pull request's history and not in the base. (A branch name reused after an earlier pull request
+  // merged has that pull request's head in the base too.) Nothing has been changed yet when this refuses.
+  const requestFile = args['request-file'] || readRequirement({state, repository: slug, branch,
+    contains: sha => ancestor(directory, sha, pull.head) && !ancestor(directory, sha, remoteBase)}).file;
+  if (!resuming) merge({directory, remoteBase, branch});
+  const result = await review({directory, base: remoteBase, 'request-file': requestFile, harness: args.harness, agent: args.agent,
+    identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine}, {title: pull.title});
+  // A review continued on a pinned engine runs this very command there, publishes and pushes; its result is the final one.
+  if (result.status === 'refreshed') return result;
   const context = {pull_request: number, previous_head_sha: pull.head, pushed: false};
   if (result.status === 'awaiting_agent') {
     return {...result, ...context, then: 'Repeat the identical refresh command. It continues on the merge commit already made and on this pinned engine revision.'};
