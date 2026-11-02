@@ -320,6 +320,16 @@ function patchOf(snapshot, file) {
   return `${file.patch}${lines.map(line => `+${line}`).join('\n')}\n${final ? '' : '\\ No newline at end of file\n'}`;
 }
 
+// GitHub lists no patch for a change that shows no text: an empty file added or removed, or a rename that
+// changes nothing. Only the immutable contents prove it, so a missing patch for anything else stays unavailable.
+function showsNoText(status, base, head) {
+  return (status === 'added' && head === '') || (status === 'removed' && base === '') ||
+    (status === 'renamed' && typeof base === 'string' && base === head);
+}
+
+// A source with no nonblank line holds nothing a reviewer could cite.
+const citable = source => Boolean(source?.content.trim());
+
 function nonBehavioural(patch) {
   if (typeof patch !== 'string') return false;
   // Contiguous runs of one sign are one edit. A multi-line block comment is dropped only when the run
@@ -439,7 +449,13 @@ function validateEvidence(report, snapshot) {
     unique(item.units, 'accounting units'); citations(item.evidence);
     requireThat(item.units.length > 0 && item.units.every(id => unitIds.has(id) &&
       report.units.find(unit => unit.id === id).paths.includes(item.path)), 'accounting lacks a covering acceptance unit');
-    requireThat(item.evidence.some(id => snapshot.sources[evidence.get(id).source].path === item.path ||
+    // A file whose sources have no nonblank line on either side (an empty package marker) has nothing to cite; the
+    // controller knows that from the immutable sources, so the reviewer is not asked for a citation that cannot exist.
+    // A file with no source at all (a segment of a large file) still needs its evidence.
+    const changed = snapshot.files.find(file => file.path === item.path);
+    const sides = [changed?.base_source, changed?.head_source].filter(Boolean);
+    const barren = sides.length > 0 && !sides.some(id => citable(snapshot.sources[id]));
+    requireThat(barren || item.evidence.some(id => snapshot.sources[evidence.get(id).source].path === item.path ||
       snapshot.files.some(file => file.path === item.path && [file.base_source, file.head_source].includes(evidence.get(id).source))),
       'accounting lacks direct changed-file evidence');
   }
@@ -525,4 +541,4 @@ function validateApproval(report, snapshot, holdSnapshot = snapshot) {
   return hold && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold} : scores;
 }
 
-module.exports = {patchOf, JS_PATH, LINKABLE_PATH, importsOf, pythonImports, resolvePython, resolveImport, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};
+module.exports = {patchOf, showsNoText, citable, JS_PATH, LINKABLE_PATH, importsOf, pythonImports, resolvePython, resolveImport, coveringTests, nonBehavioural, specifiersOf, resolveSpecifier, isExecutablePath, isCodePath, moduleStem, approvalHold, validateApproval, isTestPath, FACTORS, GATES, STATES, RULES, MAX_CITATION_LINES, digest, impactOf, findingScore, scoreReport, validateFacts, validateReport};

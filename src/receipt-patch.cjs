@@ -1,6 +1,6 @@
 'use strict';
 
-const {patchOf} = require('./acceptance.cjs');
+const {patchOf, showsNoText} = require('./acceptance.cjs');
 const {LOCKFILE_PATCH, isLockfile} = require('./lockfile-summary.cjs');
 const {ReceiptRejected} = require('./receipt-rejection.cjs');
 
@@ -32,14 +32,16 @@ class ReceiptPatchMismatch extends ReceiptRejected {
 function hostedForm(patch, live) {
   if (typeof patch !== 'string') return null;
   const lines = patch.split('\n');
-  const start = lines.findIndex(line => line.startsWith('@@'));
-  const head = lines.slice(0, Math.max(start, 0)); const allowed = headerLines(live);
-  if (start < 0 || !head.every(line => allowed.has(line) || HEADER.some(rule => rule.test(line))) ||
+  const found = lines.findIndex(line => line.startsWith('@@'));
+  // A change that shows no text (an empty file, a pure rename) is a header and no hunk: the hosted patch is then empty.
+  const start = found < 0 ? lines.length - Number(lines[lines.length - 1] === '') : found;
+  const head = lines.slice(0, start); const allowed = headerLines(live);
+  if ((found < 0 && !head.length) || !head.every(line => allowed.has(line) || HEADER.some(rule => rule.test(line))) ||
     new Set(head).size !== head.length) return null;
   const renamed = Object.fromEntries(lines.slice(0, start).map(line => /^rename (from|to) (.+)$/.exec(line)).filter(Boolean)
     .map(([, side, name]) => [side, name]));
   if (live.status === 'renamed' ? renamed.from !== live.previous_filename || renamed.to !== live.filename : Object.keys(renamed).length) return null;
-  return lines.slice(start).join('\n').replace(/\n$/, '');
+  return found < 0 ? '' : lines.slice(start).join('\n').replace(/\n$/, '');
 }
 
 // git appends a function-name heading (`@@ -1,2 +1,2 @@ def run():`) to a hunk header when the local `git diff` runs;
@@ -94,7 +96,16 @@ const summarized = item => item.lockfile === true && isLockfile(item.path) && it
 function verifyPatches({snapshot, files}) {
   const signed = new Map(snapshot.files.map(file => [file.path, file]));
   // GitHub supplies no patch for very large or binary changes; the hosted collector refuses those and so does this.
-  if (files.some(file => (typeof file.patch !== 'string' || !file.patch) && !(signed.has(file.filename) && summarized(signed.get(file.filename))))) {
+  // It also supplies none for a change that shows no text, which the signed sources prove: an empty file added or
+  // removed, or a rename of identical content. Then the signed patch must be a header with no hunk.
+  const textless = live => {
+    const item = signed.get(live.filename);
+    const text = id => snapshot.sources?.[id]?.content;
+    return Boolean(item) && item.status === live.status && hostedForm(signedPatch(snapshot, item), live) === '' &&
+      showsNoText(item.status, text(item.base_source), text(item.head_source));
+  };
+  if (files.some(file => (typeof file.patch !== 'string' || !file.patch) &&
+    !(signed.has(file.filename) && summarized(signed.get(file.filename))) && !textless(file))) {
     throw new Error('Changed-file evidence is incomplete');
   }
   for (const file of snapshot.files) if (!files.some(live => live.filename === file.path)) throw new ReceiptPatchMismatch(file.path);
@@ -107,7 +118,7 @@ function verifyPatches({snapshot, files}) {
     }
     if (!item || item.status !== live.status) throw new ReceiptPatchMismatch(live.filename);
     const signedText = withoutHeading(hostedForm(signedPatch(snapshot, item), live) ?? '');
-    const hostedText = withoutHeading(live.patch);
+    const hostedText = withoutHeading(live.patch ?? '');
     if (signedText !== hostedText && !joinsSingleGaps(signedText, hostedText)) throw new ReceiptPatchMismatch(live.filename);
   }
 }

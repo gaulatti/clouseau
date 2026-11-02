@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {patchOf, GATES, MAX_CITATION_LINES, digest, validateFacts, validateApproval, isExecutablePath} = require('./acceptance.cjs');
+const {patchOf, GATES, MAX_CITATION_LINES, digest, validateFacts, validateApproval, isExecutablePath, citable} = require('./acceptance.cjs');
 const {additionalSources, proofCatalog, refresh} = require('./acceptance-sources.cjs');
 const {gradeReport} = require('./acceptance-grading.cjs');
 const {requestJSON} = require('./review-provider.cjs');
@@ -11,12 +11,21 @@ const {schemas} = require('./acceptance-schema.cjs');
 function template(snapshot) {
   const sources = Object.keys(snapshot.sources);
   const trusted = sources.find(id => snapshot.sources[id].authority === 'trusted' && snapshot.sources[id].kind === 'contract');
-  const changed = new Map(snapshot.files.map(file => [file.path, file.head_source || file.base_source]));
-  const evidence = [trusted, ...snapshot.paths.map(filename => changed.get(filename))].map((id, index) => {
-    const lines = snapshot.sources[id].content.split('\n');
-    const start = lines.findIndex(line => line.trim()) + 1;
-    return {id: index === 0 ? 'contract' : index === 1 ? 'source' : `source-${index}`, source: id, start, end: start};
+  // The side that holds a line: a file the change emptied is cited from its base.
+  const holding = file => {
+    const sides = [file.head_source, file.base_source].filter(Boolean);
+    return sides.find(id => citable(snapshot.sources[id])) ?? sides[0];
+  };
+  const changed = new Map(snapshot.files.map(file => [file.path, holding(file)]));
+  const named = [trusted, ...snapshot.paths.map(filename => changed.get(filename))].map(id => {
+    const start = snapshot.sources[id].content.split('\n').findIndex(line => line.trim()) + 1;
+    return {source: id, start, end: start};
   });
+  // An empty file has no line to cite: its accounting cites the contract, and the controller does not demand more.
+  // The first changed file with a line is `source`, so the gates always cite a proof that exists.
+  const evidence = named.filter(entry => citable(snapshot.sources[entry.source]));
+  let count = 0;
+  for (const entry of evidence) entry.id = entry === named[0] ? 'contract' : ++count === 1 ? 'source' : `source-${count}`;
   const coverage = snapshot.review_manifest_version ? {coverage: {sources: Object.keys(snapshot.sources).map(source => {
     let citation = evidence.find(item => item.source === source);
     if (!citation && snapshot.sources[source].content.trim()) {
@@ -28,8 +37,8 @@ function template(snapshot) {
   return {...coverage, version: 4, snapshot: snapshot.digest, summary: 'Replace this example with the evidence-supported change summary.', evidence,
     units: [{id: 'accepted-outcome', title: 'Name the actual capability or material engineering choice.', kind: 'capability',
       obligation: 'State the accepted outcome this unit serves.'}], findings: [],
-    gates: GATES.map(name => ({name, state: 'unresolved', reason: 'Replace this with the demonstrated gate result.', evidence: ['source']})),
-    accounting: snapshot.paths.map((filename, index) => ({path: filename, units: ['accepted-outcome'], evidence: [evidence[index + 1].id], reason: 'Explain this file role and its connection to the accepted unit.'})),
+    gates: GATES.map(name => ({name, state: 'unresolved', reason: 'Replace this with the demonstrated gate result.', evidence: [count ? 'source' : 'contract']})),
+    accounting: snapshot.paths.map((filename, index) => ({path: filename, units: ['accepted-outcome'], evidence: [evidence.includes(named[index + 1]) ? named[index + 1].id : 'contract'], reason: 'Explain this file role and its connection to the accepted unit.'})),
     resolutions: []};
 }
 
@@ -188,8 +197,12 @@ function materialize(facts, snapshot) {
     if (!file) {
       // The reviewer pointed at supporting source (a test, a dependency). The finding stands; its
       // cause is anchored to the first changed line of the changed file it names, else the first file.
-      file = snapshot.files.find(item => item.path === snapshot.sources[finding.anchor.source]?.path) || snapshot.files[0];
-      finding.anchor = changedAnchor(file, catalog);
+      // A file with no nonblank line (an empty package marker) has no line to anchor to, so the next file does.
+      const named = snapshot.files.find(item => item.path === snapshot.sources[finding.anchor.source]?.path);
+      const anchors = [named, ...snapshot.files].filter(Boolean).map(item => [item, changedAnchor(item, catalog)]);
+      const found = anchors.find(([, anchor]) => anchor);
+      if (!found) throw new Error('Technical findings require a concrete changed-source anchor');
+      [file, finding.anchor] = found;
     }
     const entry = {id: `clouseau-cause-${index}`, ...finding.anchor};
     report.evidence.push(...proof(entry)); finding.evidence = [...new Set([...finding.evidence, entry.id])];
@@ -206,13 +219,17 @@ function materialize(facts, snapshot) {
   return canonicalReferences(report, spans);
 }
 
-// First changed line of a file as a controller proof span: the head side when it exists, else the base.
+// First changed line of a file as a controller proof span: the head side when it holds a citable line, else the
+// base. A file with no nonblank line on either side (an empty file) has none, and the answer is null.
 function changedAnchor(file, catalog) {
   const hunk = /^@@ -(\d+)(?:,\d+)? \+(\d+)/m.exec(file.patch);
-  const source = file.head_source || file.base_source; const line = Number(hunk?.[file.head_source ? 2 : 1] || 1);
-  const spans = [...catalog.values()].filter(entry => entry.source === source);
-  const span = spans.find(entry => entry.start <= line && line <= entry.end) || spans[0];
-  return {source: span.source, start: span.start, end: span.end};
+  for (const [source, side] of [[file.head_source, 2], [file.base_source, 1]]) {
+    const line = Number(hunk?.[side] || 1);
+    const spans = [...catalog.values()].filter(entry => entry.source === source);
+    const span = spans.find(entry => entry.start <= line && line <= entry.end) || spans[0];
+    if (span) return {source: span.source, start: span.start, end: span.end};
+  }
+  return null;
 }
 
 const OUTPUT_ERROR = /^(?:Invalid acceptance evidence|Technical finding|Unknown controller-supplied|Unit paths are derived|A prior investigation concern)/;
