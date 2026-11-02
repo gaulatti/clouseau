@@ -1043,14 +1043,14 @@ test('non-native checks also hold an external PR and finalization rechecks owner
   await f.policy.finalize({github: f.github, context: f.context, core, assessment, mergePolls: 0, pr: {...f.state.pr, merged: true}, files: []});
 }));
 
-async function privateOwnerFixture(f, controls = false) {
+async function privateOwnerFixture(f, controls = false, extra = {}) {
   if (controls) {
     const filename = '.github/clouseau.json';
     f.github.rest.pulls.listFiles = async () => ({data: [{filename, status: 'modified', patch: '+protected control'}]});
     const content = f.github.rest.repos.getContent;
     f.github.rest.repos.getContent = args => content({...args, path: args.path === filename ? 'src/upload.test.js' : args.path});
   }
-  const policy = createPolicy({...config, merge_mode: 'automatic'});
+  const policy = createPolicy({...config, merge_mode: 'automatic', ...extra});
   const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
   f.state.pr.auto_merge = null;
   f.state.pr.head.repo.node_id = 'R_private'; f.state.pr.base.repo = {node_id: 'R_private'};
@@ -1551,4 +1551,119 @@ test('optional local review on the receipt-only route names the real condition i
   const text = body({...assessment, receipt_notice: 'source'}, 'u');
   assert.match(text, /this receipt-only run did not review the change itself/); assert.doesNotMatch(text, /CI reviewed this change itself|requires a valid receipt/);
   assert.doesNotMatch(body(assessment, 'u'), /Local review receipt ignored/);
+}));
+
+// Exact revert (opt-in `exact_revert`): trees are judged by the engine from base-repository history, never by a model.
+function revertWorld(f, {trees = ['2', '1', '0'], headTree = '1'} = {}) {
+  const sha = letter => letter.repeat(39) + '7';
+  const rows = trees.map((tree, index) => ({sha: index === 0 ? f.state.pr.base.sha : sha('abcdef'[index]), parents: index + 1 < trees.length ? [{sha: sha('abcdef'[index + 1])}] : [],
+    commit: {tree: {sha: sha(tree)}}}));
+  const world = {rows, headTree: sha(headTree), reads: 0};
+  Object.assign(f.github.rest.repos, {
+    getCommit: async () => {world.reads++; return {data: {sha: f.state.pr.head.sha, commit: {tree: {sha: world.headTree}}}};},
+    compareCommitsWithBasehead: async () => ({data: {status: 'ahead', merge_base_commit: {sha: f.state.pr.base.sha}}}),
+    listCommits: async () => ({data: world.rows}),
+  });
+  return world;
+}
+
+const REVERTING = {...config, exact_revert: {window: 5}};
+
+test('exact_revert accepts a byte-identical earlier tree with zero AI calls and keeps every gate; unset it never runs', () => fixture(async f => {
+  const world = revertWorld(f);
+  // Unset: no history is read and the ordinary review runs.
+  const ordinary = await f.assess();
+  assert.equal(world.reads, 0);
+  assert.ok(f.state.calls > 0);
+  assert.equal(JSON.parse(fs.readFileSync(f.recordPath)).exact_revert, undefined);
+  f.state.calls = 0;
+  const policy = createPolicy(REVERTING);
+  const reports = [];
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: line => reports.push(line)});
+  assert.equal(f.state.calls, 0);
+  assert.equal(ordinary.record_digest === assessment.record_digest, false);
+  assert.deepEqual([assessment.decision, assessment.review_source, assessment.provider_api_calls], ['auto_approve', 'exact_revert', 0]);
+  assert.ok(reports.some(line => line.startsWith('Exact revert accepted without an AI review')));
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  const gate = value => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: value, nativeGate: true, wait: async () => {}});
+  await gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  const posted = f.state.writes.find(item => item.name === 'create-ledger');
+  assert.match(posted.args.body, /^<!-- clouseau-exact-revert:v1 -->\n## Clouseau exact revert/);
+  // A second run updates its own notice in place.
+  f.state.comments.push({id: 9, user: {login: 'github-actions[bot]'}, body: posted.args.body});
+  f.state.writes.length = 0;
+  await gate(assessment);
+  assert.equal(f.state.writes.filter(item => item.name === 'update-ledger').length, 1);
+  // Not an exact revert: the ordinary review runs (a tree absent from the history).
+  world.headTree = 'f'.repeat(40);
+  f.state.calls = 0;
+  const miss = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: line => reports.push(line)});
+  assert.ok(f.state.calls > 0);
+  assert.notEqual(miss.review_source, 'exact_revert');
+  assert.ok(reports.some(line => line.startsWith('Exact revert not applied: the resulting tree is not a tree')));
+}));
+
+test('exact_revert gate refuses altered records, rewritten history, a moved head or base, changed verification and a disabled option', () => fixture(async f => {
+  const world = revertWorld(f);
+  const policy = createPolicy(REVERTING);
+  const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const save = value => fs.writeFileSync(f.recordPath, JSON.stringify(value));
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  const gate = (value = assessment, which = policy) => which.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: value, nativeGate: true, wait: async () => {}});
+  const altered = structuredClone(record); altered.exact_revert.tree = 'f'.repeat(40); save(altered);
+  await assert.rejects(gate(), /Stale or altered exact-revert record/);
+  save(record);
+  await assert.rejects(gate({...assessment, decision: 'owner_decision'}), /Stale or altered exact-revert record/);
+  await assert.rejects(gate({...assessment, review_source: 'authenticated_local'}), /Stale or altered exact-revert record/);
+  await assert.rejects(gate(assessment, createPolicy({...config, exact_revert: {window: 6}})), /Stale or altered exact-revert record/);
+  await assert.rejects(gate(assessment, f.policy), /Stale or altered exact-revert record/);
+  const original = world.rows; world.rows = original.map((row, index) => index === 1 ? {...row, commit: {tree: {sha: 'e'.repeat(40)}}} : row);
+  await assert.rejects(gate(), /Exact-revert evidence changed/);
+  world.rows = original;
+  f.state.pr.head.sha = 'd'.repeat(40);
+  await assert.rejects(gate(), /PR changed after exact-revert investigation/);
+  f.state.pr.head.sha = assessment.head_sha;
+  f.state.failed = true;
+  await assert.rejects(gate(), /Verification changed after exact-revert/);
+  f.state.failed = false;
+  f.state.pr.base.sha = 'c'.repeat(40);
+  await assert.rejects(gate());
+  f.state.pr.base.sha = assessment.base_sha;
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 0);
+}));
+
+test('exact_revert never waives protected controls: without the exact-head confirmation the ordinary review runs, with it the owner decision is exact', () => fixture(async f => {
+  const filename = '.github/clouseau.json';
+  f.github.rest.pulls.listFiles = async () => ({data: [{filename, status: 'modified', patch: '+protected control'}]});
+  const content = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = args => content({...args, path: args.path === filename ? 'src/upload.test.js' : args.path});
+  revertWorld(f);
+  const policy = createPolicy(REVERTING);
+  const run = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
+  const held = await run();
+  assert.equal(held.decision, 'owner_decision');
+  assert.notEqual(held.review_source, 'exact_revert');
+  assert.ok(f.state.calls > 0);
+  f.state.calls = 0;
+  f.state.comments.push({id: 1, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
+  const exact = await run();
+  assert.deepEqual([exact.decision, exact.review_source, f.state.calls], ['owner_decision', 'exact_revert', 0]);
+  const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
+  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: exact, nativeGate: true, wait: async () => {}});
+  assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);
+  // The confirmation is bound to the head and can be withdrawn before the gate.
+  f.state.comments.length = 0;
+  await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: exact, nativeGate: true, wait: async () => {}}),
+    /owner authorization changed/);
+}));
+
+test('exact_revert is revalidated at the private owner merge write boundary', () => fixture(async f => {
+  const world = revertWorld(f);
+  const p = await privateOwnerFixture(f, false, {exact_revert: {window: 5}});
+  assert.equal(p.assessment.review_source, 'exact_revert');
+  await p.run(true);
+  assert.deepEqual(f.state.writes.filter(w => ['approve', 'atomic'].includes(w.name)).map(w => w.name), ['approve', 'atomic']);
+  assert.ok(world.reads >= 3);
 }));

@@ -31,7 +31,7 @@ function protectedChanges(config, files) {
 function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const {local_review, merge_mode, ...legacyConfig} = config;
+  const {local_review, merge_mode, exact_revert, ...legacyConfig} = config;
   const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic'});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
