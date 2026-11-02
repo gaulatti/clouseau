@@ -258,6 +258,21 @@ test('uncached historical source fetch is bounded to the fixed public repository
   assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), /Public source unavailable/);
 });
 
+test('engine seed is paid only when the workflow change touches the pin: an ordinary edit of a pinned workflow adds no engine bytes', () => {
+  const workflow = '.github/workflows/ci.yml';
+  const pinned = ref => `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${ref}\n`;
+  const edit = {files: [{path: workflow, head_source: 'head', base_source: 'base'}], sources: {
+    base: {content: `${pinned(first)}      - run: echo one\n`}, head: {content: `${pinned(first)}      - run: echo two\n`}}};
+  assert.deepEqual(engineContext(edit), [], 'an unrelated line of a workflow that keeps its pin must not seed ~380 KB of engine source');
+  edit.sources.head.content = `${pinned(second)}      - run: echo two\n`;
+  const bump = engineContext(edit);
+  assert.ok(bump.includes(`.clouseau-ci/scripts/resolve/action.yml@${second}`) && bump.includes('.clouseau-ci/src/policy.cjs'), 'a pin bump still seeds the engine');
+  const added = {files: [{path: workflow, head_source: 'head'}], sources: {head: {content: pinned(first)}}};
+  assert.ok(engineContext(added).length > 0, 'a new workflow carrying a pin is a pin change');
+  edit.sources.head.content = `${pinned(first)}      - uses: gaulatti/clouseau/scripts/resolve@${second}\n`;
+  assert.ok(engineContext(edit).includes(`.clouseau-ci/scripts/resolve/action.yml@${second}`), 'a second, new pin in the same workflow is a pin change');
+});
+
 test('an unexpected Git failure while reading historical engine evidence is surfaced unchanged, never read as an absent path', t => {
   const failures = [Object.assign(new Error('git failed'), {stderr: 'fatal: unable to read object database'}), new Error('spawn git ENOENT')];
   for (const failure of failures) {

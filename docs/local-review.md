@@ -268,7 +268,9 @@ Serialized local evidence is capped at 900,000 characters. To keep large changes
 without dropping anything a reviewer judges, the local collector stores a file added whole once:
 its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
 the head source with every line prefixed `+` (consumers restore the identical patch). The pinned
-engine seed for workflow changes is optional context: seed files that would use the last 150,000
+engine seed (roughly 380 KB) is collected only when a workflow change adds or changes a
+`gaulatti/clouseau/scripts/resolve@<sha>` pin; an ordinary edit of a workflow that keeps its pin
+carries no engine source, and a reviewer can still request any of it. The seed is optional context: seed files that would use the last 150,000
 characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
 Changed files, their base and head sources and contracts are never omitted; a change that exceeds
 the cap with only that evidence is reviewed in bounded units (see "Chunked local review") unless the protected configuration disabled chunked review, in which case it fails closed.
