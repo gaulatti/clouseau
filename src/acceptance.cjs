@@ -196,10 +196,11 @@ function packageRoots(known) {
   if (!rootsCache.has(known)) {
     const packages = new Set(known.filter(name => /(?:^|\/)__init__\.py$/.test(name)).map(name => name.replace(/\/?__init__\.py$/, '')));
     const roots = new Set();
+    const parent = dir => path.posix.dirname(dir).replace(/^\.$/, '');
     for (const dir of packages) {
       let top = dir;
-      while (packages.has(path.posix.dirname(top).replace(/^\.$/, ''))) top = path.posix.dirname(top);
-      roots.add(path.posix.dirname(top).replace(/^\.$/, ''));
+      while (top && packages.has(parent(top))) top = parent(top);
+      roots.add(parent(top));
     }
     rootsCache.set(known, [...roots].sort());
   }

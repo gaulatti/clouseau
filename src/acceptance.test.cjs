@@ -324,6 +324,7 @@ test('an absolute Python import resolves exactly, against the importing file anc
   assert.deepEqual(resolvePython('tests/test_user.py', 'api.routes', known), ['svc/src/api/routes.py'], 'a package root inferred below src/');
   assert.deepEqual(resolvePython('tests/test_user.py', 'app', known), ['backend/app/__init__.py']);
   assert.deepEqual(resolvePython('tests/test_user.py', 'vendor.models.user', known), [], 'lib/ is not a root, its package has no __init__.py');
+  assert.deepEqual(resolvePython('t/test_a.py', 'pkg.mod', ['__init__.py', 'pkg/__init__.py', 'pkg/mod.py']), ['pkg/mod.py'], 'a package at the repository root terminates the root search');
 });
 
 test('a Python test that loads a script by path links it to the changed script', () => {
