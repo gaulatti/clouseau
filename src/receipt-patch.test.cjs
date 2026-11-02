@@ -163,3 +163,45 @@ test('a summarized lockfile is exempt from the patch comparison only when it is 
   assert.throws(() => verifyPatches({snapshot: {files: [item('src/a.js', 'modified')]}, files: [lock('src/a.js', 'modified', undefined)]}), /incomplete/);
   assert.throws(() => verifyPatches({snapshot: {files: []}, files: [lock('package-lock.json', 'modified', undefined)]}), /incomplete/);
 });
+
+test('git function-name headings on hunk headers are ignored on both sides, and nothing else is', () => {
+  const body = '\n context\n-old secret-free line\n+new line';
+  const hunk = heading => `@@ -14,7 +14,7 @@${heading}${body}`;
+  const signed = heading => snapshotOf(['tests/test_a.py', 'modified', `diff --git a/tests/test_a.py b/tests/test_a.py\nindex 1234567..89abcde 100644\n--- a/tests/test_a.py\n+++ b/tests/test_a.py\n${hunk(heading)}\n`]);
+  for (const heading of [' import unittest', ' class Case(unittest.TestCase):', ' ## Section title', ' def run(): # @@ -1 +1 @@']) {
+    verifyPatches({snapshot: signed(heading), files: [live('tests/test_a.py', 'modified', hunk(''))]});
+    verifyPatches({snapshot: signed(''), files: [live('tests/test_a.py', 'modified', hunk(heading))]});
+    verifyPatches({snapshot: signed(heading), files: [live('tests/test_a.py', 'modified', hunk(' other heading'))]});
+  }
+  // Two hunks, one with and one without a heading.
+  const two = `${hunk(' import unittest')}\n@@ -40,2 +40,2 @@${body}`;
+  verifyPatches({snapshot: snapshotOf(['a.py', 'modified', `${two}\n`]), files: [live('a.py', 'modified', `${hunk('')}\n@@ -40,2 +40,2 @@ def late():${body}`)]});
+  // Line numbers, hunk bodies and body lines that merely look like headers still mismatch.
+  mismatch(() => verifyPatches({snapshot: signed(' import unittest'), files: [live('tests/test_a.py', 'modified', hunk('').replace('-14,7', '-15,7'))]}), 'tests/test_a.py');
+  mismatch(() => verifyPatches({snapshot: signed(' import unittest'), files: [live('tests/test_a.py', 'modified', hunk('').replace('+new line', '+new  line'))]}), 'tests/test_a.py');
+  mismatch(() => verifyPatches({snapshot: signed(' import unittest'), files: [live('tests/test_a.py', 'modified', hunk('').replace('+new line', '+new line\n+extra'))]}), 'tests/test_a.py');
+  const look = heading => snapshotOf(['a.py', 'modified', `@@ -1,2 +1,2 @@\n+@@ -9,9 +9,9 @@${heading}\n`]);
+  mismatch(() => verifyPatches({snapshot: look(' x'), files: [live('a.py', 'modified', '@@ -1,2 +1,2 @@\n+@@ -9,9 +9,9 @@ y')]}), 'a.py');
+  mismatch(() => verifyPatches({snapshot: signed(' import unittest'), files: [live('tests/test_a.py', 'modified', hunk('').replace('@@ -14,7 +14,7 @@', '@@ -14,7 +14,7'))]}), 'tests/test_a.py');
+});
+
+test('a patch mismatch classified as a source rejection carries the file name for the notice', () => {
+  const error = new ReceiptPatchMismatch('src/a.js');
+  assert.equal(error.path, 'src/a.js'); assert.equal(error.reason, 'source');
+});
+
+test('a patch rejection names the changed file to the caller, never a path taken from the receipt', async () => {
+  const f = await fixture();
+  const files = hostedFiles(f.snapshot);
+  const pr = {changed_files: 1, base: {sha: f.snapshot.base_sha}, head: {sha: f.snapshot.head_sha, repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}};
+  const options = {github: f.github, repo: f.repo, pr, files, snapshot: f.snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md'}};
+  const {screenSources} = require('./local-receipt.cjs');
+  const forged = structuredClone(f.snapshot); forged.files[0].patch = `${forged.files[0].patch}\n+import './harmless'`;
+  const named = [];
+  assert.equal(await screenSources({...options, snapshot: forged, note: path => named.push(path)}), 'source');
+  assert.deepEqual(named, [files[0].filename]);
+  assert.equal(await screenSources({...options, snapshot: forged}), 'source', 'the note is optional');
+  const foreign = structuredClone(f.snapshot); foreign.files[0].path = 'secret/elsewhere.js';
+  assert.equal(await screenSources({...options, snapshot: foreign, note: path => named.push(path)}), 'source');
+  assert.deepEqual(named, [files[0].filename], 'a path that only the receipt names is not reported');
+});

@@ -154,10 +154,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         configDigest: digest(config), policyDigest: policyDigest()});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;
-      const ignore = reason => {
+      const ignore = (reason, file) => {
         receiptRef = null;
         identity.receipt_notice = reason;
-        if (report) report(noticeText(reason, receiptOnly || config.local_review?.mode === 'required'));
+        if (file) identity.receipt_notice_file = file;
+        if (report) report(noticeText(reason, receiptOnly || config.local_review?.mode === 'required', file));
       };
       if (screened.rejected) ignore(screened.rejected);
       // A signed local quality review is reusable even when independent CI
@@ -169,7 +170,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const previous = priorState(comments, `${repo.owner}/${repo.repo}`, number);
       let discovery;
       if (receiptRef) {
-        let rejected = await receipts.screenSources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha});
+        let file;
+        let rejected = await receipts.screenSources({github, repo, pr, snapshot: verified.record.snapshot, config, files, reviewerSha: bundle.payload.reviewer_sha,
+          note: path => {file = path;}});
         if (!rejected) {
           // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
           // is reused only when hosted approval's affirmative-evidence rule also holds.
@@ -178,7 +181,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           if (held.hold) rejected = 'held';
         }
         if (rejected) {
-          ignore(rejected);
+          ignore(rejected, file);
           if (technicalBlock) return {...identity, ...technicalBlock};
         }
       }
