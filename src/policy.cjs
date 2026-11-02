@@ -454,6 +454,9 @@ function needsDeployment(files) {
     matchesPath(file.filename, config.deployment.paths) || matchesPath(file.previous_filename || '', config.deployment.paths));
 }
 
+// The values a gate notice may mention; `pr` is the last pull request read, which always exists once the gate runs.
+const gateNoticeContext = (context, pr, repo) => ({repo: `${repo.owner}/${repo.repo}`, run: String(context.runId), head: pr.head.sha, number: String(pr.number)});
+
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
   wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null}) {
   const repo = context.repo;
@@ -544,9 +547,12 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       const marker = `<!-- clouseau-intent:${pr.head.sha} -->`;
       const reason = assessment.reason.replaceAll('@', '').slice(0, 2000);
       const selfReview = selfAuthored ? 'This PR was authored by the approval bot. A maintainer must first submit an approving review on this exact revision; the bot cannot approve its own PR.\n\n' : '';
+      const gateNotice = require('./gate-notice.cjs');
+      const noticeContext = gateNoticeContext(context, pr, repo);
+      const cause = gateNotice.intentCause({selfAuthored, scope: scopeReason(files, pr, managed.exempt), controlReason: REVIEW_CONTROL_REASON});
       const summary = `A maintainer's second opinion is required.\n\n${selfReview}${reason}\n\n` +
         `To confirm this change belongs in this repository, comment:\n\n\`/approve-intent ${pr.head.sha}\`\n\n` +
-        `This confirms intent only. All tests and ${COVERAGE.full} remain mandatory.`;
+        `This confirms intent only. All tests and ${COVERAGE.full} remain mandatory.\n\n${gateNotice.intentBlock(cause, noticeContext)}`;
       await finish('action_required', summary);
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pull_number, per_page: 100});
       if (!comments.some(comment => comment.user.type === 'Bot' && comment.body.includes(marker))) {
@@ -603,7 +609,8 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     }
     if (protectionGaps) {
       await require('./merge-protection.cjs').postProtectionNotice({github, repo, pull_number, gaps: protectionGaps});
-      await finish('success', `Tests, ${COVERAGE.brief} and approval recorded. Merge was not armed because repository settings are insufficient: ${protectionGaps.join(', ')}.`);
+      await finish('success', `Tests, ${COVERAGE.brief} and approval recorded. Merge was not armed because repository settings are insufficient: ${protectionGaps.join(', ')}. ` +
+        'Cause: `merge_protection_insufficient`; the numbered steps are in the protection notice on the pull request.');
       return;
     }
     if (manualMerge) {
@@ -630,7 +637,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
 
     if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
   } catch (error) {
-    await finish('failure', error.message);
+    await finish('failure', require('./gate-notice.cjs').failureBlock(error.message, gateNoticeContext(context, pr, repo)));
     throw error;
   }
 }

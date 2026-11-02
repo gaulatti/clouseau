@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const {readPull} = require('./pull-read.cjs');
-const {noticeText, noticeLine} = require('./receipt-rejection.cjs');
+const {noticeText, noticeLine, describe} = require('./receipt-rejection.cjs');
 const path = require('node:path');
 const {digest, validateApproval, approvalHold, importsOf, LINKABLE_PATH} = require('./acceptance.cjs');
 const {collectSnapshot, refresh, supplyTests} = require('./acceptance-sources.cjs');
@@ -157,13 +157,20 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         configDigest: digest(config), policyDigest: policyDigest()});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;
-      const ignore = (reason, file) => {
+      const mode = receiptOnly || config.local_review?.mode === 'required' ? 'required' : 'optional';
+      const ignore = (reason, detail) => {
         receiptRef = null;
         identity.receipt_notice = reason;
-        if (file) identity.receipt_notice_file = file;
-        if (report) report(noticeText(reason, receiptOnly || config.local_review?.mode === 'required', file));
+        identity.receipt_notice_detail = {...detail, base_branch: config.base_branch};
+        if (report) report(noticeText(reason, {mode, detail: identity.receipt_notice_detail, number}));
       };
-      if (screened.rejected) ignore(screened.rejected);
+      if (screened.rejected) ignore(screened.rejected, screened.detail);
+      // Why no receipt stands: the class that ignored it, else why there was nothing to read.
+      const noReceipt = () => {
+        const reason = identity.receipt_notice ?? (ignoreReceipt ? 'unread' : 'absent');
+        const detail = {...identity.receipt_notice_detail, base_branch: config.base_branch};
+        return {fields: {receipt_notice: reason, receipt_notice_detail: detail}, sentence: describe(reason, {detail}).sentence};
+      };
       // A signed local quality review is reusable even when independent CI
       // cannot yet authorize acceptance. Unstamped changes retain the existing
       // technical precondition before any paid investigation.
@@ -183,14 +190,14 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           ({discovery} = held);
           if (held.hold) {
             // Name the rule that held and, for the per-file rule, the files, so the notice is actionable.
-            const [rule, names] = held.hold.split(': ');
+            const [rule] = held.hold.split(': ');
             rejected = {'test integrity is unresolved': 'integrity', 'review completeness is unresolved': 'completeness',
               'no supplied test imports changed production code': 'untested'}[rule];
-            file = names;
+            file = held.hold.slice(rule.length + 2);
           }
         }
         if (rejected) {
-          ignore(rejected, file);
+          ignore(rejected, {file});
           if (technicalBlock) return {...identity, ...technicalBlock};
         }
       }
@@ -240,12 +247,14 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         // The receipt-only route is chosen by the workflow when the PR description carries a receipt marker, and it holds no
         // provider credential. Local review is optional here, so the repository does not require a receipt; this run simply
         // cannot review the change itself.
-        return {...identity, decision: 'review_incomplete', cause: 'local_receipt_unusable',
-          reason: 'The local review receipt named in the pull request description cannot be used, and this run is the receipt-only route, which does not run the CI AI review. Local review is optional for this repository.'};
+        const why = noReceipt();
+        return {...identity, ...why.fields, decision: 'review_incomplete', cause: 'local_receipt_unusable',
+          reason: `The local review receipt cannot be used (${why.sentence}), and this run is the receipt-only route, which does not run the CI AI review. Local review is optional for this repository.`};
       }
       if (receiptOnly || config.local_review?.mode === 'required') {
-        return {...identity, decision: 'review_incomplete', cause: 'local_receipt_required',
-          reason: 'This repository requires an authenticated local Clouseau review receipt.'};
+        const why = noReceipt();
+        return {...identity, ...why.fields, decision: 'review_incomplete', cause: 'local_receipt_required',
+          reason: `This repository requires an authenticated local Clouseau review receipt, and none can be used (${why.sentence}).`};
       }
       const intentConfirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
       snapshot = await collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation});

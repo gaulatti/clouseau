@@ -70,7 +70,7 @@ test('any HTTP error in the wait is a visible hold naming status and endpoint, n
     assert.equal(assessment.reason, `GitHub API request failed: HTTP ${status} GET gaulatti/bleecker/pulls/453 (Something broke owner).`);
     assert.ok(!/SECRET|token|api\.github\.com/.test(assessment.reason), 'no credential, query or host');
     const notice = body({number: 453, head_sha: SHA, ...assessment}, 'https://github.com/gaulatti/bleecker/actions/runs/1');
-    assert.ok(notice.includes(`HTTP ${status} GET gaulatti/bleecker/pulls/453`) && notice.includes(NEXT_STEPS.github_api_error));
+    assert.ok(notice.includes(`HTTP ${status} GET gaulatti/bleecker/pulls/453`) && notice.includes(NEXT_STEPS.github_api_error[0].split('{')[0]));
   }
   // The step's own control-flow errors (no status) still fail closed; a rate limit keeps its own hold.
   const s = sink();

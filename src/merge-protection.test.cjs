@@ -1,7 +1,7 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {assertMergeProtection, postProtectionNotice} = require('./merge-protection.cjs');
+const {assertMergeProtection, postProtectionNotice, protectionBody, GAP_STEPS} = require('./merge-protection.cjs');
 
 const unsupported = () => Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});
 function fixture() {
@@ -69,7 +69,7 @@ test('the protection notice is one fixed-text comment updated in place', async (
     updateComment: async a => writes.push(['update', a])}}};
   const post = gaps => postProtectionNotice({github, repo: {owner: 'o', repo: 'r'}, pull_number: 3, gaps});
   const body = await post(['main not protected']);
-  assert.match(body, /insufficient: main not protected\./);
+  assert.match(body, /\*\*Cause:\*\* `merge_protection_insufficient`: repository settings are insufficient: main not protected\./);
   assert.equal(writes[0][0], 'create');
   await post(['main not protected']);
   assert.equal(writes.length, 1);
@@ -91,4 +91,18 @@ test('explicit owner automatic mode admits only the unavailable private-plan pat
   await assert.rejects(run(), /Available branch protection/);
   f.state.error = unsupported(); f.state.settings.allow_auto_merge = true;
   assert.equal((await run()).insufficient, true);
+});
+
+test('every protection gap names its own repair, numbered, and an unknown gap still gets a step', () => {
+  const repo = {owner: 'o', repo: 'r'};
+  for (const [gap, step] of Object.entries(GAP_STEPS)) {
+    const text = protectionBody([gap], repo);
+    assert.ok(text.includes(`1. ${step.replaceAll('{repo}', 'o/r')} (${gap})`), gap);
+    assert.match(text, /\*\*Cause:\*\* `merge_protection_insufficient`/);
+    assert.match(text, /\n2\. Re-run the failed Clouseau job/, 'the last step arms the merge');
+  }
+  assert.ok(GAP_STEPS['auto-merge disabled'].includes('gh repo edit {repo} --enable-auto-merge'));
+  const mixed = protectionBody(['main not protected', 'surprise'], repo);
+  assert.ok(mixed.includes('2. Make the base branch protection satisfy the Clouseau requirements. (surprise)'));
+  assert.ok(mixed.includes('\n3. Re-run the failed Clouseau job'));
 });

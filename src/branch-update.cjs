@@ -16,13 +16,14 @@ async function surface({github, repo, pr, assessment, baseBranch, note = '', tip
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number, per_page: 100});
   const owned = comments.filter(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(prefix));
   const text = `${marker}\n## Clouseau: branch update needed\n\n` +
-    `\`${baseBranch}\` moved from \`${assessment.base_sha.slice(0, 12)}\` to \`${branch.commit.sha.slice(0, 12)}\` after revision ` +
+    `**Cause:** \`base_moved\`: \`${baseBranch}\` moved from \`${assessment.base_sha.slice(0, 12)}\` to \`${branch.commit.sha.slice(0, 12)}\` after revision ` +
     `\`${assessment.head_sha.slice(0, 12)}\` was assessed, so it was not merged. The assessment, any local review receipt and ` +
-    'the exact-head approval are bound to the old base and cannot be reused.\n\n' +
-    `**Next step:** update this branch with the latest \`${baseBranch}\` (the "Update branch" button, \`gh pr update-branch ${pr.number}\`, ` +
-    'or a merge commit) using your own credentials so verification starts. Clouseau then re-verifies and re-reviews the new ' +
-    'revision automatically. If this repository requires a local review receipt, run the local review again on the new head. ' +
-    `Re-running the failed job cannot succeed.${note ? `\n\n${note}` : ''}`;
+    'the exact-head approval are bound to the old base and cannot be reused. Re-running the failed job cannot succeed.\n\n' +
+    `**Next steps:**\n\n1. Update this branch with the latest \`${baseBranch}\` using your own credentials so verification starts: ` +
+    `\`gh pr update-branch ${pr.number}\` (or the "Update branch" button, or \`git fetch origin && git merge origin/${baseBranch}\` and push; never rebase).\n` +
+    '2. Wait: Clouseau re-verifies and re-reviews the new revision automatically.\n' +
+    '3. Only if this repository requires a local review receipt: run `clouseau review` and `clouseau publish` again on the new head ' +
+    `and update the marker in the pull request description.${note ? `\n\n${note}` : ''}`;
   // One notice per head: a later base move updates it in place instead of adding another.
   if (!owned.some(item => item.body.startsWith(`${marker}\n`))) {
     if (owned.length) await github.rest.issues.updateComment({...repo, comment_id: owned[0].id, body: text});

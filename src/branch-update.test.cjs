@@ -32,7 +32,9 @@ test('a moved base fails closed with one explicit secret-free needs-branch-updat
   assert.ok(created[0].body.startsWith(`<!-- ${MARKER}:${head}:${moved} -->\n`));
   assert.match(created[0].body, /update-branch 4/);
   assert.match(created[0].body, /Re-running the failed job cannot succeed/);
-  assert.match(created[0].body, /local review again on the new head/);
+  assert.match(created[0].body, /local review receipt: run `clouseau review` and `clouseau publish` again on the new head/);
+  assert.match(created[0].body, /\*\*Cause:\*\* `base_moved`/);
+  assert.match(created[0].body, /\*\*Next steps:\*\*\n\n1\. .*gh pr update-branch 4.*\n2\. Wait.*\n3\. Only if/);
   assert.ok(created[0].body.includes(base.slice(0, 12)) && created[0].body.includes(moved.slice(0, 12)));
   await surface({github, repo, pr, assessment, baseBranch: 'main'});
   assert.equal(created.length, 1, 'a rerun updates nothing and never spams the PR');

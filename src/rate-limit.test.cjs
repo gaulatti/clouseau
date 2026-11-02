@@ -74,7 +74,7 @@ test('an exhausted budget is a classified hold whose visible notice names the ca
   assert.equal(classified.reason, heldReason(hold));
   const notice = body({number: 1, head_sha: 'a'.repeat(40), ...classified}, 'https://github.com/o/r/actions/runs/1');
   assert.match(notice, /Held: GitHub API rate limit, will retry after 2027-/);
-  assert.ok(notice.includes(NEXT_STEPS.github_rate_limit));
+  assert.ok(notice.includes(NEXT_STEPS.github_rate_limit[0].split('{')[0]));
 });
 
 const config = require('../test/fixtures/config.json');
