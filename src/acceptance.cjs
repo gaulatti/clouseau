@@ -182,10 +182,12 @@ const importsOf = (name, content) => PY_PATH.test(name) ? pythonImports(content)
 // Directories from the importing file's own up to the repository root, nearest first.
 function ancestors(from) {
   const found = [];
-  for (let dir = path.posix.dirname(from); ; dir = path.posix.dirname(dir)) {
-    found.push(dir === '.' ? '' : dir);
-    if (dir === '.') return found;
+  let dir = path.posix.dirname(from);
+  while (dir !== '.') {
+    found.push(dir);
+    dir = path.posix.dirname(dir);
   }
+  return [...found, ''];
 }
 
 // Import roots the file list proves: the parent of the outermost directory of each chain of __init__.py packages.
