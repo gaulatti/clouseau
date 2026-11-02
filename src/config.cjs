@@ -35,6 +35,10 @@ function validateConfig(config) {
     }
   }
   if (config.managed_agents !== undefined) require('./managed-agents.cjs').validate(config.managed_agents);
+  if (config.exact_revert !== undefined) {
+    require('./exact-revert.cjs').validate(config.exact_revert);
+    if (config.version !== 2) throw new Error('Exact revert acceptance requires acceptance protocol version two');
+  }
   if (config.coverage !== undefined) require('./coverage-changed.cjs').validateMode(config.coverage);
   if (config.local_review !== undefined) {
     require('./local-receipt.cjs').validateTrust(config.local_review);
