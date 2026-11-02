@@ -100,6 +100,11 @@ needs the provider secret and never reads the receipt; you do not have to remove
 marker. Workflows installed before this job existed carry a copy and must be upgraded
 (see [automatic CI upgrades](automatic-ci-upgrades.md#receipt-route-fallback-upgrade)).
 
+After every merge to `main`, an open PR needs its branch updated. In that PR's checkout,
+`clouseau refresh --pr N --request-file req.txt --harness claude` (or `--agent claude` inside a harness) merges the base,
+reviews again while reusing the answers whose evidence did not change, publishes the receipt, updates the marker in the
+PR body and pushes once (see [refreshing a pull request](local-review.md#refreshing-a-pull-request-after-its-base-moved)).
+
 Pull requests by Dependabot or outside contributors cannot carry your receipt by
 default. To opt in, add `"attest": {"authors": ["dependabot[bot]"]}` (or `"any"`) to
 `local_review` in the protected configuration, check out that pull request's head and
