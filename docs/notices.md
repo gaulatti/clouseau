@@ -144,7 +144,22 @@ When the approval gate stops, its check summary shows the gate's own sentence fo
 | `protection_mode_changed` | The repository protection settings changed while the gate ran. Re-run the failed job: `gh run rerun {run} --failed --repo {repo}`. |
 | `gate_failed` | Open the failed job log of the workflow run for the full error. |
 
-## Notices that already carry their own stated reason
+## Local review notices
 
-These are fixed sentences that name their condition and are outside the cause tables: the managed `AGENTS.md` hold (`managed_agents`, one sentence per decided change), the exact-revert hold, the initial-installation settings notice, and the repair-proposal comment. They never quote repository content.
+`clouseau review` prints these to stderr and lists their cause classes under `notices` in its result.
 
+| Cause class | Meaning | Steps |
+| --- | --- | --- |
+| `verification_tool_missing` | A verification command needs a program or module that is not installed (a program that cannot start, `No module named X`, or `X: not found`). The program name is shown only when it is a plain name. | Install it (for `coverage`: `python3 -m pip install -r requirements-test.txt`; for `c8`: `npm ci`; otherwise put it on PATH), then run the review again on the same commit. |
+| `local_recipe_edited` | The change edits `.clouseau-local.json`, so local review verified the recipe from the base branch, not the edit (a change cannot weaken its own checks). | Land a wanted edit in its own pull request first and review this change on the new base, or revert the edit. |
+
+## Notices that already name their own cause
+
+These four are fixed sentences that state their condition, and each is outside the cause tables for the reason given. `src/notice-causes.test.cjs` proves each sentence.
+
+| Notice | Why it needs no cause class |
+| --- | --- |
+| managed AGENTS.md hold | One stable sentence per decided change (`AGENTS.md stays a protected-control hold: <reason>.`, with reasons such as the managed block not being an enrolled central snapshot). It is not a refusal by itself: it feeds the protected-control request, which carries the cause classes `intent_protected_controls` and its numbered steps. |
+| exact-revert hold | A report line (`Exact revert not applied: <reason>.`), never a hold: the ordinary review continues. Every verdict carries a fixed reason, and a stale base says `update the branch`. |
+| installation settings notice | States the condition (an unprotected private base branch or an unreadable auto-merge setting) and the way out (a maintainer merges manually or protects the base branch). Trust is verified; only automatic merge is withheld. |
+| repair-reservation comment | Not a refusal. It records that bounded repair attempt N of 2 was reserved for a named revision and that all checks and both AI reviews run again. |

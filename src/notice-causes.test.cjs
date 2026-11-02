@@ -184,3 +184,70 @@ test('an ignored receipt line is rendered from the assessment only for a known c
   assert.ok(line.includes('1. Update the branch with the base: `gh pr update-branch 42`'));
   assert.equal(noticeLine({receipt_notice: 'nope'}), '');
 });
+
+const localNotices = require('./local-notices.cjs');
+
+test('local review names a missing verification tool and an edited recipe, with the install step for the tools it knows', () => {
+  const cmd = (argv, extra = {}) => ({argv, exit_code: 0, stdout: '', stderr: '', ...extra});
+  const enoent = argv => cmd(argv, {exit_code: null, error: {code: 'ENOENT', message: 'spawn ENOENT'}});
+  const rows = [
+    ['a program that cannot start', [enoent(['coverage', 'run'])], ['coverage'], 'Install coverage.py: `python3 -m pip install -r requirements-test.txt`'],
+    ['a python module', [cmd(['python3', '-m', 'coverage'], {exit_code: 1, stderr: "/usr/bin/python3: No module named coverage"})], ['coverage'], 'Install coverage.py'],
+    ['a dotted python module', [cmd(['python3'], {exit_code: 1, stderr: "No module named 'coverage.cmdline'"})], ['coverage'], 'Install coverage.py'],
+    ['a shell tool', [cmd(['npm', 'run', 'cov'], {exit_code: 127, stdout: 'sh: 1: c8: not found'})], ['c8'], 'Install the repository\'s dev dependencies, which include c8: `npm ci`'],
+    ['a command-not-found tool', [cmd(['npm'], {exit_code: 127, stderr: 'bash: go: command not found'})], ['go'], 'Install `go` and put it on PATH.'],
+    ['node', [enoent(['node'])], ['node'], 'Install Node.js and make sure `node` is on PATH.'],
+    ['an unnamed program', [enoent(['not a/plain name'])], [null], 'Install the missing program and put it on PATH.'],
+  ];
+  for (const [name, commands, tools, step] of rows) {
+    assert.deepEqual(localNotices.missingTools({commands}), tools, name);
+    const [notice] = localNotices.localNotices({paths: ['src/a.js'], technical: {commands}, baseBranch: 'main'});
+    assert.equal(notice.cause, 'verification_tool_missing', name);
+    const text = localNotices.render(notice);
+    assert.ok(text.startsWith('Local review notice (cause: `verification_tool_missing`): '), name);
+    assert.ok(text.includes(`\n\n1. ${step}`) && text.includes('\n2. Run the review again on the same commit'), `${name}: ${text}`);
+  }
+  assert.ok(localNotices.describeTool('python3').steps[0].includes('Install Python 3'));
+  assert.ok(localNotices.describeTool('npm').steps[0].includes('provides `npm`'));
+  // Nothing found: a passing command, a failure with no phrase, and evidence with no commands at all.
+  for (const technical of [{commands: [cmd(['node'], {stderr: 'No module named x'})]}, {commands: [cmd(['node'], {exit_code: 1, stderr: 'boom'})]},
+    {commands: [{argv: undefined, exit_code: 1}]}, {}, undefined, null]) assert.deepEqual(localNotices.missingTools(technical), []);
+  // Each tool once, at most three.
+  assert.deepEqual(localNotices.missingTools({commands: ['a', 'b', 'a', 'c', 'd'].map(name => enoent([name]))}), ['a', 'b', 'c']);
+  const recipe = localNotices.localNotices({paths: ['.clouseau-local.json'], technical: {}, baseBranch: 'trunk'});
+  assert.deepEqual(recipe.map(notice => notice.cause), ['local_recipe_edited']);
+  const text = localNotices.render(recipe[0]);
+  assert.ok(text.includes('this change edits `.clouseau-local.json`, so the local review verified the recipe from `trunk`, not your edit'));
+  assert.match(text, /\n\n1\. If the edit is wanted, land it in its own pull request first/);
+  assert.deepEqual(localNotices.localNotices({paths: ['src/a.js'], technical: {}, baseBranch: 'trunk'}), []);
+});
+
+test('the notices that were already specific are proven to name their condition, and say why they need no cause table', async () => {
+  // Managed AGENTS.md hold: a stable sentence per decided change, followed by the protected-control cause when it holds.
+  const managed = require('./managed-agents.cjs');
+  const config = {managed_agents: {digests: []}};
+  const held = await managed.exemptions({github: {}, repo: {}, pr: {head: {repo: null}}, config,
+    files: [{filename: 'AGENTS.md', status: 'modified'}]});
+  assert.deepEqual(held.notices, ['AGENTS.md stays a protected-control hold: the head repository is unavailable.']);
+  const renamed = await managed.exemptions({github: {}, repo: {}, pr: {}, config, files: [{filename: 'AGENTS.md', status: 'renamed'}]});
+  assert.deepEqual(renamed.notices, ['AGENTS.md stays a protected-control hold: only a modification of the existing file qualifies.']);
+  assert.equal(managed.judge({baseText: 'none', headText: 'none', digests: []}).reason, 'the head file does not contain exactly one well-formed managed block');
+  // The exact-revert hold: every verdict carries its reason, and a stale base says what to do.
+  const exact = require('./exact-revert.cjs');
+  const pr = {head: {sha: 'e'.repeat(40)}, base: {sha: 'b'.repeat(40)}};
+  const world = (status, headSha) => ({rest: {repos: {
+    getCommit: async () => ({data: {sha: headSha, commit: {tree: {sha: '1'.repeat(40)}}}}),
+    compareCommitsWithBasehead: async () => ({data: {status, merge_base_commit: {sha: 'b'.repeat(40)}}}),
+    listCommits: async () => ({data: []})}}});
+  assert.equal((await exact.verify({github: world('ahead', 'f'.repeat(40)), repo: {}, pr, window: 5})).reason, 'the head commit tree is unavailable');
+  assert.match((await exact.verify({github: world('diverged', pr.head.sha), repo: {}, pr, window: 5})).reason, /update the branch$/);
+  assert.equal((await exact.verify({github: world('ahead', pr.head.sha), repo: {}, pr, window: 5})).reason, 'the base history is unavailable');
+  // The installation settings notice names the condition and the way out.
+  const {SETTINGS_NOTICE} = require('./installation-cli.cjs');
+  assert.ok(SETTINGS_NOTICE.includes('unprotected private base branch or unreadable auto-merge setting') &&
+    SETTINGS_NOTICE.includes('until a maintainer merges manually or protects the base branch'));
+  const docs = fs.readFileSync(path.join(__dirname, '../docs/notices.md'), 'utf8');
+  for (const heading of ['managed AGENTS.md hold', 'exact-revert hold', 'installation settings notice', 'repair-reservation comment', 'local_recipe_edited', 'verification_tool_missing']) {
+    assert.ok(docs.includes(heading), `docs/notices.md covers ${heading}`);
+  }
+});

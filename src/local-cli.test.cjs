@@ -198,6 +198,27 @@ test('agent-only local review needs no CI config or provider keys and does not r
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
 
+test('a change that edits the review recipe, and a verification tool that is missing, are named in the review result and on stderr', () => repository(async f => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-notices-fixture-'));
+  const written = []; const write = process.stderr.write;
+  try {
+    const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+    const recipe = path.join(f.directory, '.clouseau-local.json');
+    fs.writeFileSync(recipe, JSON.stringify({...JSON.parse(fs.readFileSync(recipe, 'utf8')), verification: [['coverage', 'run']]}));
+    git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'chore: edit the recipe']);
+    const verify = () => ({commands: [{argv: ['coverage', 'run'], exit_code: null, error: {code: 'ENOENT', message: 'spawn coverage ENOENT'}}],
+      verification_status: 'failed', coverage: {status: 'unavailable', passed: false}});
+    process.stderr.write = chunk => {written.push(String(chunk)); return true;};
+    const result = await runReview({directory: f.directory, base: f.base, 'request-file': request},
+      {state, ask: fakeHarness(), verify, installed: fixtureInstallation});
+    process.stderr.write = write;
+    assert.deepEqual(result.notices, ['verification_tool_missing', 'local_recipe_edited']);
+    const text = written.join('');
+    assert.match(text, /Local review notice \(cause: `verification_tool_missing`\): the verification command needs `coverage`, which is not installed\.\n\n1\. Install coverage\.py/);
+    assert.match(text, /Local review notice \(cause: `local_recipe_edited`\): this change edits `\.clouseau-local\.json`, so the local review verified the recipe from `main`, not your edit/);
+  } finally {process.stderr.write = write; fs.rmSync(state, {recursive: true, force: true});}
+}));
+
 test('a completed negative local review retains evidence and never produces a signed passing receipt', () => repository(async f => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-negative-fixture-'));
   try {

@@ -196,7 +196,12 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
     const parsed = JSON.parse(git(directory, ['show', `${base}:.github/clouseau.json`]));
     ciConfig = require('./config.cjs').validateConfig(parsed);
   }
-  const warn = (paths, shas) => {const warnings = controlWarnings(ciConfig, paths, {directory, ...shas}); return warnings.length ? {warnings} : {};};
+  const warn = (paths, shas, technical) => {
+    const warnings = controlWarnings(ciConfig, paths, {directory, ...shas});
+    const notices = require('./local-notices.cjs').localNotices({paths, technical, baseBranch: config.base_branch});
+    for (const notice of notices) process.stderr.write(`${require('./local-notices.cjs').render(notice)}\n`);
+    return {...warnings.length ? {warnings} : {}, ...notices.length ? {notices: notices.map(notice => notice.cause)} : {}};
+  };
   let identityPath = args.identity;
   if (!identityPath && ciConfig?.local_review) {
     const available = ciConfig.local_review.keys.filter(key => !key.revoked)
@@ -248,7 +253,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
-      provider_api_calls: 0, harness_invocations: 0, reused: true, ...attested(verified.attestation), ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths, {baseSha: verified.record.snapshot.base_sha, headSha: head})};
+      provider_api_calls: 0, harness_invocations: 0, reused: true, ...attested(verified.attestation), ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths, {baseSha: verified.record.snapshot.base_sha, headSha: head}, verified.record.technical)};
   }
   const agentDirectory = path.join(cache, 'agent');
   // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
@@ -387,7 +392,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
   return {decision: result.decision, record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0, ...attested(attestation),
-    harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head})};
+    harness_invocations: result.usage.length, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head}, technical)};
 }
 
 const attested = attestation => attestation ? {maintainer_attested: {author: attestation.author, pull_request: attestation.number}} : {};
