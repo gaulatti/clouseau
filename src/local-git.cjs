@@ -51,8 +51,11 @@ function githubRepository(directory) {
 // `unbounded` is the collector of a chunked review (design: chunked review): a changed file or patch of any size is read
 // whole, and the combined snapshot has no size cap, because it is reviewed as bounded segments in bounded units and
 // stored as a multi-part receipt. Without it nothing changes: one snapshot of at most 900,000 characters.
+//
+// `title` is the claimed title of the change. By default it is the subject of HEAD, which is right for a commit the author wrote
+// and wrong for the merge commit a refresh makes ("Merge origin/main into ..."); a refresh passes the pull request's own title.
 function collectLocal({directory, base, request, technical, ciConfig = null, reviewerSha = null, installation = null, unbounded = false,
-  engineRoot = path.join(__dirname, '..')}) {
+  engineRoot = path.join(__dirname, '..'), title = git(directory, ['log', '-1', '--format=%s']).trim()}) {
   const read = (...args) => (unbounded ? git(directory, args, undefined, Infinity) : git(directory, args));
   const cap = unbounded ? UNBOUNDED : BUDGET;
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
@@ -76,7 +79,7 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     paths: changed.map(file => file.filename).sort(), config_digest: digest(config),
     policy_digest: digest(fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8')),
     sources: {}, files: [], history: [], tickets: [], intent_confirmation: null, prior_findings: [],
-    local_config_digest: digest(localConfig), claims: {title: git(directory, ['log', '-1', '--format=%s']).trim(), description: request}};
+    local_config_digest: digest(localConfig), claims: {title, description: request}};
   const source = (filename, ref) => {
     if (!safePath(filename)) throw new Error('Unsafe local evidence path');
     // Reviewers may inspect their own frozen public engine through the CI

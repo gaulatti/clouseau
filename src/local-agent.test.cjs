@@ -10,7 +10,8 @@ const {fixture} = require('../test/local-review-fixture.cjs');
 const {localReview} = require('./local-review.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {runReview, main} = require('./local-cli.cjs');
-const {validateValue, respond, createExchange, shareSchema} = require('./local-agent.cjs');
+const {validateValue, respond, createExchange, shareSchema, AwaitingAgent, SESSION_RULE, suggestSession, readablePrompt} = require('./local-agent.cjs');
+const SESSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
 // Stand-in for a fresh subagent: answers each frozen request from its own prompt and schema files.
@@ -18,7 +19,7 @@ function subagent(request) {
   const prompt = fs.readFileSync(request.prompt_file, 'utf8');
   const schema = JSON.parse(fs.readFileSync(request.schema_file, 'utf8'));
   if (request.phase === 'investigation') {
-    const report = JSON.parse(prompt.slice(prompt.lastIndexOf('\n') + 1)).template;
+    const report = JSON.parse(prompt.slice(prompt.search(/\n\{\n/) + 1)).template;
     report.gates.forEach(gate => {gate.state = 'satisfied';});
     return {kind: 'report', report, request_sources: []};
   }
@@ -59,6 +60,10 @@ test('an agent-driven review completes through separate commands, verifies once 
     if (result.status !== 'awaiting_agent') break;
     assert.equal(result.agent, 'opencode'); assert.equal(result.sequence, answered + 1);
     assert.equal(result.provider_api_calls, 0); assert.match(result.respond, /clouseau respond --agent-request/);
+    // The printed command is usable as it stands: a valid, unused session identifier, and the rule that governs it.
+    const printed = /--session (\S+)$/.exec(result.respond)[1];
+    assert.notEqual(printed, 'FRESH_SESSION_ID'); assert.match(printed, SESSION_PATTERN); assert.equal(result.session_rule, SESSION_RULE);
+    assert.match(result.session_rule, /8 to 128/); assert.match(result.session_rule, /never reused/);
     assert.ok(result.request_file.startsWith(state), 'exchange evidence stays outside the checkout');
     fs.writeFileSync(result.answer_file, JSON.stringify(subagent(JSON.parse(fs.readFileSync(result.request_file, 'utf8')))));
     const receipt = await main(['respond', '--agent-request', result.request_file, '--answer', result.answer_file,
@@ -216,6 +221,9 @@ test('an in-flight agent review stays pinned to its engine revision while main a
       assert.deepEqual(await main(argv, spy), {status: 'awaiting_agent'});
       assert.deepEqual(calls, [[checkout, argv]]);
       assert.deepEqual(lines, [`Clouseau review pinned to engine ${pin.reviewer_sha.slice(0, 12)}; newer ${'f'.repeat(12)} exists (pass --engine latest to restart on it)\n`]);
+      // A second command of the same exchange does not repeat the notice for the same newer revision.
+      assert.deepEqual(await main(argv, spy), {status: 'awaiting_agent'}); assert.equal(calls.length, 2); assert.equal(lines.length, 1);
+      calls.pop();
       // The pinned engine itself continues in place, with no notice and no re-execution.
       assert.equal((await main(argv, started)).status, 'awaiting_agent'); assert.equal(calls.length, 1);
       // A pin whose revision was tampered with is never executed.
@@ -297,3 +305,44 @@ test('the schema file an agent reads is compact and shared, and still constrains
   bad.report.findings.push({...bad.report.findings[0] || {}, evidence: ['proof-unknown-1']});
   assert.throws(() => validateValue(schema, bad));
 }));
+
+test('a suggested session identifier is always valid and different each time, and the rule is stated', () => {
+  const seen = new Set();
+  for (let n = 0; n < 20; n++) {
+    const id = suggestSession('opencode'); assert.match(id, SESSION_PATTERN); seen.add(id);
+  }
+  assert.equal(seen.size, 20);
+  assert.match(SESSION_RULE, /8 to 128 characters.*letters, digits.*never reused/);
+});
+
+test('a prompt file is laid out for reading when that changes no byte of the evidence, and verbatim otherwise', () => {
+  const packet = {a: [1, 2, {b: 'x\ny'}], c: null, d: 1.5};
+  const compact = `Policy text.\nSecond line.\n${JSON.stringify(packet)}`;
+  const laid = readablePrompt(compact);
+  assert.ok(laid.split('\n').length > 10, 'the evidence is no longer one line');
+  assert.equal(laid.slice(0, laid.indexOf('{')), 'Policy text.\nSecond line.\n');
+  const lastLine = laid.slice(laid.indexOf('\n{') + 1);
+  assert.equal(JSON.stringify(JSON.parse(lastLine)), JSON.stringify(packet), 'the same value, byte for byte once compacted');
+  assert.equal(readablePrompt('7'), '7');
+  // A value that would not survive a parse and print (a number beyond double precision, a space after a colon) stays as it was.
+  for (const prompt of ['Text.\n{"big":12345678901234567890}', 'Text.\n{"a": 1}', 'Text.\nnot json', 'Text.\n{"a":1} trailing']) {
+    assert.equal(readablePrompt(prompt), prompt, prompt);
+  }
+});
+
+test('the prompt file an agent receives is the readable layout of exactly the prompt the request digest covers', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-prompt-'));
+  try {
+    const prompt = `Policy.\n${JSON.stringify({sources: {one: {content: 'line one\nline two'}}, claims: {title: 'T'}})}`;
+    const task = {role: 'examiner', phase: 'investigation', schema: {type: 'object'}, prompt};
+    const journal = [];
+    const exchange = createExchange({directory, agent: 'claude', journal: entry => journal.push(entry)});
+    const error = await exchange.ask(task).then(() => assert.fail('a pending session must stop the command'), caught => caught);
+    assert.ok(error instanceof AwaitingAgent);
+    const file = fs.readFileSync(error.info.prompt_file, 'utf8');
+    assert.ok(file.split('\n').length > 5);
+    assert.equal(readablePrompt(prompt), file);
+    const stored = JSON.parse(fs.readFileSync(error.info.request_file, 'utf8'));
+    assert.equal(stored.request_digest, require('./acceptance.cjs').digest({schema: task.schema, prompt}), 'the request is still keyed by the original prompt');
+  } finally {fs.rmSync(directory, {recursive: true, force: true});}
+});

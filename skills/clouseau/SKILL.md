@@ -72,7 +72,7 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
    workflow sees it. The artifact is published separately from the reviewed
    commit. Open a ready PR. Any code/base/policy change requires fresh matching
    evidence; never hand-edit the receipt or reuse a marker for another revision.
-   When only the base moved after the PR was opened, `clouseau refresh --pr N --request-file FILE
+   When only the base moved after the PR was opened, `clouseau refresh --pr N [--request-file FILE]
    --agent claude|codex|opencode` (or `--harness`) performs the merge, review, publication, marker update and
    single push for you, reusing reviewer answers only where the evidence is byte-identical.
 

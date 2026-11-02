@@ -11,6 +11,7 @@ const {digest} = require('./acceptance.cjs');
 const {git} = require('./local-git.cjs');
 const {engineDigest} = require('./local-version.cjs');
 
+const FAILURE_CHARACTERS = 2000;
 const pinFile = (state, key) => path.join(state, 'pins', `${key}.json`);
 const pinKey = parts => digest(parts);
 
@@ -21,12 +22,22 @@ function readPin(state, key) {
   if (!/^[a-f0-9]{40}$/.test(value.reviewer_sha) || !/^[a-f0-9]{64}$/.test(value.reviewer_digest)) {
     throw new Error(`Invalid engine pin ${filename}; preserve it and continue with --engine latest to restart the review`);
   }
+  if (value.notified !== undefined && !/^[a-f0-9]{40}$/.test(value.notified)) {
+    throw new Error(`Invalid engine pin ${filename}; preserve it and continue with --engine latest to restart the review`);
+  }
   return value;
 }
 
 function writePin(state, key, reviewer) {
   fs.mkdirSync(path.join(state, 'pins'), {recursive: true, mode: 0o700});
   fs.writeFileSync(pinFile(state, key), JSON.stringify({reviewer_sha: reviewer.sha, reviewer_digest: reviewer.digest}), {mode: 0o600});
+}
+
+// The "newer engine exists" line is for the person, once per newer revision: the pin remembers the one it announced.
+const noticeOwed = (pin, newer) => pin.notified !== newer;
+
+function markNotified(state, key, pin, newer) {
+  fs.writeFileSync(pinFile(state, key), JSON.stringify({...pin, notified: newer}), {mode: 0o600});
 }
 
 const clearPin = (state, key) => fs.rmSync(pinFile(state, key), {force: true});
@@ -50,9 +61,14 @@ function argvFor(args) {
 }
 
 function execute(checkout, argv, spawn = cp.spawnSync) {
-  const result = spawn('node', [path.join(checkout, 'bin/clouseau.cjs'), ...argv], {encoding: 'utf8', stdio: ['inherit', 'pipe', 'inherit']});
-  if (![0, 2, 3].includes(result.status)) throw new Error(`Pinned Clouseau engine failed (status ${result.status}); see its message above`);
+  const result = spawn('node', [path.join(checkout, 'bin/clouseau.cjs'), ...argv], {encoding: 'utf8', stdio: ['inherit', 'pipe', 'pipe']});
+  if (![0, 2, 3].includes(result.status)) {
+    // The engine's own message is the error: its end is kept, because that is where the cause is.
+    const message = String(result.stderr || result.error?.message || '').trim().slice(-FAILURE_CHARACTERS);
+    throw new Error(`Pinned Clouseau engine failed (status ${result.status})${message ? `: ${message}` : ''}`);
+  }
+  process.stderr.write(result.stderr);
   return JSON.parse(result.stdout);
 }
 
-module.exports = {pinKey, readPin, writePin, clearPin, verifiedRevision, argvFor, execute};
+module.exports = {pinKey, readPin, writePin, noticeOwed, markNotified, clearPin, verifiedRevision, argvFor, execute};
