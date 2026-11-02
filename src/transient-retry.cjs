@@ -39,15 +39,15 @@ class TransientExhausted extends Error {
 
 // Runs `call(attempt)` and retries only transient failures with the bounded backoff. `call` receives the zero-based
 // attempt so that a retry can first check whether an earlier, apparently failed attempt had in fact landed.
-async function retryTransient(call, {operation, head, wait = sleep, delays = DELAYS_MS, report = () => {}}) {
-  for (let attempt = 0; ; attempt++) {
-    try {return await call(attempt);} catch (error) {
-      if (!isTransient(error)) throw error;
-      if (attempt >= delays.length) throw new TransientExhausted({operation, attempts: attempt + 1, head, error});
-      const delay = Math.max(delays[attempt], rateLimitDelay(error) ?? 0);
-      report(`Transient GitHub failure while ${operation} (${describe(error)}); retry ${attempt + 1}/${delays.length} in ${delay / 1000} s.`);
-      await wait(delay);
-    }
+async function retryTransient(call, options, attempt = 0) {
+  const {operation, head, wait = sleep, delays = DELAYS_MS, report = () => {}} = options;
+  try {return await call(attempt);} catch (error) {
+    if (!isTransient(error)) throw error;
+    if (attempt >= delays.length) throw new TransientExhausted({operation, attempts: attempt + 1, head, error});
+    const delay = Math.max(delays[attempt], rateLimitDelay(error) ?? 0);
+    report(`Transient GitHub failure while ${operation} (${describe(error)}); retry ${attempt + 1}/${delays.length} in ${delay / 1000} s.`);
+    await wait(delay);
+    return retryTransient(call, options, attempt + 1);
   }
 }
 

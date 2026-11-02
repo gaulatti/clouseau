@@ -49,6 +49,8 @@ test('exhaustion names the accepted head, the attempts and the safe retry withou
     assert.ok(caught.message.length < 700);
     return true;
   });
+  await assert.rejects(retryTransient(async () => {throw {status: 500};}, {operation: 'op', head: HEAD, wait: async () => {}, delays: []}),
+    /1 attempts; last HTTP 500: \)/);
   await assert.rejects(retryTransient(async () => {throw new Error('Something went wrong while executing your query');},
     {operation: 'op', head: HEAD, wait: async () => {}, delays: []}), /1 attempts; last GraphQL error: Something went wrong/);
 });
