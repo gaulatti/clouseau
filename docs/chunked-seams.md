@@ -21,7 +21,7 @@ between DIFFERENT units are seams.
 | `import` | `a` imports the changed file `b` |
 | `export_consumer` | as `import`, and `a` mentions an export that `b`'s patch added or removed (`exports` lists them) |
 | `removed_import` | `a` still imports a path that `b` removed or renamed away |
-| `test_subject` | `a` is a test that was deleted or lost lines, `b` is its subject (same stem, or imported) changed in another unit |
+| `test_subject` | `a` is a test that was deleted or lost lines, `b` is its subject (same stem once `test_`/`_test` are removed, or imported) changed in another unit |
 
 Edge detection reuses `specifiersOf` and `resolveSpecifier`. Semantic coupling with no import (config keys, event names)
 is not detected; that limit is accepted in the design.

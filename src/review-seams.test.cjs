@@ -99,18 +99,32 @@ test('a test that loses lines is linked to its subject by import, from head sour
     'test_subject:tests/check.test.ts>src/engine.ts', 'test_subject:tests/py_check.py>src/py_check.py']);
 });
 
-test('a non-JavaScript test is linked to its subject by stem only', () => {
+test('a non-JavaScript test is linked to its subject by stem, with the test_ and _test affixes removed', () => {
   const {snapshot, plan} = change([
     {path: 'tests/test_engine.py', unit: 'u0', base: 'assert 1\n', patch: '-assert 1\n', status: 'removed'},
     {path: 'tests/engine_test.py', unit: 'u0', base: 'assert 1\n', patch: '-assert 1\n', status: 'removed'},
+    {path: 'tests/test_other.py', unit: 'u0', base: 'assert 1\n', patch: '-assert 1\n', status: 'removed'},
     {path: 'pkg/engine.py', unit: 'u1', head: 'x = 1\n', patch: '+x\n'},
   ]);
-  assert.deepEqual(kinds(seamsOf({snapshot, plan})), []);
+  assert.deepEqual(kinds(seamsOf({snapshot, plan})), ['test_subject:tests/engine_test.py>pkg/engine.py', 'test_subject:tests/test_engine.py>pkg/engine.py']);
   const stem = change([
     {path: 'tests/engine.spec.py', unit: 'u0', base: 'assert 1\n', patch: '-assert 1\n', status: 'removed'},
     {path: 'pkg/engine.py', unit: 'u1', head: 'x = 1\n', patch: '+x\n'},
   ]);
   assert.deepEqual(kinds(seamsOf(stem)), ['test_subject:tests/engine.spec.py>pkg/engine.py']);
+});
+
+test('Python imports between units are seams, resolved exactly; a lost-line Python test is linked to what it imports', () => {
+  const {snapshot, plan} = change([
+    {path: 'app/main.py', unit: 'u0', head: 'from app.util import helper  # shared\nimport app.gone\nimport os\n'},
+    {path: 'app/util.py', unit: 'u1', head: 'def helper(): pass\n', patch: '+def helper(): pass\n'},
+    {path: 'other/util.py', unit: 'u1', head: 'x = 1\n'},
+    {path: 'app/gone.py', unit: 'u1', status: 'removed', base: 'x = 1\n', patch: '-x = 1\n'},
+    {path: 'tests/test_main.py', unit: 'u0', head: 'from app.util import helper\n', patch: '@@ -1,2 +1 @@\n-assert helper()\n from app.util import helper\n'},
+  ]);
+  assert.deepEqual(kinds(seamsOf({snapshot, plan})), ['removed_import:app/main.py>app/gone.py', 'import:app/main.py>app/util.py', 'import:tests/test_main.py>app/util.py',
+    'test_subject:tests/test_main.py>app/util.py']);
+  assert.equal(seamsOf({snapshot, plan})[0].exports, undefined, 'JavaScript export parsing is not applied to Python');
 });
 
 test('seams are deterministic, deduplicated and ordered whatever the order of files', () => {

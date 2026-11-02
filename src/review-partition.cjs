@@ -10,6 +10,7 @@
 // segments (see file-segments.cjs), each owned by a different unit, and the number of units is unbounded: running
 // them in waves is the runner's concern. Every changed line is owned by exactly one unit.
 const crypto = require('node:crypto');
+const {isTestPath, moduleStem} = require('./acceptance.cjs');
 const fs = require('node:fs');
 
 const SCHEME = 'clouseau-partition/1';
@@ -89,6 +90,29 @@ function atomKey(path) {
   return `${path.slice(0, slash + 1)}${name}`;
 }
 
+// The name a file answers to when it is paired with its subject or its tests: a source is named by its module
+// (a directory's entry file by the directory), a test by the module it tests, without `test_` or `_test`.
+function pairName(path) {
+  const name = moduleStem(path);
+  return isTestPath(path) ? name.replace(TEST_MARKER, '') : name;
+}
+const TEST_MARKER = /^test_|_test$|\.(?:test|spec|stories)$/;
+
+// Atom key of every path. A test stays with the source that shares its directory and stem (atomKey) or, when it
+// lives in a separate tests tree, with the one changed source it is named after. A test named after no source or
+// after several (two modules called `dup`) stays alone: an ambiguous pairing would guess, and a guess is not owned.
+function pairKeys(paths) {
+  const sources = paths.filter(name => !isTestPath(name));
+  const keys = new Set(sources.map(atomKey));
+  const byName = new Map();
+  for (const name of sources) byName.set(pairName(name), [...new Set([...(byName.get(pairName(name)) ?? []), atomKey(name)])]);
+  return new Map(paths.map(name => {
+    const marked = isTestPath(name) && TEST_MARKER.test(moduleStem(name));
+    const candidates = marked && !keys.has(atomKey(name)) ? byName.get(pairName(name)) ?? [] : [];
+    return [name, candidates.length === 1 ? candidates[0] : atomKey(name)];
+  }));
+}
+
 // One member per whole file and one per segment of a split file. A split file's segments are atoms of their own
 // (a segment is already as large as a unit can hold and never shares a stem group).
 function membersOf(files, params) {
@@ -100,8 +124,9 @@ function membersOf(files, params) {
 
 function atomsOf(members, params) {
   const byKey = new Map();
+  const keys = pairKeys([...new Set(members.map(member => member.path))]);
   for (const member of members) {
-    const key = member.part ? `${member.path}\0${member.part.index}` : atomKey(member.path);
+    const key = member.part ? `${member.path}\0${member.part.index}` : keys.get(member.path);
     byKey.set(key, [...(byKey.get(key) ?? []), member]);
   }
   // A stem group too large for one unit falls apart into its files.
@@ -218,4 +243,4 @@ function main(argv, io = {}) {
   }
 }
 
-module.exports = {SCHEME, DEFAULTS, PartitionRefusal, atomKey, parameters, cost, threshold, inflate, checkOwnership, partition, render, main};
+module.exports = {SCHEME, DEFAULTS, PartitionRefusal, atomKey, pairName, pairKeys, parameters, cost, threshold, inflate, checkOwnership, partition, render, main};

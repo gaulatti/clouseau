@@ -134,6 +134,12 @@ failures and replacing the production behavior under test block approval.
 Missing verification is an evidence gap rather than proof of deception. Ordinary
 mocks at real dependency boundaries remain legitimate.
 
+Test linkage is by import, resolved exactly against the repository file list. A Python import is read
+through trailing comments; a module loaded by path (`spec_from_file_location`, `runpy.run_path`, a
+`subprocess` call naming a `.py` path or `-m module`) counts as an import. An absolute Python import is
+found only under the importing file's directories (and `src/` below them) or under a package root
+proven by `__init__.py` files, never by a path tail.
+
 Every factor is one number from 0 to 1. A condition the evidence cannot
 establish counts as level0 (0). A finding's formula output is its single score;
 a score of 70 or more must be fixed and anything lower is advisory. The review

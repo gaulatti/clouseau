@@ -629,7 +629,7 @@ whose complete evidence exceeds the 900,000-character snapshot budget in bounded
 and model-free; `clouseau review` uses it for a change that does not fit one snapshot.
 
 Changed files are sorted by new path (UTF-8 bytes) and grouped into atoms: a file stays with its `.test`,
-`.spec` and `.stories` siblings, and a rename is one entry keyed by its new path. A file costs
+`.spec` and `.stories` siblings, a test in a separate tests tree (`test_x.py`, `x_test.py`, `x.spec.ts`) stays with the one changed source named `x` (no pairing when zero or several sources carry that name), and a rename is one entry keyed by its new path. A file costs
 `ceil(1.03 * (base bytes + head bytes + patch characters))`, where the patch size is the stored one (a file added whole keeps only its patch header, its body lives once in the head source). Atoms are packed next-fit, in path order, into
 units of at most `unit_ceiling` (C = 450,000); an atom above C becomes its own unit. The plan digest covers the
 scheme, parameters, unit membership and costs, so it is the same for any input order. Every changed path is
