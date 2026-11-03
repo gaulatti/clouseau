@@ -260,7 +260,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
         reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
         policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))})};
     } catch {
-      // The receipt this exact input produced no longer verifies (typically: it expired) or cannot be read as one. It approves nothing any more, so the
+      // The receipt this exact input produced no longer verifies (typically: it expired, or it fails any other receipt check). A file that is not JSON, or JSON without a payload, still throws before this point. It approves nothing any more, so the
       // input is reviewed again, answers taking the evidence-keyed reuse of a refresh. The old evidence is retired, except the
       // stored requirement that `refresh` defaults to, which stays valid until the new review replaces it.
       for (const name of fs.readdirSync(cache)) if (!['request.txt', 'requirement.json'].includes(name)) fs.rmSync(path.join(cache, name), {recursive: true, force: true});
