@@ -223,6 +223,29 @@ test('local review names a missing verification tool and an edited recipe, with 
   assert.deepEqual(localNotices.localNotices({paths: ['src/a.js'], technical: {}, baseBranch: 'trunk'}), []);
 });
 
+test('a directory that shadows a python module is named as such, not reported as a missing install', () => {
+  const python = 'No module named coverage.__main__; \'coverage\' is a package and cannot be directly executed';
+  const commands = [{argv: ['python3', '-m', 'coverage', 'run'], exit_code: 1, stdout: '', stderr: `/usr/bin/python3: ${python}`}];
+  assert.deepEqual(localNotices.shadowedModules({commands}), ['coverage']);
+  assert.deepEqual(localNotices.missingTools({commands}), [], 'the same text is not also "coverage is not installed"');
+  const notices = localNotices.localNotices({paths: ['src/a.py'], technical: {commands}, baseBranch: 'main'});
+  assert.deepEqual(notices.map(notice => notice.cause), ['verification_tool_shadowed']);
+  const text = localNotices.render(notices[0]);
+  assert.ok(text.startsWith('Local review notice (cause: `verification_tool_shadowed`): a directory named `coverage` in the directory the verification runs from is found before the `coverage` Python module'), text);
+  assert.ok(text.includes('\n\n1. Move or delete the `coverage/` directory'), text);
+  assert.ok(text.includes('\n2. If the failure remains with no `coverage/` directory') && text.includes('Install coverage.py') && text.includes('\n3. Run the review again on the same commit'), text);
+  // A genuinely absent module keeps its install notice; a passing command, another failure and an unplain name show nothing.
+  const absent = [{argv: ['python3', '-m', 'coverage'], exit_code: 1, stderr: 'No module named coverage'}];
+  assert.deepEqual(localNotices.shadowedModules({commands: absent}), []);
+  assert.deepEqual(localNotices.localNotices({paths: [], technical: {commands: absent}, baseBranch: 'main'}).map(notice => notice.cause), ['verification_tool_missing']);
+  assert.deepEqual(localNotices.shadowedModules({commands: [{...commands[0], exit_code: 0}, {...commands[0], stderr: 'No module named a b.__main__; \'a b\' is a package and cannot be directly executed'}]}), []);
+  assert.deepEqual(localNotices.shadowedModules({}), []);
+  assert.equal(localNotices.describeShadow('other').steps[1].endsWith('install `other` there, or put a virtualenv that has it first on PATH.'), true);
+  assert.deepEqual(localNotices.shadowedModules({commands: ['a', 'b', 'a', 'c', 'd'].map(name => ({exit_code: 1, stderr: `No module named ${name}.__main__; '${name}' is a package and cannot be directly executed`}))}), ['a', 'b', 'c']);
+  const docs = fs.readFileSync(path.join(__dirname, '../docs/notices.md'), 'utf8');
+  assert.ok(docs.includes('`verification_tool_shadowed`'), 'documented');
+});
+
 test('the notices that were already specific are proven to name their condition, and say why they need no cause table', async () => {
   // Managed AGENTS.md hold: a stable sentence per decided change, followed by the protected-control cause when it holds.
   const managed = require('./managed-agents.cjs');
