@@ -19,10 +19,24 @@ const INSTALL = Object.freeze({
 
 const tail = command => `${command.stdout ?? ''}\n${command.stderr ?? ''}`;
 
+// Python's own words when `python -m X` meets a directory named X before the installed module: the directory wins.
+const SHADOW = /No module named '?[A-Za-z0-9_.]{1,40}\.__main__'?; '([A-Za-z0-9_]{1,40})' is a package and cannot be directly executed/;
+
+// The modules a directory of the working tree hides from `python -m`, in order, once each, at most three.
+function shadowedModules(technical) {
+  const found = [];
+  for (const command of technical?.commands ?? []) {
+    const name = command.exit_code !== 0 ? SHADOW.exec(tail(command))?.[1] : null;
+    if (name) found.push(name);
+  }
+  return [...new Set(found)].slice(0, 3);
+}
+
 // The programs or modules the verification could not find, in order, once each, at most three.
 function missingTools(technical) {
   const found = [];
   for (const command of technical?.commands ?? []) {
+    if (command.exit_code !== 0 && SHADOW.test(tail(command))) continue;
     const program = String(command.argv?.[0] ?? '');
     const module = /No module named '?([A-Za-z0-9_.]{1,40})/.exec(tail(command))?.[1];
     const shell = /(?:^|[\s:])([A-Za-z0-9._-]{1,40}): (?:command )?not found/m.exec(tail(command))?.[1];
@@ -40,6 +54,14 @@ function describeTool(name) {
       'Run the review again on the same commit; the verification outcome is recorded fresh each time.']};
 }
 
+function describeShadow(name) {
+  return {cause: 'verification_tool_shadowed',
+    sentence: `a directory named \`${name}\` in the directory the verification runs from is found before the \`${name}\` Python module, so \`python -m ${name}\` cannot run`,
+    steps: [`Move or delete the \`${name}/\` directory (typically a leftover report directory) in the repository root, or run the verification from a directory without one.`,
+      `If the failure remains with no \`${name}/\` directory, the module is not installed in the Python on PATH: ${Object.hasOwn(INSTALL, name) ? INSTALL[name] : `install \`${name}\` there, or put a virtualenv that has it first on PATH.`}`,
+      'Run the review again on the same commit; the verification outcome is recorded fresh each time.']};
+}
+
 function describeRecipe(baseBranch) {
   return {cause: 'local_recipe_edited',
     sentence: `this change edits \`${RECIPE}\`, so the local review verified the recipe from \`${baseBranch}\`, not your edit (a change cannot weaken its own checks)`,
@@ -50,11 +72,11 @@ function describeRecipe(baseBranch) {
 
 // All local notices for one review: `paths` are the changed paths of the snapshot.
 function localNotices({paths, technical, baseBranch}) {
-  const found = missingTools(technical).map(describeTool);
+  const found = [...shadowedModules(technical).map(describeShadow), ...missingTools(technical).map(describeTool)];
   if (paths.includes(RECIPE)) found.push(describeRecipe(baseBranch));
   return found;
 }
 
 const render = notice => `Local review notice (cause: \`${notice.cause}\`): ${notice.sentence}.\n\n${numbered(notice.steps)}`;
 
-module.exports = {RECIPE, INSTALL, missingTools, describeTool, describeRecipe, localNotices, render};
+module.exports = {RECIPE, INSTALL, missingTools, shadowedModules, describeShadow, describeTool, describeRecipe, localNotices, render};

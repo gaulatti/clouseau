@@ -155,6 +155,7 @@ When the approval gate stops, its check summary shows the gate's own sentence fo
 | Cause class | Meaning | Steps |
 | --- | --- | --- |
 | `verification_tool_missing` | A verification command needs a program or module that is not installed (a program that cannot start, `No module named X`, or `X: not found`). The program name is shown only when it is a plain name. | Install it (for `coverage`: `python3 -m pip install -r requirements-test.txt`; for `c8`: `npm ci`; otherwise put it on PATH), then run the review again on the same commit. |
+| `verification_tool_shadowed` | A verification command ran `python -m X` and a directory named `X` in the directory it runs from was found before the installed module (Python: `'X' is a package and cannot be directly executed`), typically a leftover `coverage/` report directory. The module name is shown only when it is a plain name. | Move or delete that directory; if the failure remains, install the module in the Python on PATH (for `coverage`: `python3 -m pip install -r requirements-test.txt`, or put a virtualenv that has it first on PATH), then run the review again on the same commit. |
 | `local_recipe_edited` | The change edits `.clouseau-local.json`, so local review verified the recipe from the base branch, not the edit (a change cannot weaken its own checks). | Land a wanted edit in its own pull request first and review this change on the new base, or revert the edit. |
 
 ## Declared coverage
