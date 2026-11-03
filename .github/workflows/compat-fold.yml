@@ -1,0 +1,70 @@
+name: Clouseau compatibility fold
+# Folds the review-semantics declarations that merged pull requests carry (compat/declarations/) into
+# policy/review-compatibility.json and compat/manifest.json on protected main. See docs/receipt-compatibility.md
+# ("Declare, then fold"). It exists because a pull request must not rewrite the shared statement line, and merges made with
+# GITHUB_TOKEN raise no push event, so the fold also follows the completion of the review workflow and runs on a schedule.
+#
+# Trust boundary: this workflow never checks out, builds or executes pull request code. It checks out main only, runs the
+# fold from main's own protected scripts without any credential in its environment, and only then pushes one commit. The
+# fold itself refuses every ref but refs/heads/main of gaulatti/clouseau and fails closed on any inconsistent declaration.
+# The only permission is contents: write, to push that commit. Nothing is approved, merged, commented or re-run here.
+run-name: Fold compatibility declarations (${{ github.event_name }})
+on:
+  push:
+    branches: [main]
+    paths: ['compat/declarations/**']
+  workflow_run:
+    workflows: ["Clouseau CI"]
+    types: [completed]
+  schedule:
+    - cron: '23,53 * * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  fold:
+    if: >-
+      github.repository == 'gaulatti/clouseau' && github.ref == 'refs/heads/main' &&
+      (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request_target')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    concurrency:
+      group: clouseau-compat-fold
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Fold, verify and push one commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          allowed=(policy/review-compatibility.json compat/manifest.json compat/declarations)
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            # The fold runs without the token in its environment.
+            env -u GH_TOKEN node scripts/review-compatibility fold
+            if [ -z "$(git status --porcelain)" ]; then echo "Nothing to fold."; exit 0; fi
+            # Only the statement, the manifest and the declarations may have changed.
+            git add -A -- "${allowed[@]}"
+            if [ -n "$(git status --porcelain --untracked-files=all | grep -v '^[MADR] ' || true)" ]; then
+              echo "::error::The fold changed files outside the compatibility statement, manifest and declarations"; exit 1
+            fi
+            env -u GH_TOKEN node scripts/review-compatibility check
+            env -u GH_TOKEN node --test src/review-semantics.test.cjs src/review-compatibility-cli.test.cjs
+            git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' \
+              commit --quiet -m 'chore(compat): fold review-semantics declarations' \
+              -m 'Records the merged declarations in policy/review-compatibility.json and compat/manifest.json.'
+            header="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+            echo "::add-mask::$header"
+            # A plain, fast-forward-only push. If main moved, fold again from the new main.
+            if git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $header" push --quiet origin HEAD:refs/heads/main; then
+              echo "Folded declarations into main at $(git rev-parse HEAD)."; exit 0
+            fi
+            echo "main moved during the fold (attempt $attempt)."
+          done
+          echo "::error::The fold could not be pushed; main keeps its declarations and acceptor() keeps refusing until it is."; exit 1

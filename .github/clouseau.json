@@ -24,6 +24,7 @@
     "skills/",
     "src/",
     "policy/",
+    "compat/",
     "test/",
     "scripts/",
     "requirements-test.txt"
