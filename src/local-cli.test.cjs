@@ -593,6 +593,10 @@ test('the local protected-control warning holds package.json only when its decla
     const unrelated = commit('unrelated', {'package.json': JSON.stringify({name: 'y', jest: {coverageThreshold: {global: {lines: 80}}}})});
     const lowered = commit('lowered', {'package.json': declare(10)});
     const removed = commit('removed', {'package.json': null});
+    fs.mkdirSync(path.join(directory, 'backend'));
+    const nestedBase = commit('nested base', {'backend/package.json': declare(80), 'package.json': declare(80)});
+    const nestedUnrelated = commit('nested unrelated', {'backend/package.json': JSON.stringify({name: 'z', jest: {coverageThreshold: {global: {lines: 80}}}})});
+    const nestedLowered = commit('nested lowered', {'backend/package.json': declare(10)});
     const config = {...require('../test/fixtures/config.json'), coverage: {mode: 'declared'}};
     const stderr = process.stderr.write;
     process.stderr.write = () => true;
@@ -601,6 +605,10 @@ test('the local protected-control warning holds package.json only when its decla
       assert.deepEqual(warn(config, unrelated), [], 'an unrelated package.json edit');
       for (const head of [lowered, removed]) assert.match(warn(config, head)[0], /^Protected review controls changed \(package\.json\)/, head);
       assert.deepEqual(warn(config, lowered, ['src/a.js']), [], 'package.json not changed');
+      const nested = (headSha, paths) => controlWarnings(config, paths, {directory, baseSha: nestedBase, headSha});
+      assert.match(nested(nestedLowered, ['backend/package.json'])[0], /^Protected review controls changed \(backend\/package\.json\)/, 'a part package.json');
+      assert.deepEqual(nested(nestedUnrelated, ['backend/package.json']), [], 'an unrelated edit of a part package.json');
+      assert.deepEqual(nested(nestedLowered, ['backend/src/a.js', 'backend/package-lock.json']), [], 'not a package.json');
       for (const settings of [{...config, coverage: {mode: 'exact'}}, require('../test/fixtures/config.json'), null]) assert.deepEqual(warn(settings, lowered), [], 'other modes: not a control');
     } finally {process.stderr.write = stderr;}
   } finally {fs.rmSync(directory, {recursive: true, force: true});}

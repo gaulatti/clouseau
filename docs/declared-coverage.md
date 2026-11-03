@@ -27,8 +27,10 @@ used. Without `coverage-base-ref` the step runs the stricter exact gate.
 
 ## What is read
 
-Only the repository-root `package.json`, parsed strictly, from the base revision
-(`git cat-file blob BASE_REF:package.json`).
+A single-artifact gate reads the repository-root `package.json`; a multi-artifact
+plan reads each part's own `package.json` ([below](#monorepos-one-declaration-per-part)).
+Either is parsed strictly, from the base revision
+(`git cat-file blob BASE_REF:<directory>/package.json`).
 
 | Declaration | Read as |
 | --- | --- |
@@ -51,6 +53,52 @@ Only the repository-root `package.json`, parsed strictly, from the base revision
 * Vitest cannot declare thresholds in `package.json`; a project that uses it and
   has no other declaration fails closed.
 
+## Monorepos: one declaration per part
+
+Clients that keep the declaration next to each package (for example
+`backend/package.json`) use the accepted-base v2 `coverage-config` recipe, and each
+part names the directory whose `package.json` declares its minimums:
+
+```json
+"coverage": [
+  {"format": "istanbul", "report": "backend/coverage/coverage-final.json",
+   "source_directory": "backend/src", "package_directory": "backend"},
+  {"format": "istanbul", "report": "frontend/coverage/coverage-final.json",
+   "source_directory": "frontend/app", "package_directory": "frontend"}
+]
+```
+
+* `package_directory` is optional and must be `.` (the repository root) or an
+  explicit repository-relative directory that **contains** the part's
+  `source_directory` (or equals it). Without it, the part's own
+  `source_directory` is the package directory; nothing is inferred from a parent
+  directory and nothing falls back to the root. A part at the repository root
+  (`source_directory: "."`) reads the root `package.json`.
+* Each part's measured lines and branches are enforced against **its own**
+  declaration at the base revision; the totals of the parts are not pooled and
+  one part's declaration never applies to another. Several parts may share a
+  package directory.
+* A part whose package directory has no `package.json` at the base revision
+  (including a directory or file that is a symbolic link there), or whose file
+  declares nothing, fails closed as `declared_missing` naming the part, for
+  example `Declared coverage (cause: declared_missing) for coverage part 1
+  (istanbul, source backend/src, declaration backend/package.json): ...`. It
+  never uses the root's declaration or 100%.
+* Every failing part is reported with its own class. `per-file` applies to the
+  files of its own part only.
+* A pull request that adds a weaker `package.json` to a part directory, moves the
+  directory, or edits the declaration changes nothing for that run: the base
+  revision decides, and a changed declaration in any `package.json` needs the
+  exact-head `/approve-intent` ([approval rule](#approval-rule)). `..`, absolute,
+  backslash and `.git` paths, a `package_directory` that does not contain the
+  source, duplicate reports and overlapping source directories are rejected, and
+  a source directory that is a link leaving the checkout fails as for every mode.
+
+Adding `package_directory` to a recipe is a change to the accepted recipe, so it
+lands in its own pull request first. Plans written for the root `package.json`
+with a nested `source_directory` (for example `src`) now need
+`"package_directory": "."`.
+
 ## Fail closed, never fall back
 
 Each failure names a stable cause class, the measured percent against the
@@ -67,12 +115,16 @@ next base, not to the run that contains it.
 
 ## Approval rule
 
-A pull request whose **parsed declaration** differs between base and head is a
+A pull request whose **parsed declaration** differs between base and head, in the
+root `package.json` or in any other `package.json` (a monorepo part's own), is a
 protected-control change and needs the exact-head `/approve-intent`, like a change
 to `.github/clouseau.json`. The comparison is of the parsed objects, so unrelated
-edits to `package.json` (dependencies, scripts, version) never trigger the hold;
+edits to `package.json` files (dependencies, scripts, version) never trigger the hold;
 lowering, raising, removing, adding a second declaration or making the file
-unreadable does. A renamed or deleted `package.json` counts as a change. The
+unreadable does. A renamed or deleted `package.json` counts as a change, and so does a new one
+that declares thresholds. The comparison covers every changed `package.json`, not
+only the recipe's part directories, so a declaration change in an unrelated
+package is also held (more than 20 changed `package.json` files are all held). The
 hold applies only when `coverage.mode` is `declared`. `clouseau review` prints the
 same warning locally.
 
@@ -80,7 +132,7 @@ same warning locally.
 
 * Local verification (`clouseau review`) still reports exact-100% `coverage` status
   for the `.clouseau-local.json` recipe. It is advisory; CI is the authority.
-* Only the root `package.json`; `.nycrc`, `.c8rc.json`, `jest.config.*` and Vitest
+* Only `package.json` files; `.nycrc`, `.c8rc.json`, `jest.config.*` and Vitest
   configuration files are not read.
 * Metrics: this repository is a CI engine and exposes no Prometheus backend;
   there is no metrics impact.

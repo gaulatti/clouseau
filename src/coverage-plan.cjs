@@ -1,6 +1,9 @@
 'use strict';
 
 const {safePath} = require('./acceptance-sources.cjs');
+const {packageDirectory, validPartShape} = require('./coverage-util.cjs');
+
+const packageDirectoryValid = part => {try {return Boolean(packageDirectory(part));} catch {return false;}};
 
 function coverageParts(config, {allowUnsupported = false} = {}) {
   const fail = () => {throw new Error('Invalid local-only Clouseau coverage configuration');};
@@ -15,7 +18,7 @@ function coverageParts(config, {allowUnsupported = false} = {}) {
     if (!part || !(allowUnsupported ? typeof part.format === 'string' && /^[a-z][a-z0-9_-]{0,39}$/.test(part.format) :
         (config.version === 1 ? ['llvm', 'istanbul', 'coveragepy', 'go'] : ['istanbul', 'coveragepy', 'go']).includes(part.format)) ||
       !safePath(part.report) || !(part.source_directory === '.' || safePath(part.source_directory))) fail();
-    if (config.version === 2 && Object.keys(part).sort().join(',') !== 'format,report,source_directory') fail();
+    if (config.version === 2 && (!validPartShape(part) || !packageDirectoryValid(part))) fail();
     if (reports.has(part.report) || roots.some(root => root === '.' || part.source_directory === '.' || part.source_directory === root ||
       part.source_directory.startsWith(root + '/') || root.startsWith(part.source_directory + '/'))) fail();
     reports.add(part.report);

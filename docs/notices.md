@@ -159,16 +159,16 @@ When the approval gate stops, its check summary shows the gate's own sentence fo
 
 ## Declared coverage
 
-The `declared` coverage mode ([declared coverage](declared-coverage.md)) fails the coverage step with one of these classes. The step prints `Declared coverage (cause: <class>): <sentence>` followed by numbered steps; the approval gate then reports `gate_verification_failed` for the failed job.
+The `declared` coverage mode ([declared coverage](declared-coverage.md)) fails the coverage step with one of these classes. The step prints `Declared coverage (cause: <class>): <sentence>` followed by numbered steps. For a multi-artifact plan the header names the part and its declaration file: `Declared coverage (cause: <class>) for coverage part N (<format>, source <source>, declaration <dir>/package.json): <sentence>`, and every failing part is reported under its own class; the approval gate then reports `gate_verification_failed` for the failed job.
 
 | Cause class | Meaning | First step |
 | --- | --- | --- |
-| `declared_missing` | The base revision has no readable `package.json`, or it declares no `lines` or `branches` minimum (`jest.coverageThreshold.global`, `c8` or `nyc`). | Declare the minimum in package.json and land it in its own pull request first; the gate reads the base revision. |
+| `declared_missing` | The base revision has no readable `package.json` in the part's package directory (the part's `package_directory`, else its source directory; a missing directory included), or it declares no `lines` or `branches` minimum (`jest.coverageThreshold.global`, `c8` or `nyc`). | Declare the minimum in package.json and land it in its own pull request first; the gate reads the base revision. |
 | `declared_conflict` | The declaration is ambiguous: a repeated JSON key, two tools declaring different values for one metric, tools disagreeing on `per-file`, or both spellings of one `c8`/`nyc` key. | Keep exactly one value per metric. |
 | `declared_unsupported` | The shape cannot be read exactly: invalid JSON, a Jest path or glob entry, a string, negative, exponent or out-of-range value, thresholds without `"check-coverage": true`, Vitest, or per-file minimums on a `go` or `llvm` report. | Use `jest.coverageThreshold.global`, or `c8`/`nyc` with `"check-coverage": true`, with plain decimals from 0 to 100. |
 | `declared_below_threshold` | A measured metric is below the declared minimum. The sentence names each metric, the measured percent (floored to two decimals, with the exact counts) and the declared minimum. | Add tests; do not lower the threshold in the same pull request. |
 
-A pull request that changes the parsed declaration in `package.json` is a protected-control change and is held with the existing `intent_protected_controls` cause (see Maintainer request); it carries the notice `package.json is a protected-control hold: the declared coverage thresholds changed.`
+A pull request that changes the parsed declaration in any `package.json` (the root or a part's own) is a protected-control change and is held with the existing `intent_protected_controls` cause (see Maintainer request); it carries the notice `<path>/package.json is a protected-control hold: the declared coverage thresholds changed.` with the changed file's path (`package.json` for the root). More than 20 changed `package.json` files are all held with one notice.
 
 ## Notices that already name their own cause
 

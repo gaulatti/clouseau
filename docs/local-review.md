@@ -73,7 +73,7 @@ Only the six documented top-level fields are accepted in version 2: `version`,
 `base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
 Misspelled or additional policy fields fail before local command execution and
 at the CI data entrypoint. Each coverage part likewise accepts only its three
-documented fields. Version 1 keeps its existing compatibility behavior.
+documented fields, plus the optional `package_directory` that only [declared coverage](declared-coverage.md#monorepos-one-declaration-per-part) reads. Version 1 keeps its existing compatibility behavior.
 
 Adapt commands to the repository's real test suite. The runner passes argument
 arrays directly, runs every command, and checks each untouched native report.

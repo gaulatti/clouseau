@@ -2,15 +2,17 @@
 // Declared coverage mode: the opt-in gate that enforces the minimums the CLIENT repository itself declares.
 //
 // The minimums are read from `package.json` AT THE ACCEPTED BASE REVISION (`git cat-file blob BASE:package.json`), never from
-// the pull request head, so a pull request cannot lower its own bar. Like the mode itself, the declaration is a protected
-// control: a change of the parsed declaration between base and head needs the exact-head owner confirmation (`protect`).
+// the pull request head, so a pull request cannot lower its own bar. A single-artifact gate reads the root package.json. A
+// multi-artifact plan reads `<package directory>/package.json` for EACH part (`packageDirectory` in coverage-util.cjs) and
+// holds every part to its own declaration. Like the mode itself, the declarations are protected controls: a change of any
+// package.json's parsed declaration between base and head needs the exact-head owner confirmation (`protect`).
 // Clouseau still measures coverage itself through its adapters; only the pass line comes from the declaration.
 //
 // Every shape the gate cannot read exactly fails closed with a stable cause class and numbered steps; nothing falls back to
 // 100% or to zero. See docs/declared-coverage.md.
 const cp = require('node:child_process');
 const path = require('node:path');
-const {fail, isObject, rejectDuplicateKeys} = require('./coverage-util.cjs');
+const {fail, isObject, rejectDuplicateKeys, packageDirectory} = require('./coverage-util.cjs');
 const {REF} = require('./coverage-changed.cjs');
 
 const FILE = 'package.json';
@@ -22,22 +24,34 @@ const SAMPLE = 20;
 const PER_FILE_FORMATS = ['istanbul', 'lcov', 'coveragepy'];
 const has = (object, key) => Object.hasOwn(object, key);
 
+const PART_FIX = 'In a monorepo, declare the minimum in the package.json of the part\'s package directory, and name that directory in the part\'s `package_directory` field of the accepted coverage recipe when it is not the part\'s source directory; the gate never falls back to another directory\'s package.json.';
 const LAND = 'Land that change in its own pull request first. The gate reads package.json from the accepted base revision, so it takes effect only after it merges, and changing declared thresholds needs the exact-head `/approve-intent` of a maintainer.';
 const OTHER_MODE = 'Or set `coverage.mode` to `exact` or `changed_lines` in `.github/clouseau.json` (also a protected control).';
 const SHAPE = 'Use `jest.coverageThreshold.global`, or `c8` or `nyc` with `"check-coverage": true`, with `lines` and `branches` as plain decimal numbers from 0 to 100.';
 const STEPS = Object.freeze({
-  declared_missing: ['Declare the minimum in package.json: ' + SHAPE, LAND, OTHER_MODE],
+  declared_missing: ['Declare the minimum in package.json: ' + SHAPE, PART_FIX, LAND, OTHER_MODE],
   declared_conflict: ['Keep exactly one value per metric: remove repeated JSON keys, and make every declaring tool state the same value and the same `per-file` setting.', LAND],
   declared_unsupported: [SHAPE + ' Path and glob Jest entries, negative or string values, Vitest thresholds and per-file thresholds on `go` or `llvm` reports cannot be read exactly.', LAND, OTHER_MODE],
   declared_below_threshold: ['Add tests until each metric named above reaches its declared minimum.',
     'Do not lower the declared threshold in this pull request to pass: the gate reads the base revision, so the edit would not apply to this run and would need the exact-head `/approve-intent`.'],
 });
 
+// `where` names the coverage part (and its declaration file) in a multi-artifact plan; without it the wording is unchanged.
 class DeclaredError extends Error {
-  constructor(cause, sentence) {
-    super(`Declared coverage (cause: \`${cause}\`): ${sentence}\n\n${STEPS[cause].map((step, index) => `${index + 1}. ${step}`).join('\n')}`);
+  constructor(cause, sentence, where = null) {
+    super(`Declared coverage (cause: \`${cause}\`)${where ? ` for ${where}` : ''}: ${sentence}\n\n${STEPS[cause].map((step, index) => `${index + 1}. ${step}`).join('\n')}`);
     this.declared_cause = cause;
     this.sentence = sentence;
+    this.where = where;
+  }
+
+  // Every failing part is reported, each under its own cause class and name.
+  static combine(errors) {
+    const [first] = errors;
+    const combined = new DeclaredError(first.declared_cause, first.sentence, first.where);
+    combined.message = errors.map(error => error.message).join('\n\n');
+    combined.declared_parts = errors.map(error => ({part: error.where, cause: error.declared_cause}));
+    return combined;
   }
 }
 const missing = sentence => new DeclaredError('declared_missing', sentence);
@@ -121,15 +135,21 @@ function parse(text) {
   return {tools: found.map(declaration => declaration.tool), per_file: found[0].per_file, thresholds};
 }
 
-// package.json at the base revision. A missing file or an unreachable revision is a missing declaration.
-function readBase(directory, baseRef, run = cp.execFileSync) {
+// `<package directory>/package.json` ('.' is the repository root).
+const fileIn = packageDir => packageDir === '.' ? FILE : `${packageDir}/${FILE}`;
+
+// The package.json of a package directory at the base revision. A missing file, a directory that is a symbolic link or
+// absent there, or an unreachable revision is a missing declaration.
+function readBase(directory, baseRef, run = cp.execFileSync, packageDir = '.') {
   if (typeof baseRef !== 'string' || !REF.test(baseRef) || baseRef.includes('..')) fail('Declared coverage requires a plain base revision');
+  packageDirectory({source_directory: packageDir});
+  const file = fileIn(packageDir);
   try {
-    return run('git', ['cat-file', 'blob', `${baseRef}:${FILE}`], {cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024});
-  } catch {throw missing(`package.json cannot be read at the base revision ${baseRef.slice(0, 12)} (absent there, or the checkout lacks its history)`);}
+    return run('git', ['cat-file', 'blob', `${baseRef}:${file}`], {cwd: directory, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024});
+  } catch {throw missing(`${file} cannot be read at the base revision ${baseRef.slice(0, 12)} (absent there, or the checkout lacks its history)`);}
 }
 
-const declaration = (directory, baseRef, run) => parse(readBase(directory, baseRef, run));
+const declaration = (directory, baseRef, run, packageDir = '.') => parse(readBase(directory, baseRef, run, packageDir));
 
 // A threshold as an exact fraction of integers: 87.5 -> 875/10.
 function fraction(value) {
@@ -195,39 +215,55 @@ function outcome(text) {
 }
 const differs = (baseText, headText) => JSON.stringify(outcome(baseText)) !== JSON.stringify(outcome(headText));
 
-// The protected-control hold for a changed declaration. Without `coverage.mode: declared` this reads nothing.
+const isPackageFile = name => typeof name === 'string' && path.posix.basename(name) === FILE;
+const CANDIDATE_LIMIT = 20;
+
+// The protected-control hold for a changed declaration, in ANY package.json (a monorepo part declares in its own package
+// directory). Each changed package.json (or one renamed away) is compared on its parsed declaration at base and head.
+// Without `coverage.mode: declared` this reads nothing.
 async function protect({github, repo, pr, files, config}) {
   const set = new Set();
   const notices = [];
   if (config.coverage?.mode !== 'declared') return {protect: set, notices};
-  if (!files.some(file => file.filename === FILE || file.previous_filename === FILE)) return {protect: set, notices};
-  const hold = reason => {
-    set.add(FILE);
-    notices.push(`${FILE} is a protected-control hold: ${reason}.`);
-    return {protect: set, notices};
+  const candidates = [...new Set(files.flatMap(file => [file.filename, file.previous_filename]).filter(isPackageFile))].sort();
+  if (!candidates.length) return {protect: set, notices};
+  const hold = (file, reason) => {
+    set.add(file);
+    notices.push(`${file} is a protected-control hold: ${reason}.`);
   };
+  if (candidates.length > CANDIDATE_LIMIT) {
+    candidates.forEach(file => set.add(file));
+    notices.push(`${candidates.length} package.json files changed, more than the ${CANDIDATE_LIMIT} whose declared coverage thresholds can be compared, so all are protected-control holds.`);
+    return {protect: set, notices};
+  }
   const headRepo = pr.head.repo;
-  if (!headRepo?.owner?.login || !headRepo.name) return hold('the head repository is unavailable');
+  if (!headRepo?.owner?.login || !headRepo.name) {
+    candidates.forEach(file => hold(file, 'the head repository is unavailable'));
+    return {protect: set, notices};
+  }
   const {fetchText} = require('./acceptance-sources.cjs');
   const snapshot = {head_sha: pr.head.sha, head_repository: {owner: headRepo.owner.login, repo: headRepo.name}};
-  const read = async ref => {
-    try {return await fetchText({github, repo, snapshot, filename: FILE, ref});}
-    catch (error) {
-      if (error.status === 404) return null;
-      throw error;
+  for (const file of candidates) {
+    const read = async ref => {
+      try {return await fetchText({github, repo, snapshot, filename: file, ref});}
+      catch (error) {
+        if (error.status === 404) return null;
+        throw error;
+      }
+    };
+    let baseText;
+    let headText;
+    try {
+      baseText = await read(pr.base.sha);
+      headText = await read(pr.head.sha);
+    } catch (error) {
+      if (!error.unavailable) throw error;
+      hold(file, 'the base or head file is unavailable as complete text');
+      continue;
     }
-  };
-  let baseText;
-  let headText;
-  try {
-    baseText = await read(pr.base.sha);
-    headText = await read(pr.head.sha);
-  } catch (error) {
-    if (!error.unavailable) throw error;
-    return hold('the base or head file is unavailable as complete text');
+    if (differs(baseText, headText)) hold(file, 'the declared coverage thresholds changed');
   }
-  if (differs(baseText, headText)) return hold('the declared coverage thresholds changed');
   return {protect: set, notices};
 }
 
-module.exports = {FILE, METRICS, STEPS, DeclaredError, threshold, parse, readBase, declaration, meets, percent, enforce, requirePerFile, outcome, differs, protect};
+module.exports = {FILE, CANDIDATE_LIMIT, isPackageFile, fileIn, METRICS, STEPS, DeclaredError, threshold, parse, readBase, declaration, meets, percent, enforce, requirePerFile, outcome, differs, protect};

@@ -265,4 +265,11 @@ test('every declared-coverage cause class names its sentence and numbered steps,
     assert.ok(section.includes(`| \`${name}\` |`), `docs/notices.md documents ${name}`);
   }
   assert.ok(section.includes('package.json is a protected-control hold: the declared coverage thresholds changed.'));
+  // A multi-artifact plan names the failing part and its declaration file in the same notice, for every class.
+  const where = 'coverage part 2 (istanbul, source backend/src, declaration backend/package.json)';
+  for (const name of Object.keys(STEPS)) {
+    assert.ok(new DeclaredError(name, 'the stated condition', where).message.startsWith(`Declared coverage (cause: \`${name}\`) for ${where}: the stated condition\n\n1. `), name);
+  }
+  assert.ok(section.includes('for coverage part N (<format>, source <source>, declaration <dir>/package.json)'));
+  assert.ok(section.includes('with the changed file\'s path'));
 });

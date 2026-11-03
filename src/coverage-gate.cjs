@@ -2,7 +2,7 @@
 // Require exact, nonempty application line and branch coverage.
 const fs = require('node:fs');
 const path = require('node:path');
-const {fail, isObject, get, realPath, isInside, loadReport, emptyCounts} = require('./coverage-util.cjs');
+const {fail, isObject, get, realPath, isInside, loadReport, emptyCounts, validPartShape, packageDirectory} = require('./coverage-util.cjs');
 const istanbul = require('./coverage-istanbul.cjs');
 const coveragepy = require('./coverage-coveragepy.cjs');
 const go = require('./coverage-go.cjs');
@@ -92,10 +92,10 @@ function measurePlan(parts, directory, detail) {
   const roots = [];
   const plan = [];
   for (const part of parts) {
-    if (!isObject(part) || Object.keys(part).sort().join(',') !== 'format,report,source_directory' ||
-        !['istanbul', 'coveragepy', 'go'].includes(part.format)) {
+    if (!validPartShape(part) || !['istanbul', 'coveragepy', 'go'].includes(part.format)) {
       fail('Each coverage part requires a supported native format, report and source_directory');
     }
+    packageDirectory(part);
     const report = planPath(root, part.report, false);
     const source = planPath(root, part.source_directory, true);
     if (!fs.statSync(source, {throwIfNoEntry: false})?.isDirectory()) fail('Every coverage part requires an existing application source directory');
@@ -109,7 +109,7 @@ function measurePlan(parts, directory, detail) {
   const totals = emptyCounts();
   const results = [];
   for (const {part, report, source} of plan) {
-    const measured = counters(readReport(part.format, report), source, part.format, root, detail);
+    const measured = counters(readReport(part.format, report), source, part.format, root, typeof detail === 'function' ? detail(part) : detail);
     if (measured.lines[0] === 0) fail('Every coverage part requires nonempty application line counters');
     for (const metric of Object.keys(totals)) {
       totals[metric][0] += measured[metric][0];
@@ -174,14 +174,30 @@ function declaredCheck(report, sourceDirectory, format, cwd, baseRef, run) {
   return declared.enforce({totals, detail, declared: minimums, directory: cwd});
 }
 
+// Declared mode over a multi-artifact plan: every part is measured and held to the declaration in ITS OWN package directory
+// (`<package_directory>/package.json` at the base revision, or its source directory when none is named). A part without a
+// readable declaration fails closed as `declared_missing`; nothing falls back to another part's declaration or to 100.
 function declaredPlan(parts, directory, baseRef, run) {
   const root = realPath(path.resolve(directory), '/');
-  const minimums = declared.declaration(root, baseRef, run);
-  const detail = new Map();
-  const measured = measurePlan(parts, directory, minimums.per_file ? detail : undefined);
-  measured.parts.forEach(part => declared.requirePerFile(minimums, part.format));
-  const {totals} = measured;
-  return declared.enforce({totals, detail, declared: minimums, directory: root});
+  const details = parts.map(() => new Map());
+  const measured = measurePlan(parts, directory, part => details[parts.indexOf(part)]);
+  const lines = [];
+  const errors = [];
+  measured.parts.forEach((result, index) => {
+    const packageDir = packageDirectory(result);
+    const where = `coverage part ${index + 1} (${result.format}, source ${result.source_directory}, declaration ${declared.fileIn(packageDir)})`;
+    try {
+      const minimums = declared.declaration(root, baseRef, run, packageDir);
+      declared.requirePerFile(minimums, result.format);
+      declared.enforce({totals: result.counts, detail: details[index], declared: minimums, directory: root}).forEach(line => lines.push(`${where}: ${line}`));
+    } catch (error) {
+      if (!(error instanceof declared.DeclaredError)) throw error;
+      errors.push(new declared.DeclaredError(error.declared_cause, error.sentence, where));
+    }
+  });
+  if (errors.length === 1) throw errors[0];
+  if (errors.length) throw declared.DeclaredError.combine(errors);
+  return lines;
 }
 
 const printChanged = (stdout, counts) => {
