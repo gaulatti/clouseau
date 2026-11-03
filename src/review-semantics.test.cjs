@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const {execFileSync} = require('node:child_process');
+const crypto = require('node:crypto');
 const semantics = require('./review-semantics.cjs');
 const cli = require('./review-compatibility-cli.cjs');
 
@@ -23,17 +25,28 @@ const cleanup = root => fs.rmSync(root, {recursive: true, force: true});
 const quiet = () => {const lines = []; return {lines, out: text => lines.push(text)};};
 
 // ENFORCEMENT. This is what keeps the compatibility statement honest: any change to a file that determines what a review
-// attests changes this digest, and this test then fails until a maintainer records the decision with
-// `scripts/review-compatibility bump --compatible` (earlier receipts stay acceptable) or `--incompatible` (they do not).
-test('the compatibility statement describes exactly the review semantics of this tree', () => {
+// attests makes this tree differ from the manifest the statement was last folded for, and this test then fails until the
+// change carries a declaration (`scripts/review-compatibility declare --compatible|--incompatible`). Once the change is on
+// protected main, the fold records it in the statement; until then `acceptor()` refuses every claim.
+test('every review-semantics change of this tree is either folded into the statement or declared', () => {
+  const state = cli.inspect(path.join(__dirname, '..'));
+  assert.deepEqual(state.problems, []);
+  assert.deepEqual(state.undeclared, [], 'Review semantics changed without a declaration. Run scripts/review-compatibility declare ' +
+    '--compatible (the change cannot alter what a review attests) or declare --incompatible (receipts issued earlier must be reviewed again).');
+  assert.equal(cli.main(['verify'], {out: () => {}}), 0);
   const live = semantics.semanticsDigest();
-  const statement = semantics.readStatement();
-  assert.equal(statement.current, live,
-    `Review semantics changed (${live}) but ${semantics.STATEMENT} still describes ${statement.current}. ` +
-    'Record the decision: scripts/review-compatibility bump --compatible (the change cannot alter what a review attests) ' +
-    'or bump --incompatible (receipts issued earlier must be reviewed again).');
-  assert.equal(cli.main(['check'], {out: () => {}}), 0);
-  assert.equal(semantics.acceptor()(live), true);
+  assert.equal(semantics.acceptor()(live), state.changed.size === 0);
+  assert.equal(semantics.acceptor()(live), semantics.readStatement().current === live);
+});
+
+test('the semantic entries are exactly what the digest covers', () => {
+  const root = engine();
+  try {
+    const list = semantics.entries(root);
+    assert.deepEqual(list.map(entry => entry[0]), ['action.yml', 'src/rules.cjs']);
+    assert.equal(semantics.digestOf(list), semantics.semanticsDigest(root));
+    assert.equal(semantics.digestOf(list), crypto.createHash('sha256').update(JSON.stringify([semantics.DOMAIN, list])).digest('hex'));
+  } finally {cleanup(root);}
 });
 
 test('every receipt-neutral file is explained, exists, and is not loaded by semantic code', () => {
@@ -133,23 +146,3 @@ test('only a listed digest of the very checkout that was read is accepted, and a
   } finally {[stale, missing, broken].forEach(cleanup);}
 });
 
-test('the maintainer tool checks and records the decision', () => {
-  const root = engine();
-  try {
-    const live = semantics.semanticsDigest(root);
-    fs.writeFileSync(path.join(root, semantics.STATEMENT), JSON.stringify({version: 1, current: H('1'), compatible: []}));
-    let io = quiet();
-    assert.equal(cli.main(['check'], {root, out: io.out}), 1); assert.match(io.lines.join(''), /stale/);
-    for (const args of [[], ['check', 'x'], ['bump'], ['bump', '--maybe'], ['bump', '--compatible', 'x'], ['other']]) {
-      io = quiet(); assert.equal(cli.main(args, {root, out: io.out}), 2); assert.match(io.lines.join(''), /usage/);
-    }
-    assert.equal(cli.main(['bump', '--compatible'], {root, out: () => {}}), 0);
-    assert.deepEqual(semantics.readStatement(root), {version: 1, current: live, compatible: [H('1')]});
-    io = quiet(); assert.equal(cli.main(['check'], {root, out: io.out}), 0); assert.match(io.lines.join(''), /current/);
-    io = quiet(); assert.equal(cli.main(['bump', '--incompatible'], {root, out: io.out}), 0); assert.match(io.lines.join(''), /unchanged/);
-    fs.writeFileSync(path.join(root, 'src/rules.cjs'), 'module.exports = 5;\n');
-    io = quiet(); assert.equal(cli.main(['bump', '--incompatible'], {root, out: io.out}), 0); assert.match(io.lines.join(''), /0 earlier/);
-    assert.equal(semantics.readStatement(root).compatible.length, 0);
-    assert.equal(cli.main(['bump', '--compatible'], {root}), 0);
-  } finally {cleanup(root);}
-});

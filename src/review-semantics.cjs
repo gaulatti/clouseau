@@ -57,11 +57,14 @@ function classify(root = defaultRoot()) {
   return files(root).map(([file, mode]) => ({path: file, mode, semantic: !neutral.has(file)}));
 }
 
-function semanticsDigest(root = defaultRoot()) {
-  const entries = files(root).filter(([file]) => !neutral.has(file)).map(([file, mode, filename]) =>
+// The semantic files of the tree at `root` as [path, executable bits, sha256 of content], sorted by path.
+function entries(root = defaultRoot()) {
+  return files(root).filter(([file]) => !neutral.has(file)).map(([file, mode, filename]) =>
     [file, mode, crypto.createHash('sha256').update(fs.readFileSync(filename)).digest('hex')]);
-  return digest([DOMAIN, entries]);
 }
+
+const digestOf = list => digest([DOMAIN, list]);
+const semanticsDigest = (root = defaultRoot()) => digestOf(entries(root));
 
 function parseStatement(text) {
   let value;
@@ -105,4 +108,4 @@ function acceptor(root = defaultRoot()) {
   return accepted.get(key);
 }
 
-module.exports = {DOMAIN, ROOTS, STATEMENT, MAX_COMPATIBLE, NEUTRAL, classify, semanticsDigest, parseStatement, readStatement, render, next, acceptor};
+module.exports = {DOMAIN, ROOTS, STATEMENT, MAX_COMPATIBLE, NEUTRAL, classify, entries, digestOf, semanticsDigest, parseStatement, readStatement, render, next, acceptor};
