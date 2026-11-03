@@ -104,7 +104,13 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const resuming = head !== pull.head;
   if (resuming && !resumable({directory, head, pullHead: pull.head, remoteBase})) {
-    throw new Error(`Local HEAD ${head} is not the head of pull request ${number} (${pull.head}); check out exactly that commit and refresh again`);
+    // Local commits on top of the pull request head are the usual cause: name it and the step, instead of a bare mismatch.
+    if (ancestor(directory, pull.head, head)) {
+      const count = Number(git(directory, ['rev-list', '--count', `${pull.head}..${head}`]).trim());
+      throw new Error(`Local HEAD ${head} is not the head of pull request ${number} (${pull.head}): the local branch has ${count} unpushed commit${count === 1 ? '' : 's'} ` +
+        `that the pull request does not have. Refresh reviews only the head GitHub shows, so push first (git push origin HEAD:refs/heads/${pull.ref}), then refresh again; nothing was changed or pushed`);
+    }
+    throw new Error(`Local HEAD ${head} is not the head of pull request ${number} (${pull.head}), and the pull request head is not an ancestor of it; check out exactly that commit and refresh again`);
   }
   // A refresh interrupted after its merge (an agent-driven review awaiting an answer) continues on the base it began with.
   let renewal = null;

@@ -133,7 +133,7 @@ test('refresh refuses before it changes anything: arguments, harness, dirty work
     fs.rmSync(path.join(f.work, 'untracked.txt'));
     for (const [change, pattern] of [[{state: 'closed'}, /not open/], [{repository: 'someone/fork'}, /comes from someone\/fork/],
       [{ref: 'other-branch'}, /not the pull request branch other-branch/], [{base: 'release'}, /against release, not the configured base main/],
-      [{head: 'f'.repeat(40)}, /is not the head of pull request 7/], [{title: ''}, /has no title/], [{title: undefined}, /has no title/]]) {
+      [{head: 'f'.repeat(40)}, /is not the head of pull request 7 \(f{40}\), and the pull request head is not an ancestor of it; check out exactly that commit/], [{title: ''}, /has no title/], [{title: undefined}, /has no title/]]) {
       const original = {...f.pull}; Object.assign(f.pull, change);
       await refuses(args(f), pattern); Object.assign(f.pull, original);
     }
@@ -143,7 +143,9 @@ test('refresh refuses before it changes anything: arguments, harness, dirty work
     git(f.work, ['checkout', '-q', 'feature']);
     // A head that is a merge, but not of this pull request head and the base, is not resumable either.
     git(f.work, ['commit', '-q', '--allow-empty', '-m', 'chore: local only']);
-    await refuses(args(f), /is not the head of pull request 7/);
+    await refuses(args(f), /is not the head of pull request 7.*the local branch has 1 unpushed commit that the pull request does not have.*push first \(git push origin HEAD:refs\/heads\/feature\), then refresh again; nothing was changed or pushed/);
+    git(f.work, ['commit', '-q', '--allow-empty', '-m', 'chore: local only too']);
+    await refuses(args(f), /has 2 unpushed commits/);
     git(f.work, ['reset', '-q', '--hard', before]);
     assert.deepEqual(dependencies.seen.reviews, []);
     unchanged(f, before);

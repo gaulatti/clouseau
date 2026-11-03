@@ -430,7 +430,8 @@ Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`.
 6. `git push origin HEAD:<pull request branch>`, once, as the last step.
 
 It refuses, with a message that names the cause and before pushing anything, when: the worktree has uncommitted or untracked
-changes; HEAD is not the head GitHub reports for the pull request; the pull request is closed, comes from a fork, is not the
+changes; HEAD is not the head GitHub reports for the pull request (when the local branch only has commits on top of that head, the message
+says how many are unpushed and that you must `git push` first, then refresh again); the pull request is closed, comes from a fork, is not the
 checked-out branch, or is not against the configured `base_branch`; the harness is unknown or its program is not installed;
 the base conflicts with the branch (the checkout is left untouched and the conflicting paths are listed); a hook refuses the
 merge (it is aborted). It never pushes when the review does not pass (`repair_required`, `review_incomplete`, ...), when a

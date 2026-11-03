@@ -133,5 +133,8 @@ test('classification names the unreadable file, and shows validation detail only
   assert.match(classify(Object.assign(new Error('x'), {unavailable: true})).reason, /Changed file unknown cannot be read/);
   assert.match(classify(Object.assign(new Error('x'), {unavailable: true, path: 'src/a.ts'})).reason, /Changed file src\/a\.ts cannot/);
   assert.equal(classify(new Error('Invalid acceptance evidence: factor value')).reason.endsWith('attempts: factor value.'), true);
+  const named = classify(new Error('Invalid acceptance evidence: changed source cannot be excluded: src/a_b.py has content, so mark it inspected and cite a quote from it'));
+  assert.equal(named.cause, 'review_output_invalid');
+  assert.match(named.reason, /attempts: changed source cannot be excluded: src\/a_b\.py has content, so mark it inspected and cite a quote from it\.$/);
   assert.equal(classify(new Error('Invalid acceptance evidence: <script>alert(1)</script> $secret')).reason.endsWith('3 consecutive attempts.'), true);
 });
