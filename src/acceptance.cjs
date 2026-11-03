@@ -15,6 +15,11 @@ function requireThat(condition, message) {
   if (!condition) throw new Error(`Invalid acceptance evidence: ${message}`);
 }
 
+// A file of the pull request, safe to show in a rejection: printable ASCII only, bounded.
+function named(path) {
+  return String(path).replace(/[^\x20-\x7e]/g, '?').slice(0, 120);
+}
+
 function text(value) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 2000;
 }
@@ -451,7 +456,8 @@ function validateEvidence(report, snapshot) {
     requireThat(snapshot.paths.includes(item.path) && text(item.reason), 'unknown accounted path');
     unique(item.units, 'accounting units'); citations(item.evidence);
     requireThat(item.units.length > 0 && item.units.every(id => unitIds.has(id) &&
-      report.units.find(unit => unit.id === id).paths.includes(item.path)), 'accounting lacks a covering acceptance unit');
+      report.units.find(unit => unit.id === id).paths.includes(item.path)),
+      `accounting lacks a covering acceptance unit: list ${named(item.path)} in the paths of every unit its accounting names`);
     // A file whose sources have no nonblank line on either side (an empty package marker) has nothing to cite; the
     // controller knows that from the immutable sources, so the reviewer is not asked for a citation that cannot exist.
     // A file with no source at all (a segment of a large file) still needs its evidence.
@@ -460,7 +466,7 @@ function validateEvidence(report, snapshot) {
     const barren = sides.length > 0 && !sides.some(id => citable(snapshot.sources[id]));
     requireThat(barren || item.evidence.some(id => snapshot.sources[evidence.get(id).source].path === item.path ||
       snapshot.files.some(file => file.path === item.path && [file.base_source, file.head_source].includes(evidence.get(id).source))),
-      'accounting lacks direct changed-file evidence');
+      `accounting lacks direct changed-file evidence: cite a quote from ${named(item.path)} itself`);
   }
   if (snapshot.review_manifest_version) validateCompleteness(report, snapshot, evidence, citations);
   requireThat(Array.isArray(report.resolutions), 'missing prior-finding dispositions');
@@ -491,17 +497,20 @@ function validateCompleteness(report, snapshot, evidence, citations) {
     keys(item, [dependency ? 'path' : 'source', 'state', 'reason', 'evidence']);
     requireThat(['inspected', 'excluded', 'missing'].includes(item.state) && text(item.reason), 'source disposition');
     unique(item.evidence, 'source disposition citations');
-    if (item.state === 'missing') { missing = true; requireThat(item.evidence.length === 0, 'missing source cannot claim inspection evidence'); return; }
+    if (item.state === 'missing') { missing = true; requireThat(item.evidence.length === 0,
+      `missing source cannot claim inspection evidence: give no citations for ${named(dependency ? item.path : snapshot.sources[item.source]?.path)} or mark it inspected`); return; }
     citations(item.evidence);
     const selected = item.evidence.map(id => snapshot.sources[evidence.get(id).source]);
     requireThat(item.state === 'excluded' || selected.some(source => dependency ? source.path === item.path && source.ref === snapshot.head_sha :
-      source === snapshot.sources[item.source]), 'inspection lacks direct immutable evidence');
+      source === snapshot.sources[item.source]),
+      `inspection lacks direct immutable evidence: cite a quote from ${named(dependency ? item.path : snapshot.sources[item.source]?.path)} itself`);
   };
   for (const item of manifest.sources) {
     requireThat(Object.hasOwn(snapshot.sources, item.source), 'unknown inventoried source');
     check(item, false);
     const changed = snapshot.files.some(file => [file.base_source, file.head_source].includes(item.source));
-    requireThat(!changed || item.state !== 'excluded' || !snapshot.sources[item.source].content.trim(), 'changed source cannot be excluded');
+    requireThat(!changed || item.state !== 'excluded' || !snapshot.sources[item.source].content.trim(),
+      `changed source cannot be excluded: ${named(snapshot.sources[item.source].path)} has content, so mark it inspected and cite a quote from it`);
   }
   for (const item of manifest.dependencies) {
     requireThat(typeof item.path === 'string' && item.path.length > 0 && item.path.length < 500 &&

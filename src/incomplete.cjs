@@ -90,7 +90,7 @@ function classify(error) {
   if (message === 'Acceptance provider did not complete the bounded review') return {cause: 'provider_incomplete', reason: 'The reviewer model did not complete its answer within the bounded token budget.'};
   const invalid = /^Invalid acceptance evidence: (.*)$/.exec(message);
   if (invalid) {
-    const detail = /^[a-z0-9 ,'-]{1,120}$/i.test(invalid[1]) ? `: ${invalid[1]}` : '';
+    const detail = /^[a-z0-9 ,'\/._:-]{1,240}$/i.test(invalid[1]) ? `: ${invalid[1]}` : '';
     return {cause: 'review_output_invalid', reason: `The reviewer's output failed controller validation on 3 consecutive attempts${detail}.`};
   }
   if (/^(?:Technical finding|Unknown controller-supplied|Unit paths are derived)/.test(message)) return {cause: 'review_output_invalid', reason: 'The reviewer returned a finding or unit the controller cannot bind to the changed source, on 3 consecutive attempts.'};

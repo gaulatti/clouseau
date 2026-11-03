@@ -358,6 +358,9 @@ records without that marker remain readable; they do not acquire new claims.
 
 Each review inventories every supplied immutable source as inspected, excluded
 with a cited reason, or missing. Nonempty changed source cannot be excluded.
+A rejection of the inventory or of the changed-file accounting names the file and the step that repairs it, for example
+`changed source cannot be excluded: src/a.py has content, so mark it inspected and cite a quote from it`; the local review
+hands that sentence back to the agent, and the hosted notice shows it because it is a plain constant plus a file of the pull request.
 The structured response schema requires inspected and excluded coverage
 dispositions to select one `primary` proof ID and an `additional` array of distinct
 supplied proof IDs. Missing dispositions omit the citation field. The controller
