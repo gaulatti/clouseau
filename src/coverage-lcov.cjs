@@ -1,19 +1,27 @@
 'use strict';
-// Read an LCOV report against a complete JS/TS source inventory.
+// Read an LCOV report against a complete source inventory: JS/TS by default, or the `source_suffixes` an lcov part declares
+// (for example `.swift` for `llvm-cov export -format=lcov`, `.rs` for cargo-llvm-cov). Paths in `SF:` may be absolute or
+// relative to the workspace; both resolve to the same real path as the inventory.
 //
+// A report with no BRDA record at all (llvm-cov lcov exports carry none) measures no branches: branches stay 0/0, the
+// reader appends a note saying so, and the exact gate still refuses a plan with no measured branch. It is never 100%.
 // lines    = distinct DA records; covered when the hit count is positive.
 // branches = BRDA records; covered when the taken count is a positive integer ("-" is not taken).
-// The LF/LH/BRF/BRH totals a producer writes are cross-checked, never trusted.
+// The LF/LH/BRF/BRH totals a producer writes are cross-checked, never trusted. One exception, only for a part that declares
+// source_suffixes: `llvm-cov export -format=lcov` (Swift, and Rust through cargo-llvm-cov) writes LF/LH from its own summary,
+// which differs from its DA records (measured: LF 35 against 31 DA records in one file). For that part LF/LH are not compared
+// and the DA records alone are measured; BRF/BRH are still compared with the BRDA records.
 const fs = require('node:fs');
 const path = require('node:path');
 const {fail, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
-const {candidates, productionName, EXCLUDED_DIRECTORIES} = require('./coverage-istanbul.cjs');
+const {candidates, productionName} = require('./coverage-istanbul.cjs');
+const {scopeFor, DEFAULT_SCOPE} = require('./coverage-scope.cjs');
 
 const IGNORED = /^(?:TN:.*|FN:.*|FNDA:.*|FNF:.*|FNH:.*|)$/;
 
 const integer = value => /^[0-9]+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : fail('LCOV numbers must be nonnegative safe integers');
 
-function parseRecord(rows) {
+function parseRecord(rows, producerLines) {
   const lines = new Map();
   const branches = [];
   const branchLines = [];
@@ -34,20 +42,24 @@ function parseRecord(rows) {
   }
   const measured = {lines: [...lines.values()], branches};
   const covered = values => values.filter(count => count > 0).length;
-  if (totals.LF !== measured.lines.length || totals.LH !== covered(measured.lines) ||
+  if (!producerLines && (totals.LF !== measured.lines.length || totals.LH !== covered(measured.lines)) ||
       totals.BRF !== branches.length || totals.BRH !== covered(branches)) fail('LCOV totals do not match its records');
   return {...measured, lineMap: lines, branchLines};
 }
 
-function counters(text, sourceDirectory, cwd, detail) {
+const NO_BRANCHES = 'the lcov report has no BRDA records, so branches are not measured and only lines are gated';
+
+// `options.suffixes` declares the inventory (default JS/TS); `options.notes`, when given, receives plain-language notes.
+function counters(text, sourceDirectory, cwd, detail, options = {}) {
   if (typeof text !== 'string') fail('Expected an LCOV report as text');
   const root = realPath(sourceDirectory, cwd);
-  const found = candidates(root);
-  if (found.some(({file, symbolic}) => symbolic || !isInside(realPath(file, cwd), root))) fail('Symbolic or escaped JS/TS application source');
+  const scope = options.suffixes === undefined ? DEFAULT_SCOPE : scopeFor(options.suffixes, root);
+  const found = candidates(root, scope);
+  if (found.some(({file, symbolic}) => symbolic || !isInside(realPath(file, cwd), root))) fail(`Symbolic or escaped ${scope.label} application source`);
   const sources = new Set(found.map(({file}) => realPath(file, cwd)));
-  if (!sources.size) fail('No application JS/TS sources found');
+  if (!sources.size) fail(`No application ${scope.label} sources found`);
   for (const file of sources) {
-    if (/\b(?:c8|istanbul|v8)\s+ignore\b/.test(fs.readFileSync(file, 'utf8'))) fail(`Coverage ignore directives are not allowed: ${file}`);
+    if (scope.ignorePattern.test(fs.readFileSync(file, 'utf8'))) fail(`Coverage ignore directives are not allowed: ${file}`);
   }
   const seen = new Set();
   const counts = emptyCounts();
@@ -56,11 +68,11 @@ function counters(text, sourceDirectory, cwd, detail) {
   const finish = () => {
     const file = realPath(name, cwd);
     const relative = path.relative(root, file);
-    if (!isInside(file, root) || relative.split(path.sep).slice(0, -1).some(part => EXCLUDED_DIRECTORIES.has(part)) ||
+    if (!isInside(file, root) || scope.excludesDirectories(relative.split(path.sep).slice(0, -1)) ||
         !productionName(path.basename(file))) return;
     if (!sources.has(file) || seen.has(file)) fail(`Unexpected or duplicate application coverage: ${name}`);
     seen.add(file);
-    const measured = parseRecord(rows);
+    const measured = parseRecord(rows, scope.custom);
     if (detail) {
       detail.set(file, {lines: new Map([...measured.lineMap].map(([line, hits]) => [line, hits > 0])),
         branches: measured.branches.map((hits, index) => {
@@ -87,6 +99,7 @@ function counters(text, sourceDirectory, cwd, detail) {
   }
   if (name !== null) fail('LCOV record is missing end_of_record');
   if (!seen.size) fail('Expected a nonempty LCOV report');
+  if (counts.branches[0] === 0 && options.notes) options.notes.push(NO_BRANCHES);
   const missing = [...sources].filter(file => !seen.has(file));
   if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', '));
   return counts;

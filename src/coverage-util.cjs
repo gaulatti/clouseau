@@ -50,7 +50,6 @@ function loadReport(filename) {
 const emptyCounts = () => ({lines: [0, 0], branches: [0, 0]});
 
 const PART_KEYS = 'format,report,source_directory';
-const PART_KEYS_WITH_PACKAGE = 'format,package_directory,report,source_directory';
 const plainDirectory = value => typeof value === 'string' && value.length > 0 && value.length < 500 && !value.startsWith('/') &&
   !value.includes('\\') && !value.includes('\0') && !value.split('/').some(part => !part || part === '.' || part === '..' || part === '.git');
 
@@ -67,7 +66,27 @@ function packageDirectory(part) {
   return directory;
 }
 
-// A v2 part has exactly these fields; package_directory is the one optional field.
-const validPartShape = part => isObject(part) && [PART_KEYS, PART_KEYS_WITH_PACKAGE].includes(Object.keys(part).sort().join(','));
+// The source suffixes an lcov part may declare: one to eight distinct lowercase suffixes such as ".swift". Returns the
+// validated array or throws. With no declaration the inventory stays the JS/TS list (applied by the source scope).
+const SUFFIX = /^\.[a-z0-9]{1,8}$/;
+function validateSourceSuffixes(value) {
+  if (!Array.isArray(value) || !value.length || value.length > 8 || value.some(item => typeof item !== 'string' || !SUFFIX.test(item)) ||
+      new Set(value).size !== value.length) {
+    fail('source_suffixes must be a list of one to eight distinct suffixes such as ".swift" (lowercase letters and digits, at most eight)');
+  }
+  return value;
+}
 
-module.exports = {fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts, packageDirectory, validPartShape};
+// A v2 part has exactly these fields; package_directory and source_suffixes are the optional ones. source_suffixes is
+// meaningful only for the lcov format, whose report names files of any language; every other adapter owns its inventory.
+function validPartShape(part) {
+  if (!isObject(part)) return false;
+  const keys = Object.keys(part);
+  const optional = ['package_directory', 'source_suffixes'];
+  if (!PART_KEYS.split(',').every(key => keys.includes(key)) || keys.some(key => !PART_KEYS.split(',').includes(key) && !optional.includes(key))) return false;
+  if (!Object.hasOwn(part, 'source_suffixes')) return true;
+  try {validateSourceSuffixes(part.source_suffixes);} catch {return false;}
+  return part.format === 'lcov';
+}
+
+module.exports = {fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts, packageDirectory, validPartShape, validateSourceSuffixes};

@@ -4,26 +4,25 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {fail, isObject, get, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
 
-const SOURCE_SUFFIXES = new Set(['.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs']);
-const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules', 'vendor', 'test', 'tests', '__tests__']);
+const {EXCLUDED_DIRECTORIES, DEFAULT_SCOPE} = require('./coverage-scope.cjs');
 
 const productionName = name => !(name.endsWith('.d.ts') || /\.(?:test|spec)\.(?:ts|tsx|js|jsx|cjs|mjs)$/.test(name));
 
 // Every production candidate under root. Symbolic links are listed, never followed.
-function candidates(root) {
+function candidates(root, scope = DEFAULT_SCOPE) {
   const found = [];
-  const walk = directory => {
+  const walk = (directory, parts) => {
     for (const entry of fs.readdirSync(directory, {withFileTypes: true})) {
       const file = path.join(directory, entry.name);
       if (entry.isDirectory()) {
-        if (!EXCLUDED_DIRECTORIES.has(entry.name)) walk(file);
-      } else if (SOURCE_SUFFIXES.has(path.extname(entry.name)) && productionName(entry.name) &&
+        if (!scope.excludesDirectories([...parts, entry.name])) walk(file, [...parts, entry.name]);
+      } else if (scope.suffixes.has(path.extname(entry.name)) && productionName(entry.name) &&
           (entry.isSymbolicLink() ? fs.statSync(file, {throwIfNoEntry: false})?.isFile() : entry.isFile())) {
         found.push({file, symbolic: entry.isSymbolicLink()});
       }
     }
   };
-  walk(root);
+  walk(root, []);
   return found;
 }
 
