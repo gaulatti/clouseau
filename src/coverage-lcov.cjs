@@ -6,7 +6,7 @@
 // The LF/LH/BRF/BRH totals a producer writes are cross-checked, never trusted.
 const fs = require('node:fs');
 const path = require('node:path');
-const {fail, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
+const {missingSourceExplanation, fail, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
 const {candidates, productionName, EXCLUDED_DIRECTORIES} = require('./coverage-istanbul.cjs');
 
 const IGNORED = /^(?:TN:.*|FN:.*|FNDA:.*|FNF:.*|FNH:.*|)$/;
@@ -88,7 +88,7 @@ function counters(text, sourceDirectory, cwd, detail) {
   if (name !== null) fail('LCOV record is missing end_of_record');
   if (!seen.size) fail('Expected a nonempty LCOV report');
   const missing = [...sources].filter(file => !seen.has(file));
-  if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', '));
+  if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', ') + '\n' + missingSourceExplanation(missing));
   return counts;
 }
 

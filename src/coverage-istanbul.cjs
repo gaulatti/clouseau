@@ -2,7 +2,7 @@
 // Read native Istanbul counters and require a complete JS/TS source inventory.
 const fs = require('node:fs');
 const path = require('node:path');
-const {fail, isObject, get, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
+const {missingSourceExplanation, fail, isObject, get, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
 
 const SOURCE_SUFFIXES = new Set(['.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs']);
 const EXCLUDED_DIRECTORIES = new Set(['.git', 'node_modules', 'vendor', 'test', 'tests', '__tests__']);
@@ -99,7 +99,7 @@ function counters(report, sourceDirectory, cwd, detail) {
     }
   }
   const missing = [...sources].filter(file => !seen.has(file));
-  if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', '));
+  if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', ') + '\n' + missingSourceExplanation(missing));
   return counts;
 }
 

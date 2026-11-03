@@ -56,6 +56,16 @@ test('the repository V8 writer output is readable by the reader', () => tree(dir
   assert.ok(counts.lines[1] <= counts.lines[0]);
 }));
 
+test('LCOV names the cause and the repairs when application source coverage is missing', () => tree(directory => {
+  assert.throws(() => measure(directory, record('src/a.cjs')), error => /^Missing application source coverage: .*b\.mjs\nLikely causes and repairs:\n1\. .*--coverageProvider=v8/.test(error.message) &&
+    /2\. .*source_directory/.test(error.message) && /3\. No test imports/.test(error.message) && !/Detected:/.test(error.message));
+  fs.mkdirSync(path.join(directory, 'src', '.clouseau-ci'));
+  fs.writeFileSync(path.join(directory, 'src', '.clouseau-ci', 'x.cjs'), 'module.exports = 1;\n');
+  fs.writeFileSync(path.join(directory, 'src', 'shape.types.ts'), 'export type S = string;\n');
+  assert.throws(() => measure(directory, record('src/a.cjs')), error => /Detected: 1 missing file\(s\) have type-only names/.test(error.message) &&
+    /Detected: 1 missing file\(s\) are under a \.clouseau-ci directory/.test(error.message));
+}));
+
 test('malformed, partial, foreign and ambiguous LCOV cannot claim coverage', () => {
   rejects(undefined, /Expected an LCOV report as text/);
   rejects('', /Expected a nonempty LCOV report/);
