@@ -376,7 +376,10 @@ function approvalHold(report, snapshot) {
   if (testMatters && gate('test_integrity') === 'unresolved') return 'test integrity is unresolved';
   if (executable.length && missing && gate('review_completeness') === 'unresolved') return 'review completeness is unresolved';
   const reached = reachedByTests(snapshot);
-  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !nonBehavioural(patchOf(snapshot, file)) && !linked(snapshot, file.path, reached)).map(file => file.path);
+  // A file whose head source has no nonblank line (an empty package marker such as an __init__.py) holds no statement, so
+  // there is no production code in it for a test to exercise. A head that was not supplied is not evidence of emptiness.
+  const empty = file => typeof snapshot.sources[file.head_source]?.content === 'string' && !snapshot.sources[file.head_source].content.trim();
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !empty(file) && !nonBehavioural(patchOf(snapshot, file)) && !linked(snapshot, file.path, reached)).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;
 }
