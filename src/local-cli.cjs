@@ -250,13 +250,24 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
   const cachedReceipt = path.join(cache, 'receipt.json');
+  let reusable = null;
   if (ciConfig?.local_review && fs.existsSync(cachedReceipt)) {
     const bundle = JSON.parse(fs.readFileSync(cachedReceipt, 'utf8'));
     const key = ciConfig.local_review.keys.find(item => item.id === bundle.payload.key_id);
-    const verified = verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
-      author: pull ? pull.author : key?.github_actor, pullNumber: pull?.number, headSha: head, baseSha: git(directory, ['rev-parse', base]).trim(),
-      reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
-      policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))});
+    try {
+      reusable = {bundle, verified: verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
+        author: pull ? pull.author : key?.github_actor, pullNumber: pull?.number, headSha: head, baseSha,
+        reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
+        policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))})};
+    } catch {
+      // The receipt this exact input produced no longer verifies (typically: it expired) or cannot be read as one. It approves nothing any more, so the
+      // input is reviewed again, answers taking the evidence-keyed reuse of a refresh. The old evidence is retired, except the
+      // stored requirement that `refresh` defaults to, which stays valid until the new review replaces it.
+      for (const name of fs.readdirSync(cache)) if (!['request.txt', 'requirement.json'].includes(name)) fs.rmSync(path.join(cache, name), {recursive: true, force: true});
+    }
+  }
+  if (reusable) {
+    const {bundle, verified} = reusable;
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
@@ -465,9 +476,22 @@ function publishReceipt({directory, receipt}) {
     ...parts.map((part, index) => [partName(index), Buffer.from(part, 'base64')])];
   const entries = files.map(([name, content]) => `100644 blob ${git(directory, ['hash-object', '-w', '--stdin'], content).trim()}\t${name}\n`);
   const tree = git(directory, ['mktree'], entries.join('')).trim();
-  const commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
-    `Authenticated local review of ${record.snapshot.head_sha}\n`).trim();
-  git(directory, ['push', 'origin', `${commit}:refs/tags/clouseau-review/${payload.nonce}`]);
+  // Publishing the same receipt again (a refresh that finds its marker gone, replaced or forged) names the artifact already
+  // published for this nonce, when it holds exactly these files; a tag is never overwritten.
+  const tag = `refs/tags/clouseau-review/${payload.nonce}`;
+  const remote = git(directory, ['remote', 'get-url', '--push', 'origin']).trim();
+  const [published] = git(directory, ['ls-remote', remote, tag]).trim().split(/\s+/);
+  let commit = published;
+  if (published) {
+    git(directory, ['fetch', '-q', remote, tag]);
+    if (git(directory, ['rev-parse', `${published}^{tree}`]).trim() !== tree) {
+      throw new Error(`The artifact tag ${tag} already exists with other content; nothing was published`);
+    }
+  } else {
+    commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
+      `Authenticated local review of ${record.snapshot.head_sha}\n`).trim();
+    git(directory, ['push', 'origin', `${commit}:${tag}`]);
+  }
   return {artifact_commit: commit, ...attested(payload.attestation), marker: `<!-- clouseau-local-review:v1 ${commit} -->`, ...(warnings.length ? {warnings} : {})};
 }
 
@@ -479,10 +503,11 @@ async function main(argv, runtime = {}) {
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
   if (args.command === 'review') return runReview(args, runtime);
   if (args.command === 'refresh') {
-    const {state = stateDirectory()} = runtime;
+    const {state = stateDirectory(), installed = installation} = runtime;
     return require('./pr-refresh.cjs').refreshPull(args, {
       review: (reviewArgs, extra) => runReview(reviewArgs, {...runtime, reuse: {read: true}, continued: pinning.argvFor(args), ...extra}),
-      publish: publishReceipt, execute: runtime.execute, available: runtime.available, state});
+      publish: publishReceipt, standing: require('./receipt-standing.cjs').receiptStanding, installed,
+      execute: runtime.execute, available: runtime.available, state});
   }
   if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);

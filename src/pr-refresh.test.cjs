@@ -7,7 +7,10 @@ const path = require('node:path');
 const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {initializeIdentity, main} = require('./local-cli.cjs');
+const crypto = require('node:crypto');
 const {refreshPull, withMarker} = require('./pr-refresh.cjs');
+const {receiptStanding, githubReader} = require('./receipt-standing.cjs');
+const {issueReceipt} = require('./local-receipt.cjs');
 
 const GITHUB = 'git@github.com:example/local-fixture.git';
 const MARKER = sha => `<!-- clouseau-local-review:v1 ${sha} -->`;
@@ -69,7 +72,7 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
     };
     const head = () => git(work, ['rev-parse', 'HEAD']).trim();
     const remoteHead = () => git(bare, ['rev-parse', 'refs/heads/feature']).trim();
-    const pull = {state: 'open', base: 'main', head: head(), ref: 'feature', repository: 'example/local-fixture', title: 'fix: reject missing input', body: 'Body.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'};
+    const pull = {number: 7, author: 'fixture-author', state: 'open', base: 'main', head: head(), ref: 'feature', repository: 'example/local-fixture', title: 'fix: reject missing input', body: 'Body.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'};
     const events = [];
     const execute = (program, args, options) => {
       assert.equal(program, 'gh');
@@ -78,8 +81,15 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
         events.push(`patch:${remoteHead() === pull.head ? 'before-push' : 'after-push'}`);
         return '';
       }
+      // The two reads that loading a receipt makes: a file of the commit a marker names, as the contents API serves it.
+      const content = /^repos\/example\/local-fixture\/contents\/([^?]+)\?ref=([0-9a-f]{40})$/.exec(args[1]);
+      if (content) {
+        let text;
+        try {text = git(bare, ['show', `${content[2]}:${content[1]}`]);} catch {throw Object.assign(new Error('gh failed'), {stderr: 'gh: Not Found (HTTP 404)'});}
+        return JSON.stringify({type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64'), size: Buffer.byteLength(text)});
+      }
       events.push('read');
-      return JSON.stringify(pull);
+      return JSON.stringify({...pull, base_sha: git(bare, ['rev-parse', 'refs/heads/main']).trim()});
     };
     return await run({root, bare, work, other, advance, head, remoteHead, pull, events, execute, commit, write});
   } finally {delete process.env.GIT_SSH_COMMAND; fs.rmSync(root, {recursive: true, force: true});}
@@ -89,8 +99,8 @@ const request = (root, text = 'Reject missing input.') => {
   const filename = path.join(root, 'requirement.txt'); fs.writeFileSync(filename, text); return filename;
 };
 const stub = (extra = {}) => {
-  const seen = {reviews: [], extras: [], publishes: []};
-  return {seen, review: async (args, options) => {seen.reviews.push(args); seen.extras.push(options); return extra.result || {decision: 'auto_approve', receipt: '/receipt.json', head_sha: seen.reviews.length ? extra.head() : null};},
+  const seen = {reviews: [], extras: [], publishes: [], standings: []};
+  return {seen, standing: async given => {seen.standings.push(given); return extra.standing || {applicable: true, usable: true};}, installed, review: async (args, options) => {seen.reviews.push(args); seen.extras.push(options); return extra.result || {decision: 'auto_approve', receipt: '/receipt.json', head_sha: seen.reviews.length ? extra.head() : null};},
     publish: async args => {seen.publishes.push(args); return {marker: MARKER('1'.repeat(40)), artifact_commit: '1'.repeat(40)};}};
 };
 const args = (f, extra = {}) => ({pr: '7', directory: f.work, 'request-file': request(f.root), harness: 'claude', ...extra});
@@ -432,4 +442,191 @@ test('an agent-driven refresh continues on its pinned engine with the user\'s ow
       } finally {process.stderr.write = original;}
     });
   } finally {fs.rmSync(state, {recursive: true, force: true}); fs.rmSync(cacheHome, {recursive: true, force: true});}
+});
+
+// ---- The base has not moved: a receipt that no longer stands is renewed, one that does stand is left alone ----
+
+const REPO = {owner: 'example', repo: 'local-fixture'};
+const quiet = async work => {
+  const lines = []; const original = process.stderr.write; process.stderr.write = text => {lines.push(text); return true;};
+  try {return [await work(), lines];} finally {process.stderr.write = original;}
+};
+const EXPIRED = {applicable: true, usable: false, cause: 'receipt_expired', sentence: 'it is expired or not yet valid (it expires `2026-11-01T00:00:00.000Z`)'};
+
+test('with the base unmoved a receipt that does not stand is renewed: same head, no merge, review, publication, marker, and no push of the branch', async () => {
+  await pullRepository(async f => {
+    const before = f.head(); const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-refresh-empty-'));
+    const dependencies = {...stub({head: () => f.head(), standing: EXPIRED}), execute: f.execute, available: () => true};
+    // Nothing is changed when the requirement cannot be found.
+    await assert.rejects(refreshPull({...args(f), 'request-file': undefined}, {...dependencies, state: empty}), /No accepted review of example\/local-fixture branch feature is recorded/);
+    assert.deepEqual(dependencies.seen.reviews, []); unchanged(f, before);
+    const [result, lines] = await quiet(() => refreshPull(args(f), dependencies));
+    assert.equal(result.status, 'renewed'); assert.equal(result.pushed, false); assert.equal(result.previous_head_sha, before);
+    assert.equal(result.cause, 'receipt_expired'); assert.equal(result.reason, EXPIRED.sentence); assert.equal(result.marker, MARKER('1'.repeat(40)));
+    assert.deepEqual(lines, [`Renewing the local review receipt of pull request 7 (cause: receipt_expired): ${EXPIRED.sentence}\n`]);
+    assert.equal(f.head(), before, 'no merge: the head is the pull request head'); assert.equal(f.remoteHead(), before, 'the branch was not pushed');
+    assert.equal(dependencies.seen.reviews.length, 1); assert.equal(dependencies.seen.reviews[0].base, 'origin/main');
+    assert.deepEqual(dependencies.seen.publishes, [{directory: f.work, receipt: '/receipt.json'}]);
+    assert.deepEqual(dependencies.seen.extras, [{title: 'fix: reject missing input'}]);
+    assert.ok(f.pull.body.includes(MARKER('1'.repeat(40))) && f.pull.body.includes('Generated with'));
+    assert.deepEqual(f.events.filter(event => event.startsWith('patch')), ['patch:before-push']);
+    // The judgement is taken on what GitHub reports for this pull request and the fetched base.
+    const [given] = dependencies.seen.standings;
+    assert.equal(given.directory, f.work); assert.equal(given.base, 'origin/main'); assert.deepEqual(given.repo, REPO); assert.equal(given.installed, installed);
+    assert.deepEqual({number: given.pull.number, author: given.pull.author, head: given.pull.head, base_sha: given.pull.base_sha, body: given.pull.body},
+      {number: 7, author: 'fixture-author', head: before, base_sha: git(f.bare, ['rev-parse', 'refs/heads/main']).trim(), body: f.pull.body.replace(`\n\n${MARKER('1'.repeat(40))}\n`, '')});
+    // Warnings of the publication reach the result, as for a merge.
+    const publish = dependencies.publish;
+    const warned = await quiet(() => refreshPull(args(f), {...dependencies, publish: async given => ({...await publish(given), warnings: ['w']})}));
+    assert.deepEqual(warned[0].warnings, ['w']);
+    // A review that does not pass or is not signed pushes nothing and does not talk about a merge that never happened.
+    const held = await quiet(() => refreshPull(args(f), {...stub({result: {decision: 'repair_required', receipt: null}, standing: EXPIRED}), execute: f.execute, available: () => true}));
+    assert.equal(held[0].pushed, false); assert.equal(held[0].note, 'The review did not pass; nothing was pushed.');
+    await assert.rejects(quiet(() => refreshPull(args(f), {...stub({result: {decision: 'auto_approve', receipt: null}, standing: EXPIRED}), execute: f.execute, available: () => true})),
+      /produced no signed receipt/);
+    assert.equal(f.remoteHead(), before); assert.equal(f.head(), before);
+    fs.rmSync(empty, {recursive: true, force: true});
+  });
+});
+
+test('with the base unmoved a receipt that still stands, or a repository without receipts, is up to date and nothing is reviewed', async () => {
+  await pullRepository(async f => {
+    const before = f.head();
+    const stands = {...stub({standing: {applicable: true, usable: true}}), execute: f.execute, available: () => true};
+    const kept = await refreshPull(args(f), stands);
+    assert.equal(kept.status, 'up_to_date'); assert.equal(kept.pushed, false); assert.match(kept.note, /already contains origin\/main and its local review receipt still verifies; nothing to refresh/);
+    const none = {...stub({standing: {applicable: false}}), execute: f.execute, available: () => true};
+    const plain = await refreshPull(args(f), none);
+    assert.equal(plain.status, 'up_to_date'); assert.equal(plain.note, 'Pull request 7 already contains origin/main; nothing to refresh');
+    assert.deepEqual([...stands.seen.reviews, ...none.seen.reviews, ...stands.seen.publishes, ...none.seen.publishes], []);
+    assert.equal(f.pull.body.includes('clouseau-local-review'), false); unchanged(f, before);
+  });
+});
+
+test('GitHub reads for a receipt go through gh and keep a missing object distinct from any other failure', async () => {
+  const seen = [];
+  const reader = githubReader((program, given, options) => {
+    seen.push([program, given, options.encoding]);
+    if (given[1].includes('missing')) throw Object.assign(new Error('x'), {stderr: 'gh: Not Found (HTTP 404)'});
+    if (given[1].includes('broken')) throw Object.assign(new Error('x'), {stderr: 'gh: Server Error (HTTP 500)'});
+    return JSON.stringify({size: 2});
+  });
+  assert.deepEqual(await reader.rest.repos.getContent({owner: 'o', repo: 'r', ref: 'a'.repeat(40), path: 'clouseau-review.json'}), {data: {size: 2}});
+  assert.deepEqual(await reader.rest.git.getBlob({owner: 'o', repo: 'r', file_sha: 'b'.repeat(40)}), {data: {size: 2}});
+  assert.deepEqual(seen.map(([program, given]) => [program, given]), [['gh', ['api', `repos/o/r/contents/clouseau-review.json?ref=${'a'.repeat(40)}`]],
+    ['gh', ['api', `repos/o/r/git/blobs/${'b'.repeat(40)}`]]]);
+  await assert.rejects(reader.rest.git.getBlob({owner: 'o', repo: 'r', file_sha: 'missing'}), error => error.status === 404);
+  await assert.rejects(reader.rest.git.getBlob({owner: 'o', repo: 'r', file_sha: 'broken'}), error => error.status === undefined && /x/.test(error.message));
+});
+
+// Every kind of receipt the pull request body can name, judged with real signed receipts and the code CI uses.
+test('through the command, a receipt is renewed unless it verifies for this head; forged, foreign, expired, unenrolled and missing ones never stand', async t => {
+  const {state, config, calls, runtime, refresh} = signedFixture(t);
+  await pullRepository(async f => {
+    const requestFile = request(f.root);
+    const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], runtime(f));
+    assert.equal(first.decision, 'auto_approve');
+    const bundle = JSON.parse(fs.readFileSync(first.receipt, 'utf8'));
+    const identityFile = path.join(state, `${bundle.payload.key_id}.json`);
+    const {private_key: privateKey, id, issuer} = JSON.parse(fs.readFileSync(identityFile, 'utf8'));
+    const sign = (payload, key = privateKey) => ({payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
+      crypto.createPrivateKey(key)).toString('base64url')});
+    const alter = (mutate, key) => {
+      const payload = structuredClone(bundle.payload); mutate(payload); payload.record_digest = digest(payload.record); return sign(payload, key);
+    };
+    const plant = files => {
+      const entries = Object.entries(files).map(([name, text]) => `100644 blob ${git(f.work, ['hash-object', '-w', '--stdin'], text).trim()}\t${name}\n`).join('');
+      const tree = git(f.work, ['mktree'], entries).trim();
+      const commit = git(f.work, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit-tree', tree], 'planted\n').trim();
+      git(f.work, ['push', '-q', 'origin', `${commit}:refs/tags/planted/${commit}`]);
+      return commit;
+    };
+    const named = other => plant({'clouseau-review.json': JSON.stringify(other) + '\n'});
+    const asked = () => ({directory: f.work, base: 'origin/main', repo: REPO, execute: f.execute, installed,
+      pull: {number: 7, author: 'fixture-author', head: f.head(), base_sha: git(f.bare, ['rev-parse', 'refs/heads/main']).trim(), body: f.pull.body}});
+    const judge = async (body, given = asked) => {f.pull.body = body; return receiptStanding({...given(), pull: {...given().pull, body}});};
+    const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], runtime(f));
+    const marker = (commit = published.artifact_commit) => `Body.\n\n<!-- clouseau-local-review:v1 ${commit} -->\n`;
+    // The same review, signed by the enrolled key two hours ago for one hour: published, it is what an author finds after the expiry.
+    const expired = issueReceipt({record: bundle.payload.record, privateKey, keyId: id, issuer, reviewerSha: bundle.payload.reviewer_sha,
+      reviewerDigest: bundle.payload.reviewer_digest, reviewerSemantics: bundle.payload.reviewer_semantics, now: Date.now() - 7200000, lifetime: 3600});
+    assert.ok(expired.payload.expires_at < Date.now() / 1000);
+    const stale = named(expired);
+    // The receipt the author published stands, and nothing else about the pull request is consulted.
+    assert.deepEqual(await judge(marker()), {applicable: true, usable: true});
+    // Forged, foreign or not-yet-trusted receipts: each is unusable, with CI's own cause class, and none is accepted.
+    const foreignKey = crypto.generateKeyPairSync('ed25519').privateKey.export({type: 'pkcs8', format: 'pem'});
+    const cases = [
+      ['no marker', 'Body without a marker.\n', 'receipt_absent'],
+      ['two markers', marker() + marker(), 'receipt_malformed'],
+      ['a marker naming a commit that does not exist', marker('a'.repeat(40)), 'receipt_unavailable'],
+      ['a commit that holds no receipt', marker(plant({'README.md': 'not a receipt\n'})), 'receipt_unavailable'],
+      ['a file that is not JSON', marker(plant({'clouseau-review.json': 'not json\n'})), 'receipt_malformed'],
+      ['an envelope with extra fields', marker(named({...bundle, extra: true})), 'receipt_malformed'],
+      ['a receipt signed by a key that is not enrolled', marker(named(alter(() => {}, foreignKey))), 'receipt_signature'],
+      ['an altered receipt under the old signature', marker(named({...bundle, payload: {...bundle.payload, nonce: 'f'.repeat(64)}})), 'receipt_signature'],
+      ['a receipt of another head', marker(named(alter(payload => {payload.record.snapshot.head_sha = 'c'.repeat(40);}))), 'receipt_revision_head'],
+      ['a receipt of another repository', marker(named(alter(payload => {payload.record.snapshot.repository = 'someone/else';}))), 'receipt_revision_repository'],
+      ['a receipt of another base', marker(named(alter(payload => {payload.record.snapshot.base_sha = 'd'.repeat(40);}))), 'receipt_revision_base'],
+      ['a receipt signed for another author', marker(named(alter(payload => {payload.attestation = {author: 'someone', number: 7, signer: 'fixture-author'};}))), 'receipt_attestation'],
+      ['an expired receipt', marker(stale), 'receipt_expired'],
+    ];
+    for (const [name, body, cause] of cases) {
+      const standing = await judge(body);
+      assert.deepEqual({usable: standing.usable, cause: standing.cause}, {usable: false, cause}, name);
+      assert.equal(standing.applicable, true, name); assert.equal(typeof standing.sentence, 'string', name);
+    }
+    // The engine running here is not the one that signed it, and does not accept that engine's receipts.
+    const other = await receiptStanding({...asked(), pull: {...asked().pull, body: marker()}, installed: () => ({sha: 'd'.repeat(40), digest: 'd'.repeat(64), clean: true})});
+    assert.equal(other.cause, 'receipt_engine');
+    // A failure that is not the receipt's own (GitHub unreachable) is not a verdict: nothing is renewed on a guess.
+    await assert.rejects(receiptStanding({...asked(), pull: {...asked().pull, body: marker()}, execute: () => {throw Object.assign(new Error('unreachable'), {stderr: 'gh: Server Error (HTTP 500)'});}}), /unreachable/);
+    // Without receipts in the protected configuration (no configuration at all, or none for local review) there is nothing to judge.
+    const tree = entries => git(f.work, ['mktree'], entries).trim();
+    const commitOf = root => git(f.work, ['-c', 'user.name=T', '-c', 'user.email=t@example.invalid', 'commit-tree', root], 'base\n').trim();
+    const withConfig = text => commitOf(tree(`040000 tree ${tree(`100644 blob ${git(f.work, ['hash-object', '-w', '--stdin'], text).trim()}\tclouseau.json\n`)}\t.github\n`));
+    const {local_review: dropped, ...withoutReceipts} = config;
+    assert.ok(dropped);
+    for (const base of [commitOf(tree('')), withConfig(JSON.stringify(withoutReceipts))]) {
+      assert.deepEqual(await receiptStanding({...asked(), base, pull: {...asked().pull, body: marker()}}), {applicable: false});
+    }
+
+    // The same, through the command: a receipt that stands is up to date, and the reviewer is not asked.
+    f.pull.body = marker();
+    const asks = calls.length;
+    const stands = await refresh(f, {request: requestFile});
+    assert.equal(stands.status, 'up_to_date'); assert.match(stands.note, /receipt still verifies/); assert.equal(calls.length, asks);
+    // A forged marker is never taken for a receipt: the review is repeated for this head, a receipt is published, the marker replaced, the branch not pushed.
+    const before = f.head(); const forged = marker('a'.repeat(40)); f.pull.body = forged;
+    const [renewed] = await quiet(() => refresh(f, {request: requestFile}));
+    assert.equal(renewed.status, 'renewed'); assert.equal(renewed.pushed, false); assert.equal(renewed.cause, 'receipt_unavailable');
+    assert.equal(f.head(), before); assert.equal(f.remoteHead(), before);
+    assert.ok(f.pull.body.includes(renewed.marker) && !f.pull.body.includes('a'.repeat(40)), 'the forged marker was replaced');
+    assert.equal(f.pull.body.match(/clouseau-local-review:/g).length, 1);
+    assert.ok(git(f.bare, ['cat-file', '-t', renewed.artifact_commit]).includes('commit') && renewed.decision === 'auto_approve');
+    // The renewed receipt now stands, so asking again does nothing.
+    assert.equal((await refresh(f, {request: requestFile})).status, 'up_to_date');
+
+    // The real case: the receipt in the body (and the one this input cached) expired. The same input is reviewed again, taking the
+    // remembered answers, a fresh receipt replaces the marker, and the branch on GitHub is not touched.
+    f.pull.body = marker(stale);
+    const caches = fs.readdirSync(path.join(state, 'reviews'));
+    const cacheDirectory = path.join(state, 'reviews', caches.find(name => fs.existsSync(path.join(state, 'reviews', name, 'receipt.json')) &&
+      JSON.parse(fs.readFileSync(path.join(state, 'reviews', name, 'receipt.json'))).payload.nonce === bundle.payload.nonce));
+    fs.writeFileSync(path.join(cacheDirectory, 'receipt.json'), JSON.stringify(expired) + '\n');
+    const reviewed = calls.length;
+    const [again, lines] = await quiet(() => refresh(f, {request: requestFile}));
+    assert.equal(again.status, 'renewed'); assert.equal(again.cause, 'receipt_expired'); assert.match(lines.join(''), /\(cause: receipt_expired\): it is expired or not yet valid \(it expires `\d{4}-/);
+    assert.equal(again.harness_invocations, 0); assert.ok(again.reused_calls >= 2); assert.equal(calls.length, reviewed, 'the remembered answers were used');
+    assert.equal(f.head(), before); assert.equal(f.remoteHead(), before); assert.ok(f.pull.body.includes(again.marker) && !f.pull.body.includes(stale));
+    assert.notEqual(JSON.parse(fs.readFileSync(again.receipt, 'utf8')).payload.nonce, bundle.payload.nonce);
+    assert.equal((await refresh(f, {request: requestFile})).status, 'up_to_date');
+    // A tag is never overwritten: publishing a receipt whose nonce names an artifact with other content is refused.
+    const squatted = JSON.parse(fs.readFileSync(again.receipt, 'utf8')); const squatter = plant({'clouseau-review.json': 'other\n'});
+    git(f.work, ['push', '-q', 'origin', `${squatter}:refs/tags/clouseau-review/${'f'.repeat(64)}`]);
+    const resigned = sign({...squatted.payload, nonce: 'f'.repeat(64)});
+    const resignedFile = path.join(f.root, 'resigned.json'); fs.writeFileSync(resignedFile, JSON.stringify(resigned));
+    await assert.rejects(main(['publish', '--directory', f.work, '--receipt', resignedFile], runtime(f)), /already exists with other content; nothing was published/);
+    assert.ok(fs.existsSync(path.join(cacheDirectory, 'request.txt')), 'the stored requirement stayed with the retired evidence');
+  }, {ciConfig: config});
 });
