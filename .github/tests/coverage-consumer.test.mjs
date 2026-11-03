@@ -94,7 +94,7 @@ test('the composite coverage entry point reads declared minimums from the base r
   assert.notEqual(below.status, 0);
   assert.match(below.stderr, /Coverage gate failed: Declared coverage \(cause: `declared_below_threshold`\): lines: 50\.00% \(1\/2\) is below the declared minimum 100%/);
   // A base without the file fails closed with a notice, never to 100% or to zero.
-  const missing = invoke(1, {...declared, COVERAGE_BASE_REF: git('rev-list', '--max-parents=0', 'HEAD').stdout.trim().replace(/./, 'f')});
+  const missing = invoke(1, {...declared, COVERAGE_BASE_REF: '0'.repeat(40)});
   assert.match(missing.stderr, /cause: `declared_missing`/);
   // Without the base revision, or without the protected opt-in, the exact gate stays in force.
   assert.match(invoke(1, {...declared, COVERAGE_BASE_REF: ''}).stderr, /No branches measured/);
