@@ -82,7 +82,7 @@ measurement requires a complete application inventory and nonempty measured
 lines. Local AI review records valid partial counts and unavailable, invalid or
 unverified coverage honestly, then runs regardless of the percentage. It does
 not label an old artifact as this run's verified coverage. CI's separate exact
-coverage gate still requires 100% lines and branches for every part. A genuinely
+coverage gate still requires 100% lines and branches for every part (unless the protected configuration opts in to [changed-line](changed-line-coverage.md) or [declared](declared-coverage.md) coverage; local status stays advisory exact either way). A genuinely
 branchless part may have zero branches when another part supplies measured
 branches; an entirely branchless plan fails that CI gate. One part cannot
 compensate for another part's missing or uncovered data.
