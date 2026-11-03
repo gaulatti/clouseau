@@ -175,6 +175,26 @@ test('Istanbul requires a complete production inventory and ignores only concret
   messages(() => check(), /Missing application source/);
 }));
 
+test('Istanbul names the cause and the repairs when application source coverage is missing', () => istanbul(({root, check}) => {
+  const explanation = check2 => { try {check2(); } catch (error) {return error.message;} assert.fail('expected a missing coverage failure'); };
+  const options = [/1\. .*--coverageProvider=v8.*collectCoverageFrom/, /2\. .*source_directory.*version-2 multi-part recipe/, /3\. No test imports/];
+  write(root, {'unloaded.ts': 'export const unloaded = 1;\n'});
+  let message = explanation(check);
+  assert.match(message, /^Missing application source coverage: .*unloaded\.ts\nLikely causes and repairs:\n1\. /);
+  assert.doesNotMatch(message, /Detected:/);
+  for (const option of options) assert.match(message, option);
+  write(root, {'shape.types.ts': 'export type Shape = string;\n', 'api/user.interface.tsx': 'export type User = string;\n'});
+  message = explanation(check);
+  assert.match(message, /Detected: 2 missing file\(s\) have type-only names/);
+  assert.doesNotMatch(message, /\.clouseau-ci directory/);
+  write(root, {'.clouseau-ci/engine/run.cjs': 'module.exports = 1;\n'});
+  message = explanation(check);
+  assert.match(message, /Detected: 1 missing file\(s\) are under a \.clouseau-ci directory/);
+  assert.match(message, /Detected: 2 missing file\(s\) have type-only names/);
+  for (const option of options) assert.match(message, option);
+  assert.match(message.slice(message.indexOf('\nLikely')), /^[\x20-\x7e\n]*$/);
+}));
+
 test('Istanbul fails closed on missing sources, empty measurements, directives and skips', () => istanbul(({root, report, name, check}) => {
   for (const tool of ['c8', 'istanbul', 'v8']) {
     fs.writeFileSync(name, `/* ${tool} ignore next */\nexport const hidden = 1;\n`);
