@@ -56,11 +56,12 @@ function numberFor(context) {
 }
 
 // `exempt` names the protected files whose change was verified as the opt-in managed-standard update (managed-agents.cjs).
-function scopeReason(files, pr, exempt = new Set()) {
+// `protect` names the files that are protected only because of what changed in them (declared coverage thresholds).
+function scopeReason(files, pr, exempt = new Set(), protect = new Set()) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
   const sensitive = controlPaths(config);
-  const protectedFile = name => matchesPath(name, sensitive) && !exempt.has(name);
-  if (files.some(file => protectedFile(file.filename) || matchesPath(file.previous_filename || '', sensitive))) {
+  const protectedFile = name => (matchesPath(name, sensitive) && !exempt.has(name)) || protect.has(name);
+  if (files.some(file => protectedFile(file.filename) || protect.has(file.previous_filename) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
   // GitHub lists no patch for an empty added file. Its empty blob id is the proof that no text was withheld.
@@ -72,8 +73,12 @@ function scopeReason(files, pr, exempt = new Set()) {
 }
 
 // Verified managed-standard AGENTS.md changes. Without `managed_agents` this reads nothing and exempts nothing.
-function managedExemptions(github, repo, pr, files) {
-  return require('./managed-agents.cjs').exemptions({github, repo, pr, files, config});
+// Also the files held only because their content changed: package.json when its declared coverage minimums changed
+// (`coverage.mode: declared`; unset, it reads nothing and holds nothing).
+async function managedExemptions(github, repo, pr, files) {
+  const managed = await require('./managed-agents.cjs').exemptions({github, repo, pr, files, config});
+  const declared = await require('./coverage-declared.cjs').protect({github, repo, pr, files, config});
+  return {exempt: managed.exempt, notices: [...managed.notices, ...declared.notices], protect: declared.protect};
 }
 
 function assessmentResult(raw, sha) {
@@ -97,8 +102,8 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
   if (pr.user?.login === 'github-actions[bot]') return hold('The approval bot cannot review its own PR; an independent maintainer review is required');
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
-  const {exempt} = await managedExemptions(github, repo, pr, files);
-  const reason = scopeReason(files, pr, exempt);
+  const {exempt, protect} = await managedExemptions(github, repo, pr, files);
+  const reason = scopeReason(files, pr, exempt, protect);
   if (reason && reason !== REVIEW_CONTROL_REASON) return hold(reason);
   const keyProblem = require('./provider-key.cjs').keyProblem(process.env.DEEPSEEK_API_KEY);
   if (keyProblem) return hold(`AI assessment unavailable: DEEPSEEK_API_KEY ${keyProblem}`);
@@ -543,7 +548,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     if (nativeGate && intentPending) throw new Error('AI assessment must finish after successful verification before the native policy job can pass');
     const managed = await managedExemptions(github, repo, pr, files);
     for (const notice of managed.notices) core.info(notice);
-    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt));
+    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt, managed.protect));
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) {
       if (!pr.assignees?.some(user => user.login === MANUAL_REVIEWER)) {
         await github.rest.issues.addAssignees({...repo, issue_number: pull_number, assignees: [MANUAL_REVIEWER]});
@@ -558,7 +563,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       const selfReview = selfAuthored ? 'This PR was authored by the approval bot. A maintainer must first submit an approving review on this exact revision; the bot cannot approve its own PR.\n\n' : '';
       const gateNotice = require('./gate-notice.cjs');
       const noticeContext = gateNoticeContext(context, pr, repo);
-      const cause = gateNotice.intentCause({selfAuthored, scope: scopeReason(files, pr, managed.exempt), controlReason: REVIEW_CONTROL_REASON});
+      const cause = gateNotice.intentCause({selfAuthored, scope: scopeReason(files, pr, managed.exempt, managed.protect), controlReason: REVIEW_CONTROL_REASON});
       const summary = `A maintainer's second opinion is required.\n\n${selfReview}${reason}\n\n` +
         `To confirm this change belongs in this repository, comment:\n\n\`/approve-intent ${pr.head.sha}\`\n\n` +
         `This confirms intent only. All tests and ${COVERAGE.full} remain mandatory.\n\n${gateNotice.intentBlock(cause, noticeContext)}`;

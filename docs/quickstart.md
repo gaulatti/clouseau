@@ -58,7 +58,8 @@ branch (for example `install/clouseau`) add:
 
 A repository far below 100% coverage can add `"coverage": {"mode": "changed_lines"}`
 to `.github/clouseau.json` to gate changed lines instead; see
-[changed-line coverage](changed-line-coverage.md). The default stays exact 100%.
+[changed-line coverage](changed-line-coverage.md), or `"mode": "declared"` to enforce the minimums your
+`package.json` already declares; see [declared coverage](declared-coverage.md). The default stays exact 100%.
 
 ## 3. Initial trust PR
 

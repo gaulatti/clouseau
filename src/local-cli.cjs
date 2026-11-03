@@ -424,11 +424,18 @@ function controlWarnings(config, paths, {directory, baseSha, headSha}) {
   const protectedHits = config ? require('./policy.cjs').protectedChanges(config, paths.map(filename => ({filename}))) : [];
   // The opt-in managed-standard update is judged on the same base and head bytes CI reads (managed-agents.cjs).
   const hits = protectedHits.filter(name => !(name === 'AGENTS.md' && config.managed_agents && managedUpdate(config, directory, baseSha, headSha)));
+  // With coverage.mode "declared", package.json is held only when its declared minimums changed (coverage-declared.cjs).
+  if (config?.coverage?.mode === 'declared' && paths.includes('package.json') && declaredChanged(directory, baseSha, headSha)) hits.push('package.json');
   if (!hits.length) return [];
   const warning = `Protected review controls changed (${hits.slice(0, 5).join(', ')}): CI cannot accept a local receipt for this change ` +
     'without the exact-head owner confirmation (/approve-intent) and will report review_incomplete. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.';
   process.stderr.write(`warning: ${warning}\n`);
   return [warning];
+}
+
+function declaredChanged(directory, baseSha, headSha) {
+  const read = ref => {try {return git(directory, ['show', `${ref}:package.json`]);} catch {return null;}};
+  return require('./coverage-declared.cjs').differs(read(baseSha), read(headSha));
 }
 
 function managedUpdate(config, directory, baseSha, headSha) {

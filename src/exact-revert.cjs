@@ -83,7 +83,7 @@ const text = verdict => `Exact revert accepted without an AI review: the resulti
 async function assess({github, repo, pr, files, comments, technical, legacy, config, engine, identity, recordPath, report}) {
   const note = line => {if (report) report(line);};
   const managed = await legacy.managedExemptions(github, repo, pr, files);
-  const controls = legacy.scopeReason(files, pr, managed.exempt);
+  const controls = legacy.scopeReason(files, pr, managed.exempt, managed.protect);
   if (controls && controls !== legacy.REVIEW_CONTROL_REASON) {
     note(`Exact revert not applied: ${controls}.`);
     return null;

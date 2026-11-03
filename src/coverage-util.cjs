@@ -49,4 +49,4 @@ function loadReport(filename) {
 
 const emptyCounts = () => ({lines: [0, 0], branches: [0, 0]});
 
-module.exports = {fail, isObject, get, realPath, isInside, loadReport, emptyCounts};
+module.exports = {fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts};

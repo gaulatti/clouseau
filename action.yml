@@ -26,10 +26,10 @@ inputs:
     description: Application source directory to measure (coverage)
     default: ''
   coverage-base-ref:
-    description: "Base revision for changed-line coverage (coverage); used only when the protected config sets coverage.mode to changed_lines. Needs a checkout with that revision's history"
+    description: "Base revision for changed-line coverage (coverage); used only when the protected config sets coverage.mode to changed_lines or declared (declared reads package.json at this revision). Needs a checkout with that revision's history"
     default: ''
   coverage-baseline:
-    description: "Path to a file of JSON totals {lines:[total,covered],branches:[total,covered]} measured on the base revision with the `totals` command; a path, never inline JSON (coverage, changed_lines mode)"
+    description: "Path to a file of JSON totals {lines:[total,covered],branches:[total,covered]} measured on the base revision with the `totals` command; a path, never inline JSON (coverage, changed_lines mode; declared mode needs none)"
     default: ''
   pull-request:
     description: PR number for manual reassessment
@@ -155,7 +155,7 @@ runs:
         COVERAGE_BASELINE: ${{ inputs.coverage-baseline }}
         CLOUSEAU_CONFIG: ${{ inputs.config }}
       run: |
-        # Exact 100% unless a base revision is supplied AND the protected configuration opts in to changed_lines.
+        # Exact 100% unless a base revision is supplied AND the protected configuration opts in to changed_lines or declared.
         COVERAGE_MODE=exact
         if [[ -n "$COVERAGE_BASE_REF" ]]; then
           COVERAGE_MODE=$(node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" mode "$CLOUSEAU_CONFIG")
@@ -168,6 +168,16 @@ runs:
           else
             test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
             node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+          fi
+        elif [[ "$COVERAGE_MODE" == declared ]]; then
+          # Minimums come from package.json at the base revision; no baseline file is used.
+          if [[ -n "$COVERAGE_CONFIG" ]]; then
+            test -z "$COVERAGE_REPORT"
+            test -z "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" declared-plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE" "$COVERAGE_BASE_REF"
+          else
+            test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" declared-check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT" "$COVERAGE_BASE_REF"
           fi
         else
           test -n "$COVERAGE_BASELINE"

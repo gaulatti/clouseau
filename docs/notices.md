@@ -157,6 +157,19 @@ When the approval gate stops, its check summary shows the gate's own sentence fo
 | `verification_tool_missing` | A verification command needs a program or module that is not installed (a program that cannot start, `No module named X`, or `X: not found`). The program name is shown only when it is a plain name. | Install it (for `coverage`: `python3 -m pip install -r requirements-test.txt`; for `c8`: `npm ci`; otherwise put it on PATH), then run the review again on the same commit. |
 | `local_recipe_edited` | The change edits `.clouseau-local.json`, so local review verified the recipe from the base branch, not the edit (a change cannot weaken its own checks). | Land a wanted edit in its own pull request first and review this change on the new base, or revert the edit. |
 
+## Declared coverage
+
+The `declared` coverage mode ([declared coverage](declared-coverage.md)) fails the coverage step with one of these classes. The step prints `Declared coverage (cause: <class>): <sentence>` followed by numbered steps; the approval gate then reports `gate_verification_failed` for the failed job.
+
+| Cause class | Meaning | First step |
+| --- | --- | --- |
+| `declared_missing` | The base revision has no readable `package.json`, or it declares no `lines` or `branches` minimum (`jest.coverageThreshold.global`, `c8` or `nyc`). | Declare the minimum in package.json and land it in its own pull request first; the gate reads the base revision. |
+| `declared_conflict` | The declaration is ambiguous: a repeated JSON key, two tools declaring different values for one metric, tools disagreeing on `per-file`, or both spellings of one `c8`/`nyc` key. | Keep exactly one value per metric. |
+| `declared_unsupported` | The shape cannot be read exactly: invalid JSON, a Jest path or glob entry, a string, negative, exponent or out-of-range value, thresholds without `"check-coverage": true`, Vitest, or per-file minimums on a `go` or `llvm` report. | Use `jest.coverageThreshold.global`, or `c8`/`nyc` with `"check-coverage": true`, with plain decimals from 0 to 100. |
+| `declared_below_threshold` | A measured metric is below the declared minimum. The sentence names each metric, the measured percent (floored to two decimals, with the exact counts) and the declared minimum. | Add tests; do not lower the threshold in the same pull request. |
+
+A pull request that changes the parsed declaration in `package.json` is a protected-control change and is held with the existing `intent_protected_controls` cause (see Maintainer request); it carries the notice `package.json is a protected-control hold: the declared coverage thresholds changed.`
+
 ## Notices that already name their own cause
 
 These four are fixed sentences that state their condition, and each is outside the cause tables for the reason given. `src/notice-causes.test.cjs` proves each sentence.

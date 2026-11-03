@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {fail, isObject, realPath} = require('./coverage-util.cjs');
 
-const MODES = ['exact', 'changed_lines'];
+const MODES = ['exact', 'changed_lines', 'declared'];
 const METRICS = ['lines', 'branches'];
 const SAMPLE = 20;
 
@@ -21,12 +21,14 @@ const WORDING = {
   exact: {waiting: 'exact 100% coverage', full: 'exact 100% line and branch coverage', brief: 'exact coverage'},
   changed_lines: {waiting: 'covered changed lines and branches with no coverage regression',
     full: 'full coverage of changed lines and branches with no repository-wide coverage regression', brief: 'changed-line coverage'},
+  declared: {waiting: 'coverage at or above the minimums declared in package.json',
+    full: 'coverage at or above the minimums declared in package.json at the base revision', brief: 'declared coverage'},
 };
 const requirement = config => WORDING[modeOf(config)];
 
 function validateMode(coverage) {
   if (!isObject(coverage) || Object.keys(coverage).join(',') !== 'mode' || !MODES.includes(coverage.mode)) {
-    throw new Error('Invalid Clouseau coverage configuration; coverage.mode must be "exact" or "changed_lines"');
+    throw new Error('Invalid Clouseau coverage configuration; coverage.mode must be "exact", "changed_lines" or "declared"');
   }
 }
 
@@ -116,4 +118,4 @@ function enforceChanged({detail, changed, totals, baseline, directory}) {
   return out;
 }
 
-module.exports = {MODES, modeOf, requirement, validateMode, parseDiff, changedLines, readBaseline, enforceChanged};
+module.exports = {MODES, REF, modeOf, requirement, validateMode, parseDiff, changedLines, readBaseline, enforceChanged};

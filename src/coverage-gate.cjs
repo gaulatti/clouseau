@@ -8,6 +8,7 @@ const coveragepy = require('./coverage-coveragepy.cjs');
 const go = require('./coverage-go.cjs');
 const lcov = require('./coverage-lcov.cjs');
 const changed = require('./coverage-changed.cjs');
+const declared = require('./coverage-declared.cjs');
 
 function llvmCounters(report, sourceDirectory, cwd) {
   if (get(report, 'type') !== 'llvm.coverage.json.export') fail('Expected an LLVM coverage export');
@@ -163,6 +164,26 @@ function changedPlan(parts, directory, baseRef, baselineFile, run) {
   return changed.enforceChanged({detail, changed: changed.changedLines(root, baseRef, run), totals, baseline, directory: root});
 }
 
+// Declared mode: the totals (or, for per-file minimums, each file) must reach the minimums that package.json declares at
+// the base revision. Returns the report lines; throws a DeclaredError otherwise.
+function declaredCheck(report, sourceDirectory, format, cwd, baseRef, run) {
+  const minimums = declared.declaration(cwd, baseRef, run);
+  declared.requirePerFile(minimums, format);
+  const detail = new Map();
+  const totals = measure(report, sourceDirectory, format, cwd, minimums.per_file ? detail : undefined);
+  return declared.enforce({totals, detail, declared: minimums, directory: cwd});
+}
+
+function declaredPlan(parts, directory, baseRef, run) {
+  const root = realPath(path.resolve(directory), '/');
+  const minimums = declared.declaration(root, baseRef, run);
+  const detail = new Map();
+  const measured = measurePlan(parts, directory, minimums.per_file ? detail : undefined);
+  measured.parts.forEach(part => declared.requirePerFile(minimums, part.format));
+  const {totals} = measured;
+  return declared.enforce({totals, detail, declared: minimums, directory: root});
+}
+
 const printChanged = (stdout, counts) => {
   for (const [metric, [count, covered]] of Object.entries(counts)) stdout(`changed ${metric}: ${covered}/${count}\n`);
 };
@@ -185,13 +206,19 @@ function main(argv, {cwd, stdout, stderr}) {
     } else if (command === 'changed-plan' && rest.length === 4) {
       const [file, directory, baseRef, baseline] = rest;
       printChanged(stdout, changedPlan(loadRecipe(file, cwd), path.resolve(cwd, directory), baseRef, path.resolve(cwd, baseline)));
+    } else if (command === 'declared-check' && rest.length === 4) {
+      const [report, source, format, baseRef] = rest;
+      declaredCheck(readReport(format, path.resolve(cwd, report)), path.resolve(cwd, source), format, cwd, baseRef).forEach(line => stdout(line + '\n'));
+    } else if (command === 'declared-plan' && rest.length === 3) {
+      const [file, directory, baseRef] = rest;
+      declaredPlan(loadRecipe(file, cwd), path.resolve(cwd, directory), baseRef).forEach(line => stdout(line + '\n'));
     } else if (command === 'check' && (rest.length === 2 || rest.length === 3)) {
       const format = rest[2] ?? 'llvm';
       const counts = counters(readReport(format, path.resolve(cwd, rest[0])), path.resolve(cwd, rest[1]), format, cwd);
       for (const [metric, [count, covered]] of Object.entries(counts)) stdout(`${metric}: ${covered}/${count}\n`);
       if (format === 'go') stdout('note: go lines are statements and go branches are basic blocks\n');
       enforce(counts);
-    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|lcov|go] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | mode CLOUSEAU_CONFIG | totals REPORT SOURCE_DIRECTORY FORMAT | totals-plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | changed-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF BASELINE | changed-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF BASELINE');
+    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|lcov|go] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | mode CLOUSEAU_CONFIG | totals REPORT SOURCE_DIRECTORY FORMAT | totals-plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | changed-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF BASELINE | changed-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF BASELINE | declared-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF | declared-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF');
     return 0;
   } catch (error) {
     stderr(`Coverage gate failed: ${error.message}\n`);
@@ -199,4 +226,4 @@ function main(argv, {cwd, stdout, stderr}) {
   }
 }
 
-module.exports = {readReport, counters, measure, enforce, check, measurePlan, checkPlan, planMain, changedCheck, changedPlan, main};
+module.exports = {readReport, counters, measure, enforce, check, measurePlan, checkPlan, planMain, changedCheck, changedPlan, declaredCheck, declaredPlan, main};
