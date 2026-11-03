@@ -576,6 +576,36 @@ test('the local protected-control warning exempts only the opt-in verified manag
   } finally {fs.rmSync(directory, {recursive: true, force: true});}
 });
 
+test('the local protected-control warning holds package.json only when its declared coverage minimums changed', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-declared-warning-'));
+  try {
+    git(directory, ['init', '-q', '-b', 'main']);
+    const commit = (name, files) => {
+      for (const [file, content] of Object.entries(files)) {
+        if (content === null) fs.rmSync(path.join(directory, file), {force: true}); else fs.writeFileSync(path.join(directory, file), content);
+      }
+      git(directory, ['add', '-A']);
+      git(directory, ['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', name]);
+      return git(directory, ['rev-parse', 'HEAD']).trim();
+    };
+    const declare = lines => JSON.stringify({name: 'x', jest: {coverageThreshold: {global: {lines}}}});
+    const base = commit('base', {'package.json': declare(80)});
+    const unrelated = commit('unrelated', {'package.json': JSON.stringify({name: 'y', jest: {coverageThreshold: {global: {lines: 80}}}})});
+    const lowered = commit('lowered', {'package.json': declare(10)});
+    const removed = commit('removed', {'package.json': null});
+    const config = {...require('../test/fixtures/config.json'), coverage: {mode: 'declared'}};
+    const stderr = process.stderr.write;
+    process.stderr.write = () => true;
+    try {
+      const warn = (settings, headSha, paths = ['package.json']) => controlWarnings(settings, paths, {directory, baseSha: base, headSha});
+      assert.deepEqual(warn(config, unrelated), [], 'an unrelated package.json edit');
+      for (const head of [lowered, removed]) assert.match(warn(config, head)[0], /^Protected review controls changed \(package\.json\)/, head);
+      assert.deepEqual(warn(config, lowered, ['src/a.js']), [], 'package.json not changed');
+      for (const settings of [{...config, coverage: {mode: 'exact'}}, require('../test/fixtures/config.json'), null]) assert.deepEqual(warn(settings, lowered), [], 'other modes: not a control');
+    } finally {process.stderr.write = stderr;}
+  } finally {fs.rmSync(directory, {recursive: true, force: true});}
+});
+
 // Opt-in maintainer attestation (docs/local-review.md): an enrolled key signs a receipt for another author's pull request.
 test('--pr attests another author\'s pull request only when the protected configuration allows that author, and binds author and number', async () => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-attest-fixture-'));

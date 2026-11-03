@@ -67,3 +67,36 @@ test('the composite coverage entry point switches to changed lines only for a pr
   assert.match(invoke(1, {...changed, CLOUSEAU_CONFIG: config('exact')}).stderr, /No branches measured/);
   assert.notEqual(invoke(1, {...changed, COVERAGE_BASELINE: ''}).status, 0);
 });
+
+test('the composite coverage entry point reads declared minimums from the base revision only for a protected declared opt-in', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'clouseau-declared-'));
+  t.after(() => rmSync(directory, {recursive: true, force: true}));
+  const git = (...args) => spawnSync('git', args, {cwd: directory, encoding: 'utf8'});
+  git('init', '-q', '-b', 'main'); git('config', 'user.email', 'a@example.test'); git('config', 'user.name', 'A');
+  const source = join(directory, 'source.ts'); const report = join(directory, 'coverage.json');
+  const entry = hits => ({[source]: {path: source, statementMap: {0: {start: {line: 1, column: 0}, end: {line: 1, column: 9}},
+    1: {start: {line: 2, column: 0}, end: {line: 2, column: 9}}}, s: {0: 1, 1: hits}, branchMap: {}, b: {}}});
+  const declare = lines => JSON.stringify({jest: {coverageThreshold: {global: {lines}}}});
+  writeFileSync(source, 'const a = 1;\nconst b = 1;\n'); writeFileSync(join(directory, 'package.json'), declare(100)); git('add', '-A'); git('commit', '-q', '-m', 'base');
+  // The head lowers its own bar; the gate must keep reading the base.
+  writeFileSync(join(directory, 'package.json'), declare(1)); git('add', '-A'); git('commit', '-q', '-m', 'head');
+  const config = mode => { const file = join(directory, `${mode}.json`); writeFileSync(file, JSON.stringify({...JSON.parse(readFileSync(join(root, 'examples/colombo.json'), 'utf8')), coverage: {mode}})); return file; };
+  const invoke = (hits, env) => {
+    writeFileSync(report, JSON.stringify(entry(hits)));
+    return spawnSync('bash', ['--noprofile', '--norc', '-e', '-o', 'pipefail', '-c', step.run], {cwd: directory, encoding: 'utf8',
+      env: {...process.env, CLOUSEAU_ROOT: root, COVERAGE_REPORT: report, SOURCE_DIRECTORY: directory, COVERAGE_FORMAT: 'istanbul', ...env}});
+  };
+  const declared = {COVERAGE_BASE_REF: git('rev-parse', 'HEAD~1').stdout.trim(), CLOUSEAU_CONFIG: config('declared')};
+  const passed = invoke(1, declared);
+  assert.equal(passed.status, 0, passed.stderr);
+  assert.equal(passed.stdout, 'declared lines: 100.00% (2/2), minimum 100%\n');
+  const below = invoke(0, declared);
+  assert.notEqual(below.status, 0);
+  assert.match(below.stderr, /Coverage gate failed: Declared coverage \(cause: `declared_below_threshold`\): lines: 50\.00% \(1\/2\) is below the declared minimum 100%/);
+  // A base without the file fails closed with a notice, never to 100% or to zero.
+  const missing = invoke(1, {...declared, COVERAGE_BASE_REF: git('rev-list', '--max-parents=0', 'HEAD').stdout.trim().replace(/./, 'f')});
+  assert.match(missing.stderr, /cause: `declared_missing`/);
+  // Without the base revision, or without the protected opt-in, the exact gate stays in force.
+  assert.match(invoke(1, {...declared, COVERAGE_BASE_REF: ''}).stderr, /No branches measured/);
+  assert.match(invoke(1, {...declared, CLOUSEAU_CONFIG: config('exact')}).stderr, /No branches measured/);
+});

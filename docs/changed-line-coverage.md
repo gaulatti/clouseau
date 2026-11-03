@@ -22,8 +22,8 @@ exact-revision owner confirmation like any other policy change.
 { "version": 2, "...": "...", "coverage": { "mode": "changed_lines" } }
 ```
 
-`coverage.mode` is `"exact"` (the default) or `"changed_lines"`; no other key is
-accepted. The required verification step name stays
+`coverage.mode` is `"exact"` (the default), `"changed_lines"` or
+[`"declared"`](declared-coverage.md); no other key is accepted. The required verification step name stays
 `Enforce 100% line and branch coverage`, because installed workflows already
 require that name.
 

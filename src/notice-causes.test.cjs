@@ -252,3 +252,17 @@ test('the notices that were already specific are proven to name their condition,
     assert.ok(docs.includes(heading), `docs/notices.md covers ${heading}`);
   }
 });
+
+test('every declared-coverage cause class names its sentence and numbered steps, and is documented', () => {
+  const {STEPS, DeclaredError} = require('./coverage-declared.cjs');
+  const docs = fs.readFileSync(path.join(__dirname, '../docs/notices.md'), 'utf8');
+  const section = docs.slice(docs.indexOf('## Declared coverage'), docs.indexOf('## Notices that already name their own cause'));
+  assert.deepEqual(Object.keys(STEPS).sort(), ['declared_below_threshold', 'declared_conflict', 'declared_missing', 'declared_unsupported']);
+  for (const [name, steps] of Object.entries(STEPS)) {
+    const text = new DeclaredError(name, 'the stated condition').message;
+    assert.ok(text.startsWith(`Declared coverage (cause: \`${name}\`): the stated condition\n\n1. `), name);
+    steps.forEach((step, index) => assert.ok(text.includes(`${index + 1}. ${step}`), `${name} step ${index + 1}`));
+    assert.ok(section.includes(`| \`${name}\` |`), `docs/notices.md documents ${name}`);
+  }
+  assert.ok(section.includes('package.json is a protected-control hold: the declared coverage thresholds changed.'));
+});
