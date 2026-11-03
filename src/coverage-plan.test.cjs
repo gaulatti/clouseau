@@ -14,7 +14,7 @@ const recipe = coverage => ({version: 2, base_branch: 'main', readme: 'README.md
 
 test('canonical repository source root is representable without relaxing report or general paths', () => {
   for (const version of [1, 2]) {
-    for (const format of version === 1 ? ['llvm', 'istanbul', 'coveragepy', 'go'] : ['istanbul', 'coveragepy', 'go']) {
+    for (const format of version === 1 ? ['llvm', 'istanbul', 'coveragepy', 'go'] : ['istanbul', 'coveragepy', 'go', 'lcov']) {
       const coverage = part('.', 'native.json', format);
       const config = {...recipe(version === 1 ? coverage : [coverage]), version};
       assert.deepEqual(coverageParts(config), [coverage]);

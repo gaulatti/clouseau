@@ -67,13 +67,53 @@ quote (control characters, quotes) fail closed.
 
 | Format | Line unit | Branch unit |
 | --- | --- | --- |
-| `istanbul`, `lcov` | statement or `DA` line | the decision's source line (`loc`, else legacy `line`, else first outcome) |
+| `istanbul`, `lcov` | statement or `DA` line | the decision's source line (`loc`, else legacy `line`, else first outcome); `lcov` has none when the report has no `BRDA` record |
 | `coveragepy` | executed/missing line | decision exit, by its origin line |
 | `go` | every line of a profile block | the block, covering its line range (Go records no finer unit) |
 | `llvm` | not supported: the summary has no per-line data, so the mode fails closed |
 
 Ignore directives, missing sources, duplicate or inconsistent reports are
 rejected exactly as in the exact gate, because the same adapters measure first.
+
+## Swift, Rust and other lcov languages
+
+An `lcov` part reads any language's lcov report once the recipe declares which
+source files make up the application. The optional part field is
+`source_suffixes`:
+
+```json
+{"format": "lcov", "report": "coverage/llvm.lcov", "source_directory": "celesti", "source_suffixes": [".swift"]}
+```
+
+* A non-empty list of one to eight distinct strings, each matching `^\.[a-z0-9]{1,8}$`
+  (for example `".swift"`, `".rs"`); anything else, and the field on a format other than `lcov`, is
+  rejected before any report is read. Absent, the inventory is the JS/TS list, exactly as before.
+* The single-report commands (`check`, `totals`, `changed-check`, `declared-check`) take the same list as
+  `--source-suffixes=.swift,.rs`; the plan commands read it from the recipe and reject the flag.
+* Strictness is unchanged: every file with a declared suffix under the source directory must appear in the
+  report (`Missing application source coverage`), a report entry the inventory does not contain is
+  `Unexpected or duplicate application coverage`, and ignore directives fail the gate. `SF:` paths may be
+  absolute (as `llvm-cov` writes them) or workspace-relative.
+* Exclusions: everything the JS/TS inventory skips (`.git`, `node_modules`, `vendor`, `test`, `tests`,
+  `__tests__`) stays excluded. A declared-suffix part additionally excludes `Tests` at any depth (the SwiftPM
+  and Xcode spelling), `target` directly under a source directory that contains `Cargo.toml`, and `.build`
+  directly under one that contains `Package.swift` (the Cargo and SwiftPM build outputs). A module that is
+  merely named `target` elsewhere, such as `src/target/`, is application source. Nothing else is skipped.
+* Ignore directives: besides `c8`/`istanbul`/`v8 ignore`, a declared-suffix part fails on `LCOV_EXCL_*`,
+  `GRCOV_EXCL_*`, `coverage(off)` and tarpaulin's `skip`/`tarpaulin_include`. The JS/TS default keeps its set.
+* `LF`/`LH` are not compared for a declared-suffix part. `llvm-cov export -format=lcov` writes them from its own
+  summary, which differs from its `DA` records (measured: `LF:35` against 31 `DA` records), so the `DA` records
+  alone are measured. `BRF`/`BRH` are still compared with the `BRDA` records, and the default part still compares all four.
+
+### Branches when the report has no `BRDA`
+
+`llvm-cov` lcov reports carry `BRF:0`/`BRH:0` and no `BRDA` record. For such a report branches are **not
+measured**: they count `0/0` (never 100%), and every command that measures it appends
+`note: ... the lcov report has no BRDA records, so branches are not measured and only lines are gated`
+(for a plan, prefixed with the part number, format and source directory). In `changed_lines` mode the
+changed-branch and branch-regression halves then have nothing to gate, so **only lines are gated** for that
+part. A report that does have `BRDA` records is always measured on branches and carries no note. In exact
+mode a plan whose parts all lack branches still fails (`No branches measured`); only a plan with measured branches elsewhere can include a branchless part.
 
 ## Regression rule
 

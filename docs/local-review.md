@@ -40,7 +40,9 @@ Actions and contains no provider settings:
 }
 ```
 
-`llvm` and `lcov` (production sources only; `DA` lines and `BRDA` branches) are also supported. The shared parser requires complete, nonempty exact
+`llvm` and `lcov` (production sources only; `DA` lines and `BRDA` branches) are also supported. A version 2 `lcov` part may add
+`source_suffixes` (for example `[".swift"]`, see [changed-line coverage](changed-line-coverage.md#swift-rust-and-other-lcov-languages)) to cover
+a non-JS/TS language. The shared parser requires complete, nonempty exact
 line/branch counters. Commands run as argument arrays, without shell expansion.
 The accepted base supplies the recipe; a change cannot weaken its own checks.
 The source checkout must be committed and clean before review. Verification
@@ -73,7 +75,7 @@ Only the six documented top-level fields are accepted in version 2: `version`,
 `base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
 Misspelled or additional policy fields fail before local command execution and
 at the CI data entrypoint. Each coverage part likewise accepts only its three
-documented fields, plus the optional `package_directory` that only [declared coverage](declared-coverage.md#monorepos-one-declaration-per-part) reads. Version 1 keeps its existing compatibility behavior.
+documented fields, plus the optional `package_directory` that only [declared coverage](declared-coverage.md#monorepos-one-declaration-per-part) reads and, for `lcov` parts only, the optional `source_suffixes` list. Version 1 keeps its existing compatibility behavior.
 
 Adapt commands to the repository's real test suite. The runner passes argument
 arrays directly, runs every command, and checks each untouched native report.
@@ -104,7 +106,7 @@ Python test/dependency conventions. Those non-application entries may appear in
 a native report but cannot contribute passing counters.
 
 Version 2 supports native measurement through the complete-inventory `istanbul`,
-`coveragepy` and `go` adapters. Version 1's single-report interface, including LLVM,
+`coveragepy`, `go` and `lcov` adapters. Version 1's single-report interface, including LLVM,
 remains supported. Unsupported native formats are reported as unavailable local
 coverage; they do not suppress AI review or acquire invented counters. CI still
 rejects unsupported formats. LLVM multi-root plans require a complete
