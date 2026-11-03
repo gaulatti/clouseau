@@ -37,7 +37,7 @@ secret and re-run the failed jobs.
 ```sh
 git clone https://github.com/gaulatti/clouseau.git && bash clouseau/scripts/install-agent
 clouseau init-identity          # once per workstation; skip if one exists
-clouseau installation-engine    # prints reviewer_sha: the pin used below
+clouseau installation-engine    # prints reviewer_sha: pinned only in the initial-trust workflow
 clouseau public-identity        # the public enrollment for clouseau.json
 ```
 
@@ -51,7 +51,10 @@ branch (for example `install/clouseau`) add:
 - `.github/clouseau.md` (the purpose contract) and `.github/CODEOWNERS`,
 - `.github/workflows/ci.yml` from [`examples/consumer-ci.yml`](../examples/consumer-ci.yml)
   and the `initial-trust` workflow from [initial installation](initial-installation.md#independent-ci-and-initial-owner-acceptance),
-  both pinned to the `reviewer_sha`.
+  The `ci.yml` bootstrap is referenced as `gaulatti/clouseau/scripts/resolve@main` (never a
+  commit, tag or other branch: the engine is resolved from protected main at run time, so a
+  commit pin on the bootstrap adds little and only goes stale). Only the `initial-trust`
+  workflow's `shared-clouseau` checkout is pinned to the `reviewer_sha`.
 
 A repository far below 100% coverage can add `"coverage": {"mode": "changed_lines"}`
 to `.github/clouseau.json` to gate changed lines instead; see

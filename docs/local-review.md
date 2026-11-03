@@ -287,7 +287,7 @@ without dropping anything a reviewer judges, the local collector stores a file a
 its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
 the head source with every line prefixed `+` (consumers restore the identical patch). The pinned
 engine seed (roughly 380 KB) is collected only when a workflow change adds or changes a
-`gaulatti/clouseau/scripts/resolve@<sha>` pin; an ordinary edit of a workflow that keeps its pin
+`gaulatti/clouseau/scripts/resolve@main` (or an existing `@<sha>`) reference; an ordinary edit of a workflow that keeps its reference
 carries no engine source, and a reviewer can still request any of it. The seed is optional context: seed files that would use the last 150,000
 characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
 Changed files, their base and head sources and contracts are never omitted; a change that exceeds
@@ -581,7 +581,7 @@ retained; a different SHA with identical engine bytes cannot resample an unchang
 negative judgment.
 
 When a resolver workflow changes, the runner supplies at most 32 observed shared
-source/test dependencies, its actual pinned bootstrap and the legacy action
+source/test dependencies, its actual bootstrap and the legacy action
 boundary as additional untrusted context. Wiki source is included only when the
 changed workflow invokes it.
 Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read

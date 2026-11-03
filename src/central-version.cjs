@@ -9,6 +9,17 @@ const SOURCE = Object.freeze({repository: 'gaulatti/clouseau', ref: 'refs/heads/
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const hash = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
+// The one accepted way to reference the bootstrap is the latest protected main, because the engine itself is resolved from
+// protected main at run time and runs with the repository's secrets: a commit pin on the small bootstrap adds little and
+// only goes stale. A full commit remains accepted for installations that already carry one. Every other moving reference
+// (a tag, another branch, a fork or another action path) is rejected.
+const RESOLVER = /^gaulatti\/clouseau\/scripts\/resolve@(main|[a-f0-9]{40})$/;
+function resolverReference(uses) {
+  const match = typeof uses === 'string' ? RESOLVER.exec(uses) : null;
+  if (!match) throw new Error('The Clouseau bootstrap must be referenced as gaulatti/clouseau/scripts/resolve@main (or a full commit)');
+  return match[1];
+}
+
 function centralSource(source) {
   return Boolean(source && Object.keys(source).sort().join(',') === 'ref,repository' &&
     source.repository === SOURCE.repository && source.ref === SOURCE.ref);
@@ -104,15 +115,15 @@ function readEngineEvidence(filename, reviewerSha, root = path.join(__dirname, '
 }
 
 function engineContext(snapshot) {
-  const pins = new Set(); const legacy = new Set(); let wiki = false; let pinChanged = false;
-  const resolverPins = content => [...content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau\/scripts\/resolve@([a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)].map(match => match[1]);
+  const pins = new Set(); const legacy = new Set(); let wiki = false; let pinChanged = false; let latest = false;
+  const resolverPins = content => [...content.matchAll(/^\s+(?:-\s*)?uses:\s*['"]?gaulatti\/clouseau\/scripts\/resolve@(main|[a-f0-9]{40})['"]?\s*(?:#.*)?$/gm)].map(match => match[1]);
   for (const file of snapshot.files) {
     if (!/^\.github\/workflows\/[^/]+\.ya?ml$/.test(file.path) || !file.head_source) continue;
     const content = snapshot.sources[file.head_source].content;
     if (content.includes('.clouseau-ci/src/wiki-git.cjs')) wiki = true;
     const before = file.base_source ? resolverPins(snapshot.sources[file.base_source].content) : [];
     for (const pin of resolverPins(content)) {
-      pins.add(pin);
+      if (pin === 'main') latest = true; else pins.add(pin);
       if (!before.includes(pin)) pinChanged = true;
     }
     for (const source of [file.base_source, file.head_source].filter(Boolean)) {
@@ -132,11 +143,11 @@ function engineContext(snapshot) {
     'src/local-git.cjs', 'src/local-harness.cjs', 'scripts/clouseau', 'scripts/install-agent',
     'bin/clouseau.cjs', 'skills/clouseau/SKILL.md', 'src/local-review.cjs', 'src/acceptance-sources.cjs', 'src/record-transport.cjs',
     'src/provider.cjs', 'src/review-provider.cjs', 'src/acceptance.cjs', 'src/acceptance-review.cjs',
-    ...(wiki ? ['src/wiki-git.cjs', 'src/wiki.cjs'] : [])];
+    ...(latest ? ['scripts/resolve/action.yml'] : []), ...(wiki ? ['src/wiki-git.cjs', 'src/wiki.cjs'] : [])];
   return [...current.map(filename => `.clouseau-ci/${filename}`), ...[...pins].flatMap(ref =>
     ['scripts/resolve/action.yml', 'src/central-version.cjs'].map(filename => `.clouseau-ci/${filename}@${ref}`)),
     ...[...legacy].flatMap(ref => ['action.yml', 'src/config.cjs', 'src/policy.cjs', 'src/local-receipt.cjs']
       .map(filename => `.clouseau-ci/${filename}@${ref}`))].slice(0, 32);
 }
 
-module.exports = {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext};
+module.exports = {SOURCE, resolverReference, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext};

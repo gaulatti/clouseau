@@ -32,9 +32,26 @@ test('the actual job expressions keep the original engine after main advances an
   assert.throws(() => assertFrozenWorkflow(redirected, evaluate), /authorized repository/);
 });
 
+test('the reference consumer workflow follows protected main through the shared contract', () => {
+  const example = parse(readFileSync(path.join(root, 'examples/consumer-ci.yml'), 'utf8'));
+  assert.equal(example.jobs['resolve-clouseau'].steps[0].uses, 'gaulatti/clouseau/scripts/resolve@main');
+  assert.doesNotMatch(readFileSync(path.join(root, 'examples/consumer-ci.yml'), 'utf8'), /FULL_REVIEWED_RELEASE_SHA/);
+});
+
+test('the bootstrap reference follows protected main or an existing full commit, and every other moving reference is rejected', () => {
+  const withUses = uses => {const copy = structuredClone(workflow); copy.jobs['resolve-clouseau'].steps[0].uses = uses; return copy;};
+  assertFrozenWorkflow(withUses('gaulatti/clouseau/scripts/resolve@main'), evaluate);
+  assertFrozenWorkflow(withUses(`gaulatti/clouseau/scripts/resolve@${'a'.repeat(40)}`), evaluate);
+  for (const rejected of ['gaulatti/clouseau/scripts/resolve@v1', 'gaulatti/clouseau/scripts/resolve@develop', 'gaulatti/clouseau/scripts/resolve@refs/heads/main',
+    'gaulatti/clouseau/scripts/resolve@Main', 'gaulatti/clouseau/scripts/resolve@abc123', 'attacker/clouseau/scripts/resolve@main',
+    'gaulatti/clouseau-fork/scripts/resolve@main', 'gaulatti/clouseau/scripts/other@main', 'gaulatti/clouseau/scripts/resolve']) {
+    assert.throws(() => assertFrozenWorkflow(withUses(rejected), evaluate), /bootstrap follows protected main/, rejected);
+  }
+});
+
 test('protected self review uses one frozen engine while candidate tests and explicit installation retain their own boundaries', () => {
   const resolver = workflow.jobs['resolve-clouseau'];
-  assert.match(resolver.steps[0].uses, /^gaulatti\/clouseau\/scripts\/resolve@[a-f0-9]{40}$/);
+  assert.equal(resolver.steps[0].uses, 'gaulatti/clouseau/scripts/resolve@main');
   for (const name of ['assess-intent', 'approve-and-merge', 'apply-repair', 'finalize-merge', 'request-reassessment', 'reconcile-base']) {
     const job = workflow.jobs[name];
     assert.ok([job.needs].flat().includes('resolve-clouseau'), name);
@@ -187,7 +204,7 @@ test('this repository reconciles bot merges from its own separate workflow_run f
   const engine = job.steps.find(step => step.with?.path === '.clouseau-ci');
   assert.equal(engine.with.repository, 'gaulatti/clouseau');
   assert.equal(engine.with.ref, "${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}");
-  assert.match(file.jobs['resolve-clouseau'].steps[0].uses, /^gaulatti\/clouseau\/scripts\/resolve@[a-f0-9]{40}$/);
+  assert.equal(file.jobs['resolve-clouseau'].steps[0].uses, 'gaulatti/clouseau/scripts/resolve@main');
   assert.ok(!JSON.stringify(file).includes('update-token') && !JSON.stringify(file).includes('secrets.'), 'no update credential');
   for (const [name, entry] of Object.entries(file.jobs)) for (const step of entry.steps || []) {
     if (!String(step.uses || '').startsWith('actions/checkout@')) continue;

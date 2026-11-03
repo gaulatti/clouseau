@@ -6,7 +6,7 @@ export function assertFrozenWorkflow(workflow, evaluate) {
   assert.ok(resolver, 'one isolated resolver job is required');
   assert.deepEqual(resolver.permissions, {contents: 'read'});
   assert.equal(resolver.steps.length, 1);
-  assert.match(resolver.steps[0].uses, /^gaulatti\/clouseau\/scripts\/resolve@[a-f0-9]{40}$/);
+  assert.match(resolver.steps[0].uses, /^gaulatti\/clouseau\/scripts\/resolve@(main|[a-f0-9]{40})$/, 'the bootstrap follows protected main (or an existing full-commit pin); no tag, other branch or fork');
   assert.equal(resolver.steps[0].with, undefined, 'contributors cannot configure a source');
   assert.equal(resolver.outputs.sha, '${{ steps.engine.outputs.sha }}');
   assert.equal(resolver.outputs.digest, '${{ steps.engine.outputs.digest }}');

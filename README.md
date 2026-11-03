@@ -42,11 +42,13 @@ There is no application-specific deployment infrastructure in Clouseau.
 
 ## Operations
 
-Automatic CI integrations pin the small `gaulatti/clouseau/scripts/resolve`
-bootstrap once at a reviewed full commit. It selects protected Clouseau main,
+Automatic CI integrations reference the small `gaulatti/clouseau/scripts/resolve@main`
+bootstrap, so it always follows the latest protected main (the engine is resolved from protected
+main at run time with the repository's secrets, so a commit pin on the bootstrap adds little and
+only goes stale). It selects protected Clouseau main,
 freezes its SHA and computes its digest. Every engine job checks out that SHA
 and invokes the local action with the same trusted outputs. Normal central
-releases need no consumer pin or digest update. See [automatic CI upgrades](docs/automatic-ci-upgrades.md)
+releases need no consumer pin or digest update; existing full-commit references keep working. See [automatic CI upgrades](docs/automatic-ci-upgrades.md)
 for source authorization, failure behavior and exact local-receipt compatibility.
 Legacy fixed installations may still use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`;
 upgrading those installations requires a reviewed PR. See `examples/colombo.json`
