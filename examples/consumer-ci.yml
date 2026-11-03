@@ -1,7 +1,9 @@
 # Reference consumer verification-and-review workflow, verified end to end in a
 # fresh repository (GitHub-hosted runners, record-transport: job-output, provenance:
-# summary). Save as .github/workflows/ci.yml. Replace FULL_REVIEWED_RELEASE_SHA with the
-# reviewer_sha printed by `clouseau installation-engine`. The job named "verify" and its
+# summary). Save as .github/workflows/ci.yml. The bootstrap is referenced as
+# gaulatti/clouseau/scripts/resolve@main on purpose: the engine is resolved from protected
+# main at run time, so a commit pin on the bootstrap adds little and only goes stale. Do not
+# replace @main with a tag, another branch or a fork. The job named "verify" and its
 # step names must match "verification" in .github/clouseau.json; adapt the install and
 # test steps to your stack. Secrets (all optional, see docs/quickstart.md):
 # DEEPSEEK_API_KEY, TYPESAFE_API_KEY, CLOUSEAU_REPAIR_TOKEN.
@@ -47,7 +49,7 @@ jobs:
       digest: ${{ steps.engine.outputs.digest }}
     steps:
       - id: engine
-        uses: gaulatti/clouseau/scripts/resolve@FULL_REVIEWED_RELEASE_SHA
+        uses: gaulatti/clouseau/scripts/resolve@main
         with:
           provenance: summary
 

@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
-const {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
+const {SOURCE, resolverReference, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust} = require('./local-receipt.cjs');
@@ -288,6 +288,33 @@ test('engine seed is paid only when the workflow change touches the pin: an ordi
   assert.ok(engineContext(added).length > 0, 'a new workflow carrying a pin is a pin change');
   edit.sources.head.content = `${pinned(first)}      - uses: gaulatti/clouseau/scripts/resolve@${second}\n`;
   assert.ok(engineContext(edit).includes(`.clouseau-ci/scripts/resolve/action.yml@${second}`), 'a second, new pin in the same workflow is a pin change');
+});
+
+test('the bootstrap follows protected main: a full commit is still read, every other moving reference is rejected', () => {
+  assert.equal(resolverReference('gaulatti/clouseau/scripts/resolve@main'), 'main');
+  assert.equal(resolverReference(`gaulatti/clouseau/scripts/resolve@${first}`), first);
+  for (const rejected of ['gaulatti/clouseau/scripts/resolve@v1', 'gaulatti/clouseau/scripts/resolve@develop', 'gaulatti/clouseau/scripts/resolve@refs/heads/main',
+    'gaulatti/clouseau/scripts/resolve@Main', 'gaulatti/clouseau/scripts/resolve@abc123', 'gaulatti/clouseau/scripts/resolve', 'attacker/clouseau/scripts/resolve@main',
+    'gaulatti/clouseau-fork/scripts/resolve@main', 'gaulatti/clouseau/scripts/other@main', 'gaulatti/clouseau/scripts/resolve@main\n', undefined, null, 5]) {
+    assert.throws(() => resolverReference(rejected), /must be referenced as gaulatti\/clouseau\/scripts\/resolve@main/, String(rejected));
+  }
+});
+
+test('a workflow that follows main seeds the engine and the bootstrap itself, only when the reference changes, and never reads a historical bootstrap', () => {
+  const workflow = '.github/workflows/ci.yml';
+  const uses = ref => `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${ref}\n`;
+  const edit = (before, after) => ({files: [{path: workflow, head_source: 'head', base_source: 'base'}], sources: {base: {content: before}, head: {content: after}}});
+  assert.deepEqual(engineContext(edit(`${uses('main')}      - run: echo one\n`, `${uses('main')}      - run: echo two\n`)), [], 'an ordinary edit of a main-following workflow adds no engine bytes');
+  const moved = engineContext(edit(uses(first), uses('main')));
+  assert.ok(moved.includes('.clouseau-ci/scripts/resolve/action.yml') && moved.includes('.clouseau-ci/src/policy.cjs'), 'moving a pin to main seeds the engine and the current bootstrap');
+  assert.ok(!moved.some(filename => filename.includes('@')), 'there is no historical bootstrap to read for main');
+  const added = engineContext({files: [{path: workflow, head_source: 'head'}], sources: {head: {content: uses('main')}}});
+  assert.ok(added.includes('.clouseau-ci/scripts/resolve/action.yml'), 'a new workflow following main is a reference change');
+  const pinned = engineContext(edit(uses('main'), uses(first)));
+  assert.ok(pinned.includes(`.clouseau-ci/scripts/resolve/action.yml@${first}`) && !pinned.includes('.clouseau-ci/scripts/resolve/action.yml'));
+  for (const moving of ['v1', 'develop']) {
+    assert.deepEqual(engineContext(edit(uses('main'), uses(moving))), [], `${moving} is not a bootstrap reference and seeds nothing`);
+  }
 });
 
 test('an unexpected Git failure while reading historical engine evidence is surfaced unchanged, never read as an absent path', t => {

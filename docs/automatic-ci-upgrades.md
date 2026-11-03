@@ -9,8 +9,13 @@ release tag, a contributor branch, or an unmerged candidate. Protection and the
 central review process authorize that source; signatures retain their existing
 workstation trust boundary.
 
-The small `scripts/resolve` bootstrap is pinned once in trusted consumer workflow
-configuration. It has no source-selection inputs. It checks the public GitHub
+The small `scripts/resolve` bootstrap is referenced in trusted consumer workflow
+configuration as `gaulatti/clouseau/scripts/resolve@main`, never a commit pin, tag, other
+branch or fork. The engine itself is resolved from protected main at run time and runs with
+the repository's secrets, so a commit pin on the small bootstrap adds little protection and
+only creates stale pins; following main also means a bootstrap maintenance change reaches
+consumers without an installation PR. An existing full-commit reference keeps working, but
+new installations use `@main`. It has no source-selection inputs. It checks the public GitHub
 branch response, requires protected main and a full lowercase commit SHA, checks
 out that SHA without persisted credentials, and computes the engine content
 digest from that actual source. Unavailable, malformed and unprotected results
@@ -133,12 +138,13 @@ Local investigators can inspect `.clouseau-ci/` source requests through their
 own frozen public engine. This alias requires no consumer CI checkout and
 adds no authority to the source. Signed engine excerpts carry the exact engine
 revision; CI compares their bytes to its accepted frozen source before reuse.
-The pinned bootstrap can be inspected separately as
-`.clouseau-ci/scripts/resolve/action.yml@FULL_COMMIT_SHA`. Historical source is
+The bootstrap is part of the seed (`.clouseau-ci/scripts/resolve/action.yml`) for a workflow that
+follows main; a workflow that still carries a full-commit reference can also have that historical
+bootstrap inspected as `.clouseau-ci/scripts/resolve/action.yml@FULL_COMMIT_SHA`. Historical source is
 read-only untrusted evidence from the fixed public Clouseau repository; it never
 selects or executes a different review engine. CI verifies its exact immutable
 bytes. Changed resolver workflows receive at most 32 observed shared source/test
-dependencies up front, including their actual pinned bootstrap and the legacy
+dependencies up front, including their actual bootstrap and the legacy
 action/configuration/policy/receipt files read during migration. Wiki dependencies
 are included only when the changed workflow invokes them. Changed project files
 and contracts are still complete. Serialized evidence remains capped at 900,000
@@ -409,8 +415,9 @@ transport: use its separately supported `job-output` mode when needed. Neither
 mode turns a failed resolution, verification or review into success.
 
 Normal central releases reach the next consumer run without consumer pin or
-digest PRs. The stable bootstrap pin changes only when its selection protocol
-needs maintenance, through an ordinary reviewed installation change.
+digest PRs, and the bootstrap itself follows protected main (`@main`), so there is no bootstrap
+pin to maintain. A workflow change that adds or moves the reference is still a protected control
+change reviewed through an ordinary installation PR.
 
 Palazzo source CI and its separate wiki workflow each freeze their own version;
 they do not share a run identity. Colombo's source CI uses this mechanism. Its

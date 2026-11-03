@@ -36,9 +36,10 @@ not CI model keys or a new credential service.
    Keep the accepted base branch (`main`) free of `.clouseau-local.json` and
    `.github/clouseau.json`: push the candidate on its own branch (for example
    `install/clouseau`) and open the PR from it. The full commit SHA to pin in
-   the workflows (`gaulatti/clouseau/scripts/resolve@SHA`, and
-   `FULL_REVIEWED_RELEASE_SHA` below) is the `reviewer_sha` printed by
-   `clouseau installation-engine`.
+   the `initial-trust` workflow checkout (`FULL_REVIEWED_RELEASE_SHA` below) is the
+   `reviewer_sha` printed by `clouseau installation-engine`. The CI workflow's bootstrap is
+   not pinned: reference `gaulatti/clouseau/scripts/resolve@main`, because the engine is
+   resolved from protected main at run time and a commit pin on the bootstrap only goes stale.
 4. Prepare a new manifest outside the checkout:
 
    ```sh
