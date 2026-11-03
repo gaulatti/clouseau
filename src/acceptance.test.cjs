@@ -281,6 +281,25 @@ test('Python packages and modules link to the tests that import them, by any imp
   assert.match(link('# experiment_store lonely\ndef test_experiment_store(): pass\n'), /experiment_store\/__init__\.py, services\/api\/experiment_store\/store\.py, services\/api\/lonely\.py$/, 'a shared name is not an import');
 });
 
+test('an empty package marker is not untested production code, but a nonempty untested module still holds approval', () => {
+  const f = fixture();
+  const source = (path, content) => ({authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path, content});
+  f.snapshot.sources = {t: source('tests/test_it.py', 'def test_it(): pass\n'), marker: source('evaluation/__init__.py', ''), blank: source('evaluation/blank/__init__.py', '\n  \n'),
+    mod: source('evaluation/metrics.py', 'def score(): return 1\n')};
+  // An added empty file lists no patch.
+  const added = path => ({path, status: 'added', head_source: path === 'evaluation/__init__.py' ? 'marker' : path === 'evaluation/blank/__init__.py' ? 'blank' : 'mod'});
+  f.snapshot.files = [added('evaluation/__init__.py')];
+  assert.equal(approvalHold(f.report, f.snapshot), null, 'an empty __init__.py has no statement to test');
+  f.snapshot.files = [added('evaluation/__init__.py'), added('evaluation/blank/__init__.py')];
+  assert.equal(approvalHold(f.report, f.snapshot), null, 'a whitespace-only marker is empty too');
+  f.snapshot.files = [added('evaluation/__init__.py'), {...added('evaluation/metrics.py'), patch: '@@ -0,0 +1 @@\n+def score(): return 1'}];
+  assert.equal(approvalHold(f.report, f.snapshot), 'no supplied test imports changed production code: evaluation/metrics.py', 'a nonempty untested module is still rejected, and only it is named');
+  f.snapshot.files = [{path: 'evaluation/__init__.py', status: 'added', patch: '@@ -0,0 +1 @@\n+x = 1'}];
+  assert.match(approvalHold(f.report, f.snapshot), /evaluation\/__init__\.py$/, 'a file whose head source was not supplied is not assumed empty');
+  f.snapshot.files = [{path: 'evaluation/__init__.py', status: 'modified', head_source: 'mod', patch: '@@ -1 +1 @@\n-x = 0\n+x = 1'}];
+  assert.match(approvalHold(f.report, f.snapshot), /evaluation\/__init__\.py$/, 'a nonempty head is still held');
+});
+
 test('a trailing comment on a Python import line does not hide the import', () => {
   const {pythonImports} = require('./acceptance.cjs');
   assert.deepEqual(pythonImports('import a.b  # the b module\nimport c, d # both\nfrom e.f import (g,  # first\n  h)  # last\nfrom . import i  # sibling\nx = "# not a comment"\nimport j'),
