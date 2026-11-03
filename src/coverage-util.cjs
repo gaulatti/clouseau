@@ -49,4 +49,25 @@ function loadReport(filename) {
 
 const emptyCounts = () => ({lines: [0, 0], branches: [0, 0]});
 
-module.exports = {fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts};
+const PART_KEYS = 'format,report,source_directory';
+const PART_KEYS_WITH_PACKAGE = 'format,package_directory,report,source_directory';
+const plainDirectory = value => typeof value === 'string' && value.length > 0 && value.length < 500 && !value.startsWith('/') &&
+  !value.includes('\\') && !value.includes('\0') && !value.split('/').some(part => !part || part === '.' || part === '..' || part === '.git');
+
+// The repository-relative directory whose package.json declares a v2 part's coverage minimums (declared mode). It is the
+// explicit `package_directory`, or the part's own source directory; never inferred from a parent. It must contain the
+// part's source directory (`.` is the repository root). Returns the validated directory or throws.
+function packageDirectory(part) {
+  const directory = Object.hasOwn(part, 'package_directory') ? part.package_directory : part.source_directory;
+  const source = part.source_directory;
+  if (!(directory === '.' || plainDirectory(directory)) || !(source === '.' || plainDirectory(source)) ||
+      !(directory === '.' || source === directory || source.startsWith(directory + '/'))) {
+    fail('A coverage part package_directory must be an explicit repository-relative directory that contains its source_directory');
+  }
+  return directory;
+}
+
+// A v2 part has exactly these fields; package_directory is the one optional field.
+const validPartShape = part => isObject(part) && [PART_KEYS, PART_KEYS_WITH_PACKAGE].includes(Object.keys(part).sort().join(','));
+
+module.exports = {fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts, packageDirectory, validPartShape};
