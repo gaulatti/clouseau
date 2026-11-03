@@ -89,4 +89,22 @@ function validPartShape(part) {
   return part.format === 'lcov';
 }
 
-module.exports = {fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts, packageDirectory, validPartShape, validateSourceSuffixes};
+
+// Names the likely causes of missing JS/TS coverage and the repairs. The wording is fixed printable ASCII; only
+// the two detections below depend on the missing paths, and nothing here changes whether the gate passes.
+const TYPE_ONLY = /\.(?:types?|interfaces?)\.(?:ts|tsx)$/;
+function missingSourceExplanation(files) {
+  const detected = [];
+  const typeOnly = files.filter(file => TYPE_ONLY.test(file)).length;
+  if (typeOnly) detected.push(`${typeOnly} missing file(s) have type-only names (*.types.ts, *.interface.ts), which the Jest istanbul provider can omit.`);
+  const vendored = files.filter(file => file.split(/[\\/]/).includes('.clouseau-ci')).length;
+  if (vendored) detected.push(`${vendored} missing file(s) are under a .clouseau-ci directory, the vendored Clouseau engine checkout, which is not application source.`);
+  return [...detected.map(line => `Detected: ${line}`),
+    'Likely causes and repairs:',
+    '1. Files that compile to no instrumented statements (for example type-only files) are omitted by the Jest istanbul provider: run Jest with --coverageProvider=v8, or list the files in collectCoverageFrom.',
+    '2. The source directory contains a path that is not application source (for example .clouseau-ci): point source_directory at the real source directories, one part each (the version-2 multi-part recipe in docs/declared-coverage.md).',
+    '3. No test imports the files: import them from a test.'].join('\n');
+}
+
+
+module.exports = {missingSourceExplanation, fail, isObject, get, realPath, isInside, loadReport, rejectDuplicateKeys, emptyCounts, packageDirectory, validPartShape, validateSourceSuffixes};

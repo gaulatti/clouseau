@@ -171,6 +171,19 @@ The `declared` coverage mode ([declared coverage](declared-coverage.md)) fails t
 
 A pull request that changes the parsed declaration in any `package.json` (the root or a part's own) is a protected-control change and is held with the existing `intent_protected_controls` cause (see Maintainer request); it carries the notice `<path>/package.json is a protected-control hold: the declared coverage thresholds changed.` with the changed file's path (`package.json` for the root). More than 20 changed `package.json` files are all held with one notice.
 
+## Missing application source coverage
+
+The JS/TS coverage modes (`istanbul` and `lcov`) fail with `Coverage gate failed: Missing application source coverage: <files>` when an application source file under the source directory has no measurement. Only the message names causes; what passes or fails is unchanged, and every missing file still fails the gate. After the file list the message prints this fixed printable-ASCII text:
+
+```
+Likely causes and repairs:
+1. Files that compile to no instrumented statements (for example type-only files) are omitted by the Jest istanbul provider: run Jest with --coverageProvider=v8, or list the files in collectCoverageFrom.
+2. The source directory contains a path that is not application source (for example .clouseau-ci): point source_directory at the real source directories, one part each (the version-2 multi-part recipe in docs/declared-coverage.md).
+3. No test imports the files: import them from a test.
+```
+
+Two causes are detected and stated before the list, only when the missing paths show them: `Detected: N missing file(s) have type-only names (*.types.ts, *.interface.ts), which the Jest istanbul provider can omit.` (names ending in `.type`, `.types`, `.interface` or `.interfaces` with `.ts` or `.tsx`) and `Detected: N missing file(s) are under a .clouseau-ci directory, the vendored Clouseau engine checkout, which is not application source.` Nothing else is inferred; the three options are listed neutrally otherwise.
+
 ## Notices that already name their own cause
 
 These four are fixed sentences that state their condition, and each is outside the cause tables for the reason given. `src/notice-causes.test.cjs` proves each sentence.

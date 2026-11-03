@@ -13,7 +13,7 @@
 // and the DA records alone are measured; BRF/BRH are still compared with the BRDA records.
 const fs = require('node:fs');
 const path = require('node:path');
-const {fail, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
+const {missingSourceExplanation, fail, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
 const {candidates, productionName} = require('./coverage-istanbul.cjs');
 const {scopeFor, DEFAULT_SCOPE} = require('./coverage-scope.cjs');
 
@@ -101,7 +101,7 @@ function counters(text, sourceDirectory, cwd, detail, options = {}) {
   if (!seen.size) fail('Expected a nonempty LCOV report');
   if (counts.branches[0] === 0 && options.notes) options.notes.push(NO_BRANCHES);
   const missing = [...sources].filter(file => !seen.has(file));
-  if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', '));
+  if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', ') + '\n' + missingSourceExplanation(missing));
   return counts;
 }
 
