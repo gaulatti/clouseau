@@ -384,7 +384,7 @@ const detailOf = error => error instanceof ReceiptRejected ? error.detail : {};
 
 // The one decision for a claimed receipt: `ref` is set only when it verifies in every respect. Any other outcome returns
 // the fixed class in `rejected` (or neither, when no receipt is claimed) and the receipt is never consulted again.
-async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest}) {
+async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest, reviewerDigest}) {
   let ref;
   try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason, detail: error.detail};}
   if (!ref) return {ref: null, rejected: null};
@@ -396,7 +396,7 @@ async function screenReceipt({github, repo, pr, engine, trust, configDigest, pol
   }
   try {
     const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, pullNumber: pr.number,
-      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest});
+      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest, reviewerDigest});
     return {ref, bundle, verified, rejected: null};
   } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed', detail: detailOf(error)};}
 }

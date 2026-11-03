@@ -73,7 +73,7 @@ const CAUSES = Object.freeze({
   },
   expired: {
     say: d => `it is expired or not yet valid${d.expires ? ` (it expires ${tick(d.expires)})` : ''}`,
-    steps: () => ['Receipts are valid only for a limited time after they are issued; review and publish again, then update the marker without waiting.'],
+    steps: () => ['Receipts are valid only for a limited time after they are issued; renew this one in the pull request checkout with `clouseau refresh --pr {number} --agent claude|codex|opencode` (outside an AI harness use `--harness codex|claude`), which reviews the unchanged head again, reusing the earlier answers, and replaces the marker without pushing the branch, or do the steps below by hand.'],
   },
   revision_repository: {
     say: () => 'it was issued for a different repository',

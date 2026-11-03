@@ -417,11 +417,12 @@ ancestor of the pull request head, or is already in the base (the branch name wa
 `--additional-checks` (they are part of its input and are not stored; pass both again). It never guesses among candidates.
 Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`. In order, and never otherwise:
 
-1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, stop with
-   `up_to_date`;
+1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, the receipt in the
+   pull request body decides: one that still verifies for this head ends the command with `up_to_date`, any other is
+   [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch);
 2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
    `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
-3. run the ordinary local review of the new head (`clouseau review`, including its verification) with the answers reused as
+3. run the ordinary local review of the head (`clouseau review`, including its verification) with the answers reused as
    described below, and sign the receipt. The claimed title of the change is the pull request's own title (GitHub's), not the
    subject of the merge commit, which is only `Merge origin/<base> into <branch>`; a pull request with no title is refused;
 4. `clouseau publish` the receipt (this pushes only the artifact tag `clouseau-review/<nonce>`);
@@ -442,6 +443,35 @@ fetch again, and continues on the base it began with. While Clouseau main advanc
 that started the exchange ([pinning](#agent-driven-review-inside-an-ai-harness)): through the `clouseau` launcher the pinned engine
 receives your own `refresh` command, resumes it and finishes it (review, publication, marker, push), and its result is what you
 see. If the pinned engine fails, its error message is shown.
+
+### Renewing a receipt that no longer verifies
+
+When the base has not moved, `refresh` does not answer `up_to_date` merely because nothing needs merging. It judges the
+`clouseau-local-review:` marker in the pull request body for the unchanged head exactly as CI does: the same screening code
+(`screenReceipt`, with the same signature, author, expiry, repository, head, base, protected configuration and policy, engine
+and review-semantics checks) on the pull request as GitHub reports it now, the protected `.github/clouseau.json` of the fetched
+base, and the engine that is running. The receipt is read through `gh api` from the immutable commit the marker names; nothing
+in the marker or the receipt is trusted before it verifies. A repository whose protected configuration has no `local_review`
+section has no receipts to judge and keeps the plain `up_to_date`.
+
+- **The receipt verifies**: `up_to_date`, `pushed: false`; nothing is reviewed, published or edited.
+- **It does not** (expired, issued against another base or head, for another repository or author, signed by a key that is not
+  enrolled, an engine that is not accepted, a malformed, unreadable or forged marker, more than one marker, or no marker): the
+  command prints the cause on stderr (`Renewing the local review receipt of pull request N (cause: receipt_expired): it is expired
+  or not yet valid (it expires <instant>)`; the classes are those of [receipt notices](notices.md)) and performs steps 3 to 5 for
+  the current head: the ordinary local review with the stored-requirement default and the evidence-keyed reuse described below
+  (an unchanged head is mostly answered from the remembered reviews), the receipt, its publication and the marker in the pull
+  request body. It does **not** merge and does **not** push the branch, whose head is unchanged; the only push is the artifact
+  tag of step 4. The result has `status: "renewed"`, `pushed: false`, `cause` and `reason`, the new `marker` and `artifact_commit`.
+  An agent-driven renewal that returns `awaiting_agent` is repeated with the identical command like any other.
+
+The same refusals apply as for a merge (dirty worktree, HEAD not the pull request head, missing harness, fork, wrong branch or
+base, no requirement), a review that does not pass or is not signed publishes and edits nothing, and a failure to read the
+receipt that is not the receipt's own (GitHub unreachable) stops the command instead of guessing. A receipt can never be
+renewed without a new review: an expired receipt cached by `clouseau review` for the same input is retired (its stored
+requirement stays) and the input is reviewed again. Publishing a receipt whose artifact tag is already on the remote with the
+same files reuses that artifact (for example when only the marker was lost); a tag with other content is refused, and a tag is
+never overwritten.
 
 ### What is reused
 
