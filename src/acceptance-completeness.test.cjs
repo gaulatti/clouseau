@@ -225,6 +225,33 @@ test('the actual model template and materializer preserve the complete immutable
   const fresh = template(f.snapshot); assert.equal(fresh.coverage.sources.find(item => item.source === 'blank').state, 'excluded');
 });
 
+test('rejections of the source inventory and accounting name the file and the step that repairs them', () => {
+  const f = complete();
+  const path = f.snapshot.sources.head.path;
+  const excluded = structuredClone(f.report); excluded.coverage.sources[1].state = 'excluded';
+  assert.throws(() => validateReport(excluded, f.snapshot), error => {
+    assert.ok(error.message.includes(`changed source cannot be excluded: ${path} has content, so mark it inspected and cite a quote from it`), error.message);
+    return true;
+  });
+  const uncited = structuredClone(f.report); uncited.coverage.sources[1].evidence = ['contract'];
+  assert.throws(() => validateReport(uncited, f.snapshot), error => {
+    assert.ok(error.message.includes(`inspection lacks direct immutable evidence: cite a quote from ${path} itself`), error.message);
+    return true;
+  });
+  const claimed = structuredClone(f.report); claimed.coverage.sources[1].state = 'missing';
+  assert.throws(() => validateReport(claimed, f.snapshot), error => {
+    assert.ok(error.message.includes(`missing source cannot claim inspection evidence: give no citations for ${path}`), error.message);
+    return true;
+  });
+  const unaccounted = structuredClone(f.report); unaccounted.accounting[0].evidence = ['contract'];
+  assert.throws(() => validateReport(unaccounted, f.snapshot), error => {
+    assert.ok(error.message.includes(`accounting lacks direct changed-file evidence: cite a quote from ${f.report.accounting[0].path} itself`), error.message);
+    return true;
+  });
+  // The rule is unchanged: the same reports are still rejected, and a nonempty changed source is still never excludable.
+  assert.throws(() => validateReport(excluded, f.snapshot), /Invalid acceptance evidence: changed source cannot be excluded/);
+});
+
 test('finding history survives repair, unrelated pushes, paraphrases, rename, and an evidenced regression', () => {
   const f = complete();
   advance(f, 'accept_durably(input)\n// validation missing\n');
