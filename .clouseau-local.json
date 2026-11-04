@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "base_branch": "main",
+  "readme": "README.md",
+  "repository_policy": ".github/clouseau.md",
+  "verification": [
+    ["bash", "scripts/verify-coverage"],
+    ["bash", "scripts/verify-archive"],
+    ["npm", "ci", "--prefix", ".github/tests", "--ignore-scripts", "--no-audit", "--no-fund"],
+    ["npm", "test", "--prefix", ".github/tests"]
+  ],
+  "coverage": {
+    "format": "lcov",
+    "report": ".clouseau-work/node.lcov",
+    "source_directory": "src"
+  }
+}

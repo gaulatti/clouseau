@@ -3,6 +3,9 @@ const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {checkProvider} = require('./provider.cjs');
 
+// Every transport validates the credential shape before its first request.
+process.env.DEEPSEEK_API_KEY = 'fictional-test-key';
+
 test('provider probe requires credentials and validates complete structured output', async () => {
   const original = process.env.DEEPSEEK_API_KEY;
   delete process.env.DEEPSEEK_API_KEY;
@@ -224,4 +227,53 @@ test('the factual checker can use Pro while unknown model names are refused befo
   assert.deepEqual(result, {content: '{}'});
   await assert.rejects(requestWiki({messages, schema: wikiSchema, model: 'unknown', fetchImpl: async () => {calls++;}}), /Unsupported wiki model/);
   assert.equal(calls, 1);
+});
+
+test('a malformed provider key is rejected by name before any request on every transport, without echoing it', async () => {
+  const {requestWiki} = require('./provider.cjs');
+  const original = process.env.DEEPSEEK_API_KEY;
+  const fetchImpl = async () => assert.fail('a malformed credential must never reach the network');
+  try {
+    for (const value of ['fictional-test-key\n', ' fictional-test-key', 'fictional test key', '"fictional-test-key"', '']) {
+      process.env.DEEPSEEK_API_KEY = value;
+      const attempts = [checkProvider({fetchImpl}),
+        requestWiki({messages, schema: {type: 'object'}, fetchImpl})];
+      for (const attempt of attempts) {
+        await assert.rejects(attempt, error => {
+          assert.match(error.message, /^DEEPSEEK_API_KEY (is not configured|contains whitespace or a line break|is wrapped in quotation marks)$/);
+          assert.ok(!value.trim() || !error.message.includes(value.trim()));
+          return true;
+        });
+      }
+    }
+  } finally {process.env.DEEPSEEK_API_KEY = original;}
+});
+
+test('the review transport runs an injected fetch with the provider key unset, as consumer verify jobs do', async () => {
+  const original = process.env.DEEPSEEK_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  try {
+    const verdict = '{"decision":"auto_approve"}';
+    const requests = [];
+    const recovered = await requestReview({messages, wait: async () => {}, fetchImpl: async (_, options) => {
+      requests.push(JSON.parse(options.body).max_tokens);
+      return response(requests.length === 1 ? completion('length', 'partial') : completion('stop', verdict));
+    }});
+    assert.deepEqual(recovered, {content: verdict});
+    assert.deepEqual(requests, [4096, 8192]);
+    assert.deepEqual(await requestReview({messages, fetchImpl: async () => ({ok: false, status: 503})}),
+      {failure: 'AI assessment unavailable: provider HTTP 503'});
+  } finally {
+    if (original === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = original;
+  }
+});
+
+test('a separate process with no provider key runs the review transport', () => {
+  const {spawnSync} = require('node:child_process');
+  const env = {...process.env}; delete env.DEEPSEEK_API_KEY;
+  const script = `const {requestReview} = require('./src/provider.cjs');
+    requestReview({messages: [], wait: async () => {}, fetchImpl: async () => ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: 'ok'}}]})})})
+      .then(result => { if (result.content !== 'ok') process.exit(2); }, () => process.exit(3));`;
+  const run = spawnSync(process.execPath, ['-e', script], {cwd: require('node:path').join(__dirname, '..'), env});
+  assert.equal(run.status, 0, String(run.stderr));
 });

@@ -2,13 +2,20 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-python3 -m coverage run -m unittest discover -s src -p 'test_*.py'
-python3 -m coverage report
-node --experimental-test-coverage --test \
-  --test-coverage-lines=100 --test-coverage-branches=100 \
-  --test-coverage-include='src/**/*.cjs' \
-  --test-coverage-include='src/**/*.js' \
-  --test-coverage-include='src/**/*.mjs' \
-  --test-coverage-exclude='src/**/*.test.*' \
-  --test-coverage-exclude='src/**/*.spec.*' \
-  --import ./test/load-sources.mjs src/*.test.cjs
+# The native fixtures run real coverage.py through `python3 -m coverage`. Fail
+# immediately and say how to fix it instead of surfacing a late test failure.
+if ! python3 -m coverage --version >/dev/null 2>&1; then
+  echo "error: Python coverage.py is required by the native fixtures but 'python3 -m coverage' is unavailable." >&2
+  echo "Install the pinned version: python3 -m pip install -r requirements-test.txt (or put a virtualenv with it first on PATH)." >&2
+  exit 2
+fi
+
+# Every test process writes its own raw V8 coverage report. Node's built-in
+# merge is directory-order dependent, so coverage is merged and gated by
+# src/v8-coverage.cjs, which is order independent. See docs/native-verification.md.
+mkdir -p .clouseau-work
+rm -rf .clouseau-work/v8-coverage
+NODE_V8_COVERAGE="$PWD/.clouseau-work/v8-coverage" \
+  node src/native-test-report.cjs coverage "$PWD/.clouseau-work/verification-runs" -- \
+  --test --import ./test/load-sources.mjs src/*.test.cjs
+node scripts/v8-coverage-gate.cjs .clouseau-work/v8-coverage .clouseau-work/node.lcov

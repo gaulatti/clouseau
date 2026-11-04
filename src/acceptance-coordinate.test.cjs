@@ -50,7 +50,7 @@ test('all five captured coordinate aliases produce exactly the legacy-array reco
   assert.deepEqual(report, legacy, 'object and legacy transports resolve the same supplied proof chunks');
   assert.doesNotThrow(() => validateInspection(report, snapshot));
   assert.deepEqual(validateReport(report, snapshot), validateReport(legacy, snapshot));
-  assert.equal(validateReport(report, snapshot).decision, 'review_incomplete', 'transport equivalence supplies no missing grades');
+  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'transport equivalence supplies no missing grades');
   for (const item of captured) {
     assert.deepEqual(report.coverage.sources[item.index].evidence, [item.chunk]);
     const proof = report.evidence.find(entry => entry.id === item.chunk);

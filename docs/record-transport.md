@@ -53,6 +53,21 @@ unexpected, missing or altered repair bundle fails before the writer runs.
 An incomplete assessment may carry no record; this cannot create passing review
 evidence. Every caller must retain its failed-assessment job guard.
 
+## Authenticated local review records
+
+When a signed local review is reused, the assessment does not copy the signed
+snapshot, result and receipt into the transported record a second time. The
+record carries only the run facts (`previous`, `technical`, the author, optional
+engine and owner authorization) and the immutable receipt reference. The
+assessment binds it with `record_reference_digest`, and `record_digest` still
+names the complete record. Each write boundary (the gate and the private-plan
+atomic merge check) independently loads the receipt from its immutable Git blob,
+re-verifies signature, author, base, head, config, policy and engine, rebuilds
+the complete record and requires its digest to equal `record_digest` before any
+write. A missing, substituted or unavailable receipt fails closed at the write
+boundary (the next assessment ignores it and reviews afresh). Complete records produced by earlier engines remain accepted; they are
+distinguished by the absence of `record_reference_digest`.
+
 ## Data format and limits
 
 `review-record` is a compact canonical JSON array of exactly four strings. They
@@ -83,9 +98,13 @@ exact binding to repository, workflow run ID, run attempt, head SHA, base SHA,
 the existing canonical `assessment.record_digest`, and optional repair digest.
 Gate and repair compare these values against their current context and supplied
 assessment before materializing JSON in the existing fixed work paths. A
-foreign repository, previous run or previous attempt fails even when the source
-revision is unchanged. This binding supplies data integrity and run isolation;
-it is not a replacement signature or a new source of review authority.
+foreign repository, a different run, or an envelope that claims a later attempt
+than the consuming one fails even when the source revision is unchanged. The
+producing attempt may be the consuming attempt or an earlier one: `gh run rerun
+--failed` starts a new attempt that reads the job outputs the successful
+assessment produced in the earlier attempt, and it must not discard that review.
+This binding supplies data integrity and run isolation; it is not a replacement
+signature or a new source of review authority.
 
 The unchanged verifier then checks source/configuration/policy identity,
 authenticated receipts when present, independent roles, scores, findings,

@@ -6,17 +6,9 @@ const {FACTORS} = require('./acceptance.cjs');
 const {RUBRICS} = require('./acceptance-rubrics.cjs');
 const {requestJSON, requestJev, JEV_PACKET_LIMIT} = require('./review-provider.cjs');
 
-const JEV_FACTORS = Object.freeze(['fit.domain', 'excess.abstraction', 'excess.authority']);
-const delegated = entry => JEV_FACTORS.includes(`${entry.group}.${entry.name}`);
 
 function locations(report) {
   const result = [];
-  for (const [index, unit] of report.units.entries()) {
-    for (const group of ['fit', 'need', 'excess']) for (const name of FACTORS[group]) {
-      result.push({id: `u${index}_${group}_${name}`, group, name, target: unit[group][name], subject: unit.title, obligation: unit.obligation,
-        context: {kind: unit.kind, paths: unit.paths, narrower_alternative: unit.alternative}});
-    }
-  }
   for (const [index, finding] of report.findings.entries()) for (const name of FACTORS.defect) {
     result.push({id: `f${index}_${name}`, group: 'defect', name, target: finding.factors[name],
       subject: finding.title, obligation: finding.obligation, causal_evidence: finding.evidence,
@@ -35,50 +27,32 @@ function packetFor(location, report, snapshot) {
     })};
 }
 
-function bounds(answer) {
+// A factor's value is the established level. A condition the evidence cannot
+// establish counts as level0; only an unresolved provider distribution is
+// ambiguous, which routes the factor to the reasoning grader.
+function grade(answer) {
   if (typeof answer === 'string') {
-    if (answer === 'unknown') return {min: 0, max: 1};
+    if (answer === 'unknown') return {value: 0, ambiguous: false};
     if (!/^level[0-4]$/.test(answer)) throw new Error('Invalid semantic rubric answer');
-    const value = Number(answer.at(-1)) / 4;
-    return {min: value, max: value};
+    return {value: Number(answer.at(-1)) / 4, ambiguous: false};
   }
-  // Provider confidence expresses a distribution, never a proof. Preserve a
-  // broad interval whenever the atomic judgment itself is unresolved.
-  if (answer.choice === 'unknown' || answer.confidence < 0.91 || answer.probabilities.unknown >= 0.05) return {min: 0, max: 1};
+  // Provider confidence expresses a distribution, never a proof.
+  if (answer.choice === 'unknown' || answer.confidence < 0.91 || answer.probabilities.unknown >= 0.05) return {value: 0, ambiguous: true};
   const levels = Object.entries(answer.probabilities).filter(([key, probability]) => key !== 'unknown' && probability >= 0.025)
     .map(([key]) => Number(key.at(-1)) / 4);
   if (!levels.length) throw new Error('Jev distribution has no supported semantic level');
-  return {min: Math.min(...levels), max: Math.max(...levels)};
-}
-
-function authorityBounds(report, snapshot) {
-  const decisions = [];
-  for (const entry of locations(report)) {
-    if (entry.group !== 'need' || entry.name !== 'binding') continue;
-    const trusted = entry.target.evidence.some(id => {
-      const proof = report.evidence.find(item => item.id === id);
-      const source = snapshot.sources[proof.source];
-      return source.authority === 'trusted' && source.kind === 'contract';
-    });
-    if (trusted) continue;
-    const explanation = 'The cited evidence has no trusted contract authority. Investigator observation: ';
-    Object.assign(entry.target, {min: 0, max: 0,
-      reason: entry.target.reason.startsWith(explanation) ? entry.target.reason : explanation + entry.target.reason});
-    decisions.push({id: entry.id, provider: 'controller', answer: 'no_trusted_contract_citation', range: {min: 0, max: 0}});
-  }
-  return decisions;
+  return {value: Math.min(...levels), ambiguous: levels.length > 1};
 }
 
 async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, log, observe = () => {}}) {
   const graded = structuredClone(report);
   const acceptancePolicy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
-  const decisions = authorityBounds(graded, snapshot);
-  const controlled = new Set(decisions.map(item => item.id));
-  const entries = locations(graded).filter(item => !controlled.has(item.id));
+  const decisions = [];
+  const entries = locations(graded);
   const usage = [];
   const pending = [];
   // Small atomic packets keep unrelated code out of the decision model.
-  const width = ['typesafe', 'routed'].includes(provider) ? 12 : entries.length;
+  const width = provider === 'typesafe' ? 12 : entries.length;
   const evaluate = async (batch, selected) => {
     const state = {acceptance_policy: acceptancePolicy,
       accepted_contract: Object.values(snapshot.sources).filter(source => source.authority === 'trusted' && source.kind === 'contract')
@@ -110,24 +84,20 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
       transport: {raw: completion.raw, canonical: completion.canonical}});
     if (!answers || Object.keys(answers).sort().join('\0') !== batch.map(item => item.id).sort().join('\0')) throw new Error('Incomplete atomic factor grades');
     for (const item of batch) {
-      const value = bounds(answers[item.id]);
-      decisions.push({id: item.id, provider: selected, answer: answers[item.id], range: {...value}});
-      if (selected === 'typesafe' && value.min !== value.max) {pending.push(item); continue;}
-      if (item.group === 'defect' && item.name === 'confidence' && value.max > 0) value.max = 1;
-      Object.assign(item.target, value);
+      const {value, ambiguous} = grade(answers[item.id]);
+      decisions.push({id: item.id, provider: selected, answer: answers[item.id], value});
+      if (selected === 'typesafe' && ambiguous) {pending.push(item); continue;}
+      item.target.value = value;
     }
     usage.push(...completion.usage);
   };
-  const initial = provider === 'routed' ? entries.filter(delegated) : entries;
-  for (let offset = 0; offset < initial.length; offset += width) {
-    await evaluate(initial.slice(offset, offset + width), provider === 'routed' ? 'typesafe' : provider);
-  }
+  const route = provider === 'routed' ? 'deepseek' : provider;
+  for (let offset = 0; offset < entries.length; offset += width) await evaluate(entries.slice(offset, offset + width), route);
   // This is an explicit uncertainty route, not a second vote on a completed
   // negative grade. The reasoning grader receives the same original facts,
   // with no Jev answer or desired verdict in its input.
-  const reasoning = [...(provider === 'routed' ? entries.filter(entry => !delegated(entry)) : []), ...pending];
-  if (reasoning.length) await evaluate(reasoning, 'deepseek');
+  if (pending.length) await evaluate(pending, 'deepseek');
   return {report: graded, usage, grading: {provider, escalated: pending.map(item => item.id), decisions}};
 }
 
-module.exports = {JEV_FACTORS, locations, packetFor, bounds, authorityBounds, gradeReport};
+module.exports = {locations, packetFor, grade, gradeReport};

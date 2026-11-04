@@ -27,7 +27,7 @@ async function fixture() {
     controls: false, technical: JSON.parse(f.snapshot.sources.verification.content)};
   const keys = crypto.generateKeyPairSync('ed25519');
   f.privateKey = keys.privateKey.export({type: 'pkcs8', format: 'pem'});
-  f.trust = {mode: 'required', reviewer_sha: 'e'.repeat(40), reviewer_digest: require('../src/local-version.cjs').engineDigest(), max_age_seconds: 3600,
+  f.trust = {mode: 'required', reviewer_sha: 'e'.repeat(40), reviewer_digest: require('../src/local-version.cjs').engineDigest(), max_age_seconds: 172800,
     keys: [{id: 'test-runner', issuer: 'fictional-runner', github_actor: 'fixture-author', revoked: false,
       public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]};
   f.issue = {record: f.record, privateKey: f.privateKey, keyId: 'test-runner', issuer: 'fictional-runner',

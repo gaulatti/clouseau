@@ -1,6 +1,6 @@
 'use strict';
 
-const {digest, FACTORS, RULES} = require('./acceptance.cjs');
+const {digest, impactOf, FACTORS, RULES} = require('./acceptance.cjs');
 
 const MARKER = '<!-- clouseau-acceptance:v2 -->';
 const STATE = /<!-- clouseau-state:([A-Za-z0-9+/=]+) -->/;
@@ -10,8 +10,8 @@ function clean(value) {
     .replaceAll('|', '&#124;').replaceAll('`', '&#96;').replaceAll('@', '').replace(/[\r\n]+/g, ' ');
 }
 
-function score(min, max) {
-  return min === max ? min.toFixed(2) : `${min.toFixed(2)}–${max.toFixed(2)}`;
+function score(value) {
+  return value.toFixed(2);
 }
 
 function priorState(comments, repository, number) {
@@ -48,26 +48,15 @@ function reconcile(result, snapshot, previous = []) {
     const entries = roots.get(id) || []; entries.push({report, basis: basis(report, ids)}); roots.set(id, entries);
   };
   for (const review of result.reviews) {
-    for (const [index, unit] of review.report.units.entries()) {
-      const current = review.scores.units[index];
-      if (current.disposition === 'accepted') continue;
-      const old = related(unit);
-      const cause = `The material unit does not establish the required product acceptance: ${unit.title}`;
-      const id = old?.kind === 'product' ? old.id : digest({repository: snapshot.repository, kind: 'product',
-        obligation: unit.obligation.trim().toLowerCase().replace(/\s+/g, ' '), title: unit.title.trim().toLowerCase().replace(/\s+/g, ' ')});
-      records.set(id, {id, kind: 'product', title: unit.title, path: unit.paths[0], cause, obligation: unit.obligation,
-        blocking: true, state: current.disposition === 'rework' ? 'confirmed' : 'investigating'});
-      if (snapshot.review_manifest_version) remember(id, review.report, Object.values(unit.fit).flatMap(factor => factor.evidence));
-    }
     for (const [index, finding] of review.report.findings.entries()) {
       const current = review.scores.findings[index];
       const old = related(finding);
       const id = old && old.kind !== 'product' ? old.id : digest({repository: snapshot.repository, path: finding.path,
         cause: finding.cause.trim(), obligation: normalized(finding.obligation)});
-      const blocking = current.disposition !== 'nonblocking';
+      const blocking = current.disposition === 'blocking';
       const existing = records.get(id);
       const record = {id, kind: 'technical', title: finding.title, path: finding.path, cause: finding.cause,
-        obligation: finding.obligation, blocking, state: blocking ? current.disposition === 'blocking' ? 'confirmed' : 'investigating' : 'advisory_closed'};
+        obligation: finding.obligation, blocking, state: blocking ? 'confirmed' : 'advisory_closed'};
       if (!existing || blocking) records.set(id, record);
       if (snapshot.review_manifest_version) remember(id, review.report, finding.evidence);
     }
@@ -125,64 +114,49 @@ function overview(result, snapshot, state) {
     owner_decision: ['Owner decision required', 'The owner decides the purpose or authority question; all technical checks remain mandatory.'],
   };
   const [title, next] = decisions[result.decision];
-  const summary = Array.from(clean(result.reviews[0].report.summary));
-  const lines = [MARKER, `## Clouseau — ${title}`, '',
-    summary.slice(0, 500).join('') + (summary.length > 500 ? '…' : ''), '',
-    '| Assessment | Lowest score | Required |', '|---|---:|---:|'];
-  for (const [name, label] of [['fit', 'Fits the repository'], ['need', 'Solves a demonstrated need'],
-    ['proportionality', 'Keeps scope and complexity appropriate']]) {
-    const units = result.reviews.flatMap(review => review.scores.units);
-    lines.push(`| ${label} | ${score(Math.min(...units.map(unit => unit.min[name])), Math.min(...units.map(unit => unit.max[name])))} / 100 | ${RULES.product_threshold} |`);
-  }
-  lines.push('', 'Each material change must pass independently. Scores retain uncertainty; rounding does not decide approval.');
+  const lines = [MARKER, `## Clouseau — ${title}`];
   if (new Set(result.reviews.map(review => review.scores.decision)).size > 1) {
     lines.push('', '**Reviewer disagreement:** ' + result.reviews.map(review => `${clean(review.role)}: ${decisions[review.scores.decision][0]}`).join('; ') + '.');
   }
-  const rejected = new Set();
-  for (const review of result.reviews) for (const [index, unit] of review.report.units.entries()) {
-    const value = review.scores.units[index];
-    if (value.disposition === 'accepted') continue;
-    rejected.add(`**Change requiring attention: ${clean(unit.title)}** — ${clean(unit.obligation)} ` +
-      `Acceptance: ${score(value.min.acceptance, value.max.acceptance)} / 100. ${clean(unit.alternative)}`);
-  }
-  for (const unit of rejected) lines.push('', unit);
-  if (result.decision === 'owner_decision') {
-    const questions = new Set(result.reviews.flatMap(review => review.report.decisions)
-      .map(decision => `${clean(decision.question)} Options: ${decision.options.map(clean).join('; ')}.`));
-    if (!questions.size) questions.add('Confirm this exact revision’s changes to protected review controls.');
-    for (const question of questions) lines.push('', `**Owner decision:** ${question}`);
-  }
+  for (const hold of new Set(result.reviews.map(review => review.scores.hold).filter(Boolean))) lines.push('', `**Approval held:** ${clean(hold)}.`);
+  if (result.decision === 'owner_decision') lines.push('', '**Owner decision:** Confirm this exact revision’s changes to protected review controls.');
   const findings = new Map();
   for (const review of result.reviews) for (const [index, finding] of review.report.findings.entries()) {
     const identity = digest([finding.path, finding.cause.trim().toLowerCase().replace(/\s+/g, ' '),
       finding.obligation.trim().toLowerCase().replace(/\s+/g, ' ')]);
-    if (!findings.has(identity)) findings.set(identity, {finding, report: review.report, scores: []});
-    findings.get(identity).scores.push(review.scores.findings[index]);
+    const entry = review.scores.findings[index];
+    const best = findings.get(identity);
+    if (!best || entry.score > best.entry.score) findings.set(identity, {finding, entry, report: review.report});
   }
-  if (!findings.size) lines.push('', '**Technical findings:** None.');
-  for (const {finding, report, scores} of findings.values()) {
-    const min = Math.max(...scores.map(value => value.min));
-    const max = Math.max(...scores.map(value => value.max));
-    const status = min >= RULES.defect_threshold ? 'Blocking' : max >= RULES.defect_threshold ? 'Investigate' : 'Optional';
-    const citation = report.evidence.find(item => item.id === finding.evidence[0]);
-    const source = snapshot.sources[citation.source];
-    const evidence = /^[a-f0-9]{40}$/.test(source.ref) && ['source', 'contract'].includes(source.kind)
-      ? `[${clean(source.path)}:${citation.start}](https://github.com/${snapshot.repository}/blob/${source.ref}/${source.path.split('/').map(encodeURIComponent).join('/')}#L${citation.start}-L${citation.end})`
-      : clean(citation.id);
-    lines.push('', `**${status}: ${clean(finding.title)}**`, '',
-      `${clean(finding.cause)} ${clean(finding.consequence)}`, '',
-      `**Score:** ${score(min, max)} / 100. Findings at ${RULES.defect_threshold} or above block approval.`,
-      `**Affected area:** ${clean(finding.path)}. **Trigger:** ${clean(finding.trigger)}`,
-      `**Evidence:** ${evidence}. **Required outcome:** ${clean(finding.obligation)}`);
-    if (status === 'Optional') lines.push(`**Expected benefit:** ${scores.some(value => value.xg === 1) ? 'Verified' : 'Not established'}. Optional priority: ${Math.max(...scores.map(value => value.priority)).toFixed(2)} / 100.`);
+  if (!findings.size) {
+    const summary = Array.from(clean(result.reviews[0].report.summary));
+    lines.push('', summary.slice(0, 240).join('') + (summary.length > 240 ? '…' : ''), '', '**Technical findings:** None.');
+  } else {
+    const rows = [...findings.values()].sort((a, b) => b.entry.score - a.entry.score);
+    const blocking = rows.filter(({entry}) => entry.score >= RULES.defect_threshold).length;
+    lines.push('', `**${rows.length} ${rows.length === 1 ? 'finding' : 'findings'}** · **${blocking} blocking** (score ${RULES.defect_threshold} or above) · highest **${Math.round(rows[0].entry.score)}/100**`, '',
+      '| Finding | Need | Conf | Sev | Active | Impact | Score |', '|---|---:|---:|---:|---:|---:|---:|');
+    for (const {finding, entry} of rows) {
+      const value = name => score(finding.factors[name].value);
+      lines.push(`| ${clean(finding.title)}${entry.score >= RULES.defect_threshold ? '' : ' *(optional)*'} | ${value('necessity')} | ${value('confidence')} | ${value('severity')} | ${value('activation')} | ×${impactOf(finding).toFixed(2)} | **${Math.round(entry.score)}** |`);
+    }
+    lines.push('', `Score = 100 × Conf × the larger of Need or (Active × Sev × Impact), capped at 100. ${RULES.defect_threshold} or above blocks approval.`, '', '**TL;DR**');
+    const sentence = text => { const first = clean(text).match(/^.*?[.!?](?=\s|$)/)?.[0] || clean(text); return Array.from(first).length > 200 ? Array.from(first).slice(0, 199).join('') + '…' : first; };
+    for (const {finding, entry, report} of rows) {
+      const citation = report.evidence.find(item => item.id === finding.evidence[0]);
+      const source = snapshot.sources[citation.source];
+      const evidence = /^[a-f0-9]{40}$/.test(source.ref) && ['source', 'contract'].includes(source.kind)
+        ? `[${clean(source.path)}:${citation.start}](https://github.com/${snapshot.repository}/blob/${source.ref}/${source.path.split('/').map(encodeURIComponent).join('/')}#L${citation.start}-L${citation.end})`
+        : clean(citation.id);
+      lines.push(`- **${clean(finding.title)}** (${evidence}): ${sentence(finding.consequence)} **Fix:** ${sentence(finding.obligation)}${entry.score >= RULES.defect_threshold ? '' : ' Optional.'}`);
+    }
   }
-  const gates = new Set();
+  const gates = new Map();
   for (const review of result.reviews) for (const gate of review.report.gates) {
-    if (['satisfied', 'inapplicable'].includes(gate.state)) continue;
-    const detail = `**Check requiring attention — ${clean(gate.name.replaceAll('_', ' '))}:** ${clean(gate.reason)}`;
-    gates.add(detail);
+    if (['satisfied', 'inapplicable'].includes(gate.state) || gates.has(gate.name)) continue;
+    gates.set(gate.name, `**Check requiring attention — ${clean(gate.name.replaceAll('_', ' '))}:** ${clean(gate.reason)}`);
   }
-  for (const gate of gates) lines.push('', gate);
+  for (const gate of gates.values()) lines.push('', gate);
   if (state.unresolved.length) {
     lines.push('', '**Outstanding prior blockers:** ' + state.findings.filter(finding => state.unresolved.includes(finding.id))
       .map(finding => `${clean(finding.title)} (${clean(finding.path)})`).join('; ') + '.');
@@ -201,38 +175,25 @@ function render(result, snapshot, state, {compact = false, unbounded = false} = 
   const lines = overview(result, snapshot, state);
   if (!compact) lines.push('', '<details><summary>Scoring and evidence</summary>', '',
     `Revision: \`${snapshot.head_sha}\` · Policy: \`${snapshot.policy_digest}\``, '',
-    'Scores are policy indices. Product acceptance requires at least 80 in every dimension; a technical finding at or above 70 blocks. Uncertainty crossing a threshold requires investigation. Display rounding never decides eligibility.', '');
-  if (!compact) lines.push('Fit = 35 outcome + 25 workflow + 20 domain + 10 boundary + 10 operating model. Need = 100 × max(binding, evidence × (.50 value + .30 unmetness + .20 timeliness)). Proportionality = 100 × (1 − greatest excess). Unit acceptance = min(Fit, Need, Proportionality).', '',
-    'Technical Q = 100 × confidence × min(1, max(necessity, activation × severity × (1 + .25 irreversibility + .20 reach + .20 detection + .20 propagation + .15 recurrence))). xG affects optional priority only; it never creates a blocker.', '');
+    `A technical finding scoring ${RULES.defect_threshold} or above blocks approval. Display rounding never decides eligibility.`, '');
+  if (!compact) lines.push('Technical Q = 100 × confidence × min(1, max(necessity, activation × severity × (1 + .25 irreversibility + .20 reach + .20 detection + .20 propagation + .15 recurrence))). xG affects optional priority only; it never creates a blocker.', '');
   if (!compact) for (const review of result.reviews) {
     lines.push(`### ${clean(review.role)}`, '', clean(review.report.summary), '',
-      '| Unit | Fit | Need | Proportionality | Acceptance | Disposition |', '|---|---:|---:|---:|---:|---|');
-    for (const unit of review.scores.units) {
-      lines.push(`| ${clean(unit.id)} | ${score(unit.min.fit, unit.max.fit)} | ${score(unit.min.need, unit.max.need)} | ${score(unit.min.proportionality, unit.max.proportionality)} | ${score(unit.min.acceptance, unit.max.acceptance)} | ${unit.disposition} |`);
-    }
-    lines.push('', '| Finding | Score | BR | xG | Optional priority | Disposition |', '|---|---:|---:|---:|---:|---|');
+      '| Finding | Score | BR | xG | Optional priority | Disposition |', '|---|---:|---:|---:|---:|---|');
     for (const [index, finding] of review.report.findings.entries()) {
       const value = review.scores.findings[index];
-      lines.push(`| ${clean(finding.title)} | ${score(value.min, value.max)} | ${finding.blast_radius} | ${value.xg} | ${value.priority.toFixed(2)} | ${value.disposition} |`);
+      lines.push(`| ${clean(finding.title)} | ${score(value.score)} | ${finding.blast_radius} | ${value.xg} | ${value.priority.toFixed(2)} | ${value.disposition} |`);
     }
     if (!review.report.findings.length) lines.push('| No admitted technical findings | — | — | — | — | — |');
     lines.push('', '| Gate | State | Evidence |', '|---|---|---|');
     for (const gate of review.report.gates) lines.push(`| ${gate.name} | ${gate.state} | ${clean(gate.reason)} |`);
-    for (const unit of review.report.units) {
-      lines.push('', `<details><summary>Inputs: ${clean(unit.title)}</summary>`, '', '| Group | Factor | Range | Reason | Citations |', '|---|---|---:|---|---|');
-      for (const group of ['fit', 'need', 'excess']) for (const name of FACTORS[group]) {
-        const factor = unit[group][name];
-        lines.push(`| ${group} | ${name} | ${score(factor.min, factor.max)} | ${clean(factor.reason)} | ${clean(factor.evidence.join(', '))} |`);
-      }
-      lines.push('', '</details>');
-    }
     for (const finding of review.report.findings) {
       lines.push('', `<details><summary>Inputs: ${clean(finding.title)}</summary>`, '',
         `Cause: ${clean(finding.cause)} · Trigger: ${clean(finding.trigger)} · Consequence: ${clean(finding.consequence)}`, '',
-        '| Factor | Range | Reason | Citations |', '|---|---:|---|---|');
+        '| Factor | Value | Reason | Citations |', '|---|---:|---|---|');
       for (const name of FACTORS.defect) {
         const factor = finding.factors[name];
-        lines.push(`| ${name} | ${score(factor.min, factor.max)} | ${clean(factor.reason)} | ${clean(factor.evidence.join(', '))} |`);
+        lines.push(`| ${name} | ${score(factor.value)} | ${clean(factor.reason)} | ${clean(factor.evidence.join(', '))} |`);
       }
       lines.push('', '</details>');
     }
@@ -240,16 +201,6 @@ function render(result, snapshot, state, {compact = false, unbounded = false} = 
     for (const evidence of review.report.evidence) lines.push(`| ${clean(evidence.id)} | ${sources.get(evidence.source).id} | ${evidence.start}–${evidence.end} |`);
     lines.push('', '</details>');
     for (const resolution of review.report.resolutions) lines.push('', `Disposition ${clean(resolution.id)}: **${resolution.state}** — ${clean(resolution.reason)} (${clean(resolution.evidence.join(', '))})`);
-  }
-  if (!compact) {
-    lines.push('', '<details><summary>Literal immutable source excerpts</summary>', '',
-      'Each cited source line appears once. The per-review registers retain every evidence ID and exact line range.', '');
-    for (const [name, source] of sources) {
-      lines.push('', `**${source.id} — ${clean(name)}**`, '');
-      const content = snapshot.sources[name].content.split('\n');
-      for (const number of [...source.lines].sort((a, b) => a - b)) lines.push(`L${number}: ${clean(content[number - 1])}`);
-    }
-    lines.push('', '</details>');
   }
   if (!compact && state.findings.length) {
     lines.push('', '| Persistent finding | State | Blocking | Path |', '|---|---|---|---|');

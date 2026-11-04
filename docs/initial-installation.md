@@ -33,6 +33,13 @@ not CI model keys or a new credential service.
    reviewer. The initial manifest and receipt always bind one exact engine SHA
    and digest, including in central-source mode. Commit and push the complete
    candidate. Store the literal accepted requirement outside the checkout.
+   Keep the accepted base branch (`main`) free of `.clouseau-local.json` and
+   `.github/clouseau.json`: push the candidate on its own branch (for example
+   `install/clouseau`) and open the PR from it. The full commit SHA to pin in
+   the `initial-trust` workflow checkout (`FULL_REVIEWED_RELEASE_SHA` below) is the
+   `reviewer_sha` printed by `clouseau installation-engine`. The CI workflow's bootstrap is
+   not pinned: reference `gaulatti/clouseau/scripts/resolve@main`, because the engine is
+   resolved from protected main at run time and a commit pin on the bootstrap only goes stale.
 4. Prepare a new manifest outside the checkout:
 
    ```sh
@@ -79,11 +86,34 @@ clouseau installation-review --directory /path/to/project \
   --grant-comment NATIVE_COMMENT_ID --harness codex
 ```
 
-This runs actual verification, native exact coverage, immutable source
-collection, independent examiner/challenger and deterministic scoring. Only the
-explicitly authorized frozen installation configuration acquires initial
-trust. Every changed mechanism still earns its scope, integrity and technical
-results. Setup subprocesses do not inherit provider/write-token environment
+`--harness codex|claude` runs a headless harness. Inside an AI coding harness,
+pass `--agent claude|codex|opencode` instead (not both), exactly as for
+`clouseau review`: the command prints an `awaiting_agent` request (exit status 3),
+a fresh subagent answers it with `clouseau respond --agent-request FILE --answer
+FILE --session ID`, and repeating the identical command continues. The real
+verification runs once and the exchange costs one installation attempt however
+many commands it spans. The signed manifest binds the engine revision, so the
+exchange continues only on that revision; if Clouseau main advances, prepare a
+new manifest. A mistyped `--harness`, `--agent` or option fails before anything is
+recorded.
+
+`--harness` is `codex` or `claude`; this command does not accept the `--agent`
+form of `clouseau review` (it launches the harness itself, also from inside an
+AI session). Use a correct harness name: a mistyped one still records an
+attempt, after which the unchanged head is refused with `this unchanged
+revision already has a negative review; repair it before reassessment`. Commit
+a change, then prepare and authorize a new manifest. A branch has at most three
+attempts.
+
+This runs actual verification and native measurement, records their real
+outcomes, then performs immutable source collection, independent
+examiner/challenger review and deterministic scoring. Partial coverage, a failing
+coverage command or unavailable coverage does not suppress local AI review or
+become invented passing counts. A passing local AI-quality verdict may produce
+installation-only signed evidence; it does not establish successful technical
+verification or initial trust. The independent CI gate still requires all tests
+and exact coverage, and the owner must accept the installation manually. Every
+changed mechanism still earns its scope and integrity results. Setup subprocesses do not inherit provider/write-token environment
 variables; the existing workstation trust boundary remains unchanged.
 
 Incomplete transports and negative findings persist outside source. Renewing
@@ -100,9 +130,11 @@ clouseau installation-publish --directory /path/to/project \
 
 Publication uses the existing separate immutable Git artifact/tag route.
 Include the returned `clouseau-installation-review:v1` marker in the initial
-ready PR body. The PR must be internal, authored by the authorized native actor
+ready PR body (if the PR already exists, edit its body, then re-run the
+`initial-trust` job). The PR must be internal, authored by the authorized native actor
 and have automatic merge disabled. Ordinary receipt verification rejects this
-receipt and marker; invalid evidence never triggers paid fallback review.
+receipt and marker, which is the ordinary rule for any receipt that does not verify: it is ignored and
+the normal hosted review checks run (see [local review](local-review.md#a-receipt-that-does-not-verify-is-ignored)).
 
 ## Independent CI and initial owner acceptance
 
@@ -125,6 +157,9 @@ permissions:
   issues: read
 jobs:
   initial-trust:
+    # Only the installation PR carries the installation receipt marker. Unguarded,
+    # this job fails on every later pull request.
+    if: contains(github.event.pull_request.body, 'clouseau-installation-review:v1')
     runs-on: ubuntu-latest
     timeout-minutes: 70
     steps:
@@ -146,12 +181,23 @@ jobs:
           --pull-request "${{ github.event.pull_request.number }}"
 ```
 
-Use the same frozen engine as the grant. Run this job in a **different workflow**
+Use the same frozen engine as the grant. Keep the job's `if:` guard on the
+installation receipt marker (`clouseau-installation-review:v1`): unguarded, it
+runs on every later PR and fails with `Invalid initial installation: one
+installation-only receipt marker is required`. Run this job in a **different workflow**
 from configured verification: it waits for that complete verification run and
 must not wait on itself. It makes zero model requests, receives no provider key
-or write permission, and cannot discard an existing review ledger. Unprotected
-private repositories must select released manual merge mode and disable
-repository auto-merge.
+or write permission, and cannot discard an existing review ledger. Repository settings are the
+owner's choice and never fail the installation: the workflow token cannot read
+`allow_auto_merge`, and a private repository may have no branch protection. In
+those cases the result carries one fixed `notice` and merge arming stays
+withheld (`auto_merge_authorized` is always `false`); signature, identity,
+provenance and independent-CI checks are unchanged. Selecting the eventual
+ordinary automatic policy does not grant this installation any merge
+authority: the frozen grant binds that configuration, the initial receipt still
+requires manual owner acceptance, and ordinary changes later use accepted-base
+policy and enrollment. See the private-plan controller path in
+[change acceptance](change-acceptance.md#controller-enforced-owner-merge-on-an-unavailable-private-plan).
 
 Success explicitly returns `installation_verified`,
 `manual_owner_acceptance_required`, `ordinary_pr_approval: false` and

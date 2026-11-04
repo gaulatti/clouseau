@@ -12,8 +12,32 @@ const part = (root = 'src', report = 'coverage.json', format = 'istanbul') =>
 const recipe = coverage => ({version: 2, base_branch: 'main', readme: 'README.md',
   repository_policy: 'AGENTS.md', verification: [['node', '--version']], coverage});
 
+test('canonical repository source root is representable without relaxing report or general paths', () => {
+  for (const version of [1, 2]) {
+    for (const format of version === 1 ? ['llvm', 'istanbul', 'coveragepy', 'go'] : ['istanbul', 'coveragepy', 'go', 'lcov']) {
+      const coverage = part('.', 'native.json', format);
+      const config = {...recipe(version === 1 ? coverage : [coverage]), version};
+      assert.deepEqual(coverageParts(config), [coverage]);
+      assert.equal(readLocalConfig(config), config);
+      for (const field of ['report', 'readme', 'repository_policy']) {
+        const invalid = structuredClone(config);
+        if (field === 'report') (version === 1 ? invalid.coverage : invalid.coverage[0]).report = '.';
+        else invalid[field] = '.';
+        assert.throws(() => readLocalConfig(invalid), /Invalid local-only/);
+      }
+    }
+  }
+  for (const root of ['', './', './src', 'src/..', '../src', '/src', 'src\\nested', 'src\0']) {
+    assert.throws(() => coverageParts(recipe([part(root)])), /Invalid local-only/);
+  }
+  for (const roots of [['.', 'src'], ['src', '.'], ['.', '.'], ['.', '.storybook'], ['.storybook', '.']]) {
+    assert.throws(() => coverageParts(recipe(roots.map((root, index) => part(root, `report${index}.json`)))), /Invalid local-only/);
+  }
+  assert.equal(require('./acceptance-sources.cjs').safePath('.'), false);
+});
+
 test('v2 explicit native parts preserve the v1 single-artifact contract', () => {
-  for (const format of ['llvm', 'istanbul', 'coveragepy']) {
+  for (const format of ['llvm', 'istanbul', 'coveragepy', 'go']) {
     const coverage = {...part('src', 'native.json', format), legacy_metadata: true};
     const config = {...recipe(coverage), version: 1, legacy_metadata: true};
     assert.deepEqual(coverageParts(config), [coverage]);
@@ -28,7 +52,7 @@ test('v2 explicit native parts preserve the v1 single-artifact contract', () => 
 test('coverage configuration rejects unsafe paths, unknown policy fields and ambiguous native parts', () => {
   const invalid = [null, {version: 3}, recipe(null), recipe([]), recipe('not a plan'),
     recipe(Array.from({length: 33}, (_, index) => part('src' + index, `report${index}.json`))),
-    recipe([null]), recipe([{...part(), format: 'go'}]), recipe([part('src', 'llvm.json', 'llvm')]),
+    recipe([null]), recipe([{...part(), format: ''}]), recipe([{...part(), format: '../unsafe'}]),
     recipe([{...part(), report: '../outside.json'}]), recipe([{...part(), report: null}]),
     recipe([{...part(), source_directory: '/outside'}]), recipe([{...part(), source_directory: null}]),
     recipe([{...part(), excludes: ['uncovered.ts']}]),
@@ -57,3 +81,13 @@ test('the complete v2 plan comes from accepted base rather than the proposed rec
 }, directory => {
   fs.writeFileSync(path.join(directory, '.clouseau-local.json'), JSON.stringify(recipe([part('src', 'accepted.json')])));
 }));
+
+
+test('local assessment retains a safe unsupported format as unavailable evidence while native CI configuration remains strict', () => {
+  for (const format of ['gcov', 'llvm']) {
+    const config = recipe([part('src', 'native.json', format)]);
+    assert.equal(readLocalConfig(config), config);
+    assert.deepEqual(coverageParts(config, {allowUnsupported: true}), config.coverage);
+    assert.throws(() => coverageParts(config), /Invalid local-only/);
+  }
+});

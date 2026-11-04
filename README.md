@@ -3,12 +3,21 @@
 Clouseau also provides a centrally maintained local agent skill and signed review
 receipts. Agent-only installation is independent of CI: it uses authenticated
 coding harnesses and creates no Actions configuration or provider secrets.
-Opted-in CI verifies an enrolled runner's passing receipt, reruns tests and exact
-coverage, and approves/merges without repeating the AI review. See
+Inside Claude Code, Codex or opencode the calling agent supplies the review
+sessions (`--agent`); the headless `--harness` form is for a plain terminal.
+Local AI review runs regardless of coverage percentage or availability and keeps
+its quality verdict separate from real verification results. Opted-in CI verifies
+an enrolled runner's passing AI receipt without repeating the review, then still
+requires its own tests and exact coverage before approval/merge. See
 [local review, installation and trust boundaries](docs/local-review.md).
+New to Clouseau? Start with the [quickstart](docs/quickstart.md).
+How a receipt stays valid across engine revisions: [receipt compatibility](docs/receipt-compatibility.md).
+Every refusal or hold notice names its cause class and numbered next steps: [notices and their causes](docs/notices.md).
 Consumers without accepted recipe/enrollment/workflows use the separate
 [initial owner-authorized trust installation](docs/initial-installation.md).
 Its signed evidence cannot approve ordinary changes or automatically merge.
+Clouseau's own accepted-policy bootstrap and native coverage diagnostics are
+documented in [self-review](docs/self-review.md).
 
 Shared coverage gates and evidence-led AI pull request approval for GitHub Actions.
 Clouseau owns the PR intent review process: check whether a change is needed,
@@ -33,11 +42,13 @@ There is no application-specific deployment infrastructure in Clouseau.
 
 ## Operations
 
-Automatic CI integrations pin the small `gaulatti/clouseau/scripts/resolve`
-bootstrap once at a reviewed full commit. It selects protected Clouseau main,
+Automatic CI integrations reference the small `gaulatti/clouseau/scripts/resolve@main`
+bootstrap, so it always follows the latest protected main (the engine is resolved from protected
+main at run time with the repository's secrets, so a commit pin on the bootstrap adds little and
+only goes stale). It selects protected Clouseau main,
 freezes its SHA and computes its digest. Every engine job checks out that SHA
 and invokes the local action with the same trusted outputs. Normal central
-releases need no consumer pin or digest update. See [automatic CI upgrades](docs/automatic-ci-upgrades.md)
+releases need no consumer pin or digest update; existing full-commit references keep working. See [automatic CI upgrades](docs/automatic-ci-upgrades.md)
 for source authorization, failure behavior and exact local-receipt compatibility.
 Legacy fixed installations may still use `gaulatti/clouseau@FULL_REVIEWED_COMMIT_SHA`;
 upgrading those installations requires a reviewed PR. See `examples/colombo.json`
@@ -46,20 +57,24 @@ for the version 2 policy configuration.
 | Operation | Inputs | Result |
 | --- | --- | --- |
 | `verify-engine` | Trusted run SHA/digest in `CLOUSEAU_ENGINE_SHA` and `CLOUSEAU_ENGINE_DIGEST` | Verify the frozen source and record its exact identity |
-| `test` | none | Run Clouseau's Python and Node regression suites |
-| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive |
-| `assess` | `config`, optional `pull-request`, `provider-key` | Wait for verification, then emit a read-only intent assessment |
+| `test` | none | Run Clouseau's Node regression suite |
+| `coverage` | Accepted-base v2 `coverage-config`, or legacy `coverage-report` + `source-directory` with optional `coverage-format` | Require exact, nonempty 100% native application line and branch coverage; the two input forms are mutually exclusive. A repository can opt in to [changed-line coverage](docs/changed-line-coverage.md) with `coverage.mode` in its protected config plus `coverage-base-ref` and `coverage-baseline`, or in [declared coverage](docs/declared-coverage.md) (`"declared"`: enforce the minimums the client's `package.json` declares at the base revision; needs `coverage-base-ref` only) |
+| `await-verification` | `config`, `pull-request` for non-PR events | Wait for the exact-head PR verification run without deadlocking a single-slot runner pool: ends cleanly with `verified=false` when verification has not started within `verification_queue_grace_seconds` (default 900), to be reassessed when the verification run completes |
+| `assess` | `config`, optional `pull-request`, `provider-key`, optional `ignore-receipt: 'true'` (never read the PR's receipt; for the hosted fallback after an unusable receipt) | Authenticate local quality evidence independently of technical status, or wait for verification before CI AI assessment |
 | `verify-local` | `config`, eligible published signed receipt | Validate local evidence and independent CI with zero AI calls; missing or invalid evidence holds |
 | `gate` | `config`, `assessment`, optional `pull-request` | Validate protection, arm auto-merge, request owner review, or approve a verified revision |
 | `repair` | v2 `config`, `assessment`, this run's record artifacts, independent `repair-token` | Validate and reserve one bounded correction, then push a new internal PR revision requiring fresh CI/review |
 | `evaluate-acceptance` | `provider-key`, `typesafe-key` | Execute six fixed qualification fixtures, investigate with real models, compare DeepSeek and Jev grading plus whole-review cost; retain evidence without GitHub writes |
 | `evaluate-review` | `provider-key` | Evaluate the real model on fixed maintenance, product-drift, and test-fakery cases; no GitHub writes |
-| `check-provider` | `provider-key` | Verify DeepSeek authentication and JSON output without touching a PR |
-| `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
+| `check-provider` | `provider-key` | Verify the key shape (no whitespace, line break or quotes), DeepSeek authentication and JSON output without touching a PR |
+| `reconcile-base` | `config`, optional `update-token` | When the base moved (a push for human merges; a completed `pull_request_target` review run of a now-merged PR, a schedule or a dispatch for bot merges, which raise no push event), update (with an independent credential) or post a needs-branch-update notice on every approved PR it left behind; approves and merges nothing |
+| `request-reassessment` | `config`, optional `pull-request` | Validate the maintainer trigger (or a completed PR verification `workflow_run`) and rerun the exact trusted PR metadata workflow; never rebuild contributor code |
 | `plan-wiki` | `provider-key`, `wiki-config`, wiki/source checkouts | Generate and validate a coordinated multi-page draft after deployment; `wiki-draft: true` permits read-only validation |
 | `evaluate-wiki` | `provider-key` | Read-only live factual checks on supported and deliberately false documentation |
 | `publish-wiki` | `wiki-config`, validated `wiki-plan-path`, wiki/source checkouts | Revalidate deployment and publish every page in one non-force wiki commit; no provider key |
 | `finalize` | `config`, `assessment` | Wait for GitHub auto-merge after the required native gate finishes, then preserve the existing CD handoff |
+
+The wait is cheap and rate-limit aware: a running verification is polled every 15 s, an absent or queued one at growing gaps (15, 30, 60, then 120 s; about 10 requests for the default grace instead of 60), and the workflow-run listing is a conditional request (`If-None-Match`; a 304 does not count against the primary limit). A 403/429 (retry-after, `x-ratelimit-remaining`/`reset`, secondary or abuse limit) is retried with bounded exponential backoff and jitter that respects the stated reset. If the budget stays exhausted past the bounded wait, the review ends in an explicit hold, `Held: GitHub API rate limit, will retry after <time>`, shown in the `clouseau-review-incomplete` comment (`github_rate_limit`) and in the `retry_after` output; the next verification completion or a re-run after that time reassesses the PR.
 
 For example, a caller's coverage step supplies:
 
@@ -106,11 +121,18 @@ coverage.py's executable lines and branch decision exits, not statement
 percentages or every traced transition. Empty global totals, omitted application
 modules, exclusions, partial coverage and inconsistent counters fail closed.
 
+For Go, select `coverage-format: go` and supply the `go test -coverprofile` text
+profile built with `-coverpkg=./...`. Go records statements and basic blocks only, so
+`lines` means statements and `branches` means basic blocks; implicit false exits and
+short-circuit operands are not measured. See the [native Go coverage
+contract](docs/go-coverage.md) for exact semantics, inventory and failures.
+
 Monorepos may use the accepted-base version 2 local recipe with separate native
-Istanbul and coverage.py parts. `operation: coverage` accepts that recipe through
-`coverage-config` and runs the same shared per-part and aggregate checks as the
-local runner. Each part must be complete and exact; there is no consumer-side
-report merging. Legacy single-report inputs remain supported.
+Istanbul, coverage.py and Go parts. `operation: coverage` accepts that recipe through
+`coverage-config` and uses the shared per-part and aggregate measurement rules.
+The CI gate requires each part to be complete and exact; local AI can assess
+honest partial or unavailable measurements. There is no consumer-side report
+merging. Legacy single-report inputs remain supported.
 
 ## Trust and permissions
 
@@ -148,11 +170,30 @@ The configured verification workflow, review controls, and repository-purpose
 contract remain protected. Their changes still receive an AI integrity assessment
 and require explicit owner confirmation.
 
-The controller requires active effective base-branch rules: strict required
+`managed_agents` is an opt-in, default-off exception for one protected path: an
+`AGENTS.md` change whose managed block is byte-identical to a digest enrolled in the
+protected configuration, with every byte outside the block unchanged, is not held for
+owner confirmation. See [managed-standard AGENTS.md updates](docs/managed-agents.md).
+
+`exact_revert` is an opt-in, default-off exception for one review: a PR whose resulting tree is
+byte-identical to an earlier first-parent tree of the base history, within a window set in the protected
+configuration, is accepted without a fresh AI review; protected controls still need the exact-head owner
+confirmation and verification is unchanged. See [exact revert acceptance](docs/exact-revert.md).
+
+The native protected merge path requires active effective base-branch rules: strict required
 checks for the configured verification job and native `approve-and-merge` job
 from GitHub Actions, a fresh approving review, no deletion, and no force pushes. The installing
 administrator must also verify no bypass actors. Repository auto-merge and Actions
 approving reviews must be enabled for automatic merge. Runtime tokens do not get administration access.
+
+Missing or insufficient repository settings are a notice, never a failure. The review, acceptance
+record and approval complete and the job succeeds, but Clouseau neither arms nor performs the
+merge. It posts one fixed-text comment, updated in place, naming only bounded classes: auto-merge
+disabled, main not protected, required checks missing, approval freshness missing, up-to-date
+missing, force-push+deletion protection missing. Security reasoning: without protection the bot
+approval cannot make an unsafe merge more possible than it already is, so it is harmless, while
+merging or arming auto-merge on insufficient protection stays forbidden. API errors other than a
+reported gap still fail.
 
 Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
 configuration. Repository auto-merge must be disabled in this mode, including
@@ -164,8 +205,21 @@ unprotected branch, permits approval without host-enforced protection. Generic
 permission failures, unavailable APIs, public unprotected repositories and
 incomplete available rules fail closed. The summary states when GitHub cannot
 enforce the checks; trusted maintainers must honor them before manually merging.
-The controller never merges or dispatches deployment in manual mode. Omitting
-`merge_mode`, or choosing `"automatic"`, retains the protected owner-only flow.
+The controller never merges or dispatches deployment in manual mode.
+
+This repository explicitly selects `"merge_mode": "automatic"` for strict owner-only automation:
+CODEOWNERS must exist on the accepted base and the author must own every affected
+path. The normal protected native flow is unchanged. On the exact unavailable
+private-plan condition above, native repository auto-merge stays disabled while
+the validated acceptance controller can atomically fast-forward the exact base
+to the reviewed head, with paired source/base compare-and-swap and no force.
+This supports same-repository branches with an up-to-date head only; other
+contributions remain manual. Missing/stale reviews, failed full verification or
+coverage, changed revisions and API errors cannot authorize that write. This is
+controller-enforced delivery, not unavailable native branch protection. See
+[the complete private-plan contract](docs/change-acceptance.md#controller-enforced-owner-merge-on-an-unavailable-private-plan),
+including deployment-trigger limitations. Omitting `merge_mode` preserves the
+existing native flow and optional CODEOWNERS behavior.
 
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
@@ -199,7 +253,9 @@ findings show expected benefit and optional priority without creating a blocker.
 
 Expand **Scoring and evidence** for the unchanged formulas, every individual
 grade and explanation, both independent reviews, persistent finding history and
-immutable source excerpts. Large audits retain lossless evidence pages. Summary
+the evidence register (source and line ranges). Source text is not copied into PR
+comments; the complete source-bound record stays in the run's acceptance artifact.
+Large audits retain lossless evidence pages. Summary
 formatting uses the already validated record and makes no model requests. A
 review decision never claims that merge, deployment or live verification finished.
 
@@ -211,8 +267,26 @@ verdict, both reviewers' 100/100 product scores and no technical findings. This
 is an offline display fixture, never a substitute for fresh review or CI evidence.
 
 Version 2 additionally uploads `work/clouseau-acceptance*.json` as a run/attempt
-bound artifact and downloads it into `work/` in the separate approval and repair
-jobs. Select examiner, challenger and grader explicitly in `acceptance`; see
+bound artifact (`clouseau-acceptance-<run id>-<attempt>`) and downloads it into
+`work/` in the separate approval and repair jobs. The download resolves the
+artifact by run id with `src/acceptance-artifact.cjs` (a `actions/github-script`
+step named `Locate this run's acceptance record`, see this repository's
+`.github/workflows/ci.yml`), taking the newest attempt that is not later than the
+current one, because `gh run rerun --failed` re-runs only the failed approval job
+as a new attempt while the successful assessment job's artifact keeps its
+original attempt number. The lookup accepts only artifacts of this run id and
+this revision of the workflow that have not expired; the gate still compares
+the record against the assessment's digests, head, base and frozen engine.
+**A consumer that copied the artifact-transport workflow must update its copy**
+(add the lookup step after the engine checkout and download the name it outputs)
+before a failed-jobs re-run can find the assessment; `record-transport:
+job-output` consumers need only the engine update. Once the review is accepted
+the merge step is safe to repeat: enabling auto-merge and submitting the approval
+retry transient GitHub failures (GraphQL "Something went wrong", HTTP 5xx and
+short secondary rate limits) after 2, 6 and 15 s. Validation, permission and
+"not mergeable" errors fail at once with GitHub's message. If the transient
+failure persists the job fails with a notice that the review was already
+accepted and that re-running the failed job is safe and repeats no AI review. Select examiner, challenger and grader explicitly in `acceptance`; see
 [the self-hosting configuration](.github/clouseau.json). `typesafe-key` is needed
 only when the explicit Jev/DeepSeek grading route is selected. Failure never
 silently changes that choice. A separate repair job receives an independent
@@ -226,7 +300,9 @@ The consumer must retain PR, metadata-only target, comment, and manual workflow
 entry points and PR-level concurrency. The controller validates the exact latest
 PR-event run, revision, verification job, and named steps from configuration.
 The read-only `assess` job waits for the PR verification run to finish before
-calling AI. Allow 70 minutes for this job when verification can take 60 minutes.
+calling AI. That wait occupies a runner, and a verification job that is queued
+behind it on a single-slot pool can never start, so the wait is bounded by
+progress (see "Waiting for verification" in `docs/automatic-ci-upgrades.md`). Allow 70 minutes for this job when verification can take 60 minutes.
 The separate native job named `approve-and-merge` calls `gate`; it must run on
 `pull_request_target` and fail if assessment fails, intent is missing, integrity
 is rejected, or technical evidence is incomplete. Use `always()` with `needs`
@@ -256,23 +332,30 @@ bake windows, and ticket closure remain separate delivery work.
 ## Development
 
 ```sh
-python3 -m unittest discover -s src -p 'test_*.py'
 node --test src/*.test.cjs
 ```
 
 Clouseau's own CI also requires exactly 100% line and branch coverage across
-all production Python and JavaScript modules. New source files are included
+all production JavaScript modules. New source files are included
 even when no test imports them. Test code is outside the production scope;
 there are no exclusions for production failure paths or rounded thresholds.
 
 To run the same gate locally with Node 22:
 
 ```sh
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements-test.txt
 ./scripts/verify-coverage
 ```
+
+Clouseau needs only Node. One integration test runs a fixture Python application
+under real coverage.py to prove the `coveragepy` adapter against live output, so
+install `requirements-test.txt` (coverage.py 7.13.0) to run the whole suite. The
+coverage gate itself is `bin/coverage-gate.cjs`
+(`check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|go]` or
+`plan ACCEPTED_CONFIG [DIRECTORY]`), so reviewing a Python application requires
+Python only for that application's own tests.
+
+Successful native Node runs print compact outcomes and retain complete same-run
+traces with per-run hashes; see [native verification traces](docs/native-verification.md).
 
 CI also exercises the packaged composite action and verifies both passing and
 failing coverage reports. No provider credential is needed for regression tests.
@@ -413,8 +496,10 @@ existing provider credentials and routes. `CLOUSEAU_EVALUATION_GRADERS` selects
 `CLOUSEAU_EVALUATION_CASES` selects named diagnostic cases; such a partial run does
 not qualify a replacement. Output records the corpus and protocol fingerprints,
 selected cases, route, literal evidence, responses and bounded request usage.
-At most 48 provider requests, including historical replay usage, are permitted.
-Completed negative decisions are retained, never retried to seek approval.
+At most 64 provider requests, including historical replay usage, are permitted.
+Completed negative decisions are retained, never retried to seek approval. Only unusable
+provider output (HTTP 5xx or 429, network error, invalid tool call, malformed JSON, a report that
+fails controller validation) is asked again with the identical prompt, at most twice, and recorded.
 
 Recorded-response tests exercise transport parsing, validation, history and
 scoring without calling a model. They are deterministic software evidence,

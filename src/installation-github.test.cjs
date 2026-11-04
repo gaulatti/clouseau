@@ -8,7 +8,7 @@ test('native gh adapter pins github.com and sends structured public enrollment t
   const calls = [];
   const api = cliApi((...args) => {calls.push(args); return JSON.stringify({id: 31});});
   assert.deepEqual(await api('GET', 'user'), {id: 31});
-  assert.deepEqual(calls[0], ['gh', ['api', '--hostname', 'github.com', '--method', 'GET', 'user'], {encoding: 'utf8', maxBuffer: 3000000}]);
+  assert.deepEqual(calls[0], ['gh', ['api', '--hostname', 'github.com', '--method', 'GET', 'user'], {encoding: 'utf8', maxBuffer: 4500000}]);
   const body = {body: '/authorize-clouseau-installation v1\n{"identity":{"public_key":"PUBLIC"}}'};
   assert.deepEqual(await api('POST', 'repos/fixture-owner/project/commits/' + 'a'.repeat(40) + '/comments', body), {id: 31});
   const [program, args, options] = calls[1];
@@ -56,6 +56,8 @@ test('read-only GitHub facade emits exact encoded source, PR, comment and workfl
   const prefix = 'repos/fixture%20owner/project%2Fname';
   assert.deepEqual(await github.rest.repos.getContent({...repo, path: '.github/a file.json', ref: 'branch/one'}), {data: {fixture: true, jobs: [{id: 9}]}});
   assert.equal(calls.at(-1)[1], `${prefix}/contents/.github/a%20file.json?ref=branch%2Fone`);
+  assert.deepEqual(await github.rest.git.getBlob({...repo, file_sha: 'a'.repeat(40)}), {data: {fixture: true, jobs: [{id: 9}]}});
+  assert.equal(calls.at(-1)[1], `${prefix}/git/blobs/${'a'.repeat(40)}`);
   await github.rest.pulls.get({...repo, pull_number: 4});
   assert.equal(calls.at(-1)[1], `${prefix}/pulls/4`);
   await github.rest.pulls.listFiles({...repo, pull_number: 4, per_page: 100, page: 2});

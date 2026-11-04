@@ -117,15 +117,15 @@ test('installation review executes qualified verification, actual shared scoring
     '--grant-comment', String(f.grant.comment_id), '--harness', 'codex'], runtime);
   assert.equal(result.decision, 'auto_approve'); assert.equal(result.installation_only, true);
   assert.equal(result.manual_owner_acceptance_required, true); assert.equal(result.ordinary_pr_approval, false);
-  assert.equal(result.provider_api_calls, 0); assert.equal(result.harness_invocations, 4);
-  assert.ok(result.receipt); assert.equal(observed.length, 4);
+  assert.equal(result.provider_api_calls, 0); assert.equal(result.harness_invocations, 2);
+  assert.ok(result.receipt); assert.equal(observed.length, 2);
   assert.ok(observed.every(task => !task.prompt.includes('PRIVATE KEY')));
   const bundle = JSON.parse(fs.readFileSync(result.receipt));
   assert.equal((await bootstrap.verifyInstallationReceipt(bundle, f.options())).decision, 'auto_approve');
   const history = JSON.parse(fs.readFileSync(path.join(f.state, 'installation-ledgers', `${digest({repository: f.manifest.repository, branch: 'main'})}.json`)));
   assert.equal(history.has_receipt, true); assert.equal(history.installation_attempts, 1);
   const journal = fs.readFileSync(path.join(path.dirname(result.receipt), 'observations.jsonl'), 'utf8');
-  assert.equal(journal.trim().split('\n').length, 8);
+  assert.equal(journal.trim().split('\n').length, 4);
   assert.ok(!journal.includes('PRIVATE KEY'));
   await assert.rejects(cli.runReview(f.reviewArgs, runtime), /already ran/);
 }));
@@ -137,7 +137,7 @@ test('central-source first installation prepares, reviews requested frozen engin
   assert.deepEqual(JSON.parse(fs.readFileSync(prepared.manifest)), f.manifest);
   const review = await cli.runReview(f.reviewArgs, f.reviewRuntime);
   assert.equal(review.decision, 'auto_approve'); assert.equal(review.provider_api_calls, 0);
-  assert.equal(review.harness_invocations, 5, 'one real source-request round precedes the four semantic fixture responses');
+  assert.equal(review.harness_invocations, 3, 'one real source-request round precedes the two semantic fixture responses');
   const bundle = JSON.parse(fs.readFileSync(review.receipt));
   const sourceId = `engine:${f.reviewer.sha}:src/config.cjs`;
   const source = bundle.payload.record.snapshot.sources[sourceId];
@@ -165,11 +165,11 @@ test('a negative review remains recorded, unsigned and ineligible for unchanged 
   const output = path.join(f.temporary, 'negative-record.json');
   const result = await cli.runReview({...f.reviewArgs, output}, {...f.reviewRuntime, ask});
   assert.equal(result.receipt, null); assert.notEqual(result.decision, 'auto_approve');
-  assert.ok(fs.existsSync(output)); assert.equal(ask.calls(), 4);
+  assert.ok(fs.existsSync(output)); assert.equal(ask.calls(), 2);
   const record = JSON.parse(fs.readFileSync(output));
   assert.equal(record.controls, true); assert.equal(record.result.decision, result.decision);
   await assert.rejects(cli.runReview(f.reviewArgs, {...f.reviewRuntime, ask}), /unchanged revision/);
-  assert.equal(ask.calls(), 4, 'the negative result must not cause another model sample');
+  assert.equal(ask.calls(), 2, 'the negative result must not cause another model sample');
 }));
 
 test('an unresolved preserved finding cannot disappear behind new passing fixture grades', () => fixture(async f => {
@@ -248,7 +248,7 @@ test('failed verification, failed harness transport and changed source never pro
   const ask = harness();
   await assert.rejects(cli.runReview(f.reviewArgs, {...f.reviewRuntime, ask: async task => {
     const response = await ask(task);
-    if (ask.calls() === 4) fs.appendFileSync(path.join(f.directory, 'README.md'), 'Changed during review.\n');
+    if (ask.calls() === 2) fs.appendFileSync(path.join(f.directory, 'README.md'), 'Changed during review.\n');
     return response;
   }}), /source changed/);
 }));
@@ -265,8 +265,27 @@ test('renewing owner-grant timestamps cannot resample an unchanged transport fai
   assert.equal(calls, 1);
 }));
 
-test('default verifier and harness references never bypass a failed real coverage artifact', () => fixture(async f => {
-  await assert.rejects(cli.runReview(f.reviewArgs, {...f.reviewRuntime, verify: undefined, ask: undefined}), /exact line and branch coverage failed/);
+test('default verifier and harness references still stop unsafe signing-material output before assessment', () => fixture(async f => {
+  f.local.verification = [[process.execPath, '-e', 'console.log("-----BEGIN PRIVATE KEY-----fixture-only")']];
+  fs.writeFileSync(path.join(f.directory, '.clouseau-local.json'), JSON.stringify(f.local));
+  git(f.directory, ['add', '.clouseau-local.json']); git(f.directory, ['commit', '-qm', 'test: preserve private output boundary']);
+  await f.refresh();
+  await assert.rejects(cli.runReview(f.reviewArgs, {...f.reviewRuntime, verify: undefined, ask: undefined}), /Private signing material/);
+}));
+
+test('installation local quality assessment runs with unavailable real coverage and retains manual-only trust authority', () => fixture(async f => {
+  const ask = harness();
+  const result = await cli.runReview(f.reviewArgs, {...f.reviewRuntime, verify: undefined, ask});
+  const record = JSON.parse(fs.readFileSync(result.record));
+  assert.equal(ask.calls(), 2);
+  assert.equal(record.technical.coverage.status, 'unavailable');
+  assert.equal(record.technical.exact_coverage, null);
+  assert.equal(result.decision_scope, 'review_reuse_only');
+  assert.equal(result.independent_ci_required, true);
+  assert.equal(result.merge_authority, false);
+  assert.equal(result.ordinary_pr_approval, false);
+  assert.equal(result.manual_owner_acceptance_required, true);
+  assert.ok(result.receipt, 'a signature authenticates fixture AI quality, not a passing technical gate');
 }));
 
 test('changing the installed shared engine after investigation never produces a signature', () => fixture(async f => {
@@ -439,14 +458,24 @@ test('native authorization and base are freshly revalidated after independent CI
   }
 }));
 
-test('a private unprotected repository cannot silently opt into general automatic merge', () => fixture(async f => {
+test('unreadable or insufficient repository settings never block trust and only add one fixed notice', () => fixture(async f => {
   const remote = await f.remote();
-  f.live.repository.private = true; f.live.repository.allow_auto_merge = false; f.live.base.protected = false;
-  await assert.rejects(cli.check(remote.args, remote.runtime), /explicit manual mode/);
+  f.live.repository.private = true; f.live.repository.allow_auto_merge = null; f.live.base.protected = false;
+  const unreadable = await cli.check(remote.args, remote.runtime);
+  assert.equal(unreadable.installation_verified, true);
+  assert.equal(unreadable.auto_merge_authorized, false);
+  assert.equal(unreadable.notice, cli.SETTINGS_NOTICE);
+  f.live.repository.allow_auto_merge = true;
+  assert.equal((await cli.check(remote.args, remote.runtime)).notice, cli.SETTINGS_NOTICE);
+  f.live.repository.allow_auto_merge = false;
+  assert.equal((await cli.check(remote.args, remote.runtime)).notice, cli.SETTINGS_NOTICE, 'no explicit merge mode');
   f.config.merge_mode = 'manual'; fs.writeFileSync(path.join(f.directory, '.github/clouseau.json'), JSON.stringify(f.config));
   git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'ci: require manual first-install acceptance']); await f.refresh();
   const manual = await f.remote();
-  assert.equal((await cli.check(manual.args, manual.runtime)).auto_merge_authorized, false);
-  f.live.repository.allow_auto_merge = true;
-  await assert.rejects(cli.check(manual.args, manual.runtime), /disabled repository auto-merge/);
+  const accepted = await cli.check(manual.args, manual.runtime);
+  assert.equal(accepted.notice, undefined);
+  assert.equal(accepted.auto_merge_authorized, false);
+  assert.equal(accepted.manual_owner_acceptance_required, true);
+  f.live.base.protected = true; f.live.repository.allow_auto_merge = null;
+  assert.equal((await cli.check(manual.args, manual.runtime)).notice, undefined, 'protected base needs no notice');
 }));

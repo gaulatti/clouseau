@@ -2,9 +2,12 @@
 
 The shared coverage gate accepts `coverage-format: coveragepy`. Supply the
 unmodified JSON format 3 emitted by coverage.py 7 with native branch measurement
-enabled. The adapter is qualified against real coverage.py 7.13.0 subprocess
-reports and Centinela's native 7.17.0 artifact. It requires no provider key or
-additional Python runtime package to validate JSON.
+enabled. The adapter is a Node module; validating a report needs no provider key
+and no Python runtime. It is qualified against committed real coverage.py 7.13.0
+reports (`test/fixtures/coveragepy`, one per scenario: full, partial, unloaded
+module, no branch measurement, configured exclusions, loop exits, docstrings and an
+extensionless entry point) and was previously qualified against Centinela's native
+7.17.0 artifact.
 
 For an application-only source tree:
 
@@ -20,6 +23,27 @@ migrations and generated application bindings. A package with no executable
 statements is allowed, but an empty report or empty executable module is not
 evidence of full coverage. The selected application must have nonzero line and
 branch totals.
+
+The inventory also includes extensionless files with a Python shebang: an
+absolute interpreter path ending in `python`, `python3` or a numeric version
+such as `python3.13`, or an absolute `env` path followed by that interpreter
+name or an absolute Python interpreter path. `env -S python3 -u` supports split
+interpreter arguments; direct Python interpreter arguments are also recognized. Classification reads the header and
+scans the Python source lexically without executing it. The scan finds comments
+and string literals and treats anything it cannot classify as executable. It does
+not build a Python syntax tree, so a source file that is not valid Python is
+detected only when it has an unterminated string or when coverage.py itself cannot
+report it, in which case the file is missing from the report and the gate fails. Header inspection reads at most
+4096 bytes after `#!`; a longer shebang fails explicitly. Malformed shebangs,
+relative Python interpreter paths and unsupported `env` option prefixes before a Python
+interpreter fail closed. Non-Python scripts are not Python sources.
+
+Coverage.py's unloaded-module discovery does not necessarily report these
+extensionless entrypoints. Exercise each real entrypoint through the native
+coverage runner; omission from the report remains a missing-source failure.
+An extensionless symbolic candidate is rejected before reading its target,
+including broken links and links outside the declared root. The same syntax,
+pragma and native counter checks apply to these sources as to `.py` modules.
 
 Inventory excludes concrete nonproduction conventions only: `test/` and
 `tests/` directories, `test_*.py`, `*_test.py`, `tests.py`, `conftest.py`, and

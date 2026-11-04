@@ -24,37 +24,17 @@ observe the lack of a binding requirement without inventing contract authority.
 That factual phase produces no approval score. Every positive binding grade still
 requires trusted contract proof during final validation and at the write gate.
 
-## Product acceptance
+## Units and gates
 
-Inspect each material capability and mechanism. A necessary fix cannot hide an
-unnecessary framework, dependency or unrelated feature. Helpers and tests inherit
-justification only through the accepted outcome they demonstrably support.
-Routine companion documentation of that same behavior is accounted for within
-the accepted outcome. It is not a separate feature needing an explicit request
-for prose. New promises, unrelated documentation and material engineering choices
-still receive their own scope, factual and proportionality assessment.
+The examiner groups the change into units (a `capability` for a user-observable
+outcome, a `mechanism` for machinery serving it) so every changed file is
+accounted for. Units carry no scores. Unrequested or over-built code is reported
+as a finding only when it causes a distinct runtime, data, security,
+compatibility or verification failure.
 
-| Index | Inputs and calculation |
-|---|---|
-| Fit, F | 35 outcome + 25 workflow + 20 domain + 10 component boundary + 10 operating model |
-| Need, N | 100 × max(binding obligation, evidence × (.50 value + .30 unmetness + .20 timeliness)) |
-| Proportionality, P | 100 × (1 − greatest demonstrated excess) |
-| Acceptance, J | min(F, N, P), requiring at least 80 for every material unit |
+Approval depends only on technical findings and gates: a finding scoring 70 or
+more must be fixed, a violated gate blocks, and nothing else does.
 
-Excess covers abstraction, added surface, duplicated authority, dependencies,
-collateral changes and generalization beyond the demonstrated need. Every excess
-claim needs a concrete narrower alternative preserving the same guarantees.
-Preference, changed-line counts and helper counts alone establish no excess.
-If a possible excess lacks its narrower alternative, review remains incomplete
-and cannot approve. An independent integrity veto still blocks; an incomplete
-repair detail cannot erase established evidence of fabricated tests.
-A binding obligation must cite the trusted contract, never a contributor's claim.
-The controller resolves this authority boundary before calling a semantic grader:
-without a cited trusted contract, binding credit is zero. Untrusted requests and
-runtime receipts cannot be promoted into contractual authority by any model.
-They can still support the independent need-evidence formula. Existing negative
-judgments and all required gates remain effective; only impossible binding
-credit is removed. The controller records this decision alongside model grades.
 Linked requirements have content-addressed entries in the same proof catalog as
 repository sources. Investigators can cite their actual text, URL and author so
 the atomic grader receives the request itself. Issue content remains untrusted;
@@ -100,10 +80,8 @@ grader assigns descriptive semantic levels. Code converts those levels to values
 and computes every formula and threshold. All factors remain visible in the PR
 ledger, including their citations and explanations.
 
-`acceptance.grader: routed` delegates domain fit, abstraction excess and duplicated
-authority to Jev 1.13. DeepSeek grades the other factors and any unresolved Jev
-classifications in one combined request per investigation. Recorded same-input
-comparisons selected these delegated tasks; necessity and causal confidence stay
+`acceptance.grader: routed` grades every factor with DeepSeek; Jev classifications
+that are unresolved go to one combined DeepSeek request. Necessity and causal confidence stay
 with DeepSeek. Both investigators and graders receive the same trusted policy,
 including inherited justification for accurate supporting documentation.
 `deepseek` retains the all-DeepSeek route; `typesafe` retains the broader typed
@@ -120,15 +98,27 @@ again; they do not replace fresh verification or authorize a merge.
 Live qualification defaults to the single combined production route. An explicit
 `CLOUSEAU_EVALUATION_GRADERS` list enables comparisons when needed. Token usage includes the
 investigations, grading, uncertainty routing and transport truncation attempts.
-Each qualification is capped at 48 provider requests, including transport retries.
+Each qualification is capped at 64 provider requests, including transport retries.
+The eight-case corpus needs at least 49 requests on its ordinary six-request
+per-case route plus reference adjudication; 64 allows bounded source discovery
+and transport recovery. The earlier 48-request run is retained as incomplete.
 `CLOUSEAU_EVALUATION_REQUEST_LIMIT=0` verifies the guard without making a provider
 request. Exhausting the budget fails qualification and retains the case evidence.
 `resume_evaluation` reuses completed qualification work only when source, policy,
 routing, rubric and request meanings match. Completed scores and blockers are
 revalidated and retained. Failed transport framing can reuse its original factual
 response after lossless decoding; only missing judgments make new provider calls.
-Historical and new requests share the 48-request ceiling. The artifact separates
+Historical and new requests share the 64-request ceiling. The artifact separates
 new usage/cost from reused evidence. Ordinary PR assessment remains fresh.
+If only the qualification harness's reference transport changes, continuation
+can reuse input-identical recorded investigations and grades. It first verifies
+the original workflow source, unchanged production policy/rubrics/providers/roles,
+unchanged case source and causal references, immutable snapshots, reports and
+scores. Failed attempts and previous expected labels stay visible. This mode
+cannot request another investigation or grade; only the missing reference match
+may call a provider. A known defect may block as repair or integrity failure
+because integrity takes precedence, but its actual causal finding must still
+match the frozen defect reference. This is no permission to relax approval gates.
 Cost estimates identify the price date and both DeepSeek tariffs. Missing usage
 is unknown cost. A cheaper headline token price does not qualify a route. The
 live evaluation must establish useful approvals, blocked drift and excess,
@@ -144,8 +134,17 @@ failures and replacing the production behavior under test block approval.
 Missing verification is an evidence gap rather than proof of deception. Ordinary
 mocks at real dependency boundaries remain legitimate.
 
-Unknown conditions retain ranges. A range crossing a policy threshold requires
-investigation. The source reader accepts at most eight paths per request, two
+Test linkage is by import, resolved exactly against the repository file list. A Python import is read
+through trailing comments; a module loaded by path (`spec_from_file_location`, `runpy.run_path`, a
+`subprocess` call naming a `.py` path or `-m module`) counts as an import. An absolute Python import is
+found only under the importing file's directories (and `src/` below them) or under a package root
+proven by `__init__.py` files, never by a path tail.
+
+Every factor is one number from 0 to 1. A condition the evidence cannot
+establish counts as level0 (0). A finding's formula output is its single score;
+a score of 70 or more must be fixed and anything lower is advisory. The review
+is approved when no finding reaches 70 and no gate is violated or unresolved.
+The source reader accepts at most eight paths per request, two
 additional source rounds per inspection and two complete examination cycles.
 New source invalidates earlier incomplete context. A role revisits its own draft
 without seeing the other role's findings; an earlier causal concern must be
@@ -160,7 +159,7 @@ observations close without creating recurring follow-up work.
 
 When complete evidence exceeds GitHub's comment limit, the primary ledger keeps
 every score, finding, gate and persistent disposition. It links bounded evidence
-comments containing the complete factor explanations and source excerpts, with
+comments containing the complete factor explanations and evidence citations (source and line ranges, not copied source text), with
 revision and content identities. No evidence is truncated. All evidence pages
 and the primary ledger must publish successfully before approval. Retrying a
 partial publication reuses matching bot pages without calling a model; the
@@ -197,19 +196,15 @@ opportunity ends it without repeated comments or escalation.
 
 ## Owner decisions and protected merge
 
-Only real purpose, authority or outcome tradeoffs go to the configured owner.
-Protected reviewer/control installation requires exact-revision confirmation.
-The existing `/approve-intent FULL_HEAD_SHA` confirms only such a decision. It
-cannot waive tests, coverage, integrity failures, technical repairs or incomplete
-evidence. Ordinary coverage improvements do not require a new product decision.
+Changes to protected reviewer/control files require exact-revision owner
+confirmation. The existing `/approve-intent FULL_HEAD_SHA` confirms only that. It
+cannot waive tests, coverage, integrity failures or technical repairs.
 
 Before the AI assessment, the controller reads the configured human owner's
 exact-revision intent comment and verifies current write, maintain or admin
 permission through GitHub. The literal receipt becomes a content-addressed,
 trusted contract source in the proof catalog. This records accepted purpose,
-not an approval score: each capability and mechanism still needs its own fit,
-need and proportionality evidence, and all technical and integrity gates remain
-mandatory. Contributor claims and issue text do not acquire contract authority.
+not an approval score: all technical and integrity gates remain mandatory. Contributor claims and issue text do not acquire contract authority.
 Before any approval write, the gate checks that a receipt used in the assessment
 still exists unchanged and that its author remains authorized. Removed, altered
 or revoked confirmation requires reassessment rather than reusing a stale score.
@@ -236,17 +231,19 @@ Deleting an installation branch starts no installation or approval work.
 The read-only assessment uploads its full source-bound record and emits a compact
 digest. The separate approval job downloads that run's artifact, checks the
 digest, recomputes scores, reconciles history and rechecks current CI/head/base.
-It then enforces effective protection, fresh approval and enabled native
-auto-merge. No provider key enters the approval or repair writer. The author
+It then records fresh approval and arms native auto-merge only when effective
+protection and repository auto-merge are present; otherwise it posts one
+fixed-text notice naming the missing setting classes, withholds the merge and
+the job still succeeds (see the README). No provider key enters the approval or repair writer. The author
 token enters only the repair writer. Same-revision intent comments reassess
 metadata without rebuilding the application container.
 
-Automatic integrations pin a reviewed stable bootstrap, resolve protected
+Automatic integrations reference the stable bootstrap as `scripts/resolve@main`, resolve protected
 Clouseau main once and use its frozen SHA and computed digest throughout the
 workflow. [Automatic CI upgrades](automatic-ci-upgrades.md) bind receipts,
 assessment, scoring, approval and merge to that selection; normal central
 releases need no consumer pin or digest PR. Legacy fixed installations retain
-their explicit full-commit pin. Both required native checks must
+their explicit full-commit pin; new installations use `@main`. Both required native checks must
 come from GitHub Actions; main requires strict up-to-date checks, stale-review
 dismissal, last-push approval, no deletion, no force pushes and no bypass actors.
 The installing administrator verifies those settings; routine tokens do not
@@ -282,6 +279,77 @@ compatibility, or verification consequences. Product scope and proportionality
 are still enforced by the independent product scores and scope gate.
 
 
+## Dependency lockfiles are reviewed as derived summaries
+
+A generated lockfile can be hundreds of kilobytes and would otherwise exhaust the
+300,000-character source bound or the 900,000-character evidence budget on its own.
+When a changed file's name is a known lockfile (`package-lock.json`,
+`npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `uv.lock`, `poetry.lock`,
+`Cargo.lock`, `Gemfile.lock`, `go.sum`, `composer.lock`, `Pipfile.lock`; the one
+table is `LOCKFILES` in `src/lockfile-summary.cjs`), neither its raw base/head text
+nor its patch enters the snapshot. The snapshot carries one first-class source
+instead, `kind: lockfile-summary`, `authority: derived`, which reviewers cite
+exactly like any other source. `package.json`, manifests and every other file stay
+normal source.
+
+The summary is a parsed set difference between the exact base and head bytes. It is
+pure (text in, text out; nothing is executed, fetched or read), deterministic
+and sorted, and covered by the snapshot digest. Each package is described by its
+version, source (registry host, git, URL, file or workspace), the presence and a
+fingerprint of its integrity hash, and flags (install script, dev, optional,
+alias, credentials in a URL). A dependency swap is never hidden. These carry a
+`RISK[...]` tag and are listed first, in full:
+
+| Case | Tag |
+| --- | --- |
+| Resolved URL, registry host or artifact host changed | `source-changed` |
+| Package moved from a registry to git, URL, file or a path | `left-registry`, `non-registry-source` |
+| Integrity changed while the version did not | `integrity-changed-same-version` |
+| Integrity dropped | `integrity-removed` |
+| Registry package without integrity in a format that records it | `no-integrity` |
+| Package added from a plain-HTTP registry | `insecure-registry` |
+| Install script newly flagged (also on a new package) | `install-script-added` |
+| Version went down | `downgrade` |
+| Name aliasing a different package | `alias-added` |
+| Credentials embedded in a URL (never shown) | `url-credentials-added` |
+
+Install-script flags exist only where the format records them (npm `hasInstallScript`, pnpm `requiresBuild`).
+
+Added and removed packages are listed after the flagged ones. Plain version bumps
+from an unchanged source come last; if they exceed the bound the summary ends with
+an explicit `... N more version-only updates not listed here` line, and the header
+counts every category. Nothing else is ever truncated: when flagged, added or
+removed packages cannot be listed within 3,000 lines and 250,000 characters, the
+lockfile is not summarized. Moving a package within the tree without changing its
+version, source, integrity or flags is not a change.
+
+Only the canonical layout each tool writes is accepted: a line a parser would skip
+(a flow-style `packages: {...}`, a different indentation, duplicated sections or
+fields, comments after a section key) fails closed as invalid syntax, because a skipped
+entry would hide its resolved source.
+
+Only package entries are compared. Other lockfile content (for example pnpm
+`importers`, `overrides` or patched-dependency hashes) is not part of the summary;
+the manifests that declare it are normal source.
+
+A lockfile that cannot be summarized fails closed with a fixed reason: unsupported
+lockfile version (npm lockfileVersion other than 3, pnpm other than 6 and 9, Cargo other than 3
+and 4, and so on), invalid syntax or structure, not UTF-8 text, larger than
+1,000,000 bytes, too many changes, or a rename between formats. The raw evidence
+behavior is unchanged for that file and the snapshot records
+`lockfile_failures`. If the raw text then does not fit (over 300,000 characters or
+the evidence budget) the review is `review_incomplete` with cause
+`lockfile_unsummarizable`, naming the file and the specific reason instead of the
+generic budget message. A newly added or deleted lockfile is summarized too.
+When GitHub omits the patch of a very large lockfile, the summary needs none.
+
+The hosted review, the local review and the verification of a signed local
+receipt run the same function on the same bytes. CI never trusts a signed summary:
+`verifySources` fetches the base and head lockfiles at the live revisions,
+recomputes the summary and requires it, and the file's binding to it, to equal the
+signed evidence exactly, so a derived item cannot differ from what the
+repository contains. Summaries of the same bytes are identical everywhere.
+
 ## Review convergence and completeness
 
 New snapshots carry `review_manifest_version: 1`. Both the local harness and CI
@@ -290,6 +358,9 @@ records without that marker remain readable; they do not acquire new claims.
 
 Each review inventories every supplied immutable source as inspected, excluded
 with a cited reason, or missing. Nonempty changed source cannot be excluded.
+A rejection of the inventory or of the changed-file accounting names the file and the step that repairs it, for example
+`changed source cannot be excluded: src/a.py has content, so mark it inspected and cite a quote from it`; the local review
+hands that sentence back to the agent, and the hosted notice shows it because it is a plain constant plus a file of the pull request.
 The structured response schema requires inspected and excluded coverage
 dispositions to select one `primary` proof ID and an `additional` array of distinct
 supplied proof IDs. Missing dispositions omit the citation field. The controller
@@ -312,6 +383,14 @@ same immutable snapshot; earlier investigations must then reconverge. Source and
 request limits fail closed; no truncated context can produce a partial approval.
 The manifest records evidence availability and the investigator's assessment; it
 does not prove the model's semantic attention or that every possible defect was found.
+The grading phase independently checks material-source completeness against the
+trusted contract and the entire claimed source/dependency inventory. An explicit
+inspection requirement cannot be waived merely because the change is test-only
+or its dependency is unchanged. CI delegates this atomic check to Jev with the
+existing uncertainty route; local review uses the authenticated harness. Only a
+fully established complete condition can retain a satisfied gate. Missing or
+uncertain evidence downgrades it to unresolved, and a grade can never upgrade an
+inspector's existing unresolved or violated gate. Product formulas stay unchanged.
 
 Fixed and dismissed findings retain their dispositions, reasons and revision
 history across unrelated pushes. Titles, line offsets and rename paths do not
@@ -340,8 +419,11 @@ instead of granting authority through an earlier broad rule. Changes to CODEOWNE
 are protected review controls. Uncovered paths, unsupported patterns, email-only
 identities or unavailable membership evidence never grant automatic merge.
 
-If all three supported CODEOWNERS locations return confirmed absence on the
-protected base, the optional ownership gate is inactive. Other review, coverage,
+When `merge_mode` is omitted and all three supported CODEOWNERS locations return
+confirmed absence on the protected base, the optional ownership gate is inactive.
+An explicit `"merge_mode": "automatic"` instead requires configured CODEOWNERS:
+absence never authorizes automatic merge. This strict choice applies both to
+native protected merges and the private-plan path below. Other review, coverage,
 test and branch-protection gates remain mandatory. Permission or API errors are
 not absence; an existing empty or malformed file still blocks. This does not
 infer code ownership from general write access. A proposed CODEOWNERS file
@@ -374,4 +456,98 @@ write. Public repositories and private repositories with available protection
 must satisfy the full protection contract. The report distinguishes independently
 passed review and tests from unavailable host enforcement. On an unsupported
 private plan, GitHub cannot prevent a trusted maintainer from ignoring a failed
-check; no automatic merge is available as an alternate release path.
+check. Manual mode continues to require manual merge.
+
+
+### Incomplete reviews are always visible
+
+Every `review_incomplete` assessment carries a fixed `cause` (for example
+`provider_key_missing`, `provider_key_invalid`, `provider_rejected`,
+`provider_payment_required` (HTTP 402), `provider_unavailable`, `local_receipt_required`,
+`evidence_incomplete`; every class is listed in [notices and their causes](notices.md)). The `receipt_protected_controls` notice states the exact
+command a maintainer posts, `/approve-intent <full head SHA>`. Notices never name
+an artifact; the diagnostic is in the assessment job log. A local receipt that does not verify is never a cause by itself: it is
+ignored with a notice that names the receipt's own cause class and numbered steps, and CI reviews the change itself (see
+[local review](local-review.md#a-receipt-that-does-not-verify-is-ignored)). The `assess` step raises a warning annotation, and the
+`gate` creates (or updates in place) one `<!-- clouseau-review-incomplete -->`
+comment with the cause class, the specific reason and numbered next steps. Raw error text, provider
+responses and credentials are never forwarded: only fixed causes, HTTP status
+digits and variable names appear. Provider credentials are validated for shape
+(`DEEPSEEK_API_KEY`, `TYPESAFE_API_KEY`: no whitespace or line break, printable
+ASCII, not wrapped in quotation marks, at most 512 characters) before any
+request, by `check-provider` and by every review transport. A malformed value is
+refused, never trimmed or repaired; re-save the secret as the bare key.
+
+### Controller-enforced owner merge on an unavailable private plan
+
+An accepted protocol-v2 `"merge_mode": "automatic"` explicitly selects strict
+code-owner-only automation. On protected repositories it preserves the normal
+native protected auto-merge path. On a private repository whose branch is
+positively unprotected and whose rules endpoint returns the exact documented
+HTTP 403 upgrade-plan error, Clouseau can instead finalize owner work through
+its acceptance controller. Repository native `allow_auto_merge` must remain
+`false`; no native merge request is armed. Arbitrary authorization errors,
+missing rules, public repositories and available-but-disabled protection fail.
+This exception never bypasses or weakens available protection.
+
+The write occurs inside the validated acceptance gate, after deterministic
+record and score validation, all configured verification steps (including full
+tests and exact line/branch coverage), purpose authorization where required,
+current ownership of every old/new path and a freshly observed current-head
+GitHub Actions bot approval. Immediately before the atomic write it revalidates
+the recorded purpose and authorization, finding ledger, exact technical receipt
+and any local receipt signature, expiry, revocation, engine and immutable source
+bindings through the existing validators. These checks make no provider calls. Missing, dismissed or stale approval, outstanding
+human change requests, missing ownership and unavailable membership fail closed.
+External/non-owner contributions can receive bot approval but still need
+current-head human code-owner approval and manual merge. A proposed ownership
+file or merge policy never authorizes its own change.
+
+This route supports distinct source/base branches in the **same repository**,
+with the exact accepted base already an ancestor of the reviewed head. It uses
+GitHub's [atomic `updateRefs` transaction](https://docs.github.com/en/graphql/reference/git#updaterefs):
+a base before/after compare-and-swap and a source-ref no-op compare-and-swap,
+both with `force: false`. A changed source or base rejects the whole transaction;
+there is no weaker REST merge fallback. The resulting history fast-forwards to
+the exact reviewed commit rather than generating a squash commit. Fork sources,
+missing refs and a stale base require repair/review or manual merge.
+
+GitHub records this as an [indirect PR merge](https://docs.github.com/en/pull-requests/reference/pull-request-merges#indirect-merges).
+The controller verifies the merged PR and resulting base both identify the exact
+reviewed head. Native `merged_at`, `merged_by` and merge event audit are observed
+separately from the controller's acceptance evidence. A nondefault reference
+qualification proved paired no-op source CAS, atomic rejection and the native
+merged audit; it does not establish an application's hosted acceptance proof.
+If the write succeeded but the audit is not observable yet, stop and inspect;
+do not retry blindly or report an unobserved success.
+
+This is **controller-enforced delivery**, not native protected delivery. GitHub
+cannot prevent another trusted writer from manually ignoring failed checks on
+that plan. Writes using `GITHUB_TOKEN` may suppress follow-up push workflows;
+keep the supported separate `finalize` deployment handoff where configured.
+An ancestry merge is not deployment, live health or documentation publication
+proof, and a deployment contract remains separately authorized. Standalone
+`finalize` cannot authorize an unmerged private candidate: only the validated
+acceptance gate can perform this transaction.
+
+### The base moved after approval
+
+An assessment, any signed local receipt and the exact-head bot approval are
+bound to the head **and** the base they were produced against. When another PR
+merges first, the accepted base is stale. Clouseau never merges on that stale
+evidence and never weakens the exact-head requirement, including for protected
+controls. Instead, when only the base differs (same open PR, same assessed head),
+the `gate` (and the controller-enforced owner merge, at each re-check up to the
+atomic write) fails with `Needs branch update` and posts one idempotent
+`<!-- clouseau-needs-branch-update:<head>:<base> -->` comment naming the old and
+new base. Re-running the failed job cannot succeed because its assessment is
+bound to the old base.
+
+The next step is to update the PR branch ("Update branch", `gh pr update-branch`
+or a merge commit) with the author's own credentials. That push starts normal
+verification, a fresh independent review (and, where required, a fresh local
+review receipt for the new head) and then the merge. Clouseau does not update
+the branch itself: a push authenticated with the workflow `GITHUB_TOKEN` does not
+start the verification workflow, so the new head would have no tests, coverage
+or review evidence. A changed head is a new revision and is never reported as a
+base move.

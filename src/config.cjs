@@ -20,16 +20,34 @@ function validateConfig(config) {
         strings(config.deployment?.paths) && config.deployment.paths.every(relative)))) {
     throw new Error('Invalid Clouseau configuration; see examples/colombo.json');
   }
+  const grace = config.verification_queue_grace_seconds;
+  if (grace !== undefined && !(Number.isInteger(grace) && grace >= 0 && grace <= require('./verification-wait.cjs').MAX_QUEUE_GRACE_SECONDS)) {
+    throw new Error('Invalid verification queue grace; use whole seconds from 0 to 3600');
+  }
   if (config.version === 2) {
     const review = config.acceptance;
     if (!review || !['deepseek-flash', 'deepseek-v4-pro'].includes(review.examiner) ||
         !['deepseek-flash', 'deepseek-v4-pro'].includes(review.challenger) ||
         !['deepseek', 'typesafe', 'routed'].includes(review.grader) || review.grading_model !== 'deepseek-flash' ||
-        review.repair_attempts !== 2 || Object.keys(review).sort().join(',') !==
+        review.repair_attempts !== 2 || Object.keys(review).filter(name => name !== 'chunked_hosted').sort().join(',') !==
           ['challenger', 'examiner', 'grader', 'grading_model', 'repair_attempts'].join(',')) {
       throw new Error('Invalid Clouseau acceptance configuration; explicit qualified roles and two bounded repair attempts are required');
     }
+    if (review.chunked_hosted !== undefined) {
+      const hosted = require('./hosted-chunked.cjs');
+      const message = hosted.problem(review.chunked_hosted);
+      if (message) throw new Error(`Invalid hosted chunked review configuration: ${message}`);
+      if (review.chunked_hosted.enabled && review.grader !== 'deepseek') {
+        throw new Error('Hosted chunked review grades with the deepseek grader only; set acceptance.grader to deepseek or disable chunked_hosted');
+      }
+    }
   }
+  if (config.managed_agents !== undefined) require('./managed-agents.cjs').validate(config.managed_agents);
+  if (config.exact_revert !== undefined) {
+    require('./exact-revert.cjs').validate(config.exact_revert);
+    if (config.version !== 2) throw new Error('Exact revert acceptance requires acceptance protocol version two');
+  }
+  if (config.coverage !== undefined) require('./coverage-changed.cjs').validateMode(config.coverage);
   if (config.local_review !== undefined) {
     require('./local-receipt.cjs').validateTrust(config.local_review);
     if (config.version !== 2) throw new Error('Local receipt integration requires acceptance protocol version two');

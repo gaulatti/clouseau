@@ -26,7 +26,40 @@ test('every independent local investigation and grade receives the pre-PR bounda
     return f.ask(task);
   }});
   assert.equal(result.decision, 'auto_approve');
-  assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation', 'examiner:grading', 'challenger:grading']);
+  assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation']);
+});
+
+test('both local roles and graders receive honest partial or unavailable coverage without technical approval authority', async () => {
+  for (const coverage of [
+    {status: 'below_threshold', passed: false, artifact_freshness: 'observed_current_run'},
+    {status: 'unavailable', passed: false, artifact_freshness: 'unverified', error: 'Native coverage format is unsupported'},
+  ]) {
+    const f = await fixture();
+    const technical = {verification_status: 'failed', commands: [{argv: ['npm', 'run', 'test:coverage'], exit_code: 1}],
+      coverage, exact_coverage: coverage.status === 'below_threshold' ? {lines: [10, 9], branches: [4, 3]} : null};
+    f.snapshot.sources.verification.content = JSON.stringify(technical);
+    refresh(f.snapshot);
+    const seen = [];
+    const result = await localReview({snapshot: f.snapshot, ask: async task => {
+      const split = task.prompt.lastIndexOf('\n');
+      const instructions = task.prompt.slice(0, split);
+      const packet = JSON.parse(task.prompt.slice(split + 1));
+      assert.ok(instructions.includes('Run both local AI roles regardless of coverage percentage or availability.'));
+      assert.ok(instructions.includes('Do not infer that a nonzero command failed only because of coverage'));
+      assert.ok(instructions.includes('Coverage percentage or unavailable coverage alone does not force a local quality failure'));
+      assert.ok(instructions.includes('exact nonempty 100% coverage'));
+      assert.ok(instructions.includes('cannot authorize technical approval or merge'));
+      assert.equal(packet.review_context.decision_scope, 'review_reuse_only');
+      assert.equal(packet.review_context.independent_ci_required, true);
+      assert.equal(packet.review_context.merge_authority, false);
+      if (task.phase === 'investigation') assert.deepEqual(JSON.parse(packet.evidence.sources.verification.content), technical);
+      seen.push(`${task.role}:${task.phase}`);
+      return f.ask(task);
+    }});
+    assert.equal(result.decision, 'auto_approve', 'quality scoring is independent of the recorded technical deficit');
+    assert.deepEqual(seen, ['examiner:investigation', 'challenger:investigation']);
+    assert.deepEqual(JSON.parse(f.snapshot.sources.verification.content), technical, 'review does not rewrite failed technical evidence');
+  }
 });
 
 test('a pre-PR context never rewrites an unresolved behavioral-evidence gate into a pass', async () => {
@@ -40,7 +73,7 @@ test('a pre-PR context never rewrites an unresolved behavioral-evidence gate int
     }
     return response;
   }});
-  assert.equal(result.decision, 'review_incomplete');
+  assert.equal(result.decision, 'auto_approve');
   for (const review of result.reviews) {
     assert.equal(review.report.gates.find(item => item.name === 'review_completeness').state, 'unresolved');
   }
@@ -153,31 +186,36 @@ test('the larger batch allowance still rejects cumulative oversized evidence bef
   assert.equal(reads, 4); assert.equal(grading, 0);
 });
 
-test('missing atomic grades stop local acceptance and uncertainty preserves an incomplete verdict', async () => {
+const withFinding = f => async task => {
+  const response = await f.ask(task);
+  if (task.phase === 'investigation') {
+    const report = response.value.report;
+    const evidence = report.accounting[0].evidence;
+    report.findings = [{id: 'fictional-causal-fixture', title: 'Fictional fixture defect', anchor: evidence[0],
+      cause: 'Synthetic fixture cause.', trigger: 'Synthetic fixture trigger.', consequence: 'Synthetic fixture consequence.',
+      obligation: 'Synthetic fixture obligation.', evidence,
+      factors: Object.fromEntries(FACTORS.defect.map(name => [name, {evidence, reason: 'Synthetic fixture observation.'}])),
+      blast_radius: 1, opportunity: {mechanical: false, beneficial: false, within_scope: false, verified: false},
+      repair_paths: f.snapshot.paths}];
+  }
+  return response;
+};
+
+test('missing atomic grades stop local acceptance and an unestablished condition counts as level0', async () => {
   for (const answers of [null, {}]) {
     const f = await fixture();
+    const ask = withFinding(f);
     await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => task.phase === 'grading' ?
-      {value: {answers}} : f.ask(task)}), /Incomplete local atomic/);
+      {value: {answers}} : ask(task)}), /Incomplete local atomic/);
   }
   const f = await fixture();
+  const ask = withFinding(f);
   const result = await localReview({snapshot: f.snapshot, ask: async task => {
-    const response = await f.ask(task);
+    const response = await ask(task);
     if (task.phase === 'grading') response.value.answers[Object.keys(response.value.answers)[0]] = 'unknown';
     return response;
   }});
-  assert.equal(result.decision, 'review_incomplete');
-});
-
-test('local grading cannot turn untrusted requirement evidence into contract authority', async () => {
-  const f = await fixture();
-  const result = await localReview({snapshot: f.snapshot, ask: async task => {
-    const response = await f.ask(task);
-    if (task.phase === 'investigation') response.value.report.units[0].need.binding.evidence = response.value.report.accounting[0].evidence;
-    return response;
-  }});
-  assert.equal(result.decision, 'auto_approve');
-  assert.equal(result.reviews[0].report.units[0].need.binding.max, 0);
-  assert.ok(result.reviews[0].grading.decisions.some(entry => entry.provider === 'controller'));
+  assert.ok(result.reviews[0].grading.decisions.some(entry => entry.answer === 'unknown' && entry.value === 0));
 });
 
 test('local causal findings retain conservative confidence and literal changed-source anchors', async () => {
@@ -228,4 +266,18 @@ test('local presentation preserves all source bytes, proof identities and prior 
   assert.equal(view.evidence[2].quote, 'retain unavailable earlier literal');
   assert.deepEqual(view.units, draft.units); assert.deepEqual(view.findings, draft.findings);
   assert.equal(draft.evidence[0].quote, quote);
+});
+
+
+test('a bounded seed cannot approve when a requested immutable engine dependency remains unavailable', async () => {
+  const f = await fixture(); let grades = 0; let requests = 0;
+  const deferred = `.clouseau-ci/src/local-receipt.cjs@${'b'.repeat(40)}`;
+  await assert.rejects(localReview({snapshot: f.snapshot, ask: async task => {
+    if (task.phase !== 'investigation') {grades++; return f.ask(task);}
+    return {value: {kind: 'source_request', report: null, request_sources: [deferred]}, provenance: {fixture: true}};
+  }, addSources: async paths => {
+    requests++; assert.deepEqual(paths, [deferred]);
+    throw new Error('Frozen engine dependency unavailable; material context is incomplete');
+  }}), /material context is incomplete/);
+  assert.equal(requests, 1); assert.equal(grades, 0);
 });

@@ -2,7 +2,8 @@
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {template, modelTemplate, modelEvidence, inspect, combine, reviewChange, canonicalReferences, materialize, investigateChange, validateInspection} = require('./acceptance-review.cjs');
+const {template, modelTemplate, modelEvidence, inspect, combine, reviewChange, canonicalReferences, materialize, changedAnchor, investigateChange, validateInspection} = require('./acceptance-review.cjs');
+const {proofCatalog} = require('./acceptance-sources.cjs');
 const {fixture, finding, factor} = require('../test/fixtures/acceptance.cjs');
 
 function withKey(run) {return async () => {
@@ -14,12 +15,11 @@ const response = value => {
   for (const entry of value.evidence || []) delete entry.quote;
   for (const unit of value.units || []) {
     delete unit.paths;
-    for (const group of ['fit', 'need', 'excess']) for (const factor of Object.values(unit[group])) {delete factor.min; delete factor.max;}
   }
   for (const finding of value.findings || []) {
     const evidence = value.evidence.find(entry => finding.evidence.includes(entry.id) && entry.source !== 'contract');
     finding.anchor = {source: evidence.source, start: evidence.start, end: evidence.end}; delete finding.path;
-    for (const factor of Object.values(finding.factors)) {delete factor.min; delete factor.max;}
+    for (const factor of Object.values(finding.factors)) delete factor.value;
   }
   return {ok: true, json: async () => ({choices: [value.answers ? {finish_reason: 'stop', message: {content: JSON.stringify(value)}} :
   {finish_reason: 'tool_calls', message: {tool_calls: [{function: {name: value.request_sources ? 'source_request' : 'acceptance_report', arguments: JSON.stringify(value)}}]}}]})};
@@ -39,24 +39,33 @@ test('review syntax includes all gates and uses actual immutable nonblank source
   assert.equal(original.evidence.length, 2);
   const fresh = fixture().snapshot;
   const facts = template(fresh);
-  assert.equal(materialize(facts, fresh).units[0].fit.outcome.max, 1);
   const concern = finding();
   concern.anchor = {source: 'head', start: 1, end: 1}; delete concern.path;
   concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
   facts.findings.push(concern);
-  assert.equal(materialize(facts, fresh).findings[0].factors.necessity.max, 1);
+  assert.equal(materialize(facts, fresh).findings[0].factors.necessity.value, 0);
   assert.equal(materialize(facts, fresh).findings[0].path, 'src/upload.rs');
   const outside = structuredClone(facts); outside.findings[0].anchor.source = 'contract';
-  assert.throws(() => materialize(outside, fresh), /outside changed source/);
+  const reanchored = materialize(outside, fresh).findings[0];
+  assert.equal(reanchored.path, 'src/upload.rs', 'a finding anchored in supporting source is kept and re-anchored to the changed file');
+  assert.ok(reanchored.evidence.some(id => id.startsWith('clouseau-cause-')));
+  const unnamed = structuredClone(facts); unnamed.findings[0].anchor.source = 'missing-source';
+  assert.equal(materialize(unnamed, fresh).findings[0].path, 'src/upload.rs');
+  fresh.files[0].patch = '@@ -1,2 +1,2 @@\n-a\n+b'; fresh.files[0].head_source = 'head';
+  assert.deepEqual(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))), {source: 'head', start: 1, end: 3});
+  fresh.files[0].patch = '@@ -1 +900 @@\n+x';
+  assert.equal(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))).start, 1, 'a line outside the supplied spans uses the first span');
+  fresh.files[0].head_source = undefined; fresh.files[0].base_source = 'head';
+  assert.equal(changedAnchor(fresh.files[0], new Map(proofCatalog(fresh).map(entry => [entry.id, entry]))).source, 'head');
   for (const mutate of [finding => {delete finding.anchor;}, finding => {finding.path = 'invented';}, finding => {finding.anchor.extra = true;}]) {
     const invalid = structuredClone(facts); mutate(invalid.findings[0]);
     assert.throws(() => materialize(invalid, fresh), /concrete changed-source anchor/);
   }
   const conflicting = template(fresh); conflicting.units[0].paths = ['invented'];
   assert.throws(() => materialize(conflicting, fresh), /exclusively from complete file accounting/);
-  facts.units[0].fit.outcome.extra = 'unrecognized';
+  facts.findings[0].factors.necessity.extra = 'unrecognized';
   assert.throws(() => materialize(facts, fresh), /observations and citations only/);
-  facts.units[0].fit.outcome = null;
+  facts.findings[0].factors.necessity = null;
   assert.throws(() => materialize(facts, fresh), /observations and citations only/);
   for (const mutate of [
     entry => {entry.quote = 'Fabricated quote';}, entry => {entry.source = 'invented';},
@@ -82,7 +91,7 @@ test('the native inspection selects controller proofs without generating source 
     calls++;
     const request = JSON.parse(options.body); const view = JSON.parse(request.messages[1].content);
     const schema = request.tools[0].function.parameters;
-    assert.deepEqual(schema.properties.units.items.properties.fit.properties.outcome.properties.evidence.items.enum,
+    assert.deepEqual(schema.properties.findings.items.properties.factors.properties.necessity.properties.evidence.items.enum,
       view.proofs.map(proof => proof.id));
     return wire(facts);
   }});
@@ -109,7 +118,7 @@ test('native source-line citations normalize to existing catalog blocks without 
   require('./acceptance-sources.cjs').refresh(f.snapshot);
   const facts = modelTemplate(f.snapshot);
   facts.gates.forEach(gate => {gate.state = 'satisfied';});
-  facts.units[0].excess.collateral.evidence = ['proof-1-53', 'proof-1-41', 'proof-1-69'];
+  facts.gates[0].evidence = ['proof-1-53', 'proof-1-41', 'proof-1-69'];
   facts.accounting[0].evidence = ['proof-1-53'];
   const concern = finding(); delete concern.path;
   concern.anchor = 'proof-1-69'; concern.evidence = ['proof-1-53'];
@@ -126,7 +135,7 @@ test('native source-line citations normalize to existing catalog blocks without 
   assert.equal(calls, 1);
   assert.deepEqual(facts, original, 'the original observations and causal finding remain intact');
   assert.doesNotThrow(() => validateInspection(result.report, f.snapshot));
-  assert.deepEqual(result.report.units[0].excess.collateral.evidence, ['proof-1-41']);
+  assert.deepEqual(result.report.gates[0].evidence, ['proof-1-41']);
   assert.deepEqual(result.report.accounting[0].evidence, ['proof-1-41']);
   const proof = result.report.evidence.find(entry => entry.id === 'proof-1-41');
   assert.deepEqual({source: proof.source, start: proof.start, end: proof.end}, {source: 'head', start: 41, end: 80});
@@ -151,14 +160,15 @@ test('line normalization rejects unknown sources, out-of-range offsets and unsup
 
 test('complete independent source reports are graded and combined without exposing either verdict to the other', withKey(async () => {
   const f = fixture(); const reports = []; const requests = [];
+  f.snapshot.sources.test = {authority: 'untrusted', kind: 'source', ref: f.snapshot.head_sha, path: 'src/upload.test.rs', content: 'use upload;\n'};
   const config = {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'deepseek', grading_model: 'deepseek-flash'};
   const result = await reviewChange({...f, config, diagnostic: result => reports.push(result), fetchImpl: async (_, options) => {
     const body = JSON.parse(options.body); requests.push(body);
     if (body.messages[0].content.includes('Role:')) return response(f.report);
     const packet = JSON.parse(body.messages[1].content);
-    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))});
+    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4']))});
   }});
-  assert.equal(result.decision, 'auto_approve'); assert.equal(result.reviews.length, 2); assert.equal(result.usage.length, 4);
+  assert.equal(result.decision, 'auto_approve'); assert.equal(result.reviews.length, 2); assert.equal(result.usage.length, 2, 'a change without findings needs no grading');
   assert.deepEqual(requests.slice(0, 2).map(request => request.model), ['deepseek-flash', 'deepseek-v4-pro']);
   assert.equal(requests[0].messages[1].content, requests[1].messages[1].content);
   const native = requests[0].tools.find(item => item.function.name === 'acceptance_report').function.parameters;
@@ -171,7 +181,7 @@ test('complete independent source reports are graded and combined without exposi
     const body = JSON.parse(options.body);
     if (body.messages[0].content.includes('Role:')) return response(f.report);
     const packet = JSON.parse(body.messages[1].content);
-    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, id.includes('_excess_') ? 'level0' : 'level4']))});
+    return response({answers: Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4']))});
   }});
   assert.equal(quiet.decision, 'auto_approve', 'optional telemetry cannot be a prerequisite for the decision');
 }));
@@ -205,22 +215,13 @@ test('multi-file syntax gives every accounting entry its own changed-source proo
   }
 });
 
-test('facts can observe no binding requirement while final positive grades still require trusted contract proof', () => {
-  const {report, snapshot} = fixture();
-  const facts = template(snapshot);
-  facts.units[0].need.binding = {evidence: ['source'], reason: 'The changed code establishes no accepted requirement by itself.'};
-  const materialized = materialize(facts, snapshot);
-  const {validateFacts, validateReport} = require('./acceptance.cjs');
+test('fact validation produces no approval score and rejects unknown citations', () => {
+  const {snapshot} = fixture();
+  const materialized = materialize(template(snapshot), snapshot);
+  const {validateFacts} = require('./acceptance.cjs');
   assert.equal(validateFacts(materialized, snapshot), undefined, 'fact validation cannot provide an approval score');
   assert.doesNotThrow(() => validateInspection(materialized, snapshot));
-  assert.throws(() => validateReport(materialized, snapshot), /binding obligation lacks trusted contract authority/);
-  report.units[0].need.binding = {min: 0, max: 0, ...facts.units[0].need.binding};
-  assert.equal(validateReport(report, snapshot).decision, 'auto_approve', 'established value and need can justify work without claiming a binding requirement');
-  report.units[0].need.binding.max = 0.25;
-  assert.throws(() => validateReport(report, snapshot), /binding obligation lacks trusted contract authority/);
-  report.units[0].need.binding.evidence = ['contract'];
-  assert.doesNotThrow(() => validateReport(report, snapshot));
-  materialized.units[0].need.binding.evidence = ['undeclared'];
+  materialized.accounting[0].evidence = ['undeclared'];
   assert.throws(() => validateFacts(materialized, snapshot), /missing or unknown citation/);
 });
 
@@ -269,20 +270,14 @@ test('long source and causal-anchor proofs preserve all lines, references and bl
   const original = structuredClone(facts);
   const value = materialize(facts, snapshot);
   assert.deepEqual(facts, original, 'the captured model response stays immutable');
-  for (const refs of [value.accounting[0].evidence, value.gates[0].evidence, value.units[0].excess.abstraction.evidence]) {
+  for (const refs of [value.accounting[0].evidence, value.gates[0].evidence]) {
     assert.equal(refs.map(id => value.evidence.find(entry => entry.id === id).quote).join('\n'), snapshot.sources.head.content);
   }
   const causal = value.findings[0].evidence.filter(id => id.startsWith('clouseau-'));
   // The finding also retains its original source proof, plus its complete anchor.
   assert.ok(causal.length >= 3);
   assert.equal(value.findings[0].path, report.findings[0].path);
-  for (const [i, unit] of value.units.entries()) for (const group of ['fit', 'need', 'excess']) {
-    for (const [key, factor] of Object.entries(unit[group])) {
-      Object.assign(factor, {min: report.units[i][group][key].min, max: report.units[i][group][key].max});
-    }
-  }
-  for (const [key, factor] of Object.entries(value.findings[0].factors)) Object.assign(factor,
-    {min: report.findings[0].factors[key].min, max: report.findings[0].factors[key].max});
+  for (const [key, factor] of Object.entries(value.findings[0].factors)) factor.value = report.findings[0].factors[key].value;
   assert.deepEqual(validateReport(value, snapshot), scoreReport(report));
   assert.equal(validateReport(value, snapshot).decision, 'repair_required');
   value.findings[0].evidence.push('invented');
@@ -308,12 +303,20 @@ test('no-progress, over-budget, malformed and invalid source reports fail instea
     const f = fixture(); await assert.rejects(inspect({...f, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(value)}));
   }
   const f = fixture(); f.snapshot.head_sha = 'head';
-  f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head;
+  f.snapshot.sources['head:src/upload.rs'] = f.snapshot.sources.head; f.snapshot.covering_tests = {'src/upload.rs': []}; require('./acceptance-sources.cjs').refresh(f.snapshot);
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('source').toString('base64')}})}}};
-  await assert.rejects(inspect({...f, github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: ['src/upload.rs']})}), /no new evidence/);
+  // A request that fetches nothing is told so, loses the right to ask again and must conclude.
+  const tools = []; let turn = 0;
+  const concluded = await inspect({...f, github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async (_, options) => {
+    tools.push(JSON.parse(options.body).tools.map(item => item.function.name));
+    return ++turn === 1 ? response({request_sources: ['src/upload.rs']}) : response({...f.report, snapshot: f.snapshot.digest});
+  }});
+  assert.deepEqual(tools, [['acceptance_report', 'source_request'], ['acceptance_report']]);
+  assert.match(f.snapshot.evidence_notice, /no further source request is accepted/);
+  assert.equal(concluded.report.snapshot, f.snapshot.digest);
   let call = 0;
-  await assert.rejects(inspect({...fixture(), github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: [`src/new-${++call}.rs`]})}), /exhausted/);
-  assert.equal(call, 3);
+  await assert.rejects(inspect({...fixture(), github, role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response({request_sources: [`src/new-${++call}.rs`]})}), /invalid structured result/);
+  assert.equal(call, 5, 'two source rounds, then the final invalid request is retried with the same prompt, bounded');
 }));
 
 test('new challenger source triggers a bounded fresh examination while the final independent reviews share one complete snapshot', withKey(async () => {
@@ -331,10 +334,11 @@ test('new challenger source triggers a bounded fresh examination while the final
 test('source investigation cannot run indefinitely or discard a causal concern while refreshing its evidence', withKey(async () => {
   const f = fixture(); let calls = 0;
   const github = {rest: {repos: {getContent: async () => ({data: {encoding: 'base64', content: Buffer.from('new source').toString('base64')}})}}};
-  await assert.rejects(investigateChange({...f, github, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
+  const converged = await investigateChange({...f, github, wait: async () => {}, config: {examiner: 'deepseek-flash', challenger: 'deepseek-flash'}, fetchImpl: async () => {
     calls++; return calls % 2 ? response({request_sources: [`src/new-${calls}.rs`]}) : response({...f.report, snapshot: f.snapshot.digest});
-  }}), /two complete examination cycles/);
-  assert.equal(calls, 8);
+  }});
+  assert.equal(calls, 6, 'the final cycle cannot request source; its invalid request is a malformed output, retried');
+  assert.equal(converged.inspections.length, 2);
   f.report.snapshot = f.snapshot.digest;
   const draft = structuredClone(f.report); draft.findings.push(finding());
   assert.throws(() => validateInspection(f.report, f.snapshot, [draft]), /prior investigation concern/);
@@ -355,3 +359,56 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   }});
   assert.equal(inspected.report.resolutions[0].id, draft.findings[0].id);
 }));
+
+test('a change with no executable code treats an invalid inapplicable test gate as not required', () => {
+  const {snapshot} = fixture();
+  snapshot.files = [{path: 'README.md', status: 'modified'}];
+  const gate = state => ({units: [], accounting: [], evidence: [], findings: [], gates: [{name: 'test_integrity', state, reason: 'Nothing to test.'}, {name: 'scope_authority', state: 'inapplicable', reason: 'x'}]});
+  const converted = materialize(gate('inapplicable'), snapshot);
+  assert.equal(converted.gates[0].state, 'satisfied');
+  assert.match(converted.gates[0].reason, /No executable code changed/);
+  assert.equal(converted.gates[1].state, 'inapplicable', 'other required gates are not rewritten');
+  assert.equal(materialize(gate('unresolved'), snapshot).gates[0].state, 'unresolved');
+  snapshot.files = [{path: 'src/app.ts', status: 'modified'}];
+  assert.equal(materialize(gate('inapplicable'), snapshot).gates[0].state, 'inapplicable', 'code changes keep the invalid state visible');
+});
+
+test('an earlier concern that the next examination neither retains nor resolves stands as a finding (issue 126)', withKey(async () => {
+  const f = fixture(); f.report.snapshot = f.snapshot.digest;
+  const draft = structuredClone(f.report); draft.findings.push(finding());
+  const silent = structuredClone(f.report);
+  const kept = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(silent)});
+  assert.equal(kept.report.findings.length, 1);
+  assert.equal(kept.report.findings[0].id, draft.findings[0].id);
+  assert.ok(kept.report.evidence.some(entry => entry.id.startsWith('carried-')), 'the original immutable evidence travels with it');
+  assert.ok(validateInspection(kept.report, f.snapshot, [draft]));
+  // A changed restatement under the same id is replaced by the original concern; a resolved one is left alone.
+  const changed = structuredClone(f.report); changed.findings.push({...finding(), cause: 'A different root cannot silently reuse the identifier.'});
+  const restated = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(changed)});
+  assert.equal(restated.report.findings.length, 1);
+  assert.equal(restated.report.findings[0].cause, draft.findings[0].cause);
+  const verbatim = structuredClone(draft);
+  const same = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(verbatim)});
+  assert.ok(!same.report.evidence.some(entry => entry.id.startsWith('carried-')), 'a retained concern is not duplicated');
+  const closed = structuredClone(f.report);
+  closed.resolutions = [{id: draft.findings[0].id, state: 'dismissed', reason: 'The current source proves rejection before durable acceptance.', evidence: ['source']}];
+  const resolved = await inspect({...f, drafts: [draft], role: 'examiner', model: 'deepseek-flash', fetchImpl: async () => response(closed)});
+  assert.equal(resolved.report.findings.length, 0);
+}));
+
+test('a repair outside the initial envelope is clamped to the changed paths instead of aborting the review (issue 144)', () => {
+  const {snapshot} = fixture();
+  const facts = (repairPaths) => {
+    const sample = template(snapshot);
+    const concern = finding();
+    concern.anchor = {source: 'head', start: 1, end: 1}; delete concern.path;
+    concern.factors = Object.fromEntries(Object.entries(concern.factors).map(([key, value]) => [key, {reason: value.reason, evidence: value.evidence}]));
+    concern.repair_paths = repairPaths;
+    sample.findings.push(concern);
+    return sample;
+  };
+  assert.deepEqual(materialize(facts(['src/upload.rs', 'src/new-story.stories.tsx', 'src/upload.rs']), snapshot).findings[0].repair_paths, ['src/upload.rs']);
+  assert.deepEqual(materialize(facts(['tests/new-test.ts']), snapshot).findings[0].repair_paths, ['src/upload.rs'], 'only outside paths: the finding\'s own file');
+  assert.deepEqual(materialize(facts([]), snapshot).findings[0].repair_paths, ['src/upload.rs']);
+  assert.deepEqual(materialize(facts(undefined), snapshot).findings[0].repair_paths, undefined, 'a missing list is left to validation');
+});

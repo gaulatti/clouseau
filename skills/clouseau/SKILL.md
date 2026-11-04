@@ -21,23 +21,48 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
    `.clouseau-local.json` supplies verification commands and native coverage
    configuration independently of any GitHub Actions installation. Preserve work
    outside the requirement. Commit the complete candidate before signing.
-3. Store the requirement text outside the checkout and run
-   `clouseau review --directory REPO --request-file FILE --harness codex`.
-   Use `--harness claude` when working with that authenticated harness. No CI
-   provider keys are needed. Fresh examiner and challenger sessions receive the
-   frozen evidence without the implementer's conversation or each other's work.
+3. Store the requirement text outside the checkout. Inside an AI harness
+   (Claude Code, Codex or opencode) run the review in agent-driven mode:
+   `clouseau review --directory REPO --request-file FILE --agent claude|codex|opencode`
+   naming the harness you are running in. Do not start a nested headless harness.
+   The command ends with exit code 3 and `status: awaiting_agent` whenever it
+   needs one examiner or challenger session. For each request: start a fresh
+   subagent or session that has not seen this conversation and give it only the
+   `prompt_file` and `schema_file` as its task; it must write only the JSON answer
+   to `answer_file` and must not modify the repository. If the harness cannot
+   start a fresh session, stop and report that; never answer a request yourself
+   in the implementing session. Register the answer with
+   `clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session ID`,
+   using the subagent's own unique session identifier, then repeat the identical
+   review command. An invalid answer is rejected with the reason; the same
+   request allows three attempts. Real verification runs once and is reused. An
+   in-flight review stays pinned to the Clouseau revision that started it even if
+   main advances (one line says so); pass `--engine latest` only to deliberately
+   restart on the newest revision. Only outside an AI harness use the headless form
+   `clouseau review --directory REPO --request-file FILE --harness codex|claude`.
+   No CI provider keys are needed. Real verification outcomes are recorded first;
+   partial coverage, a failing coverage command or unavailable/invalid coverage
+   never suppresses local AI review or becomes fabricated passing counts. Fresh
+   examiner and challenger sessions receive the frozen evidence without the
+   implementer's conversation or each other's work.
 4. Read the recorded findings, factor grades, source citations and decision.
    Fix demonstrated blockers within the accepted requirement, verify the repair
    and review the new revision. Retain negative evidence; never repeat an
    unchanged review in search of approval. At most two repair cycles belong to
    one implementation attempt. Missing purpose or authority requires a concrete
    owner decision; source or verification gaps require investigation.
-   This pre-PR assessment requires the accepted local recipe and behavioral
-   evidence. CI's separate technical checks remain mandatory before approval
-   and merge; pending CI execution is not a claimed local result.
+   This pre-PR assessment requires the accepted local recipe, safe complete
+   immutable source and material behavioral evidence. Coverage percentage or
+   unavailable coverage alone does not force a failing AI quality verdict;
+   demonstrated defects, deceptive tests and missing material context still do.
+   Report the AI decision separately from local verification/coverage status.
+   CI's separate tests and exact-100% coverage gate remain mandatory before
+   approval and merge; a local quality verdict cannot claim those results.
 5. An enrolled runner selects its installed signing identity automatically.
    Pass `--identity FILE` when multiple enrolled identities require selection.
-   A passing final review produces a signed receipt automatically. Never read,
+   A passing final AI quality review produces a signed reuse receipt
+   automatically. The receipt cannot authorize technical approval or merge,
+   including when local coverage is below 100%. Never read,
    print, transmit or copy the identity's private material into a repository,
    prompt, tool environment or report. The identity file belongs to the trusted
    local runner, not to project source. Developer-owned workstations and their
@@ -47,6 +72,9 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
    workflow sees it. The artifact is published separately from the reviewed
    commit. Open a ready PR. Any code/base/policy change requires fresh matching
    evidence; never hand-edit the receipt or reuse a marker for another revision.
+   When only the base moved after the PR was opened, `clouseau refresh --pr N [--request-file FILE]
+   --agent claude|codex|opencode` (or `--harness`) performs the merge, review, publication, marker update and
+   single push for you, reusing reviewer answers only where the evidence is byte-identical.
 
 Agent installation creates no Actions workflows, CI secrets or branch rules.
 Only explicitly integrated repositories can consume local receipts in CI. A

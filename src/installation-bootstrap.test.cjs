@@ -229,7 +229,7 @@ test('bootstrap local collection retains actual source and qualified authority w
   const before = git(f.directory, ['status', '--porcelain']);
   assert.throws(() => collectLocal({directory: f.directory, base: f.base, request: f.request, technical: {}}), /not in|does not exist/);
   assert.equal(git(f.directory, ['status', '--porcelain']), before);
-  const files = record.snapshot.files.map(file => ({filename: file.path, status: file.status}));
+  const files = require('../test/hosted-files.cjs').hostedFiles(record.snapshot);
   const pr = {changed_files: files.length, base: {sha: f.base}, head: {sha: f.head, repo: {owner: {login: 'fixture-owner'}, name: 'bootstrap-fixture'}}};
   const github = {rest: {repos: {getContent: async ({path: filename, ref}) => ({data: {encoding: 'base64', content: Buffer.from(git(f.directory, ['show', `${ref}:${filename}`])).toString('base64')}})}}};
   const options = {github, repo: {owner: 'fixture-owner', repo: 'bootstrap-fixture'}, pr, snapshot: record.snapshot, config: f.config, files, installation: f.grant};
@@ -273,7 +273,7 @@ test('even a legitimately re-signed receipt cannot substitute installation autho
   ]) await assert.rejects(bootstrap.verifyInstallationReceipt(f.sign(await f.record(mutateSnapshot)), f.options()), /initial trust/);
   const key = bootstrap.readIdentity(f.enrolled.identity_file).identity.private_key;
   const long = require('./local-receipt.cjs').issueReceipt({record, privateKey: key, keyId: f.enrolled.public_identity.id,
-    issuer: f.enrolled.public_identity.issuer, reviewerSha: f.reviewer.sha, reviewerDigest: f.reviewer.digest, now: f.now + 1000});
+    issuer: f.enrolled.public_identity.issuer, reviewerSha: f.reviewer.sha, reviewerDigest: f.reviewer.digest, now: f.now + 1000, lifetime: 3600});
   await assert.rejects(async () => bootstrap.verifyInstallationReceipt(long, {...f.options(), now: f.now + 1000}), /initial trust/);
   const unknown = f.sign(record); unknown.payload.type = 'unknown';
   unknown.signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(unknown.payload)}`), key).toString('base64url');

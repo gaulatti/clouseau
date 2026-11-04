@@ -92,7 +92,7 @@ async function fixture(run, {nativePython = false, centralSource = false, engine
     };
     const grant = await verifyGrant({api, manifest, commentId: live.comment.id, now: NOW});
     const f = {temporary, directory, state, enrolled, reviewer, local, config, base, head, request, manifest, live, calls, api, grant, now: NOW};
-    f.options = () => ({api, grant: f.grant, author: 'fixture-owner', reviewerSha: reviewer.sha, reviewerDigest: reviewer.digest, now: NOW});
+    f.options = () => ({api, grant: f.grant, author: 'fixture-owner', reviewerSha: reviewer.sha, reviewerDigest: reviewer.digest, now: NOW, lifetime: 3600});
     f.record = async (mutateSnapshot = () => {}, mutateRequestedSources = () => {}) => {
       const technical = {fixture_only: true, exact_coverage: {lines: [1, 1], branches: [2, 2]}};
       const collected = collectLocal({directory, base, request, technical, ciConfig: config, reviewerSha: reviewer.sha, installation: f.grant});
@@ -121,7 +121,7 @@ async function fixture(run, {nativePython = false, centralSource = false, engine
     };
     f.sign = record => issueReceipt({record, privateKey: readIdentity(enrolled.identity_file).identity.private_key,
       keyId: enrolled.public_identity.id, issuer: enrolled.public_identity.issuer,
-      reviewerSha: reviewer.sha, reviewerDigest: reviewer.digest, now: NOW});
+      reviewerSha: reviewer.sha, reviewerDigest: reviewer.digest, now: NOW, lifetime: 3600});
     await run(f);
   } finally {fs.rmSync(temporary, {recursive: true, force: true});}
 }

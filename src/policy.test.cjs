@@ -61,7 +61,10 @@ function fixture(overrides = {}) {
       createWorkflowDispatch: write('dispatch'),
     },
   }, graphql: async (query, args) => {
-    if (query.startsWith('mutation')) {writes.push({name: 'arm', args}); state.pr.auto_merge = {}; return {};}
+    if (query.startsWith('mutation')) {
+      const disarm = query.includes('disablePullRequestAutoMerge');
+      writes.push({name: disarm ? 'disarm' : 'arm', args}); state.pr.auto_merge = disarm ? null : {}; return {};
+    }
     return {repository: {pullRequest: {closingIssuesReferences: {nodes: [{number: 1, title: 'Fix naming', body: 'Restore contract'}], pageInfo: {hasNextPage: false}}}}};
   }};
   github.paginate = async (method, args) => (await method(args)).data;
@@ -347,11 +350,35 @@ test('stale assessments are refused before any write', async () => {
   assert.equal(f.writes.length, 0);
 });
 
+test('a malformed AI credential is named and refused before any provider request', async () => {
+  const {github} = fixture();
+  const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fixture-key\n';
+  try {
+    const result = await assess({github, context, fetchImpl: () => assert.fail('must not call provider')});
+    assert.equal(result.decision, 'second_opinion');
+    assert.equal(result.reason, 'AI assessment unavailable: DEEPSEEK_API_KEY contains whitespace or a line break');
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
+test('an assessment whose base moved is refused with one needs-branch-update notice and no approval', async () => {
+  const f = fixture();
+  await assert.rejects(f.run({assessment: {...automatic, base_sha: SHA}}), /^Error: Needs branch update/);
+  assert.deepEqual(f.writes.map(item => item.name), ['comment']);
+  assert.match(f.writes[0].args.body, /clouseau-needs-branch-update/);
+  f.state.comments.push({user: {login: 'github-actions[bot]'}, body: f.writes[0].args.body});
+  await assert.rejects(f.run({assessment: {...automatic, base_sha: SHA}}), /Needs branch update/);
+  assert.equal(f.writes.length, 1, 'a rerun does not repeat the notice');
+  await assert.rejects(f.run({assessment: {...automatic, number: 9, base_sha: SHA}}), /Stale/, 'another PR is not a base move');
+});
+
 test('a PR changed during CI cannot receive an approval', async () => {
   const f = fixture();
   f.state.run.status = 'in_progress';
   await assert.rejects(f.run({wait: async () => {f.state.pr.head.sha = BASE;}, maxPolls: 2}), /PR changed/);
   assert.ok(!f.writes.some(write => write.name === 'review'));
+  // The stopped gate names its cause class and a numbered next step in the check summary.
+  const summary = f.writes.filter(write => write.name === 'updateCheck').at(-1).args.output.summary;
+  assert.match(summary, /\*\*Cause:\*\* `revision_changed`/); assert.match(summary, /\*\*Next steps:\*\*\n\n1\. /);
 });
 
 test('AI-identified unsupported product scope waits for an owner decision', async () => {
@@ -361,6 +388,8 @@ test('AI-identified unsupported product scope waits for an owner decision', asyn
   assert.ok(f.writes.some(write => write.name === 'arm'));
   assert.ok(f.writes.some(write => write.args.conclusion === 'action_required'));
   assert.ok(f.writes.some(write => write.name === 'comment' && write.args.body.includes(`/approve-intent ${SHA}`)));
+  const asked = f.writes.find(write => write.name === 'comment').args.body;
+  assert.match(asked, /\*\*Cause:\*\* `intent_owner_decision`/); assert.match(asked, /\*\*Next steps:\*\*\n\n1\. Read the review above/);
   assert.ok(!f.writes.some(write => write.name === 'review'));
 });
 
@@ -388,6 +417,24 @@ test('manual decisions are assigned to gaulatti and request his review on contri
     else assert.deepEqual(request.args.reviewers, ['gaulatti']);
     assert.ok(!f.writes.some(write => write.name === 'review'));
   }
+});
+
+test('manual-merge repositories wait for intent without claiming that auto-merge is armed', async () => {
+  const messages = [];
+  const manual = createPolicy(require('../test/fixtures/config.json'), {manualMerge: true});
+  const f = fixture();
+  f.state.pr.auto_merge = null;
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  const core = {info: message => messages.push(message), summary: {addRaw() {return this;}, async write() {}}};
+  await manual.gate({github: f.github, context, core, assessment: {...automatic, decision: 'second_opinion'}, wait: async () => {}, maxPolls: 1, mergePolls: 1});
+  assert.ok(messages.includes('Automatic merge is disabled; waiting for a maintainer intent confirmation.'));
+  assert.ok(!messages.some(message => message.startsWith('Auto-merge is armed')));
+  assert.ok(!f.writes.some(write => write.name === 'arm' || write.name === 'review'));
+  messages.length = 0;
+  const armed = fixture();
+  armed.state.pr.auto_merge = null;
+  await gate({github: armed.github, context, core, assessment: {...automatic, decision: 'second_opinion'}, wait: async () => {}, maxPolls: 1, mergePolls: 1});
+  assert.ok(messages.includes('Auto-merge is armed; waiting for a maintainer intent confirmation.'));
 });
 
 test('manual handoff does not duplicate an existing assignment or review request', async () => {
@@ -448,19 +495,56 @@ test('an independent human review permits an Actions-authored PR without self-ap
   assert.ok(!f.writes.some(write => write.name === 'review'));
 });
 
-test('auto-merge cannot be armed on an unprotected branch', async () => {
-  const f = fixture();
-  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
-  await assert.rejects(f.run(), /protection/);
-  assert.equal(f.writes.length, 0);
+function noticeWrites(f) { return f.writes.filter(write => write.name === 'comment' || write.name === 'updateComment'); }
+
+test('an unprotected branch records the approval, posts one notice and never arms auto-merge', async () => {
+  for (const nativeGate of [false, true]) {
+    const f = fixture();
+    f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+    f.github.rest.issues.updateComment = async args => {f.writes.push({name: 'updateComment', args});};
+    f.github.graphql = async () => {f.state.pr.auto_merge = null; return {};};
+    await f.run({nativeGate});
+    assert.ok(f.writes.some(write => write.name === 'review'));
+    assert.ok(!f.writes.some(write => write.name === 'arm'));
+    assert.equal(noticeWrites(f).length, 1);
+    assert.match(noticeWrites(f)[0].args.body, /main not protected/);
+    if (!nativeGate) assert.ok(f.writes.some(write => write.args?.conclusion === 'success'));
+  }
 });
 
-test('partial protection cannot satisfy the policy or arm auto-merge', async () => {
+test('a review that reached no approvable decision never arms auto-merge and disarms an armed one', async () => {
+  for (const decision of ['review_incomplete', 'repair_required', 'blocked_technical', 'blocked_integrity']) {
+    for (const armed of [false, true]) {
+      const f = fixture();
+      f.state.pr.auto_merge = armed ? {} : null; f.state.pr.node_id = 'N';
+      f.github.graphql = async query => {f.writes.push({name: query.includes('disable') ? 'disarm' : 'arm'}); f.state.pr.auto_merge = null; return {};};
+      await f.run({assessment: {...automatic, decision, reason: 'No decision.'}}).catch(() => {});
+      assert.ok(!f.writes.some(write => write.name === 'arm'), `${decision} must never arm auto-merge`);
+      assert.equal(f.writes.some(write => write.name === 'disarm'), armed);
+      assert.ok(!f.writes.some(write => write.name === 'review'));
+    }
+  }
+});
+
+test('an already-armed auto-merge is disarmed when protection is insufficient', async () => {
+  const f = fixture();
+  f.state.pr.auto_merge = {}; f.state.pr.node_id = 'N';
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  f.github.graphql = async query => {f.writes.push({name: query.includes('disable') ? 'disarm' : 'arm'}); f.state.pr.auto_merge = null; return {};};
+  await f.run();
+  assert.ok(f.writes.some(write => write.name === 'disarm'));
+  assert.ok(f.writes.some(write => write.name === 'review'));
+});
+
+test('partial protection withholds the merge, names the gaps and cannot arm auto-merge', async () => {
   const f = fixture();
   f.github.request = async () => ({data: []});
+  f.github.graphql = async () => {f.state.pr.auto_merge = null; return {};};
   await assert.rejects(assertProtection(f.github, repo), /Main must enforce/);
-  await assert.rejects(f.run(), /Main must enforce/);
-  assert.equal(f.writes.length, 0);
+  await f.run();
+  assert.ok(f.writes.some(write => write.name === 'review'));
+  assert.ok(!f.writes.some(write => write.name === 'arm'));
+  assert.match(noticeWrites(f)[0].args.body, /required checks missing, up-to-date missing, approval freshness missing, force-push\+deletion protection missing/);
 });
 
 test('a completed bot merge explicitly dispatches CD for the merged revision', async () => {
@@ -580,7 +664,9 @@ test('the gate refuses stale comments, changed revisions and withdrawn human con
     await assert.rejects(f.run({context: {...context, eventName: 'issue_comment', payload: {issue: {number: 8, pull_request: {}}, comment}}}));
   }
   const disabled = fixture(); disabled.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
-  await assert.rejects(disabled.run(), /auto-merge/);
+  disabled.github.graphql = async () => {disabled.state.pr.auto_merge = null; return {};};
+  await disabled.run();
+  assert.ok(disabled.writes.some(write => write.name === 'review') && !disabled.writes.some(write => write.name === 'arm'));
   const staleArm = fixture(); staleArm.state.pr.auto_merge = null;
   staleArm.github.graphql = async () => ({});
   await assert.rejects(staleArm.run(), /Auto-merge was not enabled/);
@@ -680,7 +766,9 @@ test('native policy result fails on missing intent, pending assessment and integ
     assert.equal(f.writes.some(w => w.name === 'createCheck' || w.name === 'updateCheck'), false);
   }
   const wrongProtection = fixture();
-  await assert.rejects(wrongProtection.run({nativeGate: true}), /approve-and-merge/);
+  wrongProtection.github.graphql = async () => {wrongProtection.state.pr.auto_merge = null; return {};};
+  await wrongProtection.run({nativeGate: true});
+  assert.match(noticeWrites(wrongProtection)[0].args.body, /required checks missing/);
 });
 
 test('native policy success requires completed evidence and finishes before merge finalization', async () => {
@@ -768,4 +856,420 @@ test('separate finalization validates revision and dispatches CD only for the me
   try {await policy.finalize({github: f.github, context, core: {info() {} }});}
   finally {if (original === undefined) delete process.env.ASSESSMENT; else process.env.ASSESSMENT = original;}
   assert.ok(f.writes.some(w => w.name === 'dispatch' && w.args.workflow_id === 'backend-deploy.yml'));
+});
+
+
+test('legacy controller callers cannot select private automatic writes without a validated acceptance record', async () => {
+  const f = fixture();
+  const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  await assert.rejects(policy.gate({github: f.github, context, core: {info() {}}, assessment: automatic}), /validated protocol-two acceptance record/);
+  assert.equal(f.writes.length, 0);
+});
+
+test('verification state distinguishes an absent, queued and running PR run', async () => {
+  assert.deepEqual(await technicalRun(fixture({run: null}).github, repo, small), {pending: true, state: 'absent'});
+  for (const [status, state] of [['queued', 'queued'], ['waiting', 'queued'], ['in_progress', 'running']]) {
+    const f = fixture(); f.state.run.status = status;
+    assert.deepEqual(await technicalRun(f.github, repo, small), {pending: true, state});
+  }
+});
+
+// A single-slot pool: while the review job runs, the verification job queued
+// behind it never starts, so every poll observes the same queued run.
+function singleSlotDeadlock() {
+  const f = fixture(); f.state.run.status = 'queued'; f.state.run.conclusion = null;
+  const messages = []; const outputs = {}; const delays = []; let waits = 0;
+  return {f, messages, outputs, core: {info: message => messages.push(message), setOutput: (name, value) => {outputs[name] = value;}},
+    wait: async ms => {delays.push(ms); waits++;}, waits: () => waits, delays};
+}
+const awaiting = createPolicy(require('../test/fixtures/config.json'));
+const waitSupport = require('./verification-wait.cjs');
+const quiet = {info() {}, setOutput() {}};
+
+test('the queue grace is a validated, conservative configuration knob', () => {
+  assert.equal(waitSupport.graceSeconds({}), 900);
+  assert.equal(waitSupport.graceSeconds({verification_queue_grace_seconds: 60}), 60);
+  const base = require('../test/fixtures/config.json');
+  for (const value of [0, 60, 3600]) assert.doesNotThrow(() => createPolicy({...base, verification_queue_grace_seconds: value}));
+  for (const value of [-1, 3601, 1.5, '900', null]) {
+    assert.throws(() => createPolicy({...base, verification_queue_grace_seconds: value}), /verification queue grace/);
+  }
+});
+
+test('a review whose verification never starts ends pending after the grace instead of holding the only runner or failing', async () => {
+  const d = singleSlotDeadlock();
+  const result = await awaiting.awaitVerification({github: d.f.github, context, core: d.core, expectedHead: SHA, wait: d.wait});
+  assert.equal(result.pending, true);
+  assert.equal(d.outputs.verified, 'false');
+  assert.equal(d.waits(), 10, 'the default 15 minute grace is 10 backed-off polls (15, 30, 60, then 120 s), not 60 fixed ones');
+  assert.deepEqual(d.delays.slice(0, 5), [15000, 30000, 60000, 120000, 120000]);
+  assert.match(d.messages.at(-1), /had not started.*without holding a runner.*made no decision.*reassessed automatically/s);
+  const quick = singleSlotDeadlock();
+  await awaiting.awaitVerification({github: quick.f.github, context, core: quick.core, expectedHead: SHA, wait: quick.wait, queuedGraceSeconds: 30});
+  assert.equal(quick.waits(), 2);
+  const none = singleSlotDeadlock();
+  await awaiting.awaitVerification({github: none.f.github, context, core: none.core, expectedHead: SHA, wait: none.wait, queuedGraceSeconds: 0});
+  assert.equal(none.waits(), 0, 'a zero grace releases the runner on the first idle check');
+  const configured = createPolicy({...require('../test/fixtures/config.json'), verification_queue_grace_seconds: 15});
+  const absent = {f: fixture({run: null}), outputs: {}, wait: async () => {}};
+  await configured.awaitVerification({github: absent.f.github, context, core: {info() {}, setOutput: (n, v) => {absent.outputs[n] = v;}}, expectedHead: SHA, wait: absent.wait});
+  assert.equal(absent.outputs.verified, 'false');
+});
+
+test('a read-only assessment whose verification never starts returns a pending decision, never an approval', async () => {
+  const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  try {
+    const d = singleSlotDeadlock();
+    const result = await awaiting.assessWhenReady({github: d.f.github, context, wait: d.wait, queuedGraceSeconds: 30});
+    assert.equal(result.decision, 'pending_technical');
+    assert.equal(result.verification, 'queued');
+    assert.match(result.reason, /reassessed automatically/);
+    assert.equal(d.waits(), 2);
+    assert.ok(!result.record_digest);
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
+});
+
+test('verification that is genuinely running is awaited until it succeeds, and resets the queue grace', async () => {
+  const f = fixture(); f.state.run.status = 'queued';
+  const sequence = ['queued', 'queued', 'in_progress', 'in_progress', 'queued', 'completed'];
+  let index = 0; const messages = []; const outputs = {};
+  const result = await awaiting.awaitVerification({github: f.github, context,
+    core: {info: message => messages.push(message), setOutput: (name, value) => {outputs[name] = value;}},
+    expectedHead: SHA, queuedGraceSeconds: 30, wait: async () => {f.state.run.status = sequence[++index];}});
+  assert.match(result.url, /runs\/22/);
+  assert.equal(outputs.verified, 'true');
+  assert.ok(messages.some(message => /Verified PR CI/.test(message)));
+  assert.ok(messages.some(message => /No AI request has been made/.test(message)));
+});
+
+test('awaiting verification refuses failures, a changed PR, closed or draft PRs and an exhausted deadline', async () => {
+  const failed = fixture(); failed.state.run.conclusion = 'failure';
+  const failedOutputs = {};
+  const failedResult = await awaiting.awaitVerification({github: failed.github, context, core: {info() {}, setOutput: (n, v) => {failedOutputs[n] = v;}}, expectedHead: SHA});
+  assert.match(failedResult.failure, /concluded failure/);
+  assert.equal(failedOutputs.verified, 'false');
+  assert.equal(JSON.parse(failedOutputs.assessment).cause, 'verification_failed', 'a final failure ends the wait with a published assessment, it does not fail the step');
+  const changed = fixture();
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context, core: quiet, expectedHead: BASE}), /changed while verification/);
+  const push = sha => ({...context, eventName: 'push', sha});
+  await assert.rejects(awaiting.awaitVerification({github: changed.github, context: push(BASE), core: quiet}), /changed while verification/);
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: push(SHA), core: quiet})).url);
+  // A comment or manual run executes on the default branch: its own sha is not the PR head.
+  const comment = {...context, eventName: 'issue_comment', sha: 'c'.repeat(40)};
+  assert.ok((await awaiting.awaitVerification({github: changed.github, context: comment, core: quiet})).url);
+  const moving = fixture(); moving.state.run.status = 'in_progress';
+  await assert.rejects(awaiting.awaitVerification({github: moving.github, context: comment, core: quiet,
+    wait: async () => {moving.state.pr.head.sha = BASE;}}), /changed while verification/);
+  for (const mutate of [pr => {pr.state = 'closed';}, pr => {pr.draft = true;}]) {
+    const f = fixture(); mutate(f.state.pr);
+    await assert.rejects(awaiting.awaitVerification({github: f.github, context, core: quiet, expectedHead: SHA}), /closed, became draft/);
+  }
+  const running = fixture(); running.state.run.status = 'in_progress';
+  const budget = {};
+  const exhausted = await awaiting.awaitVerification({github: running.github, context, core: {info() {}, setOutput: (n, v) => {budget[n] = v;}}, expectedHead: SHA,
+    maxPolls: 2, wait: async () => {}});
+  assert.deepEqual({pending: exhausted.pending, state: exhausted.state, verified: budget.verified}, {pending: true, state: 'deadline', verified: 'false'}, 'a still-running verification is visibly pending, not a silent failure');
+  assert.equal(JSON.parse(budget.assessment).decision, 'pending_technical');
+  assert.equal((await awaiting.awaitVerification({github: running.github, context, core: quiet, expectedHead: SHA, maxPolls: 0})).state, 'deadline');
+});
+
+test('the default sleep paces verification polling', async t => {
+  const f = fixture(); f.state.run.status = 'in_progress';
+  t.mock.method(global, 'setTimeout', callback => {f.state.run.status = 'completed'; callback(); return 0;});
+  assert.ok((await awaiting.awaitVerification({github: f.github, context, core: quiet, expectedHead: SHA})).url);
+});
+
+test('a held technical assessment reports its own reason on a private owner repository instead of a missing record', async () => {
+  for (const decision of ['blocked_technical', 'blocked_integrity']) {
+    const f = fixture(); f.state.pr.auto_merge = null;
+    const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+    f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false}});
+    f.github.rest.repos.getBranch = async () => ({data: {protected: false}});
+    f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+    await assert.rejects(policy.gate({github: f.github, context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+      nativeGate: true, assessment: {...automatic, decision, reason: 'fixture held reason'}}), error => error.message === 'fixture held reason');
+  }
+});
+
+// The verification run that a pending review was waiting for has completed.
+const verificationTrigger = (overrides = {}) => ({...context, eventName: 'workflow_run', payload: {workflow_run: {
+  event: 'pull_request', path: '.github/workflows/backend-ci.yml', head_sha: SHA, pull_requests: [{number: 8}], ...overrides}}});
+
+test('a completed verification run reassesses a review that ended pending, without any maintainer comment', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const f = reassessmentFixture(); f.state.run.conclusion = 'failure';
+  f.github.rest.repos.getCollaboratorPermissionLevel = async () => assert.fail('the trusted workflow event needs no actor permission');
+  await policy.requestReassessment({github: f.github, context: verificationTrigger(), core: {info() {}}, wait: async () => {}});
+  assert.deepEqual(f.writes.filter(w => w.name === 'rerun').map(w => w.args.run_id), [22]);
+  const forked = reassessmentFixture(); forked.state.run.conclusion = 'cancelled';
+  forked.github.rest.repos.listPullRequestsAssociatedWithCommit = async args => {
+    assert.equal(args.commit_sha, SHA);
+    return {data: [{number: 8, state: 'open', base: {ref: 'main'}}, {number: 9, state: 'closed', base: {ref: 'main'}}, {number: 10, state: 'open', base: {ref: 'other'}}]};
+  };
+  await policy.requestReassessment({github: forked.github, context: verificationTrigger({pull_requests: []}), core: {info() {}}, wait: async () => {}});
+  assert.equal(forked.writes.filter(w => w.name === 'rerun').length, 1);
+  // The pending review may still be ending when verification completes: wait for it.
+  const ending = reassessmentFixture(); ending.state.run.conclusion = 'failure'; ending.state.run.status = 'in_progress';
+  const gaps = [];
+  await policy.requestReassessment({github: ending.github, context: verificationTrigger(), core: {info() {}},
+    wait: async ms => {gaps.push(ms); if (gaps.length === 3) ending.state.run.status = 'completed';}});
+  assert.deepEqual(gaps, [10000, 20000, 40000], 'growing gaps: three requests, not a poll every 10 s');
+  const waits = gaps.length;
+  assert.equal(waits, 3); assert.equal(ending.writes.filter(w => w.name === 'rerun').length, 1);
+});
+
+test('a completed verification run never reruns a succeeded, running, stale, unrelated or absent review', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const messages = [];
+  const core = {info: message => messages.push(message)};
+  const attempt = async (mutate, trigger = verificationTrigger()) => {
+    const f = reassessmentFixture(); f.state.run.conclusion = 'failure'; mutate(f, trigger);
+    await policy.requestReassessment({github: f.github, context: trigger, core, wait: async () => {}});
+    assert.equal(f.writes.length, 0);
+    return messages.at(-1);
+  };
+  assert.match(await attempt(f => {f.state.run.conclusion = 'success';}), /already succeeded/);
+  assert.match(await attempt(f => {f.state.run.status = 'in_progress';}), /still running/);
+  assert.match(await attempt(f => {f.state.run.head_sha = BASE;}), /No trusted PR metadata run/);
+  assert.match(await attempt(() => {}, verificationTrigger({event: 'push'})), /Not a PR verification run/);
+  assert.match(await attempt(() => {}, verificationTrigger({path: '.github/workflows/other.yml'})), /Not a PR verification run/);
+  assert.match(await attempt(() => {}, verificationTrigger({head_sha: BASE})), /no longer a ready PR head/);
+  assert.match(await attempt(f => {f.state.pr.state = 'closed';}), /no longer a ready PR head/);
+  assert.match(await attempt(f => {f.state.pr.draft = true;}), /no longer a ready PR head/);
+  assert.match(await attempt(f => {f.state.pr.base.ref = 'other';}), /no longer a ready PR head/);
+  assert.match(await attempt(() => {}, verificationTrigger({pull_requests: [{number: 8}, {number: 9}]})), /No single open PR/);
+  assert.match(await attempt(f => {
+    f.github.rest.repos.listPullRequestsAssociatedWithCommit = async () => ({data: []});
+  }, verificationTrigger({pull_requests: []})), /No single open PR/);
+});
+
+test('finalization on an owner-automatic repository with insufficient protection merges nothing', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'), {privateOwnerAutomatic: true});
+  const f = fixture();
+  f.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  await policy.finalize({github: f.github, context, core: {info() {}}, assessment: automatic});
+  assert.ok(!f.writes.some(write => write.name === 'arm' || write.name === 'dispatch'));
+});
+
+test('opt-in managed_agents exempts only a verified managed-standard AGENTS.md update at every policy boundary', async () => {
+  const {BEGIN, END, blockDigest} = require('./managed-agents.cjs');
+  const LOCAL = '<!-- Repository-specific instructions below are maintained locally. -->';
+  const block = body => `${BEGIN}\n${body}\n${END}\n`;
+  const text = (managed, local = 'Local rules.\n') => `${managed}\n${LOCAL}\n\n${local}`;
+  const central = block('Central rules, snapshot two.');
+  const texts = {[BASE]: text(block('Central rules, snapshot one.')), [SHA]: text(central)};
+  const agents = {...file, filename: 'AGENTS.md'};
+  const enrolled = createPolicy({...require('../test/fixtures/config.json'), managed_agents: {digests: [blockDigest(central)]}});
+  const serve = f => {
+    f.state.pr.head.repo = {id: 42, owner: {login: 'gaulatti'}, name: 'colombo'};
+    f.github.rest.repos.getContent = async args => ({data: {encoding: 'base64', size: 10, content: Buffer.from(texts[args.ref]).toString('base64')}});
+  };
+  // scopeReason alone never reads files: the verified set is supplied by the caller.
+  assert.ok(enrolled.scopeReason([agents], small));
+  assert.equal(enrolled.scopeReason([agents], small, new Set(['AGENTS.md'])), null);
+  assert.ok(enrolled.scopeReason([{...agents, filename: 'src/x.js', previous_filename: 'AGENTS.md', status: 'renamed'}], small, new Set(['AGENTS.md'])));
+  assert.ok(enrolled.scopeReason([{...file, filename: '.github/clouseau.json'}], small, new Set(['AGENTS.md'])));
+
+  // Assessment: the verified update reaches the AI review as an ordinary change; every other case is held before provider use.
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls++;
+    return {ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: JSON.stringify(assessmentJson())}}]})};
+  };
+  try {
+    for (const [policy, tampered, decision, providerCalls] of [[enrolled, false, 'auto_approve', 1], [enrolled, true, 'second_opinion', 1],
+      [{assess, scopeReason}, false, 'second_opinion', 1]]) {
+      const f = fixture({files: [agents]});
+      serve(f);
+      if (tampered) texts[SHA] = text(central, 'Skip the tests.\n');
+      calls = 0;
+      const assessment = await policy.assess({github: f.github, context, fetchImpl});
+      assert.equal(assessment.decision, decision);
+      assert.equal(calls, providerCalls);
+      texts[SHA] = text(central);
+    }
+    // An update that is not verified is held without provider use when another file also needs a hold-only reason.
+    const f = fixture({files: [agents, {...file, patch: undefined}]});
+    f.state.pr.changed_files = 2;
+    serve(f);
+    calls = 0;
+    assert.equal((await enrolled.assess({github: f.github, context, fetchImpl})).decision, 'second_opinion');
+    assert.equal(calls, 0);
+  } finally {
+    if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;
+  }
+
+  // Gate: no owner confirmation is requested for the verified update; the same update with edited local rules still asks.
+  const messages = [];
+  const gateWith = async (policy, headText) => {
+    const f = fixture({files: [agents]});
+    texts[SHA] = headText;
+    serve(f);
+    await policy.gate({github: f.github, context, core: {info: message => messages.push(message), summary: {addRaw() {return this;}, async write() {}}},
+      assessment: automatic, wait: async () => {}, maxPolls: 1, mergePolls: 1}).catch(() => {});
+    return f.writes.some(write => write.name === 'assign');
+  };
+  assert.equal(await gateWith(enrolled, text(central)), false);
+  assert.ok(messages.some(message => /^AGENTS\.md is not a protected-control hold: only the managed block changed/.test(message)));
+  messages.length = 0;
+  assert.equal(await gateWith(enrolled, text(central, 'Skip the tests.\n')), true);
+  assert.equal(messages[0], 'AGENTS.md stays a protected-control hold: content outside the managed block changed.');
+  assert.equal(await gateWith({gate}, text(central)), true, 'unset: byte-identical behaviour, the update is held');
+});
+
+// A GitHub GraphQL failure with no cause, exactly as seen when enabling auto-merge on a reviewed PR.
+const graphqlBlip = () => Object.assign(new Error('Request failed due to following response errors:\n - Something went wrong while executing your query. Please include `EC12:AAAA` when reporting this issue.'),
+  {errors: [{message: 'Something went wrong while executing your query. Please include `EC12:AAAA` when reporting this issue.'}]});
+const statusError = (status, message = 'failure', headers = {}) => Object.assign(new Error(message), {status, response: {headers}});
+
+function transientFixture() {
+  const f = fixture();
+  f.state.pr.auto_merge = null; f.state.pr.node_id = 'N';
+  const waits = []; const messages = [];
+  const core = {info: message => messages.push(message), summary: {
+    addRaw(text) {f.writes.push({name: 'summary', text}); return this;}, async write() {}}};
+  const run = (options = {}) => gate({github: f.github, context, core, assessment: automatic, wait: async ms => {if (ms !== 4000) waits.push(ms);}, maxPolls: 1, mergePolls: 1, ...options});
+  return {...f, waits, messages, run};
+}
+
+test('a transient GraphQL error while enabling auto-merge is retried with bounded backoff and the review proceeds', async () => {
+  const f = transientFixture();
+  let calls = 0;
+  const graphql = f.github.graphql;
+  f.github.graphql = async (query, args) => {
+    if (query.includes('enablePullRequestAutoMerge') && ++calls <= 2) throw graphqlBlip();
+    return graphql(query, args);
+  };
+  await f.run();
+  assert.equal(calls, 3);
+  assert.deepEqual(f.waits, [2000, 6000]);
+  assert.equal(f.writes.filter(write => write.name === 'arm').length, 1);
+  assert.ok(f.writes.some(write => write.name === 'review'));
+  assert.ok(f.messages.some(message => /Transient GitHub failure while enabling auto-merge.*retry 1\/3 in 2 s/.test(message)));
+});
+
+test('a retry that finds auto-merge already armed does not arm it again', async () => {
+  const f = transientFixture();
+  let calls = 0;
+  f.github.graphql = async () => {
+    calls++;
+    f.state.pr.auto_merge = {};
+    throw graphqlBlip();
+  };
+  await f.run();
+  assert.equal(calls, 1);
+  assert.deepEqual(f.waits, [2000]);
+  assert.ok(f.writes.some(write => write.name === 'review'));
+});
+
+test('a final transient failure says the review was accepted and a retry is safe, and approves nothing', async () => {
+  const f = transientFixture();
+  let calls = 0;
+  f.github.graphql = async () => {calls++; throw graphqlBlip();};
+  await assert.rejects(f.run(), error => error.code === 'TRANSIENT_GITHUB' && error.attempts === 4 &&
+    error.message.includes(`head ${SHA} was already accepted`) && /Retrying it is safe/.test(error.message) && /EC12/.test(error.message));
+  assert.equal(calls, 4);
+  assert.deepEqual(f.waits, [2000, 6000, 15000]);
+  assert.ok(!f.writes.some(write => write.name === 'review'));
+  const check = f.writes.find(write => write.name === 'updateCheck');
+  assert.equal(check.args.conclusion, 'failure');
+  assert.match(check.args.output.summary, /already accepted[\s\S]*re-run only the failed job/);
+});
+
+test('deterministic arming errors fail at once with their own message and are never retried', async () => {
+  for (const error of [
+    Object.assign(new Error('Pull request is not mergeable'), {errors: [{type: 'UNPROCESSABLE', message: 'Pull request is not mergeable'}]}),
+    statusError(422, 'Validation Failed'), statusError(403, 'Resource not accessible by integration'), statusError(404, 'Not Found'),
+    statusError(429, 'rate limited', {'retry-after': '600'}),
+  ]) {
+    const f = transientFixture();
+    f.github.graphql = async () => {throw error;};
+    await assert.rejects(f.run(), caught => caught === error);
+    assert.deepEqual(f.waits, []);
+    assert.ok(!f.writes.some(write => write.name === 'review'));
+  }
+});
+
+test('5xx and short secondary rate limits are transient and honor the requested wait', async () => {
+  for (const [error, expected] of [[statusError(502), [2000]], [statusError(503, 'unavailable'), [2000]],
+    [statusError(403, 'You have exceeded a secondary rate limit', {'retry-after': '30'}), [30000]],
+    [statusError(403, 'You have exceeded a secondary rate limit', {'retry-after': '1'}), [2000]]]) {
+    const f = transientFixture();
+    let failed = false;
+    const graphql = f.github.graphql;
+    f.github.graphql = async (query, args) => {
+      if (!failed) {failed = true; throw error;}
+      return graphql(query, args);
+    };
+    await f.run();
+    assert.deepEqual(f.waits, expected);
+    assert.ok(f.writes.some(write => write.name === 'review'));
+  }
+});
+
+test('the approval review and the disarm are retried on transient failures and fail fast otherwise', async () => {
+  const approval = transientFixture();
+  let attempts = 0;
+  const createReview = approval.github.rest.pulls.createReview;
+  approval.github.rest.pulls.createReview = async args => {if (++attempts === 1) throw statusError(502); return createReview(args);};
+  await approval.run();
+  assert.equal(approval.writes.filter(write => write.name === 'review').length, 1);
+  assert.deepEqual(approval.waits, [2000]);
+
+  const denied = transientFixture();
+  denied.github.rest.pulls.createReview = async () => {throw statusError(422, 'Unprocessable');};
+  await assert.rejects(denied.run(), /Unprocessable/);
+  assert.deepEqual(denied.waits, []);
+
+  const disarm = transientFixture();
+  disarm.state.pr.auto_merge = {};
+  disarm.github.rest.repos.get = async () => ({data: {allow_auto_merge: false}});
+  let disarms = 0;
+  const graphql = disarm.github.graphql;
+  disarm.github.graphql = async (query, args) => {if (++disarms === 1) throw graphqlBlip(); return graphql(query, args);};
+  await disarm.run();
+  assert.equal(disarms, 2);
+  assert.deepEqual(disarm.waits, [2000]);
+});
+
+test('finalizing a manual merge retries a transient disarm', async () => {
+  const manual = createPolicy(require('../test/fixtures/config.json'), {manualMerge: true});
+  const f = transientFixture();
+  f.state.pr.auto_merge = {};
+  let calls = 0;
+  f.github.graphql = async () => {if (++calls === 1) throw graphqlBlip(); f.state.pr.auto_merge = null; return {};};
+  await manual.finalize({github: f.github, context, core: {info() {}}, assessment: automatic, wait: async ms => {f.waits.push(ms);}});
+  assert.equal(calls, 2);
+  assert.deepEqual(f.waits, [2000]);
+});
+
+test('a pull request that conflicts with its base is named at once, not after the whole queue grace', async () => {
+  const old = process.env.DEEPSEEK_API_KEY;
+  process.env.DEEPSEEK_API_KEY = 'fictional-key';
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const never = async () => assert.fail('a conflict is not waited out');
+  try {
+    const f = fixture({run: null}); Object.assign(f.state.pr, {mergeable: false, mergeable_state: 'dirty'});
+    const held = await policy.assessWhenReady({github: f.github, context, wait: never});
+    assert.deepEqual({decision: held.decision, verification: held.verification, cause: held.cause, head: held.head_sha},
+      {decision: 'pending_technical', verification: 'absent', cause: 'branch_conflict', head: SHA});
+    assert.match(held.reason, /^Merge conflict with main: /);
+    const outputs = {};
+    const core = {info() {}, setOutput: (name, value) => {outputs[name] = value;}};
+    const waited = await policy.awaitVerification({github: f.github, context, core, expectedHead: SHA, wait: never});
+    assert.deepEqual(waited, {pending: true, state: 'branch_conflict'}); assert.equal(outputs.verified, 'false');
+    assert.deepEqual({...JSON.parse(outputs.assessment)}, {version: 2, number: 8, head_sha: SHA, base_sha: BASE, decision: 'pending_technical',
+      verification: 'absent', cause: 'branch_conflict', reason: held.reason});
+    // A mergeable pull request whose verification has not started is still waited on for the grace, as before.
+    const clean = fixture({run: null}); clean.state.pr.mergeable = true;
+    await assert.rejects(policy.assessWhenReady({github: clean.github, context, maxPolls: 1, wait: async () => {}}), /deadline/);
+    const waits = [];
+    const stalled = await policy.awaitVerification({github: clean.github, context, core: {info() {}, setOutput() {}}, expectedHead: SHA, wait: async ms => waits.push(ms), queuedGraceSeconds: 20});
+    assert.equal(stalled.state, 'absent'); assert.ok(waits.length > 0);
+  } finally {if (old === undefined) delete process.env.DEEPSEEK_API_KEY; else process.env.DEEPSEEK_API_KEY = old;}
 });

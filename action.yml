@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: verify-engine, test, coverage, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: verify-engine, test, coverage, await-verification, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, reconcile-base, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -14,16 +14,22 @@ inputs:
     description: Trusted repository configuration path (assess and gate)
     default: .github/clouseau.json
   coverage-report:
-    description: Native LLVM, Istanbul or coverage.py JSON report path (coverage)
+    description: Native LLVM, Istanbul or coverage.py JSON report, or Go cover profile, path (coverage)
     default: ''
   coverage-config:
     description: Accepted-base version 2 local recipe with separate native coverage parts (coverage); read as data only
     default: ''
   coverage-format:
-    description: llvm, istanbul or coveragepy; require the complete application source inventory
+    description: llvm, istanbul, coveragepy or go; require the complete application source inventory
     default: llvm
   source-directory:
     description: Application source directory to measure (coverage)
+    default: ''
+  coverage-base-ref:
+    description: "Base revision for changed-line coverage (coverage); used only when the protected config sets coverage.mode to changed_lines or declared (declared reads each coverage part's package.json at this revision). Needs a checkout with that revision's history"
+    default: ''
+  coverage-baseline:
+    description: "Path to a file of JSON totals {lines:[total,covered],branches:[total,covered]} measured on the base revision with the `totals` command; a path, never inline JSON (coverage, changed_lines mode; declared mode needs none)"
     default: ''
   pull-request:
     description: PR number for manual reassessment
@@ -31,6 +37,9 @@ inputs:
   assessment:
     description: Exact assessment JSON from the read-only assessment job (gate)
     default: ''
+  ignore-receipt:
+    description: "'true' makes assess ignore the PR local review receipt entirely (never read, never verified); for the secret-bearing hosted fallback that follows an unusable receipt"
+    default: 'false'
   record-transport:
     description: artifact (default) or bounded job-output record transport for v2 assess, verify-local, gate, and repair
     default: artifact
@@ -42,6 +51,9 @@ inputs:
     default: ''
   typesafe-key:
     description: TypeSafe API key; supply only to the read-only assessment or acceptance qualification that uses Jev grading
+    default: ''
+  update-token:
+    description: Independent GitHub credential whose push starts normal workflows; supply only to reconcile-base (optional, otherwise PRs receive a notice)
     default: ''
   repair-token:
     description: Independent GitHub author token for bounded repairs; supply only to the separate repair job
@@ -66,11 +78,14 @@ inputs:
     default: 'false'
 outputs:
   assessment:
-    description: Commit-bound intent decision from assess
-    value: ${{ steps.assess.outputs.assessment }}
+    description: Commit-bound intent decision from assess; from await-verification, the precise review_incomplete assessment when verification finally failed
+    value: ${{ steps.assess.outputs.assessment || steps.await.outputs.assessment }}
   review-record:
     description: Opaque JSON array of four bounded base64url-gzip chunks bound to repository, run, attempt, head, base, and assessment digests
     value: ${{ steps.assess.outputs.review-record }}
+  verified:
+    description: "'true' when PR verification succeeded; 'false' when it had not started within the queue grace and the review should end pending (await-verification)"
+    value: ${{ steps.await.outputs.verified }}
   wiki-commit:
     description: Published or already-documented wiki commit
     value: ${{ steps.publish-wiki.outputs.commit }}
@@ -86,9 +101,15 @@ runs:
         CLOUSEAU_OPERATION: ${{ inputs.operation }}
         CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
         CLOUSEAU_HAS_REVIEW_RECORD: ${{ inputs.review-record != '' }}
+        CLOUSEAU_IGNORE_RECEIPT: ${{ inputs.ignore-receipt }}
       run: |
+        case "$CLOUSEAU_IGNORE_RECEIPT" in
+          false) ;;
+          true) test "$CLOUSEAU_OPERATION" = assess || { echo 'ignore-receipt applies only to assess' >&2; exit 1; } ;;
+          *) echo 'ignore-receipt must be true or false' >&2; exit 1 ;;
+        esac
         case "$CLOUSEAU_OPERATION" in
-          verify-engine|test|coverage|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          verify-engine|test|coverage|await-verification|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|reconcile-base|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
         case "$CLOUSEAU_RECORD_TRANSPORT" in
@@ -120,7 +141,6 @@ runs:
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |
-        python3 -m unittest discover -s src -p 'test_*.py'
         node --test src/*.test.cjs
     - name: Enforce 100% line and branch coverage
       if: inputs.operation == 'coverage'
@@ -131,14 +151,44 @@ runs:
         SOURCE_DIRECTORY: ${{ inputs.source-directory }}
         COVERAGE_FORMAT: ${{ inputs.coverage-format }}
         COVERAGE_CONFIG: ${{ inputs.coverage-config }}
+        COVERAGE_BASE_REF: ${{ inputs.coverage-base-ref }}
+        COVERAGE_BASELINE: ${{ inputs.coverage-baseline }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
       run: |
-        if [[ -n "$COVERAGE_CONFIG" ]]; then
-          test -z "$COVERAGE_REPORT"
-          test -z "$SOURCE_DIRECTORY"
-          python3 "$CLOUSEAU_ROOT/src/coverage_plan.py" "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+        # Exact 100% unless a base revision is supplied AND the protected configuration opts in to changed_lines or declared.
+        COVERAGE_MODE=exact
+        if [[ -n "$COVERAGE_BASE_REF" ]]; then
+          COVERAGE_MODE=$(node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" mode "$CLOUSEAU_CONFIG")
+        fi
+        if [[ "$COVERAGE_MODE" == exact ]]; then
+          if [[ -n "$COVERAGE_CONFIG" ]]; then
+            test -z "$COVERAGE_REPORT"
+            test -z "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE"
+          else
+            test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+          fi
+        elif [[ "$COVERAGE_MODE" == declared ]]; then
+          # Minimums come from package.json at the base revision; no baseline file is used.
+          if [[ -n "$COVERAGE_CONFIG" ]]; then
+            test -z "$COVERAGE_REPORT"
+            test -z "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" declared-plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE" "$COVERAGE_BASE_REF"
+          else
+            test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" declared-check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT" "$COVERAGE_BASE_REF"
+          fi
         else
-          test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
-          python3 "$CLOUSEAU_ROOT/src/check_coverage.py" "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT"
+          test -n "$COVERAGE_BASELINE"
+          if [[ -n "$COVERAGE_CONFIG" ]]; then
+            test -z "$COVERAGE_REPORT"
+            test -z "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" changed-plan "$COVERAGE_CONFIG" "$GITHUB_WORKSPACE" "$COVERAGE_BASE_REF" "$COVERAGE_BASELINE"
+          else
+            test -n "$COVERAGE_REPORT" && test -n "$SOURCE_DIRECTORY"
+            node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" changed-check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT" "$COVERAGE_BASE_REF" "$COVERAGE_BASELINE"
+          fi
         fi
     - name: Verify local review or assess repository intent
       id: assess
@@ -150,6 +200,7 @@ runs:
         DEEPSEEK_API_KEY: ${{ inputs.operation == 'assess' && inputs.provider-key || '' }}
         TYPESAFE_API_KEY: ${{ inputs.operation == 'assess' && inputs.typesafe-key || '' }}
         CLOUSEAU_RECEIPT_ONLY: ${{ inputs.operation == 'verify-local' }}
+        CLOUSEAU_IGNORE_RECEIPT: ${{ inputs.operation == 'assess' && inputs.ignore-receipt }}
         PR_NUMBER: ${{ inputs.pull-request }}
         CLOUSEAU_WAIT_FOR_VERIFICATION: ${{ inputs.wait-for-verification }}
         CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
@@ -166,10 +217,28 @@ runs:
           let assessment;
           try {
             assessment = await assess({github, context, report: core.info,
-              receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true'});
+              receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true',
+              ignoreReceipt: process.env.CLOUSEAU_IGNORE_RECEIPT === 'true'});
           } finally {transport.preserveDiagnostic({mode, core, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});}
           core.setOutput('assessment', JSON.stringify(assessment));
+          require(path.join(root, 'src/incomplete.cjs')).annotate({core, assessment});
           transport.publish({mode, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT, core});
+    - name: Wait for PR verification without holding a stalled runner
+      id: await
+      if: inputs.operation == 'await-verification'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        PR_NUMBER: ${{ inputs.pull-request }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          const policy = require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()});
+          await policy.awaitVerification({github, context, core, expectedHead: context.payload.pull_request?.head.sha});
     - name: Approve and ensure auto-merge
       if: inputs.operation == 'gate'
       uses: actions/github-script@v7
@@ -293,6 +362,21 @@ runs:
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           await require(path.join(root, 'src/policy.cjs')).createPolicy(config, {engine: require(path.join(root, 'src/central-version.cjs')).environmentEngine()}).requestReassessment({github, context, core});
+    - name: Reconcile approved pull requests after the base moved
+      if: inputs.operation == 'reconcile-base'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+        CLOUSEAU_UPDATE_TOKEN: ${{ inputs.update-token }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          const updateGithub = process.env.CLOUSEAU_UPDATE_TOKEN ? new github.constructor({auth: process.env.CLOUSEAU_UPDATE_TOKEN}) : null;
+          await require(path.join(root, 'src/base-reconcile.cjs')).reconcileBase({github, updateGithub, context, core, baseBranch: config.base_branch});
     - name: Finalize merged revision and preserve deployment handoff
       if: inputs.operation == 'finalize'
       uses: actions/github-script@v7

@@ -1,0 +1,829 @@
+{
+ "source": "gaulatti/alcantara",
+ "commit": "02618a9de694eff58b0677ade86f0d0775a0754b",
+ "base": "8a4cb2a2132810e36ca3e73ff2147ae7f5207771",
+ "note": "Sizes in bytes read with gh api (commit files and recursive trees). patch_chars is the STORED patch size in the snapshot: for a file added whole it is the estimated git header only (patch_body head_source keeps the body once in head_source, engine #155), for other files the API patch length, or 45 chars per changed line when the API has no patch (patch_estimated). pnpm-lock.yaml is derived: derived_size is the assumed size of the recomputable summary that replaces its sources.",
+ "files": [
+  {
+   "path": ".gitignore",
+   "status": "modified",
+   "previous": null,
+   "base_size": 347,
+   "head_size": 392,
+   "patch_chars": 107
+  },
+  {
+   "path": "backend/COVERAGE.md",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 2017,
+   "patch_chars": 168,
+   "full_patch_chars": 2071,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/package.json",
+   "status": "modified",
+   "previous": null,
+   "base_size": 3366,
+   "head_size": 3838,
+   "patch_chars": 2205
+  },
+  {
+   "path": "backend/scripts/build-source-coverage.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 2668,
+   "patch_chars": 212,
+   "full_patch_chars": 2771,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/scripts/capture-child-coverage.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 682,
+   "patch_chars": 214,
+   "full_patch_chars": 719,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/scripts/jest-source-coverage-transformer.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1281,
+   "patch_chars": 234,
+   "full_patch_chars": 1338,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/scripts/run-source-coverage.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 770,
+   "patch_chars": 208,
+   "full_patch_chars": 814,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/scripts/source-coverage.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1529,
+   "patch_chars": 200,
+   "full_patch_chars": 1597,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/scripts/verify-local.mjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 4835,
+   "patch_chars": 194,
+   "full_patch_chars": 5018,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/auth/local-auth.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 2412,
+   "patch_chars": 222,
+   "full_patch_chars": 2493,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/auth/pompeii.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 12613,
+   "patch_chars": 214,
+   "full_patch_chars": 13008,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/broadcast-destinations/alana.client.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 8444,
+   "patch_chars": 262,
+   "full_patch_chars": 8739,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/broadcast-destinations/broadcast-destinations.service.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 7613,
+   "head_size": 28173,
+   "patch_chars": 22626
+  },
+  {
+   "path": "backend/src/broadcast-destinations/broadcast-http.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 3960,
+   "patch_chars": 266,
+   "full_patch_chars": 4084,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/charts/charts.service.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 8692,
+   "patch_chars": 212,
+   "full_patch_chars": 8980,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/config/configuration.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 5748,
+   "patch_chars": 232,
+   "full_patch_chars": 5918,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/config/runtime-secret-contract.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 6553,
+   "patch_chars": 230,
+   "full_patch_chars": 6802,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/database-backup/database-backup.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 5910,
+   "patch_chars": 252,
+   "full_patch_chars": 6087,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/database-backup/pg-dump.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 4690,
+   "patch_chars": 236,
+   "full_patch_chars": 4841,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/database-backup/s3-database-backup.storage.delivery-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1149,
+   "patch_chars": 294,
+   "full_patch_chars": 1197,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/external-sources/external-source.security-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 9453,
+   "patch_chars": 274,
+   "full_patch_chars": 9790,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/external-sources/external-sources.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 14472,
+   "patch_chars": 256,
+   "full_patch_chars": 14944,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/external-sources/external-sources.service.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 5006,
+   "head_size": 5125,
+   "patch_chars": 868
+  },
+  {
+   "path": "backend/src/http-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 28422,
+   "patch_chars": 200,
+   "full_patch_chars": 29424,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/http-catalog-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 13604,
+   "patch_chars": 216,
+   "full_patch_chars": 14065,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/identity/principals-cli.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 13363,
+   "patch_chars": 238,
+   "full_patch_chars": 13826,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/main.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 6295,
+   "patch_chars": 178,
+   "full_patch_chars": 6505,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/media-assets/media-asset-authorization.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 4087,
+   "patch_chars": 268,
+   "full_patch_chars": 4229,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/media-assets/media-assets.service.remaining-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 3418,
+   "patch_chars": 278,
+   "full_patch_chars": 3532,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/media-assets/media-assets.service.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 10603,
+   "head_size": 28260,
+   "patch_chars": 18635
+  },
+  {
+   "path": "backend/src/media-groups/media-groups.service.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 9600,
+   "patch_chars": 236,
+   "full_patch_chars": 9891,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/media/catalog-lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 19783,
+   "patch_chars": 216,
+   "full_patch_chars": 20403,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/observability/observability.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 3295,
+   "patch_chars": 246,
+   "full_patch_chars": 3408,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/operator-preferences/operator-preferences.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 13788,
+   "patch_chars": 272,
+   "full_patch_chars": 14242,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/flight.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 50848,
+   "patch_chars": 218,
+   "full_patch_chars": 52371,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/flight.optional-cues.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 4989,
+   "patch_chars": 226,
+   "full_patch_chars": 5153,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/program-template.service.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 8224,
+   "head_size": 21376,
+   "patch_chars": 13828
+  },
+  {
+   "path": "backend/src/program/program-template.service.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 18209,
+   "head_size": 18012,
+   "patch_chars": 1153
+  },
+  {
+   "path": "backend/src/program/program.feedback-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 3058,
+   "patch_chars": 240,
+   "full_patch_chars": 3169,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/program.http-contract.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 18957,
+   "patch_chars": 228,
+   "full_patch_chars": 19653,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/program.realtime.decoder.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1348,
+   "patch_chars": 234,
+   "full_patch_chars": 1392,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/program.realtime.service.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 17529,
+   "patch_chars": 234,
+   "full_patch_chars": 18025,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/program.realtime.service.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 15807,
+   "head_size": 15751,
+   "patch_chars": 2336
+  },
+  {
+   "path": "backend/src/program/program.workflows.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 66676,
+   "patch_chars": 220,
+   "full_patch_chars": 68633,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/radio-log.ordering-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1254,
+   "patch_chars": 244,
+   "full_patch_chars": 1304,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/program/radio-rundown-filler.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 4225,
+   "head_size": 8922,
+   "patch_chars": 5030
+  },
+  {
+   "path": "backend/src/radio/now-playing-publisher.service.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 3722,
+   "head_size": 12427,
+   "patch_chars": 9633
+  },
+  {
+   "path": "backend/src/radio/palazzo-contract.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 6876,
+   "patch_chars": 236,
+   "full_patch_chars": 7133,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/palazzo-contract.delivery-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1069,
+   "patch_chars": 254,
+   "full_patch_chars": 1122,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/palazzo-machine.client.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 10685,
+   "head_size": 10746,
+   "patch_chars": 1207
+  },
+  {
+   "path": "backend/src/radio/palazzo-machine.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 12512,
+   "patch_chars": 232,
+   "full_patch_chars": 12896,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/palazzo-program.client.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 13719,
+   "head_size": 29145,
+   "patch_chars": 16931
+  },
+  {
+   "path": "backend/src/radio/palazzo-program.delivery-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 7143,
+   "patch_chars": 252,
+   "full_patch_chars": 7383,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/palazzo-telemetry.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 10067,
+   "patch_chars": 236,
+   "full_patch_chars": 10361,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/palazzo-telemetry.pending.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 2804,
+   "patch_chars": 232,
+   "full_patch_chars": 2896,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/radio-metrics.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 4320,
+   "patch_chars": 230,
+   "full_patch_chars": 4441,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/radio-monitor.service.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 9056,
+   "patch_chars": 224,
+   "full_patch_chars": 9335,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/radio-output-confidence.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 6675,
+   "patch_chars": 250,
+   "full_patch_chars": 6909,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/radio.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 14665,
+   "patch_chars": 212,
+   "full_patch_chars": 15140,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/song-execution.engine.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 44143,
+   "head_size": 90651,
+   "patch_chars": 49704
+  },
+  {
+   "path": "backend/src/radio/song-execution.engine.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 61604,
+   "head_size": 61235,
+   "patch_chars": 11303
+  },
+  {
+   "path": "backend/src/radio/song-execution.public-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 14872,
+   "patch_chars": 246,
+   "full_patch_chars": 15326,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/song-queue.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1132,
+   "patch_chars": 224,
+   "full_patch_chars": 1185,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/song-rotation.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 3348,
+   "patch_chars": 230,
+   "full_patch_chars": 3480,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/song-rotation.utils.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 5959,
+   "head_size": 6129,
+   "patch_chars": 777
+  },
+  {
+   "path": "backend/src/radio/song-sequence.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 17893,
+   "patch_chars": 230,
+   "full_patch_chars": 18432,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/song-sequence.loop-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 2156,
+   "patch_chars": 240,
+   "full_patch_chars": 2248,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/radio/song-sequence.utils.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 17608,
+   "head_size": 17593,
+   "patch_chars": 1113
+  },
+  {
+   "path": "backend/src/recording/alana-recording.client.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 5426,
+   "patch_chars": 256,
+   "full_patch_chars": 5614,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/recording/alana-recording.client.delivery-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 1252,
+   "patch_chars": 274,
+   "full_patch_chars": 1301,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/recording/alana-recording.client.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 5932,
+   "head_size": 6240,
+   "patch_chars": 3696
+  },
+  {
+   "path": "backend/src/recording/recording.contract.boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 6521,
+   "patch_chars": 248,
+   "patch_estimated": true,
+   "full_patch_chars": 0,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/recording/recording.controller.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 2397,
+   "head_size": 2534,
+   "patch_chars": 450,
+   "patch_estimated": true
+  },
+  {
+   "path": "backend/src/scenes/scenes.service.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 16446,
+   "patch_chars": 212,
+   "patch_estimated": true,
+   "full_patch_chars": 21735,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/songs/songs.service.remaining-boundaries.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 3219,
+   "patch_chars": 250,
+   "patch_estimated": true,
+   "full_patch_chars": 4455,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/uploads/uploads.controller.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 2401,
+   "patch_chars": 222,
+   "patch_estimated": true,
+   "full_patch_chars": 3285,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/uploads/uploads.service.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 10075,
+   "patch_chars": 216,
+   "patch_estimated": true,
+   "full_patch_chars": 12555,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/webrtc/webrtc.lifecycle.spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 26819,
+   "patch_chars": 216,
+   "patch_estimated": true,
+   "full_patch_chars": 36900,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/src/webrtc/webrtc.service.spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 7302,
+   "head_size": 7900,
+   "patch_chars": 810,
+   "patch_estimated": true
+  },
+  {
+   "path": "backend/test/app.e2e-spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 669,
+   "head_size": 6172,
+   "patch_chars": 7875,
+   "patch_estimated": true
+  },
+  {
+   "path": "backend/test/broadcast-destinations.e2e-spec.ts",
+   "status": "modified",
+   "previous": null,
+   "base_size": 9249,
+   "head_size": 13549,
+   "patch_chars": 8505,
+   "patch_estimated": true
+  },
+  {
+   "path": "backend/test/jest-coverage.config.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 534,
+   "patch_chars": 204,
+   "patch_estimated": true,
+   "full_patch_chars": 630,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/test/native-entrypoints.e2e-spec.ts",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 8982,
+   "patch_chars": 216,
+   "patch_estimated": true,
+   "full_patch_chars": 12825,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "backend/test/source-coverage.test.cjs",
+   "status": "added",
+   "previous": null,
+   "base_size": 0,
+   "head_size": 7586,
+   "patch_chars": 204,
+   "patch_estimated": true,
+   "full_patch_chars": 9900,
+   "patch_header_estimated": true
+  },
+  {
+   "path": "pnpm-lock.yaml",
+   "status": "modified",
+   "previous": null,
+   "base_size": 537648,
+   "head_size": 538207,
+   "patch_chars": 810,
+   "patch_estimated": true,
+   "derived_size": 20000
+  }
+ ]
+}

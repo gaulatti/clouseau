@@ -6,26 +6,38 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const crypto = require('node:crypto');
 const {digest} = require('./acceptance.cjs');
-const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged} = require('./local-git.cjs');
+const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
-const {askHarness} = require('./local-harness.cjs');
-const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
+const {askHarness, assertHarness} = require('./local-harness.cjs');
+const {issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
-const {refresh, safePath} = require('./acceptance-sources.cjs');
+const {refresh, safePath, UNBOUNDED} = require('./acceptance-sources.cjs');
+const chunkedWiring = require('./chunked-wiring.cjs');
 const {coverageParts} = require('./coverage-plan.cjs');
+const {AGENTS, AwaitingAgent, SESSION_RULE, suggestSession, createExchange, respond} = require('./local-agent.cjs');
+const gate = require('./coverage-gate.cjs');
+const pinning = require('./engine-pin.cjs');
+const {createReuse} = require('./review-reuse.cjs');
+const {recordRequirement} = require('./review-requirement.cjs');
 
 const root = path.join(__dirname, '..');
+// Characters of each output stream kept as review evidence; the digests always cover the whole stream.
+const PASSED_OUTPUT_TAIL = 128;
+const FAILED_OUTPUT_TAIL = 4096;
 const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
 
 function options(argv) {
   const [command, ...args] = argv;
   const parsed = {command};
-  const allowed = ['directory', 'base', 'harness', 'request-file', 'output', 'identity', 'receipt', 'additional-checks'];
+  const allowed = ['directory', 'base', 'harness', 'agent', 'request-file', 'output', 'identity', 'receipt', 'additional-checks',
+    'agent-request', 'answer', 'session', 'engine', 'pr'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
-    if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) throw new Error('Invalid Clouseau local arguments');
+    if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) {
+      throw new Error(`Invalid Clouseau local arguments at ${JSON.stringify(args[i])}: every option is "--name value", given once; accepted: ${allowed.map(item => `--${item}`).join(' ')}`);
+    }
     parsed[name] = args[i + 1];
   }
   return parsed;
@@ -44,35 +56,79 @@ function initializeIdentity(directory = stateDirectory(), githubActor) {
   return {identity_file: filename, public_identity: publicIdentity};
 }
 
+function verificationEnvironment(environment = process.env) {
+  return Object.fromEntries(Object.entries(environment).filter(([name]) => !/(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL)/i.test(name)));
+}
+
 function executeVerification({directory, config, additional = [], run = cp.spawnSync}) {
-  const parts = coverageParts(config);
+  const env = verificationEnvironment();
+  const parts = coverageParts(config, {allowUnsupported: true});
   const commands = [];
+  const directoryRoot = fs.realpathSync(directory);
+  const observe = part => {
+    try {
+      const filename = path.join(directory, part.report);
+      const resolved = fs.realpathSync(filename);
+      if (!resolved.startsWith(directoryRoot + path.sep)) return {report_digest: null, error: 'Coverage artifact escapes the checkout'};
+      const stat = fs.statSync(filename, {bigint: true});
+      if (!stat.isFile()) return {report_digest: null, error: 'Coverage artifact is not a regular file'};
+      return {report_digest: digest(fs.readFileSync(filename, 'utf8')),
+        stamp: digest([stat.dev, stat.ino, stat.size, stat.mtimeNs, stat.ctimeNs].map(String))};
+    } catch (error) {
+      return {report_digest: null, error: error.code || 'Coverage artifact is unavailable'};
+    }
+  };
+  const before = parts.map(observe);
   const execute = argv => {
-    const result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000});
-    if (result.error || result.status !== 0) throw new Error(`Local verification failed: ${argv[0]}`);
-    commands.push({argv, exit_code: result.status, stdout_digest: digest(result.stdout), stderr_digest: digest(result.stderr)});
+    let result;
+    try {result = run(argv[0], argv.slice(1), {cwd: directory, encoding: 'utf8', timeout: 300000, maxBuffer: 3000000, env}) || {status: null, error: new Error('Verification process returned no result')};}
+    catch (error) {result = {status: null, error};}
+    const stdout = result.stdout || ''; const stderr = result.stderr || '';
+    // Signing material must never become model evidence, including on failure.
+    if (/-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----/.test(stdout + stderr)) throw new Error('Private signing material appeared in verification output; it cannot enter review evidence');
+    // The digests bind the complete output. Evidence carries its tail: a short one when the command succeeded (its
+    // summary line), a longer one when it failed (its diagnosis), so a green suite's per-test lines do not cost the
+    // reviewer and the receipt hundreds of kilobytes. `*_bytes` appears only where the text was cut.
+    const limit = result.status === 0 && !result.error && !result.signal ? PASSED_OUTPUT_TAIL : FAILED_OUTPUT_TAIL;
+    // A tail never starts inside a surrogate pair, so it may be one unit shorter than the limit.
+    const tail = (text, name) => text.length <= limit ? {[name]: text} :
+      {[name]: text.slice(-limit).replace(/^[\uDC00-\uDFFF]/, ''), [`${name}_bytes`]: Buffer.byteLength(text)};
+    commands.push({argv, exit_code: Number.isInteger(result.status) ? result.status : null,
+      stdout_digest: digest(stdout), stderr_digest: digest(stderr), ...tail(stdout, 'stdout'), ...tail(stderr, 'stderr'),
+      ...(result.error ? {error: {code: result.error.code || null, message: result.error.message}} : {}),
+      ...(result.signal ? {signal: result.signal} : {})});
   };
   for (const argv of config.verification) execute(argv);
-  const checkScript = config.version === 1 ?
-    'import contextlib,io,json,sys\nsys.path.insert(0,sys.argv[1])\nfrom check_coverage import check,load_report\n' +
-      'with contextlib.redirect_stdout(io.StringIO()):\n result=check(load_report(sys.argv[2]),sys.argv[3],sys.argv[4])\nprint(json.dumps(result))\n' :
-    'import json,sys\nsys.path.insert(0,sys.argv[1])\nfrom coverage_plan import check_plan\n' +
-      'print(json.dumps(check_plan(json.loads(sys.argv[2]),sys.argv[3])))\n';
-  const args = config.version === 1 ? [path.join(directory, parts[0].report),
-    path.join(directory, parts[0].source_directory), parts[0].format] : [JSON.stringify(parts), directory];
-  const check = run('python3', ['-c', checkScript, path.join(root, 'src'), ...args],
-  {cwd: directory, encoding: 'utf8', timeout: 60000, maxBuffer: 100000});
-  if (check.error || check.status !== 0) throw new Error('Local exact line and branch coverage failed');
-  const result = JSON.parse(check.stdout);
-  const reports = parts.map(part => ({...part, report_digest: digest(fs.readFileSync(path.join(directory, part.report), 'utf8'))}));
+  const observed = parts.map(observe);
+  const reports = parts.map((part, index) => ({...part, report_digest: observed[index].report_digest}));
+  const fresh = observed.every((part, index) => !part.error && part.stamp !== before[index].stamp);
+  let measured = null;
+  let coverageError = observed.find(part => part.error)?.error;
+  if (!coverageError) {
+    try {
+      measured = config.version === 1 ?
+        gate.measure(gate.readReport(parts[0].format, path.join(directory, parts[0].report)), path.join(directory, parts[0].source_directory), parts[0].format, directory) :
+        gate.measurePlan(parts, directory);
+    } catch (error) {coverageError = error.message || 'Native coverage could not be measured';}
+  }
   for (const argv of additional) execute(argv);
-  if (additional.length && reports.some(part => part.report_digest !== digest(fs.readFileSync(path.join(directory, part.report), 'utf8')))) {
+  if (additional.length && observed.some((part, index) => digest(part) !== digest(observe(parts[index])))) {
     throw new Error('Additional checks changed accepted coverage artifacts');
   }
-  if (config.version === 1) return {commands, exact_coverage: result, report_digest: reports[0].report_digest,
-    local_config_digest: digest(config)};
-  return {commands, exact_coverage: result.totals, coverage_reports: reports.map((part, index) =>
-    ({...part, exact_coverage: result.parts[index].counts})), report_digest: digest(reports), local_config_digest: digest(config)};
+  const counts = measured && (config.version === 1 ? measured : measured.totals);
+  const exact = counts && counts.lines[0] > 0 && ['lines', 'branches'].every(metric => counts[metric][0] === counts[metric][1]);
+  const verification = {commands, verification_status: commands.every(command => command.exit_code === 0 && !command.error) ? 'passed' : 'failed',
+    exact_coverage: counts, coverage: {status: coverageError ? 'unavailable' : exact ? 'exact' : 'below_threshold',
+      passed: Boolean(exact && fresh), artifact_freshness: fresh ? 'observed_current_run' : 'unverified',
+      ...(coverageError ? {error: coverageError} : {})}, local_config_digest: digest(config)};
+  if (config.version === 1) return {...verification, report_digest: reports[0].report_digest};
+  return {...verification, coverage_reports: reports.map((part, index) => ({...part,
+    exact_coverage: measured ? measured.parts[index].counts : null})), report_digest: digest(reports)};
+}
+
+function reviewStatus(technical = {}) {
+  return {decision_scope: 'review_reuse_only', independent_ci_required: true, merge_authority: false,
+    local_verification: {commands: technical.verification_status || 'unavailable', coverage: technical.coverage || {status: 'unavailable', passed: false}}};
 }
 
 function installation() {
@@ -98,10 +154,29 @@ function readHistory(filename, repository, branch) {
   return value;
 }
 
-async function runReview(args, {ask = askHarness, verify = executeVerification, state = stateDirectory(), installed = installation} = {}) {
+// The live facts about someone else's pull request that a maintainer attestation is bound to. GitHub, not the checkout,
+// says who the author is; the checked-out HEAD must be exactly the pull request head the author published.
+function readPull({repo, number, base, head, execute}) {
+  const pull = JSON.parse(execute('gh', ['api', `repos/${repo.owner}/${repo.repo}/pulls/${number}`, '--jq',
+    '{author: .user.login, head: .head.sha, base: .base.ref, state: .state}'], {encoding: 'utf8'}));
+  if (pull.state !== 'open' || pull.base !== base) throw new Error(`Pull request ${number} is not open against ${base}`);
+  if (typeof pull.author !== 'string' || !AUTHOR.test(pull.author)) throw new Error(`Pull request ${number} has no usable author login`);
+  if (pull.head !== head) {
+    throw new Error(`Local HEAD ${head} is not the head of pull request ${number} (${pull.head}); check out exactly that commit ` +
+      `(for a fork: git fetch origin refs/pull/${number}/head && git checkout --detach FETCH_HEAD) and review again`);
+  }
+  return {author: pull.author, number: Number(number)};
+}
+
+async function runReview(args, {ask = askHarness, execute = cp.execFileSync, verify = executeVerification, state = stateDirectory(), installed = installation,
+  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, reuse = {}, title, continued = pinning.argvFor(args)} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
-  const base = args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
+  const agent = args.agent;
+  if (agent && args.harness) throw new Error('Choose either --agent (inside an AI harness) or --harness (headless), not both');
+  if (agent && !AGENTS.includes(agent)) throw new Error(`Supported agent harnesses: ${AGENTS.join(', ')}`);
+  if (args.harness) assertHarness(args.harness);
+  const base =args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
   const config = readLocalConfig(JSON.parse(git(directory, ['show', `${base}:.clouseau-local.json`])));
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const repo = githubRepository(directory);
@@ -123,6 +198,12 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     const parsed = JSON.parse(git(directory, ['show', `${base}:.github/clouseau.json`]));
     ciConfig = require('./config.cjs').validateConfig(parsed);
   }
+  const warn = (paths, shas, technical) => {
+    const warnings = controlWarnings(ciConfig, paths, {directory, ...shas});
+    const notices = require('./local-notices.cjs').localNotices({paths, technical, baseBranch: config.base_branch});
+    for (const notice of notices) process.stderr.write(`${require('./local-notices.cjs').render(notice)}\n`);
+    return {...warnings.length ? {warnings} : {}, ...notices.length ? {notices: notices.map(notice => notice.cause)} : {}};
+  };
   let identityPath = args.identity;
   if (!identityPath && ciConfig?.local_review) {
     const available = ciConfig.local_review.keys.filter(key => !key.revoked)
@@ -130,9 +211,32 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     if (available.length > 1) throw new Error('Multiple enrolled identities are installed; select one explicitly');
     identityPath = available[0];
   }
+  // Opt-in maintainer attestation of another author's pull request (docs/local-review.md). Without --pr nothing changes.
+  let pull = null;
+  if (args.pr !== undefined) {
+    if (!/^[1-9][0-9]{0,8}$/.test(args.pr)) throw new Error('--pr takes a pull request number');
+    if (!ciConfig?.local_review?.attest) throw new Error('Maintainer attestation is not enabled: the protected CI configuration needs local_review.attest');
+    if (!identityPath) throw new Error('Attesting a pull request needs an enrolled signing identity');
+    pull = readPull({repo, number: args.pr, base: config.base_branch, head, execute});
+  }
   if (identityPath && !reviewer.clean) throw new Error('Signing requires an unmodified Clouseau checkout');
   const baseSha = git(directory, ['rev-parse', base]).trim();
-  const branch = git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  const branch = pull ? `pull/${pull.number}` : git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
+  // An in-flight agent review stays on the engine revision that began it until it completes or --engine latest is given.
+  if (args.engine && args.engine !== 'latest') throw new Error('--engine accepts only "latest"');
+  const pinId = pinning.pinKey({repository, head, baseSha, requestDigest, agent: agent || null, ...(pull ? {pr: pull.number} : {})});
+  if (args.engine === 'latest') pinning.clearPin(state, pinId);
+  const pin = pinning.readPin(state, pinId);
+  if (pin && pin.reviewer_sha !== reviewer.sha) {
+    const checkout = pinning.verifiedRevision(cacheRoot, pin);
+    // Said once per newer revision: the pin remembers it, so a long exchange does not repeat it on every command.
+    if (pinning.noticeOwed(pin, reviewer.sha)) {
+      process.stderr.write(`Clouseau review pinned to engine ${pin.reviewer_sha.slice(0, 12)}; newer ${reviewer.sha.slice(0, 12)} exists (pass --engine latest to restart on it)\n`);
+      pinning.markNotified(state, pinId, pin, reviewer.sha);
+    }
+    // `continued` is the command the person typed: for a refresh that is the refresh itself, which the pinned engine resumes.
+    return run(checkout, continued);
+  }
   const historyPath = path.join(state, 'ledgers', `${digest({repository, branch})}.json`);
   const previous = readHistory(historyPath, repository, branch);
   const priorFindings = previous?.findings || [];
@@ -141,27 +245,45 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
-    request, config, ciConfig, harness: args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {})});
+    request, config, ciConfig, harness: agent ? `agent:${agent}` : args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {}), ...(pull ? {attest: pull} : {})});
   if (sameRevision && previous.reviewer_sha === reviewerSha && previous.request_digest === requestDigest) cacheId = previous.cache_id;
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
   const cachedReceipt = path.join(cache, 'receipt.json');
+  let reusable = null;
   if (ciConfig?.local_review && fs.existsSync(cachedReceipt)) {
     const bundle = JSON.parse(fs.readFileSync(cachedReceipt, 'utf8'));
     const key = ciConfig.local_review.keys.find(item => item.id === bundle.payload.key_id);
-    const verified = verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
-      author: key?.github_actor, headSha: head, baseSha: git(directory, ['rev-parse', base]).trim(),
-      reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
-      policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))});
+    try {
+      reusable = {bundle, verified: verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository,
+        author: pull ? pull.author : key?.github_actor, pullNumber: pull?.number, headSha: head, baseSha,
+        reviewerDigest: reviewer.digest, configDigest: digest(ciConfig),
+        policyDigest: digest(fs.readFileSync(path.join(root, 'policy/change-acceptance.md'), 'utf8'))})};
+    } catch {
+      // The receipt this exact input produced no longer verifies (typically: it expired, or it fails any other receipt check). A file that is not JSON, or JSON without a payload, still throws before this point. It approves nothing any more, so the
+      // input is reviewed again, answers taking the evidence-keyed reuse of a refresh. The old evidence is retired, except the
+      // stored requirement that `refresh` defaults to, which stays valid until the new review replaces it.
+      for (const name of fs.readdirSync(cache)) if (!['request.txt', 'requirement.json'].includes(name)) fs.rmSync(path.join(cache, name), {recursive: true, force: true});
+    }
+  }
+  if (reusable) {
+    const {bundle, verified} = reusable;
     assertUnchanged(directory, verified.record.snapshot);
     return {decision: 'auto_approve', record: path.join(cache, 'record.json'), receipt: cachedReceipt,
       head_sha: head, base_sha: verified.record.snapshot.base_sha, reviewer_sha: bundle.payload.reviewer_sha,
-      provider_api_calls: 0, harness_invocations: 0, reused: true};
+      provider_api_calls: 0, harness_invocations: 0, reused: true, ...attested(verified.attestation), ...reviewStatus(verified.record.technical), ...warn(verified.record.snapshot.paths, {baseSha: verified.record.snapshot.base_sha, headSha: head}, verified.record.technical)};
   }
-  if (fs.existsSync(journal)) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
+  const agentDirectory = path.join(cache, 'agent');
+  // An unfinished agent exchange resumes from its recorded evidence; any other prior journal means the input already ran.
+  // A chunked review keeps its own durable journal and verification record, so it resumes without resampling a finished call.
+  const chunkedDirectory = path.join(cache, 'chunked');
+  const chunkedResume = fs.existsSync(path.join(chunkedDirectory, 'technical.json'));
+  const resuming = (Boolean(agent) && fs.existsSync(path.join(agentDirectory, 'technical.json')) &&
+    !fs.existsSync(path.join(agentDirectory, 'completed.json'))) || chunkedResume;
+  if (fs.existsSync(journal) && !resuming) throw new Error(`This exact review input has already run; inspect ${cache}. Change the implementation or evidence before another AI review.`);
   const output = path.resolve(args.output || path.join(cache, 'record.json'));
   if (output.startsWith(directory + path.sep)) throw new Error('Store review evidence outside the source checkout');
-  let identity = null;
+  let identity = null; let attestation;
   if (identityPath) {
     if (fs.statSync(identityPath).mode & 0o077) throw new Error('Signing identity permissions must be private');
     identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
@@ -170,72 +292,226 @@ async function runReview(args, {ask = askHarness, verify = executeVerification, 
         key.issuer === identity.issuer && key.github_actor === identity.github_actor && key.public_key === identity.public_key)) {
       throw new Error('The signer and reviewer revision must already be enrolled in the protected CI configuration');
     }
+    if (pull && pull.author !== identity.github_actor) {
+      if (!attestable(ciConfig.local_review, pull.author)) {
+        throw new Error(`Pull request author ${pull.author} is not permitted by the protected local_review.attest configuration`);
+      }
+      attestation = {author: pull.author, number: pull.number, signer: identity.github_actor};
+    }
   }
-  const technical = verify({directory, config, additional});
+  const technicalPath = path.join(agentDirectory, 'technical.json');
+  let technical;
+  if (chunkedResume && !agent) technical = JSON.parse(fs.readFileSync(path.join(chunkedDirectory, 'technical.json'), 'utf8'));
+  else if (resuming) technical = JSON.parse(fs.readFileSync(technicalPath, 'utf8'));
+  else {
+    technical = verify({directory, config, additional});
+    if (agent) {
+      // The agent exchange spans several commands; persist the one real verification so later commands cannot rerun it.
+      technical = JSON.parse(JSON.stringify(technical));
+      fs.mkdirSync(agentDirectory, {recursive: true, mode: 0o700});
+      fs.writeFileSync(technicalPath, JSON.stringify(technical), {mode: 0o600});
+    }
+  }
   if (git(directory, ['rev-parse', 'HEAD']).trim() !== head) throw new Error('Source changed during local verification');
-  const collected = collectLocal({directory, base, request, technical, ciConfig, reviewerSha});
+  // Chunked review is available by default; the protected configuration can only tighten or disable it. A change that fits one
+  // snapshot is collected and reviewed exactly as before. One that does not (or that the configuration forces) is collected
+  // without a size cap and reviewed in bounded units.
+  const active = chunkedWiring.settings(ciConfig?.local_review);
+  const collect = unbounded => collectLocal({directory, base, request, technical, ciConfig, reviewerSha, unbounded, title});
+  let collected; let chunking = false;
+  if (active?.force) {collected = collect(true); chunking = true;}
+  else {
+    try {collected = collect(false);} catch (error) {
+      if (!active) throw error;
+      collected = collect(true); chunking = true;
+    }
+  }
   collected.snapshot.prior_findings = priorFindings;
-  refresh(collected.snapshot);
+  refresh(collected.snapshot, chunking ? UNBOUNDED : undefined);
+  if (chunking && !agent) {
+    fs.mkdirSync(chunkedDirectory, {recursive: true, mode: 0o700});
+    fs.writeFileSync(path.join(chunkedDirectory, 'technical.json'), JSON.stringify(technical), {mode: 0o600});
+  }
   fs.mkdirSync(cache, {recursive: true, mode: 0o700});
-  const result = await localReview({...collected, ask: async task => {
-    fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot, null, 2) + '\n', {mode: 0o600});
+  if (agent) {
+    pinning.writePin(state, pinId, reviewer);
+    const frozen = path.join(agentDirectory, 'snapshot.digest');
+    if (!fs.existsSync(frozen)) fs.writeFileSync(frozen, collected.snapshot.digest, {mode: 0o600});
+    else if (fs.readFileSync(frozen, 'utf8') !== collected.snapshot.digest) {
+      throw new Error(`Source or evidence changed since this agent exchange began; evidence preserved in ${agentDirectory}`);
+    }
+  }
+  const exchange = agent ? createExchange({directory: agentDirectory, agent,
+    journal: entry => fs.appendFileSync(journal, JSON.stringify(entry) + '\n', {mode: 0o600})}) : null;
+  const session = async task => {
+    if (exchange) return exchange.ask(task);
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, status: 'started',
       request_digest: digest(task)}) + '\n', {mode: 0o600});
     const response = await ask({...task, harness: args.harness || 'codex'});
     fs.appendFileSync(journal, JSON.stringify({role: task.role, phase: task.phase, ...response}) + '\n', {mode: 0o600});
     return response;
-  }}).catch(error => {
+  };
+  // Every call of this review is remembered by its evidence once the review is accepted; `reuse.read` (the refresh command)
+  // lets a call whose evidence is byte-identical to a remembered one take that answer instead of asking again.
+  let unitDigests = null;
+  const reusing = createReuse({directory: path.join(state, 'unit-reuse'), read: reuse.read === true,
+    semantics: require('./review-semantics.cjs').semanticsDigest(), literals: () => {
+      if (chunking && !unitDigests) {
+        unitDigests = chunkedWiring.hooksFor(active.params).partition({snapshot: collected.snapshot}).units.map(unit => unit.view_digest);
+      }
+      return {base: baseSha, head, digests: [collected.snapshot.digest, ...(unitDigests || [])]};
+    }});
+  const asking = reusing.wrap(session);
+  let result; let chunkedRecord = null; let reviews;
+  try {
+    if (chunking) {
+      fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot) + '\n', {mode: 0o600});
+      ({record: chunkedRecord, reviews} = await chunkedWiring.review({snapshot: collected.snapshot, active, ask: asking, agent: Boolean(agent),
+        journal: exchange ? undefined : chunkedWiring.fileJournal(path.join(chunkedDirectory, 'journal')), scope: cacheId,
+        technical, priorFindings}));
+      result = chunkedRecord.result;
+    } else {
+      result = await localReview({...collected, ask: async task => {
+        fs.writeFileSync(path.join(cache, 'snapshot.json'), JSON.stringify(collected.snapshot) + '\n', {mode: 0o600});
+        return asking(task);
+      }});
+    }
+  } catch (error) {
+    if (error instanceof AwaitingAgent) {
+      return {status: 'awaiting_agent', ...error.info, reviewer_sha: reviewerSha, provider_api_calls: 0, harness_invocations: 0,
+        respond: `clouseau respond --agent-request ${error.info.request_file} --answer ${error.info.answer_file} --session ${suggestSession(agent)}`, session_rule: SESSION_RULE,
+        then: 'Repeat the identical review command. It continues on this pinned engine revision even if Clouseau main advances; pass --engine latest to restart on the newest.'};
+    }
+    if (error instanceof SourceNotFound) {
+      const failed = {status: 'failed', reason: error.reason, path: error.path};
+      fs.writeFileSync(path.join(cache, 'failure.json'), JSON.stringify({...failed, failure: error.message, harness: null}, null, 2) + '\n', {mode: 0o600});
+      return {...failed, evidence: cache};
+    }
     fs.writeFileSync(path.join(cache, 'failure.json'), JSON.stringify({failure: error.message,
       harness: error.harnessDiagnostic || null}, null, 2) + '\n', {mode: 0o600});
     error.message += `; preserved review evidence: ${cache}`; throw error;
-  });
+  }
+  if (agent) {
+    fs.writeFileSync(path.join(agentDirectory, 'completed.json'), '{}\n', {mode: 0o600});
+    pinning.clearPin(state, pinId);
+  }
   assertUnchanged(directory, collected.snapshot);
-  const findings = reconcile(result, collected.snapshot, priorFindings);
+  const findings = reconcile(chunking ? {...result, reviews} : result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
-  const record = {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
+  reusing.commit(result.decision);
+  const record = chunkedRecord || {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
     local_previous: {findings: priorFindings}, controls: false, technical};
   fs.mkdirSync(path.dirname(output), {recursive: true});
-  fs.writeFileSync(output, JSON.stringify(record, null, 2) + '\n', {mode: 0o600});
+  fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
   let receipt = null;
   if (result.decision === 'auto_approve' && identity) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
-      issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest});
-    verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: identity.github_actor,
+      issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
+      reviewerSemantics: require('./review-semantics.cjs').semanticsDigest(),
+      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null});
+    verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: pull ? pull.author : identity.github_actor, pullNumber: pull?.number,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
     receipt = path.join(cache, 'receipt.json');
-    fs.writeFileSync(receipt, JSON.stringify(bundle, null, 2) + '\n', {mode: 0o600});
+    fs.writeFileSync(receipt, JSON.stringify(bundle) + '\n', {mode: 0o600});
   }
   fs.mkdirSync(path.dirname(historyPath), {recursive: true, mode: 0o700});
   fs.writeFileSync(historyPath, JSON.stringify({version: 1, repository, branch, head_sha: head, base_sha: baseSha,
     reviewer_sha: reviewerSha, reviewer_digest: reviewer.digest, request_digest: requestDigest, cache_id: cacheId,
     has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
+  // The requirement of an accepted review is what `refresh` defaults to when it is not given a file.
+  if (result.decision === 'auto_approve') recordRequirement({state, repository, branch, head, cacheId, cache, request, additional});
   return {decision: result.decision, record: output, receipt, head_sha: head,
-    base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0,
-    harness_invocations: result.usage.length};
+    base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0, ...attested(attestation),
+    harness_invocations: result.usage.length - reusing.stats.reused, reused_calls: reusing.stats.reused, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head}, technical)};
+}
+
+const attested = attestation => attestation ? {maintainer_attested: {author: attestation.author, pull_request: attestation.number}} : {};
+
+// A receipt that touches protected review controls verifies but cannot carry owner confirmation, so CI holds the review.
+// Say so while the author can still act, naming only repository paths.
+function controlWarnings(config, paths, {directory, baseSha, headSha}) {
+  const protectedHits = config ? require('./policy.cjs').protectedChanges(config, paths.map(filename => ({filename}))) : [];
+  // The opt-in managed-standard update is judged on the same base and head bytes CI reads (managed-agents.cjs).
+  const hits = protectedHits.filter(name => !(name === 'AGENTS.md' && config.managed_agents && managedUpdate(config, directory, baseSha, headSha)));
+  // With coverage.mode "declared", package.json is held only when its declared minimums changed (coverage-declared.cjs).
+  if (config?.coverage?.mode === 'declared') {
+    const declared = require('./coverage-declared.cjs');
+    hits.push(...paths.filter(file => declared.isPackageFile(file) && declaredChanged(directory, baseSha, headSha, file)));
+  }
+  if (!hits.length) return [];
+  const warning = `Protected review controls changed (${hits.slice(0, 5).join(', ')}): CI cannot accept a local receipt for this change ` +
+    'without the exact-head owner confirmation (/approve-intent) and will report review_incomplete. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.';
+  process.stderr.write(`warning: ${warning}\n`);
+  return [warning];
+}
+
+function declaredChanged(directory, baseSha, headSha, file) {
+  const read = ref => {try {return git(directory, ['show', `${ref}:${file}`]);} catch {return null;}};
+  return require('./coverage-declared.cjs').differs(read(baseSha), read(headSha));
+}
+
+function managedUpdate(config, directory, baseSha, headSha) {
+  const read = ref => {try {return git(directory, ['show', `${ref}:AGENTS.md`]);} catch {return null;}};
+  const baseText = read(baseSha);
+  const headText = read(headSha);
+  return baseText !== null && headText !== null &&
+    require('./managed-agents.cjs').judge({baseText, headText, digests: config.managed_agents.digests}).exempt;
 }
 
 function publishReceipt({directory, receipt}) {
   const bundle = JSON.parse(fs.readFileSync(receipt, 'utf8'));
-  const {payload} = bundle;
-  assertUnchanged(directory, payload.record.snapshot);
-  const blob = git(directory, ['hash-object', '-w', '--stdin'], JSON.stringify(bundle) + '\n').trim();
-  const tree = git(directory, ['mktree'], `100644 blob ${blob}\tclouseau-review.json\n`).trim();
-  const commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
-    `Authenticated local review of ${payload.record.snapshot.head_sha}\n`).trim();
-  git(directory, ['push', 'origin', `${commit}:refs/tags/clouseau-review/${payload.nonce}`]);
-  return {artifact_commit: commit, marker: `<!-- clouseau-local-review:v1 ${commit} -->`};
+  const {parts = [], ...envelope} = bundle;
+  const {payload} = envelope;
+  // A multi-part receipt (receipt-parts.cjs) publishes its signed envelope and every part as files of the one commit.
+  const {isRoot, joinRecord, partName} = require('./receipt-parts.cjs');
+  const record = isRoot(payload.record) ? joinRecord(payload.record, parts.map(part => Buffer.from(part, 'base64'))) : payload.record;
+  assertUnchanged(directory, record.snapshot);
+  const configured = git(directory, ['ls-tree', record.snapshot.base_sha, '--', '.github/clouseau.json']).trim();
+  const warnings = controlWarnings(configured ? require('./config.cjs').validateConfig(JSON.parse(
+    git(directory, ['show', `${record.snapshot.base_sha}:.github/clouseau.json`]))) : null, record.snapshot.paths,
+  {directory, baseSha: record.snapshot.base_sha, headSha: record.snapshot.head_sha});
+  const files = [['clouseau-review.json', JSON.stringify(envelope) + '\n'],
+    ...parts.map((part, index) => [partName(index), Buffer.from(part, 'base64')])];
+  const entries = files.map(([name, content]) => `100644 blob ${git(directory, ['hash-object', '-w', '--stdin'], content).trim()}\t${name}\n`);
+  const tree = git(directory, ['mktree'], entries.join('')).trim();
+  // Publishing the same receipt again (a refresh that finds its marker gone, replaced or forged) names the artifact already
+  // published for this nonce, when it holds exactly these files; a tag is never overwritten.
+  const tag = `refs/tags/clouseau-review/${payload.nonce}`;
+  const remote = git(directory, ['remote', 'get-url', '--push', 'origin']).trim();
+  const [published] = git(directory, ['ls-remote', remote, tag]).trim().split(/\s+/);
+  let commit = published;
+  if (published) {
+    git(directory, ['fetch', '-q', remote, tag]);
+    if (git(directory, ['rev-parse', `${published}^{tree}`]).trim() !== tree) {
+      throw new Error(`The artifact tag ${tag} already exists with other content; nothing was published`);
+    }
+  } else {
+    commit = git(directory, ['-c', 'user.name=Clouseau', '-c', 'user.email=clouseau@localhost', 'commit-tree', tree],
+      `Authenticated local review of ${record.snapshot.head_sha}\n`).trim();
+    git(directory, ['push', 'origin', `${commit}:${tag}`]);
+  }
+  return {artifact_commit: commit, ...attested(payload.attestation), marker: `<!-- clouseau-local-review:v1 ${commit} -->`, ...(warnings.length ? {warnings} : {})};
 }
 
 async function main(argv, runtime = {}) {
+  if (['--help', '-h', 'help'].includes(argv[0])) return require('./cli-usage.cjs').usage();
   if (argv[0] === 'public-identity' || argv[0]?.startsWith('installation-')) return require('./installation-cli.cjs').main(argv, runtime);
   const args = options(argv);
   if (args.command === 'init-identity') return initializeIdentity(runtime.identityDirectory,
     (runtime.execute || cp.execFileSync)('gh', ['api', 'user', '--jq', '.login'], {encoding: 'utf8'}).trim());
   if (args.command === 'review') return runReview(args, runtime);
+  if (args.command === 'refresh') {
+    const {state = stateDirectory(), installed = installation} = runtime;
+    return require('./pr-refresh.cjs').refreshPull(args, {
+      review: (reviewArgs, extra) => runReview(reviewArgs, {...runtime, reuse: {read: true}, continued: pinning.argvFor(args), ...extra}),
+      publish: publishReceipt, standing: require('./receipt-standing.cjs').receiptStanding, installed,
+      execute: runtime.execute, available: runtime.available, state});
+  }
+  if (args.command === 'respond') return respond({request: args['agent-request'], answer: args.answer, session: args.session});
   if (args.command === 'publish' && args.directory && args.receipt) return publishReceipt(args);
-  throw new Error('Usage: clouseau init-identity | review --request-file FILE [--directory PATH --base REF --harness codex|claude --identity FILE --additional-checks FILE] | publish --directory PATH --receipt FILE');
+  throw new Error(require('./cli-usage.cjs').usage());
 }
 
-module.exports = {options, stateDirectory, initializeIdentity, executeVerification, installation, readHistory, runReview, publishReceipt, main};
+module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main};

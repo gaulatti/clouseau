@@ -56,7 +56,7 @@ async function execute(step, options = {}) {
   const record = options.record || f.record;
   const policy = {
     async assess(args) {
-      state.assess++; state.receiptOnly = args.receiptOnly;
+      state.assess++; state.receiptOnly = args.receiptOnly; state.ignoreReceipt = args.ignoreReceipt;
       mkdirSync('work', {recursive: true}); writeFileSync(RECORD, JSON.stringify(record));
       if (options.bundle) writeFileSync(`${RECORD}.repair.json`, JSON.stringify(options.bundle));
       if (options.diagnostic) writeFileSync(`${RECORD}.diagnostic.json`, options.diagnostic);
@@ -74,7 +74,7 @@ async function execute(step, options = {}) {
     state.verify++; assert.deepEqual(JSON.parse(JSON.stringify(actual)), record); assert.deepEqual(JSON.parse(JSON.stringify(actualAssessment)), assessment);
   }};
   const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}};
-  const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line)};
+  const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line), warning: line => (state.warnings ??= []).push(line)};
   try {
     process.chdir(dir);
     if (options.before) options.before({state, f, processEnv});
@@ -111,6 +111,9 @@ test('packaged action defaults to artifacts and rejects ambiguous transport comb
     [{operation: 'test', 'record-transport': 'job-output'}, false],
     [{operation: 'gate', 'record-transport': 'Artifact'}, false],
     [{operation: 'unknown'}, false],
+    [{operation: 'assess', 'ignore-receipt': 'true'}, true], [{operation: 'assess', 'ignore-receipt': 'false'}, true],
+    [{operation: 'verify-local', 'ignore-receipt': 'true'}, false], [{operation: 'gate', 'ignore-receipt': 'true'}, false],
+    [{operation: 'assess', 'ignore-receipt': 'yes'}, false],
   ]) {
     const result = spawnSync('bash', ['-e', '-c', validation.run], {env: environment(validation, values), encoding: 'utf8'});
     assert.equal(result.status === 0, success, JSON.stringify(values));
@@ -139,7 +142,7 @@ test('actual Actions expressions keep a 400k record in four bounded env values a
   }
 });
 
-test('actual packaged assessment emits a record reusable only by the same run and attempt', async () => {
+test('actual packaged assessment emits a record reusable only by the same run and the same or a later attempt', async () => {
   const produced = await execute(assess);
   assert.equal(produced.assess, 1); assert.equal(produced.waited, true);
   assert.equal(produced.receiptOnly, false);
@@ -147,13 +150,21 @@ test('actual packaged assessment emits a record reusable only by the same run an
   assert.equal(JSON.parse(value).length, 4);
   const passed = await execute(gate, {inputs: {'assessment': produced.outputs.assessment, 'review-record': value}});
   assert.equal(passed.gate, 1);
-  for (const options of [{env: {GITHUB_RUN_ATTEMPT: '3'}}, {context: {...fixture().context, runId: 457}},
+  const rerun = await execute(gate, {env: {GITHUB_RUN_ATTEMPT: '3'}, inputs: {'assessment': produced.outputs.assessment, 'review-record': value}});
+  assert.equal(rerun.gate, 1, 'a re-run of failed jobs reads the earlier attempt record');
+  for (const options of [{context: {...fixture().context, runId: 457}},
     {context: {repo: {owner: 'foreign', repo: 'radio'}, runId: 456}}]) {
     await assert.rejects(execute(gate, {...options, inputs: {assessment: produced.outputs.assessment, 'review-record': value}}),
       error => {assert.equal(error.transportState.gate, 0); return /foreign or stale/.test(error.message);});
   }
   const local = await execute(assess, {env: {CLOUSEAU_RECEIPT_ONLY: 'true', CLOUSEAU_WAIT_FOR_VERIFICATION: 'false'}});
   assert.equal(local.receiptOnly, true); assert.equal(local.waited, undefined);
+  assert.equal(local.ignoreReceipt, false, 'the receipt-only route still reads the receipt');
+  const hosted = await execute(assess, {inputs: {operation: 'assess', 'ignore-receipt': 'true'}});
+  assert.equal(hosted.ignoreReceipt, true); assert.equal(hosted.receiptOnly, false);
+  assert.equal(produced.ignoreReceipt, false, 'the ordinary hosted route is unchanged by default');
+  const confined = await execute(assess, {inputs: {operation: 'verify-local', 'ignore-receipt': 'true'}});
+  assert.equal(confined.ignoreReceipt, false, 'only assess can ignore a receipt');
 });
 
 test('packaged artifact mode leaves the existing artifact path and gate unchanged', async () => {
@@ -191,6 +202,7 @@ test('failed or incomplete assessment diagnostics are logged losslessly without 
   const failed = await execute(assess, {assessment, diagnostic});
   assert.ok(failed.logs.some(line => line.startsWith('CLOUSEAU_DIAGNOSTIC_GZIP_BASE64URL_BEGIN')));
   assert.deepEqual(Object.keys(failed.outputs).sort(), ['assessment', 'review-record']);
+  assert.match(failed.warnings[0], /^Clouseau review incomplete \(evidence_incomplete\): /, 'an incomplete review raises a visible annotation');
   await assert.rejects(execute(assess, {diagnostic, failure: true}), error => {
     assert.ok(error.transportState.logs.some(line => line.endsWith('BASE64URL_END')));
     return /investigation stopped/.test(error.message);

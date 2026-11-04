@@ -1,7 +1,7 @@
 'use strict';
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {assertMergeProtection} = require('./merge-protection.cjs');
+const {assertMergeProtection, postProtectionNotice, protectionBody, GAP_STEPS} = require('./merge-protection.cjs');
 
 const unsupported = () => Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});
 function fixture() {
@@ -47,13 +47,62 @@ test('manual mode requires auto-merge disabled and continues to enforce all avai
   await assert.rejects(f.check(true), /Available branch protection/);
 });
 
-test('automatic mode never falls back when protection, settings or inspection is unavailable', async () => {
+test('automatic mode reports bounded gaps instead of failing and never claims enforcement', async () => {
   const f = fixture();
-  await assert.rejects(f.check(false), /auto-merge and main protection/);
+  assert.deepEqual(await f.check(false), {enforced: false, insufficient: true, gaps: ['auto-merge disabled', 'main not protected']});
+  assert.equal(f.state.checks, 0);
   f.state.settings.allow_auto_merge = true;
-  await assert.rejects(f.check(false), /auto-merge and main protection/);
+  assert.deepEqual((await f.check(false)).gaps, ['main not protected']);
   f.state.branch.protected = true;
   await assert.rejects(f.check(false), /Upgrade to GitHub Pro/);
+  f.state.error = Object.assign(new Error('x'), {gaps: ['up-to-date missing']});
+  assert.deepEqual((await f.check(false)).gaps, ['up-to-date missing']);
   f.state.error = null;
   assert.deepEqual(await f.check(false), {enforced: true});
+});
+
+test('the protection notice is one fixed-text comment updated in place', async () => {
+  const comments = [{id: 1, user: {type: 'User'}, body: '<!-- clouseau-protection-notice -->\nspoof'}];
+  const writes = [];
+  const github = {paginate: async () => comments, rest: {issues: {
+    createComment: async a => {writes.push(['create', a]); comments.push({id: 2, user: {type: 'Bot'}, body: a.body});},
+    updateComment: async a => writes.push(['update', a])}}};
+  const post = gaps => postProtectionNotice({github, repo: {owner: 'o', repo: 'r'}, pull_number: 3, gaps});
+  const body = await post(['main not protected']);
+  assert.match(body, /\*\*Cause:\*\* `merge_protection_insufficient`: repository settings are insufficient: main not protected\./);
+  assert.equal(writes[0][0], 'create');
+  await post(['main not protected']);
+  assert.equal(writes.length, 1);
+  await post(['auto-merge disabled']);
+  assert.deepEqual(writes[1][1].comment_id, 2);
+  assert.equal(writes[1][0], 'update');
+});
+
+test('explicit owner automatic mode admits only the unavailable private-plan path with native auto-merge disabled', async () => {
+  const f = fixture();
+  const run = () => assertMergeProtection({github: {rest: {repos: {
+    get: async () => ({data: f.state.settings}), getBranch: async () => ({data: f.state.branch}),
+  }}}, repo: {}, baseBranch: 'main', manual: false, privateOwnerAutomatic: true,
+  assertProtection: async () => {if (f.state.error) throw f.state.error;}});
+  assert.equal((await run()).controllerManaged, true);
+  f.state.error = Object.assign(new Error('Resource not accessible by integration'), {status: 403});
+  await assert.rejects(run(), /accessible/);
+  f.state.error = null;
+  await assert.rejects(run(), /Available branch protection/);
+  f.state.error = unsupported(); f.state.settings.allow_auto_merge = true;
+  assert.equal((await run()).insufficient, true);
+});
+
+test('every protection gap names its own repair, numbered, and an unknown gap still gets a step', () => {
+  const repo = {owner: 'o', repo: 'r'};
+  for (const [gap, step] of Object.entries(GAP_STEPS)) {
+    const text = protectionBody([gap], repo);
+    assert.ok(text.includes(`1. ${step.replaceAll('{repo}', 'o/r')} (${gap})`), gap);
+    assert.match(text, /\*\*Cause:\*\* `merge_protection_insufficient`/);
+    assert.match(text, /\n2\. Re-run the failed Clouseau job/, 'the last step arms the merge');
+  }
+  assert.ok(GAP_STEPS['auto-merge disabled'].includes('gh repo edit {repo} --enable-auto-merge'));
+  const mixed = protectionBody(['main not protected', 'surprise'], repo);
+  assert.ok(mixed.includes('2. Make the base branch protection satisfy the Clouseau requirements. (surprise)'));
+  assert.ok(mixed.includes('\n3. Re-run the failed Clouseau job'));
 });

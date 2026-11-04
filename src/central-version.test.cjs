@@ -5,10 +5,11 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
-const {SOURCE, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
+const {SOURCE, resolverReference, centralSource, resolveCentral, identifyEngine, verifyEngine, environmentEngine, acceptsEngine, engineEvidence, readEngineEvidence, engineContext} = require('./central-version.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {fixture} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust} = require('./local-receipt.cjs');
+const {ReceiptRejected} = require('./receipt-rejection.cjs');
 const {createPolicy} = require('./policy.cjs');
 const {verifyRecord} = require('./acceptance-controller.cjs');
 const {digest} = require('./acceptance.cjs');
@@ -121,7 +122,7 @@ test('central authorization is exclusive and engine identity cannot come from a 
   const bundle = issueReceipt(f.issue);
   assert.equal(verifyReceipt(bundle, {...f.expected, trust, engine}).decision, 'auto_approve');
   for (const selected of [null, {...engine, sha: second}, {...engine, digest: '0'.repeat(64)}]) {
-    assert.throws(() => verifyReceipt(bundle, {...f.expected, trust, engine: selected}), /engine mismatch.*refresh.*No paid fallback/);
+    assert.throws(() => verifyReceipt(bundle, {...f.expected, trust, engine: selected}), /engine mismatch.*never accepted as evidence/);
   }
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust, engine, reviewerDigest: '0'.repeat(64)}), /engine mismatch/);
   const config = {...require('./config.cjs').loadConfig('.github/clouseau.json'), local_review: trust};
@@ -132,6 +133,62 @@ test('central authorization is exclusive and engine identity cannot come from a 
   assert.throws(() => verifyRecord({engine}, {engine: {...engine, digest: '0'.repeat(64)}}, config, engine), /different frozen engine/);
   const policy = createPolicy(config, {engine});
   await assert.rejects(policy.finalize({assessment: {engine: {...engine, sha: second}}}), /different frozen engine/);
+});
+
+test('every receipt failure carries one fixed class, and an engine mismatch is reported only after every other check passes', async () => {
+  const crypto = require('node:crypto');
+  const f = await fixture();
+  const engine = {...SOURCE, sha: f.issue.reviewerSha, digest: f.trust.reviewer_digest};
+  const trust = {...f.trust, central_source: {...SOURCE}};
+  delete trust.reviewer_digest;
+  const bundle = issueReceipt(f.issue);
+  const newer = {...engine, sha: second};
+  let lastDetail;
+  const reason = (options, source = bundle, base = {engine: newer}) => {
+    try {verifyReceipt(source, {...f.expected, trust, ...base, ...options});} catch (error) {
+      assert.ok(error instanceof ReceiptRejected && error instanceof Error && error.code === 'RECEIPT_REJECTED');
+      assert.match(error.message, /^Invalid local review receipt: /);
+      lastDetail = error.detail;
+      return error.reason;
+    }
+    return assert.fail('the receipt was accepted');
+  };
+  assert.equal(reason({}), 'engine');
+  assert.deepEqual(lastDetail, {receipt_engine: f.issue.reviewerSha, current_engine: second});
+  assert.equal(reason({engine: null, reviewerSha: second}), 'engine');
+  assert.deepEqual(lastDetail, {receipt_engine: f.issue.reviewerSha, current_engine: second}, 'without a frozen engine the expected revision is named');
+  assert.equal(reason({engine: {...engine, digest: '0'.repeat(64)}}), 'engine');
+  // Every other failure keeps its own class, even though the engine also differs.
+  assert.equal(reason({}, {...bundle, signature: `${bundle.signature[0] === 'a' ? 'b' : 'a'}${bundle.signature.slice(1)}`}), 'signature');
+  assert.equal(reason({trust: {...trust, keys: [{...trust.keys[0], revoked: true}]}}), 'signature');
+  assert.equal(reason({author: 'another-author'}), 'author');
+  assert.equal(reason({now: 10000000 + 200000 * 1000}), 'expired');
+  assert.match(lastDetail.expires, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/, 'the time the receipt stopped being valid is named');
+  for (const [change, expected, detail] of [
+    [{headSha: 'd'.repeat(40)}, 'revision_head', {receipt_head: f.expected.headSha, current_head: 'd'.repeat(40)}],
+    [{baseSha: 'd'.repeat(40)}, 'revision_base', {receipt_base: f.expected.baseSha, current_base: 'd'.repeat(40)}],
+    [{repository: 'other/repository'}, 'revision_repository', undefined]]) {
+    assert.equal(reason(change), expected); assert.deepEqual(lastDetail, detail ?? {});
+  }
+  for (const [change, what] of [[{configDigest: 'x'}, 'configuration'], [{policyDigest: 'x'}, 'policy']]) {
+    assert.equal(reason(change), 'changed'); assert.deepEqual(lastDetail, {changed: what});
+  }
+  const sign = payload => ({payload, signature: crypto.sign(null, Buffer.from(`clouseau.local-review.v1\0${digest(payload)}`),
+    crypto.createPrivateKey(f.privateKey)).toString('base64url')});
+  const retarget = change => {
+    const record = structuredClone(f.record); change(record);
+    return sign({...bundle.payload, record, record_digest: digest(record)});
+  };
+  // An expiry that is not a time (not an integer, or beyond the Date range) is refused as expired and named nowhere.
+  for (const expires_at of ['soon', 1e15]) {
+    assert.equal(reason({}, sign({...bundle.payload, expires_at})), 'expired'); assert.deepEqual(lastDetail, {expires: undefined});
+  }
+  const notPassing = retarget(record => {record.result.decision = 'repair_required';});
+  assert.equal(reason({}, notPassing), 'not_passing');
+  assert.equal(reason({engine}, notPassing, {}), 'record', 'a current-engine receipt whose claimed decision is false is a record failure');
+  assert.equal(reason({}, sign({...bundle.payload, record_digest: 'f'.repeat(64)})), 'record');
+  // A receipt for the current engine is unchanged: accepted when everything matches.
+  assert.equal(verifyReceipt(bundle, {...f.expected, trust, engine}).decision, 'auto_approve');
 });
 
 test('run environment is verified against actual engine source; local-only mode needs no CI environment', () => {
@@ -159,7 +216,7 @@ test('a trusted frozen workflow can migrate legacy digest enrollment without acc
   const engine = {...SOURCE, sha: f.issue.reviewerSha, digest: f.trust.reviewer_digest};
   const oldTrust = {...f.trust, reviewer_digest: '0'.repeat(64)};
   const bundle = issueReceipt(f.issue);
-  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust}), /changed/);
+  assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust}), /engine mismatch/);
   assert.equal(verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine}).decision, 'auto_approve');
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, sha: second}}), /engine mismatch/);
   assert.throws(() => verifyReceipt(bundle, {...f.expected, trust: oldTrust, engine: {...engine, repository: 'attacker/reviewer'}}), /engine mismatch/);
@@ -186,6 +243,10 @@ test('immutable historical engine evidence is text, never an executed or selecte
     assert.equal(readEngineEvidence(`.clouseau-ci/scripts/bootstrap.cjs@${old}`, current, root), 'throw Error("old text must never execute");');
     assert.equal(git(['rev-parse', 'HEAD']), current);
     assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts@${old}`, current, root), /must be a file/);
+    fs.writeFileSync(path.join(root, 'added-later.cjs'), 'new file'); git(['add', '.']);
+    git(['-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-qm', 'later file']);
+    assert.throws(() => readEngineEvidence(`.clouseau-ci/added-later.cjs@${old}`, git(['rev-parse', 'HEAD']), root),
+      error => error.code === 'ENGINE_PATH_ABSENT' && /does not exist at/.test(error.message));
     for (const bytes of [Buffer.from([255]), Buffer.from('binary\0source'), Buffer.alloc(300001, 'x')]) {
       fs.writeFileSync(path.join(root, 'invalid'), bytes);
       assert.throws(() => readEngineEvidence('.clouseau-ci/invalid', current, root), /encoded data|Binary or oversized/);
@@ -194,7 +255,7 @@ test('immutable historical engine evidence is text, never an executed or selecte
 });
 
 test('uncached historical source fetch is bounded to the fixed public repository and never falls back to current bytes', t => {
-  const calls = []; let offline = false;
+  const calls = []; let offline = false; let requested = 'scripts/resolve/action.yml';
   t.mock.method(cp, 'execFileSync', (program, args, options) => {
     assert.equal(program, 'git'); calls.push(args);
     if (args.includes('-e')) throw new Error('Object absent');
@@ -203,12 +264,69 @@ test('uncached historical source fetch is bounded to the fixed public repository
       assert.equal(options.timeout, 30000); if (offline) throw new Error('Public source unavailable'); return Buffer.alloc(0);
     }
     if (args.includes('-t')) return 'blob\n';
-    assert.equal(args.at(-1), `${first}:scripts/resolve/action.yml`); return Buffer.from('actual immutable bootstrap');
+    assert.equal(args.at(-1), `${first}:${requested}`); return Buffer.from('actual immutable bootstrap');
   });
   assert.equal(readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), 'actual immutable bootstrap');
   assert.equal(calls.filter(args => args.includes('fetch')).length, 1);
+  requested = 'src/local-receipt.cjs';
+  assert.equal(readEngineEvidence(`.clouseau-ci/${requested}@${first}`, second, '/fixture'), 'actual immutable bootstrap');
   offline = true;
+  requested = 'scripts/resolve/action.yml';
   assert.throws(() => readEngineEvidence(`.clouseau-ci/scripts/resolve/action.yml@${first}`, second, '/fixture'), /Public source unavailable/);
+});
+
+test('engine seed is paid only when the workflow change touches the pin: an ordinary edit of a pinned workflow adds no engine bytes', () => {
+  const workflow = '.github/workflows/ci.yml';
+  const pinned = ref => `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${ref}\n`;
+  const edit = {files: [{path: workflow, head_source: 'head', base_source: 'base'}], sources: {
+    base: {content: `${pinned(first)}      - run: echo one\n`}, head: {content: `${pinned(first)}      - run: echo two\n`}}};
+  assert.deepEqual(engineContext(edit), [], 'an unrelated line of a workflow that keeps its pin must not seed ~380 KB of engine source');
+  edit.sources.head.content = `${pinned(second)}      - run: echo two\n`;
+  const bump = engineContext(edit);
+  assert.ok(bump.includes(`.clouseau-ci/scripts/resolve/action.yml@${second}`) && bump.includes('.clouseau-ci/src/policy.cjs'), 'a pin bump still seeds the engine');
+  const added = {files: [{path: workflow, head_source: 'head'}], sources: {head: {content: pinned(first)}}};
+  assert.ok(engineContext(added).length > 0, 'a new workflow carrying a pin is a pin change');
+  edit.sources.head.content = `${pinned(first)}      - uses: gaulatti/clouseau/scripts/resolve@${second}\n`;
+  assert.ok(engineContext(edit).includes(`.clouseau-ci/scripts/resolve/action.yml@${second}`), 'a second, new pin in the same workflow is a pin change');
+});
+
+test('the bootstrap follows protected main: a full commit is still read, every other moving reference is rejected', () => {
+  assert.equal(resolverReference('gaulatti/clouseau/scripts/resolve@main'), 'main');
+  assert.equal(resolverReference(`gaulatti/clouseau/scripts/resolve@${first}`), first);
+  for (const rejected of ['gaulatti/clouseau/scripts/resolve@v1', 'gaulatti/clouseau/scripts/resolve@develop', 'gaulatti/clouseau/scripts/resolve@refs/heads/main',
+    'gaulatti/clouseau/scripts/resolve@Main', 'gaulatti/clouseau/scripts/resolve@abc123', 'gaulatti/clouseau/scripts/resolve', 'attacker/clouseau/scripts/resolve@main',
+    'gaulatti/clouseau-fork/scripts/resolve@main', 'gaulatti/clouseau/scripts/other@main', 'gaulatti/clouseau/scripts/resolve@main\n', undefined, null, 5]) {
+    assert.throws(() => resolverReference(rejected), /must be referenced as gaulatti\/clouseau\/scripts\/resolve@main/, String(rejected));
+  }
+});
+
+test('a workflow that follows main seeds the engine and the bootstrap itself, only when the reference changes, and never reads a historical bootstrap', () => {
+  const workflow = '.github/workflows/ci.yml';
+  const uses = ref => `jobs:\n  resolve:\n    steps:\n      - uses: gaulatti/clouseau/scripts/resolve@${ref}\n`;
+  const edit = (before, after) => ({files: [{path: workflow, head_source: 'head', base_source: 'base'}], sources: {base: {content: before}, head: {content: after}}});
+  assert.deepEqual(engineContext(edit(`${uses('main')}      - run: echo one\n`, `${uses('main')}      - run: echo two\n`)), [], 'an ordinary edit of a main-following workflow adds no engine bytes');
+  const moved = engineContext(edit(uses(first), uses('main')));
+  assert.ok(moved.includes('.clouseau-ci/scripts/resolve/action.yml') && moved.includes('.clouseau-ci/src/policy.cjs'), 'moving a pin to main seeds the engine and the current bootstrap');
+  assert.ok(!moved.some(filename => filename.includes('@')), 'there is no historical bootstrap to read for main');
+  const added = engineContext({files: [{path: workflow, head_source: 'head'}], sources: {head: {content: uses('main')}}});
+  assert.ok(added.includes('.clouseau-ci/scripts/resolve/action.yml'), 'a new workflow following main is a reference change');
+  const pinned = engineContext(edit(uses('main'), uses(first)));
+  assert.ok(pinned.includes(`.clouseau-ci/scripts/resolve/action.yml@${first}`) && !pinned.includes('.clouseau-ci/scripts/resolve/action.yml'));
+  for (const moving of ['v1', 'develop']) {
+    assert.deepEqual(engineContext(edit(uses('main'), uses(moving))), [], `${moving} is not a bootstrap reference and seeds nothing`);
+  }
+});
+
+test('an unexpected Git failure while reading historical engine evidence is surfaced unchanged, never read as an absent path', t => {
+  const failures = [Object.assign(new Error('git failed'), {stderr: 'fatal: unable to read object database'}), new Error('spawn git ENOENT')];
+  for (const failure of failures) {
+    t.mock.method(cp, 'execFileSync', (program, args) => {
+      if (args.includes('-t')) throw failure;
+      return Buffer.alloc(0);
+    });
+    assert.throws(() => readEngineEvidence(`.clouseau-ci/src/policy.cjs@${first}`, second, '/fixture'), error => error === failure && error.code === undefined);
+    t.mock.restoreAll();
+  }
 });
 
 test('resolver review supplies observed shared dependencies and actual legacy source, bounded to 32 context files', () => {
@@ -218,8 +336,8 @@ test('resolver review supplies observed shared dependencies and actual legacy so
     old: {content: `      - uses: gaulatti/clouseau@${second}\n`},
     ci: {content: `      - uses: gaulatti/clouseau/scripts/resolve@${first}\n        uses: 'gaulatti/clouseau/scripts/resolve@${first}'\n`}}};
   const before = structuredClone(snapshot); const paths = engineContext(snapshot);
-  assert.equal(paths.length, 30); assert.equal(new Set(paths).size, 30);
-  for (const filename of ['src/local-harness.cjs', 'scripts/install-agent', 'src/local-review.cjs', 'test/automatic-upgrade-contract.mjs']) {
+  assert.equal(paths.length, 31); assert.equal(new Set(paths).size, 31);
+  for (const filename of ['src/private-owner-merge.cjs', 'src/local-harness.cjs', 'scripts/install-agent', 'src/local-review.cjs', 'test/automatic-upgrade-contract.mjs']) {
     assert.ok(paths.includes(`.clouseau-ci/${filename}`));
   }
   assert.ok(paths.includes(`.clouseau-ci/scripts/resolve/action.yml@${first}`));
@@ -229,7 +347,11 @@ test('resolver review supplies observed shared dependencies and actual legacy so
   assert.deepEqual(snapshot, before);
   snapshot.sources.ci.content += "        run: require('./.clouseau-ci/src/wiki-git.cjs')\n";
   assert.ok(engineContext(snapshot).includes('.clouseau-ci/src/wiki.cjs'));
-  assert.equal(engineContext(snapshot).length, 32);
+  const bounded = engineContext(snapshot);
+  assert.equal(bounded.length, 32);
+  const deferred = `.clouseau-ci/src/local-receipt.cjs@${second}`;
+  assert.ok(!bounded.includes(deferred), 'a bounded initial seed does not falsely claim all wiki plus legacy dependencies');
+  assert.deepEqual(engineEvidence(deferred, first), {relative: 'src/local-receipt.cjs', ref: second});
   snapshot.sources.ci.content += Array.from({length: 10}, (_, i) => `      - uses: gaulatti/clouseau/scripts/resolve@${i.toString().repeat(40)}\n`).join('');
   assert.equal(engineContext(snapshot).length, 32);
   snapshot.sources.ci.content = `# uses: gaulatti/clouseau/scripts/resolve@${first}\n  uses: other/repo/scripts/resolve@${first}`;

@@ -40,7 +40,9 @@ Actions and contains no provider settings:
 }
 ```
 
-`llvm` is also supported. The shared parser requires complete, nonempty exact
+`llvm` and `lcov` (production sources only; `DA` lines and `BRDA` branches) are also supported. A version 2 `lcov` part may add
+`source_suffixes` (for example `[".swift"]`, see [changed-line coverage](changed-line-coverage.md#swift-rust-and-other-lcov-languages)) to cover
+a non-JS/TS language. The shared parser requires complete, nonempty exact
 line/branch counters. Commands run as argument arrays, without shell expansion.
 The accepted base supplies the recipe; a change cannot weaken its own checks.
 The source checkout must be committed and clean before review. Verification
@@ -73,18 +75,28 @@ Only the six documented top-level fields are accepted in version 2: `version`,
 `base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
 Misspelled or additional policy fields fail before local command execution and
 at the CI data entrypoint. Each coverage part likewise accepts only its three
-documented fields. Version 1 keeps its existing compatibility behavior.
+documented fields, plus the optional `package_directory` that only [declared coverage](declared-coverage.md#monorepos-one-declaration-per-part) reads and, for `lcov` parts only, the optional `source_suffixes` list. Version 1 keeps its existing compatibility behavior.
 
 Adapt commands to the repository's real test suite. The runner passes argument
 arrays directly, runs every command, and checks each untouched native report.
-It does not generate a combined artifact or reinterpret counters. Every part
-requires a complete application inventory, nonempty measured lines, and exact
-100% lines and branches. A genuinely branchless part may have zero branches
-when another part supplies measured branches; an entirely branchless plan fails.
-Uncovered or missing data in one part cannot be compensated by another part.
+It does not generate a combined artifact or reinterpret counters. Native
+measurement requires a complete application inventory and nonempty measured
+lines. Local AI review records valid partial counts and unavailable, invalid or
+unverified coverage honestly, then runs regardless of the percentage. It does
+not label an old artifact as this run's verified coverage. CI's separate exact
+coverage gate still requires 100% lines and branches for every part (unless the protected configuration opts in to [changed-line](changed-line-coverage.md) or [declared](declared-coverage.md) coverage; local status stays advisory exact either way). A genuinely
+branchless part may have zero branches when another part supplies measured
+branches; an entirely branchless plan fails that CI gate. One part cannot
+compensate for another part's missing or uncovered data.
 
 Report and source paths must be repository-relative. Resolved source roots must
 exist and must not overlap, and report paths must be unique, including aliases.
+Both recipe versions accept `source_directory: "."` for the complete repository
+root, including executable root configuration and nested application sources.
+A version 2 root part cannot appear alongside another part because their source
+roots overlap. The canonical `.` spelling is allowed only for a source directory;
+report and other paths keep their existing restrictions. A root recipe still
+rejects missing native source measurements and uncovered counters.
 Paths that escape the checkout fail. There is no arbitrary exclusion option.
 Generated application code, executable configuration and entry points remain
 in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
@@ -93,19 +105,30 @@ in scope. Native JS/TS inventory excludes declaration-only `.d.ts` files,
 Python test/dependency conventions. Those non-application entries may appear in
 a native report but cannot contribute passing counters.
 
-Version 2 supports the complete-inventory `istanbul` and `coveragepy` adapters.
-Version 1's single-report interface, including LLVM, remains supported. LLVM
-multi-root plans require a complete compiled-source inventory capability and
-are not accepted by version 2; Go statement reports do not become line/branch
-coverage through this interface.
+Version 2 supports native measurement through the complete-inventory `istanbul`,
+`coveragepy`, `go` and `lcov` adapters. Version 1's single-report interface, including LLVM,
+remains supported. Unsupported native formats are reported as unavailable local
+coverage; they do not suppress AI review or acquire invented counters. CI still
+rejects unsupported formats. LLVM multi-root plans require a complete
+compiled-source inventory capability and are not measured by version 2.
+Go is measured only through the `go` adapter, whose lines are statements and
+branches are basic blocks ([native Go coverage](go-coverage.md)).
 
 The accepted base supplies the complete recipe in normal local review. Local
-evidence records exact counters and a content digest for every native artifact,
-aggregate counters, and the accepted configuration digest. One frozen engine
-checks every part throughout the review.
+evidence records actual command outcomes, the digest of each command's complete stdout
+and stderr and their tails (the last 128 characters of a command that succeeded, the last
+4,096 of one that failed, with `stdout_bytes`/`stderr_bytes` stating the full length wherever a stream was cut), native counters when valid,
+artifact digests and freshness, unavailable-coverage diagnostics, and the accepted
+configuration digest. A nonzero command is not assumed to have failed only
+because of coverage. One frozen engine checks every part throughout the review.
 
 CI invokes the same shared verifier through `operation: coverage` with
-`coverage-config`. Supply the recipe from the exact accepted base, separately
+`coverage-config`. That input accepts only a **version 2** recipe: a version 1
+file fails with `Coverage gate failed: A multi-artifact coverage recipe requires
+version 2`. A repository whose CI uses `coverage-config` therefore commits
+`.clouseau-local.json` as version 2 with a one-element `coverage` array (the
+version 1 example above is for local-only use or for the legacy
+`coverage-report` + `source-directory` inputs). Supply the recipe from the exact accepted base, separately
 from the candidate checkout. For example, in an unprivileged PR verification
 job with no provider credentials:
 
@@ -139,20 +162,109 @@ clouseau review --directory /path/to/repository --base origin/main \
   --request-file /path/to/requirement.txt --harness codex
 ```
 
-Use `--harness claude` for Claude Code. The controller runs real verification,
-captures immutable base/head sources and accepted purpose, and starts separate
-examiner and challenger sessions. Additional source requests are bounded. Fresh
+Verification subprocesses and the native coverage parser receive the same
+credential-filtered environment as initial installation: inherited variable names
+matching `KEY`, `TOKEN`, `SECRET`, `PASSWORD` or `CREDENTIAL` are removed.
+Nonsecret runtime and tooling variables remain available. Repository verification
+commands supply their own nonproduction fixture configuration. PEM private-key
+output is rejected before it can enter AI evidence.
+
+### Agent-driven review inside an AI harness
+
+The headless `--harness codex|claude` form launches a separate child process per
+model session. It is for a person at a plain terminal. Inside Claude Code, Codex
+or opencode the calling agent supplies those sessions itself:
+
+```bash
+clouseau review --directory /path/to/repository --base origin/main \
+  --request-file /path/to/requirement.txt --agent opencode
+```
+
+`--agent` accepts `claude`, `codex` or `opencode` and excludes `--harness`.
+The controller still owns real verification, immutable sources, citations, grading
+formulas, the finding ledger and the decision. When it needs a model session it
+writes `request-NNNN.json`, the full `prompt-NNNN.txt` and `schema-NNNN.json` under
+the review cache's `agent/` directory (outside the checkout), prints
+`status: awaiting_agent` and exits with code 3. The agent starts a fresh subagent
+or session that sees only those files, has it write a JSON answer to the request's
+`answer_file`, and registers it:
+
+```bash
+clouseau respond --agent-request REQUEST_FILE --answer ANSWER_FILE --session SESSION_ID
+```
+
+The `awaiting_agent` output already prints this command with a valid, unused session identifier in place of
+`SESSION_ID`, and a `session_rule` field that states the rule: 8 to 128 characters, letters, digits and `. _ : -`
+only, starting with a letter or digit, never reused for another request. Any identifier that satisfies the rule may
+replace the suggested one.
+
+`prompt-NNNN.txt` is the policy text followed by the evidence, laid out over many lines instead of one line of up to hundreds of
+kilobytes. The layout is applied only when printing the parsed evidence compactly gives back the original bytes exactly (so no
+number or string is altered); otherwise the file is the original prompt. The request digest, the reuse key and answer
+validation always use the original prompt, never the file.
+
+The schema file is compact JSON Schema that states each repeated subschema (chiefly the
+proof-ID enumeration every citation site shares) once under `$defs` and points at it with
+`"$ref": "#/$defs/NAME"`; it is the same constraint as the full inline schema, a few KB
+instead of hundreds. `respond` validates the answer against the request schema (the
+supported subset, with only those `$defs` references, fails closed on unknown keywords), refuses a session identifier already used for
+another request in the exchange, and allows three attempts per request. Repeating
+the identical `review` command then resumes: it reuses the one recorded
+verification, requires the same frozen evidence digest, replays accepted answers
+and stops at the next pending session. A request whose stored digest no longer
+matches stops the review rather than guessing.
+
+An in-flight agent review is pinned to the engine revision that started it. The
+launcher still refreshes protected main before every call, but a continuation of the
+same head, base and requirement re-executes the recorded revision from the local
+cache (`~/.cache/clouseau/revisions/<sha>`; the installer never prunes revisions, and
+a pin under `~/.local/share/clouseau/pins/` is the reference that names one) and
+prints one line stating the pinned revision and the newer one, once per newer revision (the pin remembers that it said so; a
+still newer revision is announced again). The pinned checkout
+must be an unmodified worktree of the installer's own cached source whose engine
+digest equals the one recorded when the pin was made; otherwise the command fails and
+nothing from it runs. A receipt is issued under the pinned revision, so CI, which
+ignores a receipt whose engine differs from protected main, reviews the PR itself.
+A new review (different head or requirement) uses the newest revision. Pass
+`--engine latest` to drop the pin and restart on the newest revision; the pin is also
+released when the review completes. A failure of the pinned engine is reported with the engine's own error message (its last 2,000
+characters), not a bare exit status. `respond` needs no pinning: it validates against
+the schema stored with the request.
+
+Usage records for these sessions carry `harness` (`claude`, `codex` or `opencode`),
+`execution: agent_session`, the supplied session identifier and digests of the
+request, answer and stored response file. Receipt validation accepts them alongside
+headless records and still requires distinct sessions for the examiner and
+challenger investigation and grading phases. The controller cannot itself prove
+that a subagent was isolated from the implementer, so this independence rests on
+the runner's trust boundary and on the enrolled engine revision: CI accepts a
+receipt only from a Clouseau revision the protected configuration enrolls, which is
+where an owner decides whether to trust agent-driven receipts. The signed handoff,
+`independent_ci_required` and `merge_authority: false` are unchanged.
+
+Outside an AI harness, use `--harness claude` to run Claude Code headlessly. The controller runs real verification,
+records its actual outcomes, captures immutable base/head sources and accepted
+purpose, and starts separate examiner and challenger sessions. Coverage below
+100%, a failing coverage command, or unavailable, malformed or unsupported
+coverage does not prevent those local AI sessions. Additional source requests are bounded. Fresh
 semantic grading sessions supply descriptive factor levels; the same Clouseau
 code owns citations, formulas, thresholds and final decisions. No investigator
 gets the implementer's conversation or the other investigator's conclusions.
 
 The controller identifies this as a pre-PR assessment in both investigation and
-grading. It requires the accepted local recipe and meaningful evidence for the
-changed behavior. CI audit, workflow and container execution remains pending
-until the independent protected workflow runs; a local receipt does not claim
-those results or authorize GitHub approval. Missing local evidence, deceptive
-tests and unresolved code concerns still prevent a passing receipt. CI must
-pass every mandatory technical gate before consuming the review for approval.
+grading. It requires the accepted local recipe, safe complete immutable source
+and meaningful evidence for the changed behavior. Coverage percentage or
+unavailable coverage alone does not force a failing AI quality verdict; actual
+behavioral defects, deceptive tests and missing material evidence still do. The
+review never rewrites failed or unavailable verification into a test pass.
+
+New and cached CLI results identify `decision_scope: review_reuse_only`,
+`independent_ci_required: true` and `merge_authority: false`, with local
+verification and coverage status separate from the AI decision. A local
+`auto_approve` verdict means passing AI quality evidence eligible for signed
+reuse, not technical approval. CI audit, workflow and container execution remains
+independent; a local receipt does not claim those results or authorize GitHub
+approval. CI must pass every mandatory technical gate before approval or merge.
 
 A source-line reference can be normalized only to an existing immutable catalog
 block containing that line. The controller preserves the observation and reads
@@ -165,6 +277,23 @@ changed implementation and reassess. A negative or incomplete review never
 produces an approval receipt. This initial receipt path targets a new PR without
 an unresolved existing GitHub review ledger; it rejects an existing incompatible
 ledger rather than dropping its findings.
+
+## Evidence size
+
+The review cache's `snapshot.json`, the `record` output and the signed `receipt.json` are
+written as compact JSON, without indentation (about 15% of a typical receipt); they parse
+identically and the published artifact was already compact.
+
+Serialized local evidence is capped at 900,000 characters. To keep large changes inside the cap
+without dropping anything a reviewer judges, the local collector stores a file added whole once:
+its snapshot entry keeps the patch header and `patch_body: "head_source"`, the body being exactly
+the head source with every line prefixed `+` (consumers restore the identical patch). The pinned
+engine seed (roughly 380 KB) is collected only when a workflow change adds or changes a
+`gaulatti/clouseau/scripts/resolve@main` (or an existing `@<sha>`) reference; an ordinary edit of a workflow that keeps its reference
+carries no engine source, and a reviewer can still request any of it. The seed is optional context: seed files that would use the last 150,000
+characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
+Changed files, their base and head sources and contracts are never omitted; a change that exceeds
+the cap with only that evidence is reviewed in bounded units (see "Chunked local review") unless the protected configuration disabled chunked review, in which case it fails closed.
 
 ## Enrolling a trusted runner
 
@@ -186,7 +315,7 @@ An owner must install the public enrollment entry in protected CI configuration:
   "local_review": {
     "mode": "required",
     "central_source": {"repository": "gaulatti/clouseau", "ref": "refs/heads/main"},
-    "max_age_seconds": 3600,
+    "max_age_seconds": 172800,
     "keys": [{
       "id": "PUBLIC_KEY_IDENTIFIER",
       "issuer": "ENROLLED_RUNNER_IDENTIFIER",
@@ -204,16 +333,26 @@ fixed installations instead enroll `reviewer_digest` and omit `central_source`.
 The modes are exclusive, and only the central-source integration avoids recurring
 release enrollment PRs.
 
+Receipt lifetime: `issueReceipt` defaults to 48 hours (172800 seconds), and the
+trust validator rejects `max_age_seconds` above 172800. Each consumer sets its
+own `max_age_seconds` in its protected `.github/clouseau.json`; consumers that
+still say 3600 keep one-hour receipts until raised separately. The first
+[initial-installation](initial-installation.md) authorization deliberately stays
+at one hour, and installation receipts are capped by it. A receipt remains bound
+to the exact head SHA, signed review history and reviewer digest, so a changed
+head invalidates it regardless of age.
+
 Only existing protected configuration can enroll or revoke a key. A contributor
 cannot authorize their own key through the proposed PR. Keys are restricted to
 their enrolled native GitHub PR author. Set `revoked` or remove a key to reject
 its future receipts. `optional` mode permits the separately installed CI AI
-reviewer for PRs without a receipt. An invalid receipt never falls back to a paid
-AI review. `required` mode needs no CI AI provider credentials.
+reviewer for PRs without a receipt, and for any receipt that does not verify (it is
+ignored, see below). `required` mode needs no CI AI provider credentials.
 
-Malformed, unknown-version, duplicate or mixed receipt marker claims block
-before any provider call; only genuinely unstamped optional-mode PRs can enter
-the ordinary CI AI route. Do not normalize or discard an invalid stamp.
+Malformed, unknown-version, duplicate or mixed receipt marker claims are ignored
+before any artifact is fetched, with the `malformed` notice: in `optional` mode CI
+reviews the change itself, in `required` mode the outcome is `local_receipt_required`.
+Do not normalize an invalid stamp; replace it with a fresh receipt.
 
 The initial trust boundary is an enrolled maintainer workstation, including its
 operator and privileged processes. The identity is not remote or hardware
@@ -258,19 +397,213 @@ it does not change the reviewed source commit or checkout. Include the returned
 artifact follows the repository's visibility and contains reviewed source and
 the requirement text; those inputs must be appropriate for publication there.
 
+## Refreshing a pull request after its base moved
+
+Every merge to the base leaves the other open pull requests behind it: GitHub reports `branch update needed`, and each
+receipt, assessment and approval is bound to the old base. `clouseau refresh` does the author's manual routine for one
+pull request, in the pull request's own checkout:
+
+```bash
+clouseau refresh --pr N --agent claude                       # inside an AI harness
+clouseau refresh --pr N --harness claude                     # headless
+clouseau refresh --pr N --request-file req.txt --agent claude   # an explicit requirement
+```
+
+`--request-file` is optional. Without it the requirement is the one of the last accepted (`auto_approve`) review of this
+repository and branch: every accepted review stores its requirement text byte for byte as `request.txt` beside its record under
+`~/.local/share/clouseau/reviews/<cache id>/`, with a `requirement.json` that binds it, and one pointer per repository and
+branch (`requirements/`) names the newest. The command refuses, and asks for `--request-file`, when nothing is recorded for the
+branch, when the record is unusable (pointer and record name different repositories, branches, heads or cache ids; the text no
+longer hashes to the recorded digest; a part is a link, empty or over 20,000 characters), when the recorded head is not an
+ancestor of the pull request head, or is already in the base (the branch name was reused after another pull request merged), or when that review also used
+`--additional-checks` (they are part of its input and are not stored; pass both again). It never guesses among candidates.
+Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`. In order, and never otherwise:
+
+1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, the receipt in the
+   pull request body decides: one that still verifies for this head ends the command with `up_to_date`, any other is
+   [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch);
+2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
+   `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
+3. run the ordinary local review of the head (`clouseau review`, including its verification) with the answers reused as
+   described below, and sign the receipt. The claimed title of the change is the pull request's own title (GitHub's), not the
+   subject of the merge commit, which is only `Merge origin/<base> into <branch>`; a pull request with no title is refused;
+4. `clouseau publish` the receipt (this pushes only the artifact tag `clouseau-review/<nonce>`);
+5. replace the `clouseau-local-review:v1` marker in the pull request body (appended when there is none);
+6. `git push origin HEAD:<pull request branch>`, once, as the last step.
+
+It refuses, with a message that names the cause and before pushing anything, when: the worktree has uncommitted or untracked
+changes; HEAD is not the head GitHub reports for the pull request (when the local branch only has commits on top of that head, the message
+says how many are unpushed and that you must `git push` first, then refresh again); the pull request is closed, comes from a fork, is not the
+checked-out branch, or is not against the configured `base_branch`; the harness is unknown or its program is not installed;
+the base conflicts with the branch (the checkout is left untouched and the conflicting paths are listed); a hook refuses the
+merge (it is aborted). It never pushes when the review does not pass (`repair_required`, `review_incomplete`, ...), when a
+passing review produced no signed receipt (no enrolled identity), when the checkout changed during the review, when the
+pull request closed or got another head during the review, or when the push is rejected (the body is then restored). After
+a review that does not pass, the merge commit stays in the local branch: repair, commit and refresh again, or run `git reset
+--hard <old head>` to discard it. An agent-driven refresh that returns `awaiting_agent` is repeated with the identical
+command; it recognises its own merge commit (the pull request head and a commit of the base as parents), does not merge or
+fetch again, and continues on the base it began with. While Clouseau main advances, the continuation runs on the engine revision
+that started the exchange ([pinning](#agent-driven-review-inside-an-ai-harness)): through the `clouseau` launcher the pinned engine
+receives your own `refresh` command, resumes it and finishes it (review, publication, marker, push), and its result is what you
+see. If the pinned engine fails, its error message is shown.
+
+### Renewing a receipt that no longer verifies
+
+When the base has not moved, `refresh` does not answer `up_to_date` merely because nothing needs merging. It judges the
+`clouseau-local-review:` marker in the pull request body for the unchanged head exactly as CI does: the same screening code
+(`screenReceipt`, with the same signature, author, expiry, repository, head, base, protected configuration and policy, engine
+and review-semantics checks) on the pull request as GitHub reports it now, the protected `.github/clouseau.json` of the fetched
+base, and the engine that is running. The receipt is read through `gh api` from the immutable commit the marker names; nothing
+in the marker or the receipt is trusted before it verifies. A repository whose protected configuration has no `local_review`
+section has no receipts to judge and keeps the plain `up_to_date`.
+
+- **The receipt verifies**: `up_to_date`, `pushed: false`; nothing is reviewed, published or edited.
+- **It does not** (expired, issued against another base or head, for another repository or author, signed by a key that is not
+  enrolled, an engine that is not accepted, a malformed, unreadable or forged marker, more than one marker, or no marker): the
+  command prints the cause on stderr (`Renewing the local review receipt of pull request N (cause: receipt_expired): it is expired
+  or not yet valid (it expires <instant>)`; the classes are those of [receipt notices](notices.md)) and performs steps 3 to 5 for
+  the current head: the ordinary local review with the stored-requirement default and the evidence-keyed reuse described below
+  (an unchanged head is mostly answered from the remembered reviews), the receipt, its publication and the marker in the pull
+  request body. It does **not** merge and does **not** push the branch, whose head is unchanged; the only push is the artifact
+  tag of step 4. The result has `status: "renewed"`, `pushed: false`, `cause` and `reason`, the new `marker` and `artifact_commit`.
+  An agent-driven renewal that returns `awaiting_agent` is repeated with the identical command like any other.
+
+The same refusals apply as for a merge (dirty worktree, HEAD not the pull request head, missing harness, fork, wrong branch or
+base, no requirement), a review that does not pass or is not signed publishes and edits nothing, and a failure to read the
+receipt that is not the receipt's own (GitHub unreachable) stops the command instead of guessing. A receipt can never be
+renewed without a new review: an expired receipt cached by `clouseau review` for the same input is retired (its stored
+requirement stays) and the input is reviewed again. Publishing a receipt whose artifact tag is already on the remote with the
+same files reuses that artifact (for example when only the marker was lost); a tag with other content is refused, and a tag is
+never overwritten.
+
+### What is reused
+
+A review asks the harness one question at a time (each unit investigation, each integration pass, each grading round). A review
+that ends `auto_approve` remembers every answer in `~/.local/share/clouseau/unit-reuse/`, under the digest of the question's
+complete input. `refresh` (and only `refresh`) lets a question take a remembered answer instead of asking again, when its input
+is **byte-identical** to the remembered one except for the values that name the revision rather than describe it. The input
+covers the policy and stage text, the schema, role and phase, every changed patch, every base and head source, every
+source that was requested or linked, the change manifest and seams, the requirement, the prior findings, the verification
+record, the configuration and policy digests, the commit ids of each file's recent history and the review semantics of the
+engine (`review-semantics.cjs`). Any change to any of them is a different key and the question is asked. The excluded values,
+replaced by placeholders on both sides of the comparison, are: the base and head commit ids, the snapshot and unit-view
+digests, the claimed title of the change (a claim, never proof; a refresh uses the pull request's title) and, for a verification command that passed, its
+output tails and output digests (its argv, exit code, coverage counters and configuration digest stay in the key; a failed
+command is compared byte for byte). A reused answer is put through the same check as a fresh one against the new snapshot, and
+is asked again when that check fails; the receipt is signed over the new head, base and evidence, and CI verifies it exactly
+as before. In a chunked review the same holds per call (every unit, integration pass and grading round), but every unit also
+sees the change manifest of the whole change (each changed path with its line counts and size), so a base movement that
+changes any changed file asks every unit again, while one that touches none of them reuses all of them. The result reports
+`reused_calls` and `harness_invocations` (calls actually made).
+
+Limits to expect: a changed requirement text, policy, contract, verification command or engine semantics reuses nothing; a
+verification that fails reuses nothing about its output; the store is not pruned and may be deleted at any time. See
+[base-drift receipts](base-drift-receipts.md) for the separate, unimplemented question of letting CI keep a receipt when
+the base moved.
+
+## Maintainer attestation of another author's pull request (opt-in)
+
+By default the enrolled signing key's `github_actor` must equal the pull request
+author exactly, so a pull request by Dependabot or an outside contributor can never
+carry a receipt. A repository can opt in, in the protected base configuration only:
+
+```json
+"local_review": {"...": "...", "attest": {"authors": ["dependabot[bot]", "a-named-contributor"]}}
+```
+
+`authors` is either a nonempty list of distinct, exact logins (an app account keeps
+its `[bot]` suffix; matching is exact and case-sensitive) or the explicit string
+`"any"`. An empty list, a missing `authors`, any other value or any other field makes
+the configuration invalid. Without `attest` nothing changes: behavior is byte-identical
+and the author must equal the signer's login. The setting lives in the protected
+configuration, so a pull request cannot enable it for itself, and it is part of the
+configuration digest every receipt binds.
+
+The maintainer checks out exactly the pull request head (`git fetch origin
+pull/N/head && git checkout --detach FETCH_HEAD`, the same ref for forks) and runs
+the ordinary review with the extra option `--pr N`:
+
+```bash
+clouseau review --directory . --base origin/main --request-file req.txt --agent claude --pr N
+clouseau publish --directory . --receipt PATH_FROM_THE_REVIEW_OUTPUT
+```
+
+The CLI asks GitHub (`gh api`) for the pull request's author, open state, base branch
+and head. It refuses unless attestation is enabled, the pull request is open against
+the base branch, HEAD is exactly the pull request head and the author is allowed. A
+pull request the signer authored needs no attestation and is signed as before. The
+signer runs the repository's verification commands on code the author wrote;
+review the change before running it on a workstation you care about.
+
+The signed payload then carries `attestation: {author, number, signer}`. CI accepts
+it only when all of these hold: the key is enrolled and active, the protected
+configuration allows that pull request's author, the signed author equals the pull
+request author, the signed signer equals the key's enrolled login, and the signed
+number equals the pull request number. A receipt signed for one author or pull
+request therefore cannot be replayed for another, and a verifier without `attest`
+(including installation trust) rejects every attested receipt. Reasons use the fixed
+class `attestation`. The pull request comment and job summary say
+`Maintainer-attested`, name the signer and author, and the assessment's
+`review_source` is `maintainer_attested`.
+
+An attested receipt is exactly as strong as any other: it never authorizes a change
+to protected review controls (`/approve-intent` is still required and unchanged),
+tests and exact coverage still must pass, and a push to the pull request head makes
+it stale. A bot that rewrites the pull request body or rebases (Dependabot does)
+removes the marker or the matching head, so publish for the final head and place the
+marker last.
+
 ## CI consumes evidence without repeating AI
 
 An opted-in protected workflow loads configuration and Clouseau from trusted
-source. It waits for actual CI tests and exact coverage, loads the referenced
-receipt as data, validates its signature/issuer/author/time/revisions/policy, and
-compares its complete signed source inventory to GitHub's immutable PR sources.
-It recalculates the review scores and revalidates the receipt at the write gate.
-It then uses the existing native bot approval, auto-merge and protection checks.
-The local path makes zero CI AI calls. Missing, stale, revoked, altered,
-non-passing or unauthorized receipts cannot approve.
+source. It loads a referenced receipt as data, validates its
+signature/issuer/author/time/revisions/policy, compares the complete signed source
+inventory to GitHub's immutable PR sources (dependency lockfile summaries are
+recomputed from the repository's lockfile bytes and must match exactly), and
+recalculates the AI scores.
+A valid local assessment can be authenticated and reused with zero CI AI calls
+even while independent CI is pending or failed. That result remains
+`pending_technical` or `blocked_technical`, with no approval-usable record digest
+or approval/merge write. Unstamped PRs retain the CI provider route after
+technical verification.
 
-Tests, exact 100% coverage and branch protection remain mandatory. Review-control
-changes retain their existing exact-revision owner installation requirements.
+### Reviewed diff verification
+
+CI also verifies the diff text the reviewers saw. It reuses the changed-file list
+already fetched for the assessment (the pull request files endpoint, paginated;
+no extra request per file) and compares each file's repository-supplied `patch`
+with the signed `snapshot.files[].patch`. The local collector stores `git diff`
+output, so the comparison reduces it to GitHub's form: the git extended header
+(`diff --git`, mode, similarity, rename, `index`, `---`, `+++` lines) is removed
+and the final newline dropped; every remaining byte of the hunks must equal what
+GitHub reports. A header line that is not one of those git lines, or a rename
+that is not the pull request's rename, is a mismatch. Whitespace-only differences
+are mismatches. The file list and each file's status must match exactly: no extra
+file, none missing.
+
+Any disagreement means the receipt does not verify: it is ignored (class `source`)
+and CI reviews the change itself, as described under
+[a receipt that does not verify is ignored](#a-receipt-that-does-not-verify-is-ignored).
+No file name or diff content is forwarded. GitHub supplies no `patch` for very large or binary changes. The
+hosted collector already refuses those (`changed_files_incomplete`), and CI refuses
+the same changes with that cause rather than verifying a receipt with a weaker rule.
+
+GitHub also supplies no `patch` for a change that shows no text: an empty file added or removed (a Python
+`__init__.py`), or a rename of identical content. Both collectors accept that, and only that, when the immutable
+sources prove it (the head source of an added file is empty, the base source of a removed file is empty, or the
+two sides of a rename are equal). A signed `git diff` of such a file is a header without a hunk and equals the absent
+hosted patch. An empty source has no line to cite, so the review accounts for it without a citation, a finding is
+anchored in the next changed file that has a line, and any other missing patch still fails closed.
+
+Only after actual CI tests and exact coverage pass may the controller emit an
+approval assessment. It revalidates the receipt at the write gate and uses the
+existing native approval, merge-authority and protection checks. Missing, stale,
+revoked, altered, non-passing or unauthorized receipts cannot approve; one that
+does not verify is ignored and CI performs every check itself.
+
+Tests, exact 100% coverage and the applicable shared protection/owner-merge
+rules remain mandatory before approval or merge. Review-control changes retain
+their existing exact-revision owner installation requirements.
 Post-deployment wiki generation and factual review remain separate operations.
 
 Local caches include the exact installed central SHA, even when a newer commit
@@ -281,7 +614,7 @@ retained; a different SHA with identical engine bytes cannot resample an unchang
 negative judgment.
 
 When a resolver workflow changes, the runner supplies at most 32 observed shared
-source/test dependencies, its actual pinned bootstrap and the legacy action
+source/test dependencies, its actual bootstrap and the legacy action
 boundary as additional untrusted context. Wiki source is included only when the
 changed workflow invokes it.
 Historical source requests use `.clouseau-ci/PATH@FULL_COMMIT_SHA`; they read
@@ -297,9 +630,104 @@ contain review evidence, never the signing identity.
 
 Automatic central-source installations retain signer enrollment in protected base
 configuration and authorize protected Clouseau main instead of a recurring
-reviewer digest. An engine mismatch blocks without a paid fallback: refresh,
-review again and start a fresh workflow. The selected commit and digest are in
+reviewer digest. A receipt produced by an older engine revision than the protected
+main CI resolved is one more receipt that does not verify (class `engine`, below).
+Refresh and review again to reuse the local review. The selected commit and digest are in
 the run summary and engine artifact.
+
+### A receipt that does not verify is ignored
+
+CI applies one rule to a local review receipt. A receipt that verifies in every
+respect is trusted. Any receipt that does not verify is ignored: it is never
+consulted again, CI runs the normal hosted review checks itself, and the pull
+request shows one fixed notice. No receipt problem remains a hard failure
+(`review_incomplete`). The safety argument: an ignored receipt cannot approve
+anything, and CI then performs every check it would perform without a receipt
+(independent tests, exact coverage, source, policy and the full hosted review), so
+ignoring a receipt can never lower the bar.
+
+The notice is `Local review receipt not used (cause: \`receipt_<class>\`): <sentence>.`
+followed by what the run did instead and numbered steps. The class is one of a fixed
+set, and the sentence names only values that are safe to show (a short commit id, the
+engine revision, the base that moved, a changed file of the pull request, an expiry
+time), never receipt contents or untrusted text. [Notices and their causes](notices.md)
+lists every sentence and step:
+
+| Class | Receipt problem |
+| --- | --- |
+| `malformed` | Marker, envelope, fields or JSON are malformed, unsupported, duplicated, or installation-only evidence |
+| `unavailable` | The immutable artifact is missing, oversized, truncated or substituted |
+| `signature` | Unknown, revoked or invalid signing key or signature |
+| `author` | The signing identity is not enrolled for the PR author |
+| `attestation` | An attested receipt the protected `local_review.attest` setting does not permit for this author and pull request |
+| `expired` | Expired, not yet valid or an invalid challenge |
+| `revision_repository` | Issued for a different repository |
+| `revision_head` | Issued for a different head (both short ids are named) |
+| `revision_base` | Issued against a base that has since moved (both short ids are named; step: `gh pr update-branch N`) |
+| `changed` | The protected policy or configuration changed after issue (which one is named) |
+| `source` | Signed sources, file inventory or diff differ from the pull request (including a changed lockfile summary) |
+| `record` | The record, its digest, history, chunked structure or claimed decision is inconsistent or incomplete |
+| `engine` | Produced by a different engine revision than the protected one (both short ids are named) |
+| `not_passing` | The review it records did not pass |
+| `settings` | The protected chunked review configuration is invalid, so the receipt cannot be checked |
+| `untested`, `integrity`, `completeness` | Its evidence does not meet hosted approval's affirmative-evidence rule; the rule and, where it applies, the files are named |
+
+Two more classes are only ever shown when no receipt can be used at all:
+`absent` (the description carries no marker) and `unread` (a hosted fallback run
+does not read receipts). Repositories in `required` mode have no hosted review to
+fall back to. The notice then says `This repository requires a valid receipt, so
+nothing is approved until you do the following.` and the outcome is
+`local_receipt_required`; no provider call is made. On the receipt-only route
+(`local_receipt_unusable`) the reason itself carries the cause sentence. While tests are pending or failing, an ignored receipt behaves exactly like
+an unstamped change (the pending or blocked result carries the notice).
+
+#### Hosted review after an unusable receipt (reference consumer workflow)
+
+A workflow that routes a PR whose description carries a receipt marker to a
+`verify-local` job holds no provider credential in that job: the secret must not
+be exposed to a job that runs on a contributor-supplied receipt. When that job finds
+an optional-mode receipt unusable (decision `review_incomplete`, cause
+`local_receipt_unusable`) the same run continues in a separate `assess-hosted` job
+that holds the provider secrets. It runs `assess` with `ignore-receipt: 'true'`, so
+the receipt is never read there, and it receives only the PR number and the frozen
+engine, never an assessment, notice or record from the receipt-only job. Its
+assessment and review record replace the receipt-only job's in `approve-and-merge`,
+`apply-repair` and `finalize-merge`, so exactly one acceptance record is consumed per
+head. A valid receipt skips the job entirely and no provider call is made. A
+repository in `required` mode reports `local_receipt_required` and has no fallback.
+The "receipt not used" notice is not shown on the fallback path because the
+hosted job deliberately does not know why the receipt was unusable; the receipt-only
+job log still carries the warning annotation naming the cause. The owner no longer
+needs to remove the marker to obtain the CI review.
+
+Deliberately unchanged, because they are intent and infrastructure rather than
+receipt verification: a verified receipt still cannot replace changed review
+history or supply protected-control owner authorization (the controller holds,
+and the notice now names which rule: cause `receipt_protected_controls` or
+`receipt_history_changed`);
+a GitHub outage, rate limit or permission error while reading the receipt is
+reported with its ordinary cause, not ignored; and the post-assessment gate
+re-verifies the exact accepted record immediately before approval or merge and
+refuses (it does not fall back) if that record no longer verifies, in which case
+the next run assesses afresh.
+
+### Protected files make a receipt unusable in CI
+
+A change to any protected control path (the CI workflow, `.github/ci/`,
+`.github/clouseau.json`, CODEOWNERS, `.clouseau-local.json`, the repository
+policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs exact-head
+owner confirmation (`/approve-intent <head sha>` from the configured maintainer).
+A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
+cause `receipt_protected_controls` and a reason naming the protected controls.
+`clouseau review` and `clouseau publish` print the same condition as a
+`warning:` on stderr and a `warnings` entry in their JSON result, naming only
+the repository paths. This includes the mandatory agent-standard updater commit
+(`chore(agents): sync managed rules ...`), which rewrites `AGENTS.md`: keep it
+local and unpushed, or push it on its own PR with a maintainer confirmation,
+rather than riding on an ordinary change.
+A repository that enrolls `managed_agents` in its protected configuration is exempt for
+that file when the update is verifiably only the central managed block; see
+[managed-standard AGENTS.md updates](managed-agents.md).
 
 Reviewers may request `.clouseau-ci/` paths to inspect their own frozen public
 engine. The collector records that engine revision as untrusted source evidence
@@ -315,10 +743,11 @@ preserves the gate. Actual unsupported scope or authority still blocks.
 For explicit additional behavioral checks, pass `--additional-checks FILE`, where
 FILE is an operator-supplied JSON array of at most eight argv arrays, for example
 `[["npm", "test", "--prefix", ".github/tests"]]`. Keep this file outside the source
-checkout. This only adds checks: the accepted-base recipe and exact coverage
-must pass first, and additional checks must leave those coverage artifacts
-unchanged. Every command result and the additional plan are bound to the review
-and cache identity. This can record consumer workflow-test execution without
+checkout. This only adds checks: additional commands run after the accepted-base
+recipe and native measurement, even when coverage is partial or unavailable.
+They must leave the observed coverage artifacts unchanged; rewriting an artifact
+is an integrity failure, not a route to better counters. Every actual command
+result and the additional plan are bound to the review and cache identity. This can record consumer workflow-test execution without
 changing application scripts or triggering deployment. It requires no CI keys
 and creates no CI installation. Independent hosted checks remain mandatory.
 
@@ -327,6 +756,133 @@ It sends verbatim source with indexed proof coordinates and replaces a duplicate
 draft quote only when the identical bytes remain in the referenced immutable
 source. Differing or unavailable earlier literals remain explicit. No source,
 concern, disposition or score is truncated to fit transport. Oversized Codex
-input fails before invocation. Failed harness exits retain bounded stderr in
-private `failure.json` beside the snapshot and journal; public errors show only
-the diagnostic digest and evidence path, never the private stderr or environment.
+input fails before invocation. Native stdout/stderr are decoded across UTF-8
+stream boundaries, preserving characters split between process writes. Failed
+harness exits retain the final 2,000 UTF-16 code units (never starting inside a surrogate pair, so a tail may be one unit shorter) of stdout and stderr, complete
+stdout character/UTF-8 byte counts and digest, elapsed time, exit status/signal,
+configured bounds and controller timeout/output-limit kill reasons in private
+`failure.json` beside the snapshot and journal. The stdout tail is explicitly
+partial diagnostic data, never a completed review or replacement source evidence.
+Public errors show only the diagnostic digest and evidence path, never the
+private output or environment. Existing invocation limits remain unchanged.
+
+CI accepts complete receipt artifacts up to 3,000,000 UTF-8 bytes. This bounded
+allowance accommodates complete source and converged independent reviews without
+discarding draft evidence; the prior 2 MB allowance rejected a passing 2.1 MB
+consumer record. Signature envelopes use the same byte limit.
+When the [GitHub Contents API](https://docs.github.com/en/rest/repos/contents#get-repository-content)
+omits inline content above 1 MB, CI reads the Git blob named by that immutable
+artifact's metadata. It checks the exact blob identity, byte count and Git object
+hash before the normal signature, source, policy and engine verification.
+Unavailable, oversized or substituted content makes the receipt ignored (class
+`unavailable`); this transport does not grant trust or change receipt compatibility.
+A partitioned review record too large for one receipt is stored as a signed multi-part receipt
+(`clouseau-review.part-NNNN` files beside the envelope, see `docs/chunked-record.md`); each file keeps this bound.
+A missing or unreadable part, or a part that does not join to the signed root, is the same `unavailable` or `record` class.
+
+## Chunked local review
+
+`clouseau review` (and `respond`/`publish`, which continue and publish the same review) never refuses a change for its size.
+It collects the change as before; when the complete evidence does not fit one 900,000-character snapshot (or a changed file is
+over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`), bounded unit views
+(a file too large for one unit is split into segments), both roles on every unit through the unchanged reviewer, controller-computed
+seams, one blind integration pass per role (none when there are no seams), merge, one grading round per role, one chunked record (`version 3`, multi-part
+when it exceeds one receipt) and ONE signed receipt. A change that fits is reviewed and signed exactly as before (record `version 2`,
+byte-identical). CI verifies a chunked receipt through the same single derivation, recomputing the partition, views and seams.
+
+It is on by default. The protected `local_review.chunked` object (in `.github/clouseau.json` on the base branch, so CI reads the same
+values) can only **tighten** it:
+
+| field | meaning | bound |
+|---|---|---|
+| `enabled: false` | turn chunked review off; an oversized change fails as it did before | |
+| `force: true` | chunk even a change that fits one snapshot | |
+| `params: {C, S}` | unit ceiling and shared context | at most 450000 and 100000 |
+| `concurrency` | harness sessions at once (an `--agent` review answers one at a time) | at most 2 |
+| `unit_deadline_ms` | deadline of one session | at most 300000 |
+| `integration_cap` | integration session input | at most 250000 |
+| `integration_call_seams` | seams one integration session is given (more seams, more sessions) | at most 60 |
+| `integration_max_seams` | seams the integration pass examines at all; the rest are recorded `missing` and hold approval | at most 400 |
+
+No argument or environment variable changes them. A unit that misses the deadline stops the review with `unit_deadline` and the
+ceiling to use; lower `params.C` in the protected configuration and review again. A crashed headless review resumes from its journal
+(`<cache>/chunked/journal`) without sampling a finished call again. Rollback is unsetting `force` or setting `enabled: false`.
+
+The hosted CI review has its own dark, opt-in counterpart for a pull request that has no usable receipt: see `docs/chunked-hosted.md` (`acceptance.chunked_hosted`).
+
+## Review partition
+
+`src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
+whose complete evidence exceeds the 900,000-character snapshot budget in bounded units. It is deterministic
+and model-free; `clouseau review` uses it for a change that does not fit one snapshot.
+
+Changed files are sorted by new path (UTF-8 bytes) and grouped into atoms: a file stays with its `.test`,
+`.spec` and `.stories` siblings, a test in a separate tests tree (`test_x.py`, `x_test.py`, `x.spec.ts`) stays with the one changed source named `x` (no pairing when zero or several sources carry that name), and a rename is one entry keyed by its new path. A file costs
+`ceil(1.03 * (base bytes + head bytes + patch characters))`, where the patch size is the stored one (a file added whole keeps only its patch header, its body lives once in the head source). Atoms are packed next-fit, in path order, into
+units of at most `unit_ceiling` (C = 450,000); an atom above C becomes its own unit. The plan digest covers the
+scheme, parameters, unit membership and costs, so it is the same for any input order. Every changed path is
+owned by exactly one unit (checked by `checkOwnership`).
+
+A change is never refused for its size, and never truncated. The plan refuses only what is not a size: an
+`unpartitionable_path`, an `unpartitionable_binary` (binary changes still fail closed), a duplicate path, or an
+inconsistent ownership. A file with a `derived_size` (a lockfile replaced by a summary CI can recompute) costs that summary
+instead of its sources. Every entry also costs `file_overhead` (512 characters, its accounting entry and manifest row), so a
+thousand tiny files fill units as a few large ones do.
+
+The number of units is unbounded (the runner executes them in waves). A stem group (a file and its tests) costing more than
+`budget - shared - reserve` (900,000 - 100,000 - 240,000 = 560,000) falls apart into its files; a file costing more than that
+is split into **segments** of at most C (`src/file-segments.cjs`). Every unit view stays inside the 900,000 budget.
+
+A segment owns a contiguous run of the file's patch rows, so every changed line belongs to exactly one segment, and one
+unit per segment (two segments of one file never share a unit). Its view shows that segment's patch (with sub-hunk headers
+that count exactly its rows) and, as ordinary sources, the windows of the base and head text the rows touch plus 12 lines of
+margin (a file added whole is stored compactly, its body once, in the head window). Windows keep the file's line structure:
+the first line of a window is line `segment.start_line` of the whole source. A single line larger than a fragment (a minified
+bundle) is cut into consecutive pieces owned by consecutive segments. The merge lifts every citation of a window to the same
+lines of the whole source, which holds because a quote is a piece of the lines it cites, so the merged report is validated by
+the unchanged validators against the complete combined snapshot. A unit's spec names its segment as
+`parts: {path: {index, count}}`; `checkOwnership` and the record verifier want every index of `0..count-1` exactly once.
+Inconsistent evidence (a patch that names a line outside its source) is an integrity error (`segment_inconsistent`), never a guess.
+
+The change manifest every unit receives lists every changed path while it fits 60,000 characters. Beyond that the deepest
+directories are summarized first (`{dir, files, additions, deletions, size, units}`, `unit_count` when more than 16 units), then
+shallower ones, down to one row for the whole change; the files a unit owns are listed in full in its own files. Optional shared
+context beyond the shared cap (another unit's lockfile summary, an engine file) is dropped and listed in `shared_omitted`;
+only the contracts, the verification record and the request are mandatory, and those must fit the shared cap. That limit is a
+property of the repository's contract documents, not of the size of a change.
+
+`src/change-table.cjs` reads the planner's table from the stored snapshot, costing text by its JSON-escaped length, and adds
+the segment costs of a file too large for a unit, so the plan, CI's recomputation and the views agree.
+
+Print a plan for a table of changed files (`{files: [{path, previous?, base_size, head_size, patch_chars,
+derived_size?}]}`; `test/fixtures/alcantara-02618a9.json` is the measured table of alcantara commit 02618a9,
+which gives 4 units at C = 450,000 with stored sizes, 5 when every added file also counts its full patch). A table has only
+sizes, so a file too large for a unit is split into equal parts:
+
+```
+scripts/partition-plan test/fixtures/alcantara-02618a9.json [--ceiling 300000]
+```
+
+The parameters come from the protected `local_review.chunked` configuration (defaults C = 450,000, S = 100,000). The earlier `max_units` and `file_ceiling` parameters, and the protected `cap` and `max_units`, bound
+nothing any more (the protected configuration still accepts `cap` and `max_units` and ignores them).
+
+### Unbounded collection
+
+`collectLocal({..., unbounded: true})` is the collector of a chunked review: a changed file, a patch or the combined
+snapshot of any size is read whole (binary evidence still fails closed), and the optional engine seed is never omitted for
+size. Without the option nothing changes: one snapshot of at most 900,000 characters. The combined snapshot is reviewed in
+bounded views and stored as a multi-part receipt (`docs/chunked-record.md`).
+
+### Alcantara-shaped measurement
+
+`scripts/measure-chunked [TABLE.json] [--ceiling N] [--shared N]` builds a synthetic
+change from a table (fictional filler content of exactly the measured sizes, a real derived lockfile summary, compact
+added files), partitions it, builds every unit view, merges fake finding-free unit reports, builds the thin chunked
+record, signs it with an ephemeral key and verifies it through the one derivation. It prints the unit count,
+per-unit sizes (view, owned, shared, manifest, foreign hunks, estimated prompt), the record size against the single-receipt
+limit and the signed receipt (one file, or a multi-part receipt) size, then runs the real unit runner against a fake harness and prints the
+EXACT prompt characters of every unit and integration session. No AI, network or secret is used. For `02618a9`
+it gives 4 units, a 1.55M combined snapshot, a 1.70M record (59.5% of the single-receipt limit) and a largest estimated prompt of about 570K characters.
+`src/chunked-measure.test.cjs` asserts these bounds and that every size which used to be refused (170 files, more than 8 units,
+a record over the signing limit, roughly 500 paths, a file over 300,000 bytes, a unit over the unit budget, a file of
+millions of characters, a single line of a million) is partitioned, reviewed, merged, signed and verified.

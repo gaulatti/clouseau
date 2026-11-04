@@ -1,7 +1,11 @@
 'use strict';
 
 const fs = require('node:fs');
+const {readPull} = require('./pull-read.cjs');
+const branchConflict = require('./branch-conflict.cjs');
 const {requestReview} = require('./provider.cjs');
+const {retryTransient} = require('./transient-retry.cjs');
+const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
@@ -10,18 +14,38 @@ function intentText(body, sha) {
   return {body: match[0], ...(match[1] ? {accepted_purpose: match[1].trim()} : {})};
 }
 
-function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false} = {}) {
+function matchesPath(filename, paths) {
+  return paths.some(path => path.endsWith('/') ? filename.startsWith(path) : filename === path);
+}
+
+// The paths whose change needs exact-head owner confirmation. One list for CI scope checks and the local warning.
+function controlPaths(config) {
+  return [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS',
+    '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
+}
+
+function protectedChanges(config, files) {
+  const sensitive = controlPaths(config);
+  return files.flatMap(file => [file.filename, file.previous_filename || ''])
+    .filter((name, index, all) => name && matchesPath(name, sensitive) && all.indexOf(name) === index);
+}
+
+function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const {local_review, merge_mode, ...legacyConfig} = config;
-  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual'});
+  const {local_review, merge_mode, exact_revert, ...legacyConfig} = config;
+  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic'});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
+const COVERAGE = require('./coverage-changed.cjs').requirement(config);
 const CHECK = 'approval-policy';
 const WORKFLOW = config.workflow;
 const MANUAL_REVIEWER = config.manual_reviewer;
 const VERIFY_STEPS = config.verification.steps;
+const EMPTY_BLOB = 'e69de29bb2d1d6434b8b29ae775ad8c2e48c5391';
+const NEVER_ARMED = Object.freeze(['review_incomplete', 'repair_required', 'blocked_technical', 'blocked_integrity']);
 const REVIEW_CONTROL_REASON = 'Review controls or a protected repository-purpose contract changed';
+const DISABLE_AUTO_MERGE = 'mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function numberFor(context) {
@@ -31,16 +55,30 @@ function numberFor(context) {
   return Number(value);
 }
 
-function scopeReason(files, pr) {
+// `exempt` names the protected files whose change was verified as the opt-in managed-standard update (managed-agents.cjs).
+// `protect` names the files that are protected only because of what changed in them (declared coverage thresholds).
+function scopeReason(files, pr, exempt = new Set(), protect = new Set()) {
   if (files.length !== pr.changed_files || files.length === 0) return 'Incomplete changed-file list';
-  const sensitive = [`.github/workflows/${config.workflow}`, '.github/ci/', '.github/clouseau.json', '.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS', '.clouseau-local.json', config.repository_policy, 'AGENTS.md', ...config.sensitive_paths];
-  if (files.some(file => matchesPath(file.filename, sensitive) || matchesPath(file.previous_filename || '', sensitive))) {
+  const sensitive = controlPaths(config);
+  const protectedFile = name => (matchesPath(name, sensitive) && !exempt.has(name)) || protect.has(name);
+  if (files.some(file => protectedFile(file.filename) || protect.has(file.previous_filename) || matchesPath(file.previous_filename || '', sensitive))) {
     return REVIEW_CONTROL_REASON;
   }
-  if (files.some(file => !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
+  // GitHub lists no patch for an empty added file. Its empty blob id is the proof that no text was withheld.
+  const emptyAdded = file => file.status === 'added' && file.sha === EMPTY_BLOB && file.changes === 0;
+  if (files.some(file => (!file.patch && !emptyAdded(file)) || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     return 'Incomplete patch or unsupported file change';
   }
   return null;
+}
+
+// Verified managed-standard AGENTS.md changes. Without `managed_agents` this reads nothing and exempts nothing.
+// Also the files held only because their content changed: package.json when its declared coverage minimums changed
+// (`coverage.mode: declared`; unset, it reads nothing and holds nothing).
+async function managedExemptions(github, repo, pr, files) {
+  const managed = await require('./managed-agents.cjs').exemptions({github, repo, pr, files, config});
+  const declared = await require('./coverage-declared.cjs').protect({github, repo, pr, files, config});
+  return {exempt: managed.exempt, notices: [...managed.notices, ...declared.notices], protect: declared.protect};
 }
 
 function assessmentResult(raw, sha) {
@@ -58,18 +96,20 @@ function assessmentResult(raw, sha) {
 async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
-  const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
+  const {data: pr} = await readPull(github, repo, pull_number);
   const identity = {number: pull_number, head_sha: pr.head.sha, base_sha: pr.base.sha};
   const hold = reason => ({...identity, decision: 'second_opinion', reason});
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) return {...identity, decision: 'not_ready', reason: 'PR is not ready for the protected base branch'};
   if (pr.user?.login === 'github-actions[bot]') return hold('The approval bot cannot review its own PR; an independent maintainer review is required');
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
-  const reason = scopeReason(files, pr);
+  const {exempt, protect} = await managedExemptions(github, repo, pr, files);
+  const reason = scopeReason(files, pr, exempt, protect);
   if (reason && reason !== REVIEW_CONTROL_REASON) return hold(reason);
-  if (!process.env.DEEPSEEK_API_KEY) return hold('AI assessment unavailable: DEEPSEEK_API_KEY is not configured');
+  const keyProblem = require('./provider-key.cjs').keyProblem(process.env.DEEPSEEK_API_KEY);
+  if (keyProblem) return hold(`AI assessment unavailable: DEEPSEEK_API_KEY ${keyProblem}`);
   // Do not spend provider credits on a PR whose technical gate is not green.
   const technical = await technicalRun(github, repo, pr);
-  if (technical.pending) return {...identity, decision: 'pending_technical', reason: 'Waiting for all tests and exact 100% coverage'};
+  if (technical.pending) return {...identity, decision: 'pending_technical', verification: technical.state, reason: `Waiting for all tests and ${COVERAGE.waiting}`};
   if (technical.failure) return {...identity, decision: 'blocked_technical', reason: technical.failure};
 
   try {
@@ -110,42 +150,194 @@ async function assess({github, context, fetchImpl = fetch, retryWait, report}) {
   }
 }
 
-async function assessWhenReady({wait = sleep, maxPolls = 260, ...options}) {
+// A hold that states the cause and the time to retry, shaped like an assessment so that the visible
+// review-incomplete notice names the rate limit. The next verification completion reassesses the PR.
+function rateLimited(context, hold) {
+  return {version: 2, number: numberFor(context), head_sha: headShaOf(context), decision: 'review_incomplete', cause: 'github_rate_limit',
+    reason: heldReason(hold), retry_after: new Date(hold.resetAt).toISOString()};
+}
+
+async function assessWhenReady({wait = sleep, maxPolls = 260, queuedGraceSeconds = graceSeconds(config), ...options}) {
+  const schedule = pollSchedule(queuedGraceSeconds);
   for (let attempt = 0; attempt < maxPolls; attempt++) {
-    const result = await assess(options);
-    if (result.decision !== 'pending_technical') return result;
-    await wait(15000);
+    let result;
+    try {result = await withRateLimit(async () => branchConflict.mark(await assess(options), {github: options.github, repo: options.context.repo, baseBranch: config.base_branch, wait}), {wait, report: options.report});}
+    catch (error) {if (error instanceof RateLimitHold) return rateLimited(options.context, error); throw error;}
+    if (result.decision !== 'pending_technical' || result.cause === branchConflict.CAUSE) return result;
+    const {stalled, delay} = schedule(result.verification);
+    if (stalled) return {...result, reason: WAITING_REASON};
+    await wait(delay);
   }
   throw new Error('Verification did not finish before the assessment deadline');
 }
 
-async function requestReassessment({github, context, core, wait = sleep}) {
-  const repo = context.repo;
+// The bounded replacement for a consumer's inline polling loop. It holds a
+// runner only while verification is running. Verification that has not started
+// within the queue grace ends the step cleanly with verified=false so later
+// steps are skipped and the run is reassessed when verification completes.
+async function awaitVerification({github, context, core, expectedHead, wait = sleep, maxPolls = 120, queuedGraceSeconds = graceSeconds(config)}) {
   const pull_number = numberFor(context);
-  const {data: pr} = await github.rest.pulls.get({...repo, pull_number});
-  const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-  if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
-    throw new Error('Stale or malformed intent confirmation');
+  const schedule = pollSchedule(queuedGraceSeconds);
+  // Only a push event's commit is the PR head; comment and manual events run on
+  // the default branch, so they bind to the head observed when the wait starts.
+  let expected = expectedHead || (context.eventName === 'push' ? context.sha : null);
+  const limited = call => withRateLimit(call, {wait, report: message => core.info(message)});
+  const prCache = new Map();
+  // Every way the wait can end without a green verification publishes an assessment, so the write-capable job
+  // can post a visible notice (pending, rate-limited or failed) and hold instead of failing silently.
+  const payloadPr = context.payload.pull_request;
+  const publish = (pr, extra) => core.setOutput('assessment', JSON.stringify({version: 2, number: pull_number,
+    head_sha: pr?.head.sha ?? expected ?? payloadPr?.head?.sha ?? '', base_sha: pr?.base.sha ?? payloadPr?.base?.sha ?? '', ...extra}));
+  let pr;
+  for (let attempt = 0; attempt < maxPolls; attempt++) {
+    let result, conflict;
+    try {
+      ({data: pr} = await limited(() => conditionalGet(prCache, `${context.repo.owner}/${context.repo.repo}#${pull_number}`,
+        headers => readPull(github, context.repo, pull_number, headers['if-none-match'] ? {headers} : {}))));
+      expected ??= pr.head.sha;
+      if (pr.state !== 'open' || pr.draft || pr.head.sha !== expected) {
+        throw new Error('PR closed, became draft, or changed while verification was pending');
+      }
+      result = await limited(() => technicalRun(github, context.repo, pr, {wait}));
+      conflict = result.state === 'absent' && await limited(() => branchConflict.conflicting({github, repo: context.repo, number: pull_number, headSha: pr.head.sha, wait, known: pr}));
+    } catch (error) {
+      if (!(error instanceof RateLimitHold)) {
+        // Any HTTP error from GitHub ends the wait visibly, with the status and endpoint, never as a silent crash.
+        // The step's own control-flow errors (the PR closed or changed) carry no status and still fail closed.
+        if (!Number.isInteger(error.status)) throw error;
+        const reason = require('./incomplete.cjs').apiErrorReason(error);
+        core.info(reason);
+        publish(pr, {decision: 'review_incomplete', cause: 'github_api_error', reason});
+        core.setOutput('verified', 'false');
+        return {pending: true, state: 'api_error', status: error.status};
+      }
+      core.info(heldReason(error));
+      publish(pr, {decision: 'review_incomplete', cause: 'github_rate_limit', reason: heldReason(error), retry_after: new Date(error.resetAt).toISOString()});
+      core.setOutput('verified', 'false');
+      return {pending: true, state: 'rate_limited', retry_after: new Date(error.resetAt).toISOString()};
+    }
+    if (result.failure) {
+      // A final failure ends the wait cleanly with a complete incomplete assessment naming the failed run,
+      // job or step. The step does not fail: the write-capable job receives the assessment through the
+      // composite output, posts the visible review-incomplete notice and then holds, so nothing can approve
+      // or merge. (A failed step would not reliably expose its outputs to the consuming job.)
+      core.info(result.failure);
+      publish(pr, {decision: 'review_incomplete', cause: 'verification_failed', reason: result.failure});
+      core.setOutput('verified', 'false');
+      return result;
+    }
+    if (!result.pending) {
+      core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
+      core.setOutput('verified', 'true');
+      return result;
+    }
+    if (conflict) {
+      const reason = branchConflict.reasonFor(config.base_branch);
+      core.info(reason);
+      publish(pr, {decision: 'pending_technical', verification: 'absent', cause: branchConflict.CAUSE, reason});
+      core.setOutput('verified', 'false');
+      return {pending: true, state: 'branch_conflict'};
+    }
+    const {stalled, delay} = schedule(result.state);
+    if (stalled) {
+      core.info(WAITING_REASON);
+      publish(pr, {decision: 'pending_technical', verification: result.state, reason: WAITING_REASON});
+      core.setOutput('verified', 'false');
+      return result;
+    }
+    core.info('Waiting for independent unit/coverage and runtime checks. No AI request has been made.');
+    await wait(delay);
   }
-  const {data: permission} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
-  if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
-  if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
-  const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
-    event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100});
+  // Verification is still running after the whole wait budget: pending, visibly, not a silent failure.
+  const deadline = 'PR verification was still running when the wait budget ended; the review runs again when it completes.';
+  core.info(deadline);
+  publish(pr, {decision: 'pending_technical', verification: 'running', reason: deadline});
+  core.setOutput('verified', 'false');
+  return {pending: true, state: 'deadline'};
+}
+
+async function reassess({github, context, core, wait, api}) {
+  const repo = context.repo;
+  // A completed PR verification run reassesses a review that ended pending
+  // without holding a runner. The event is a trusted run of this workflow.
+  const fromVerification = context.eventName === 'workflow_run';
+  let pull_number, pr;
+  if (fromVerification) {
+    const finished = context.payload.workflow_run;
+    if (finished.event !== 'pull_request' || finished.path !== `.github/workflows/${WORKFLOW}`) {
+      core.info('Not a PR verification run of the configured workflow; no reassessment is needed.');
+      return;
+    }
+    const numbers = finished.pull_requests.length ? finished.pull_requests.map(pull => pull.number) :
+      (await api(() => github.rest.repos.listPullRequestsAssociatedWithCommit({...repo, commit_sha: finished.head_sha}))).data
+        .filter(pull => pull.state === 'open' && pull.base.ref === config.base_branch).map(pull => pull.number);
+    if (numbers.length !== 1) {
+      core.info('No single open PR is associated with this verification run; no reassessment is needed.');
+      return;
+    }
+    pull_number = numbers[0];
+    pr = (await api(() => readPull(github, repo, pull_number))).data;
+    if (pr.head.sha !== finished.head_sha || pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
+      core.info('The verified revision is no longer a ready PR head; no reassessment is needed.');
+      return;
+    }
+  } else {
+    pull_number = numberFor(context);
+    pr = (await api(() => readPull(github, repo, pull_number))).data;
+    const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
+    if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
+      throw new Error('Stale or malformed intent confirmation');
+    }
+    const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
+    if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
+    if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
+  }
+  const {data} = await api(() => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
+    event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100}));
   const runs = data.workflow_runs.filter(run => run.event === 'pull_request_target' && run.head_sha === pr.head.sha &&
     (run.pull_requests.some(pull => pull.number === pull_number) ||
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
   runs.sort((a, b) => b.id - a.id);
-  if (!runs.length) throw new Error('No trusted PR metadata run exists for this revision');
+  if (!runs.length) {
+    if (fromVerification) {
+      core.info('No trusted PR metadata run exists for this revision; its review will start normally.');
+      return;
+    }
+    throw new Error('No trusted PR metadata run exists for this revision');
+  }
   // Let an already-finishing gate consume the new comment or finish before rerun.
-  await wait(5000);
-  const {data: latest} = await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id});
+  // A verification completion can arrive while the pending review is still ending.
+  // A finishing review is awaited with growing gaps (10, 20, 40, 80, 160, 240 s) and conditional requests, so a
+  // verification completion costs a handful of requests per PR instead of one every 10 s.
+  const gaps = fromVerification ? [10000, 20000, 40000, 80000, 160000, 240000] : [5000];
+  const runCache = new Map(); let latest;
+  for (const gap of gaps) {
+    await wait(gap);
+    latest = (await api(() => conditionalGet(runCache, `run#${runs[0].id}`,
+      headers => github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id, ...(headers['if-none-match'] ? {headers} : {})})))).data;
+    if (latest.status === 'completed') break;
+  }
   if (latest.status !== 'completed') {
     core.info('The trusted review is still running and will read the current intent confirmation.');
     return;
   }
-  await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
+  if (fromVerification && latest.conclusion === 'success') {
+    core.info('The trusted review already succeeded; no reassessment is needed.');
+    return;
+  }
+  await api(() => github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id}));
   core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
+}
+
+// Reassessment is itself an API consumer and runs exactly when many PRs finish together, so it retries
+// rate-limited calls with the shared bounded backoff. If the budget stays exhausted it fails with an explicit
+// message naming when to re-run, instead of an unhandled HttpError.
+async function requestReassessment({github, context, core, wait = sleep}) {
+  const api = call => withRateLimit(call, {wait, report: message => core.info(message)});
+  try {return await reassess({github, context, core, wait, api});} catch (error) {
+    if (!(error instanceof RateLimitHold)) throw error;
+    throw new Error(`Reassessment held: ${heldReason(error)} Re-run this job after that time; contributor tests are not rerun.`);
+  }
 }
 
 async function purposeConfirmation(github, repo, pr, comments) {
@@ -182,23 +374,71 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
   return false;
 }
 
-async function technicalRun(github, repo, pr, {receipt = false} = {}) {
-  const {data} = await github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
-    event: 'pull_request', head_sha: pr.head.sha, per_page: 100});
+const etags = new Map();
+const JOB_REREADS = 3;
+const FINAL_STEP = new Set(['success', 'failure', 'cancelled', 'skipped', 'timed_out', 'neutral', 'action_required', 'stale']);
+
+// Final success, a final failure naming the job or step, or not-final with what is awaited.
+function judgeVerification(run, jobs) {
+  const waiting = what => ({final: false, waiting: what});
+  if (!jobs.length) return waiting('the job list is empty');
+  // Only the latest attempt of the verification job counts, whatever earlier attempts concluded.
+  const verify = jobs.filter(job => job.name === config.verification.job).sort((a, b) => (b.run_attempt ?? 0) - (a.run_attempt ?? 0))[0];
+  if (!verify) return {final: true, failure: `Verification job "${config.verification.job}" was not found in run ${run.id} attempt ${run.run_attempt}`};
+  if (verify.run_attempt > run.run_attempt) return waiting(`the job list is from attempt ${verify.run_attempt}, ahead of the run record (attempt ${run.run_attempt})`);
+  if (['queued', 'in_progress', 'waiting', 'pending', 'requested'].includes(verify.status) || !verify.conclusion) return waiting(`job "${verify.name}" is ${verify.status}`);
+  if (verify.conclusion !== 'success') return {final: true, failure: `Verification job "${verify.name}" concluded ${verify.conclusion}`};
+  // A job that reports success but whose step list is empty, or lists a step with no final conclusion, is
+  // demonstrably not settled. Once every listed step is final the list is complete, so a required step that
+  // is absent, skipped or unsuccessful is a definite, named failure rather than a reason to keep waiting.
+  const listed = verify.steps ?? [];
+  if (!listed.length) return waiting(`job "${verify.name}" lists no steps yet`);
+  const open = listed.find(step => !step.conclusion || !FINAL_STEP.has(step.conclusion));
+  if (open) return waiting(`step "${open.name}" has no final conclusion yet`);
+  for (const name of VERIFY_STEPS) {
+    const step = listed.find(item => item.name === name);
+    if (!step) return {final: true, failure: `Required verification step "${name}" was not found in job "${verify.name}"`};
+    if (step.conclusion !== 'success') return {final: true, failure: `Required verification step "${name}" concluded ${step.conclusion}`};
+  }
+  return {final: true, verify};
+}
+
+async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = {}) {
+  // A conditional request: an unchanged answer is HTTP 304, which does not count against the primary limit.
+  const listed = await conditionalGet(etags, `${repo.owner}/${repo.repo}@${pr.head.sha}`, headers => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
+    event: 'pull_request', head_sha: pr.head.sha, per_page: 100, ...(headers['if-none-match'] ? {headers} : {})}));
+  const {data} = listed;
   const runs = data.workflow_runs.filter(run => run.head_sha === pr.head.sha &&
     (run.pull_requests.some(pull => pull.number === pr.number) ||
       (run.head_repository?.id === pr.head.repo.id && run.head_branch === pr.head.ref)));
   runs.sort((a, b) => b.id - a.id);
   const run = runs[0];
-  if (!run || run.status !== 'completed') return {pending: true};
-  if (run.conclusion !== 'success') return {failure: `PR verification concluded ${run.conclusion}`};
-  const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
-    {...repo, run_id: run.id, filter: 'latest', per_page: 100});
-  const verify = jobs.find(job => job.name === config.verification.job);
-  if (!verify || verify.conclusion !== 'success' || VERIFY_STEPS.some(name =>
-    !verify.steps.some(step => step.name === name && step.conclusion === 'success'))) {
-    return {failure: 'Required verification steps did not all succeed'};
+  if (!run) return {pending: true, state: 'absent'};
+  if (run.status !== 'completed') return {pending: true, state: run.status === 'in_progress' ? 'running' : 'queued'};
+  if (run.conclusion !== 'success') {
+    // Name what failed, from the run's own jobs: job and step names and the job link, nothing else.
+    const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {...repo, run_id: run.id, filter: 'latest', per_page: 100});
+    const named = jobs.filter(job => ['failure', 'cancelled', 'timed_out'].includes(job.conclusion)).slice(0, 3).map(job => {
+      const steps = (job.steps ?? []).filter(step => ['failure', 'cancelled', 'timed_out'].includes(step.conclusion)).slice(0, 2).map(step => `step "${step.name}"`);
+      return `job "${job.name}"${steps.length ? ` ${steps.join(', ')}` : ''}${job.html_url ? ` (${job.html_url})` : ''}`;
+    });
+    return {failure: `PR verification concluded ${run.conclusion}${named.length ? `: ${named.join('; ')}` : ''}`};
   }
+  // The decision rests on the LATEST attempt of the completed run. A snapshot taken while jobs or steps are
+  // still being finalized, or a job list that is ahead of or behind the run record, is not a failure: it is
+  // re-read a bounded number of times and otherwise reported as still pending. Only a final, definite
+  // conclusion of a required job or step is a failure, and it names exactly which one.
+  let verdict;
+  for (let read = 0; ; read++) {
+    const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun,
+      {...repo, run_id: run.id, filter: 'latest', per_page: 100});
+    verdict = judgeVerification(run, jobs);
+    if (verdict.final || read === JOB_REREADS) break;
+    await wait(2000 * 2 ** read);
+  }
+  if (verdict.failure) return {failure: verdict.failure};
+  if (!verdict.final) return {pending: true, state: 'finalizing', detail: verdict.waiting};
+  const verify = verdict.verify;
   return receipt ? {url: run.html_url, run_id: run.id, attempt: run.run_attempt,
     head_sha: run.head_sha, event: run.event, conclusion: run.conclusion,
     job: {id: verify.id, name: verify.name, conclusion: verify.conclusion,
@@ -211,18 +451,16 @@ async function assertProtection(github, repo, policyJob = CHECK) {
     {...repo, branch: config.base_branch, per_page: 100});
   const checks = rules.find(rule => rule.type === 'required_status_checks')?.parameters;
   const reviews = rules.find(rule => rule.type === 'pull_request')?.parameters;
-  if (!checks?.strict_required_status_checks_policy ||
-    [config.verification.job, policyJob].some(name => !checks.required_status_checks.some(check =>
-      check.context === name && check.integration_id === 15368)) ||
-    !reviews || reviews.required_approving_review_count < 1 ||
-    !reviews.dismiss_stale_reviews_on_push || !reviews.require_last_push_approval ||
-    !rules.some(rule => rule.type === 'deletion') || !rules.some(rule => rule.type === 'non_fast_forward')) {
-    throw new Error(`Main must enforce ${config.verification.job}, ${policyJob}, fresh approval, up-to-date checks, and protection from deletion/force pushes`);
+  const gaps = [];
+  if ([config.verification.job, policyJob].some(name => !checks?.required_status_checks?.some(check =>
+    check.context === name && check.integration_id === 15368))) gaps.push('required checks missing');
+  if (!checks?.strict_required_status_checks_policy) gaps.push('up-to-date missing');
+  if (!reviews || reviews.required_approving_review_count < 1 ||
+    !reviews.dismiss_stale_reviews_on_push || !reviews.require_last_push_approval) gaps.push('approval freshness missing');
+  if (!rules.some(rule => rule.type === 'deletion') || !rules.some(rule => rule.type === 'non_fast_forward')) gaps.push('force-push+deletion protection missing');
+  if (gaps.length) {
+    throw Object.assign(new Error(`Main must enforce ${config.verification.job}, ${policyJob}, fresh approval, up-to-date checks, and protection from deletion/force pushes`), {gaps});
   }
-}
-
-function matchesPath(filename, paths) {
-  return paths.some(path => path.endsWith('/') ? filename.startsWith(path) : filename === path);
 }
 
 function needsDeployment(files) {
@@ -230,17 +468,24 @@ function needsDeployment(files) {
     matchesPath(file.filename, config.deployment.paths) || matchesPath(file.previous_filename || '', config.deployment.paths));
 }
 
+// The values a gate notice may mention; `pr` is the last pull request read, which always exists once the gate runs.
+const gateNoticeContext = (context, pr, repo) => ({repo: `${repo.owner}/${repo.repo}`, run: String(context.runId), head: pr.head.sha, number: String(pr.number)});
+
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
-  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false}) {
+  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
-  const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+  const getPr = async () => (await readPull(github, repo, pull_number)).data;
+  const transient = (operation, call) => retryTransient(call, {operation, head: assessment.head_sha, wait, report: message => core.info(message)});
   let pr = await getPr();
   if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) {
     core.info('PR is not ready for the protected base branch; no review or merge action is needed.');
     return;
   }
   if (assessment.number !== pull_number || assessment.head_sha !== pr.head.sha || assessment.base_sha !== pr.base.sha) {
+    if (assessment.number === pull_number && require('./branch-update.cjs').baseOnlyMoved(pr, assessment, config.base_branch)) {
+      throw await require('./branch-update.cjs').surface({github, repo, pr, assessment, baseBranch: config.base_branch});
+    }
     throw new Error('Stale intent assessment: reassess the current PR revision');
   }
   if (context.eventName === 'issue_comment') {
@@ -251,9 +496,15 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     }
   }
   const protection = () => require('./merge-protection.cjs').assertMergeProtection({github, repo,
-    baseBranch: config.base_branch, manual: manualMerge,
+    baseBranch: config.base_branch, manual: manualMerge, privateOwnerAutomatic,
     assertProtection: () => assertProtection(github, repo, nativeGate ? 'approve-and-merge' : CHECK)});
-  await protection();
+  const initialProtection = await protection();
+  const controllerManaged = initialProtection.controllerManaged === true;
+  const protectionGaps = initialProtection.insufficient ? initialProtection.gaps : null;
+  // A held assessment carries no record by design; report its own reason
+  // instead of the misleading missing-record error that would hide it.
+  const held = assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity';
+  if (controllerManaged && typeof verifyAcceptance !== 'function' && !held) throw new Error('Private owner merge requires a validated protocol-two acceptance record');
   // The native job is the required check. Additional GITHUB_TOKEN API checks
   // can attach to another run's suite; publish detail in this job's summary.
   const check = nativeGate ? null : (await github.rest.checks.create({...repo, name: CHECK, head_sha: pr.head.sha,
@@ -268,25 +519,36 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   try {
     const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
     const codeowners = require('./codeowners.cjs');
-    const ownership = codeownersRequired ? await codeowners.authority({github, repo, pr, files}) : {automatic: true};
-    if (ownership.configured === false) core.info(ownership.reason);
-    const automatic = ownership.automatic && !manualMerge;
-    if (!automatic && pr.auto_merge) {
-      await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+    let ownership = codeownersRequired ? await codeowners.authority({github, repo, pr, files}) : {automatic: true};
+    if (ownership.configured === false) {
+      core.info(ownership.reason);
+      if (privateOwnerAutomatic) ownership = {...ownership, automatic: false, reason: 'Explicit automatic mode requires configured CODEOWNERS on the accepted base; automatic merge is denied.'};
     }
-    if (automatic && !pr.auto_merge) {
-      await github.graphql(`mutation($id:ID!) { enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH}) {
-        pullRequest { autoMergeRequest { enabledAt } }
-      } }`, {id: pr.node_id});
+    const automatic = ownership.automatic && !manualMerge;
+    // A review that reached no approvable decision never arms native auto-merge, even before the gate fails on it.
+    const nativeAutomatic = automatic && !controllerManaged && !protectionGaps && !NEVER_ARMED.includes(assessment.decision);
+    if (!nativeAutomatic && pr.auto_merge) {
+      await transient('disabling auto-merge', () => github.graphql(DISABLE_AUTO_MERGE, {id: pr.node_id}));
+    }
+    if (nativeAutomatic && !pr.auto_merge) {
+      // A retry first re-reads the PR: an attempt that GitHub reported as failed may have armed it.
+      await transient('enabling auto-merge', async attempt => {
+        if (attempt > 0 && (await getPr()).auto_merge) return;
+        await github.graphql(`mutation($id:ID!) { enablePullRequestAutoMerge(input:{pullRequestId:$id,mergeMethod:SQUASH}) {
+          pullRequest { autoMergeRequest { enabledAt } }
+        } }`, {id: pr.node_id});
+      });
     }
     pr = await getPr();
-    if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha || automatic && !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
-    if (!automatic && pr.auto_merge) throw new Error('Automatic merge remains enabled for a PR that requires manual merge');
+    if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha || nativeAutomatic && !pr.auto_merge) throw new Error('Auto-merge was not enabled on the assessed revision');
+    if (!nativeAutomatic && pr.auto_merge) throw new Error('Automatic merge remains enabled for a PR that requires manual merge');
     const selfAuthored = pr.user?.login === 'github-actions[bot]';
     if (assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity') throw new Error(assessment.reason);
     const intentPending = assessment.decision === 'pending_technical';
     if (nativeGate && intentPending) throw new Error('AI assessment must finish after successful verification before the native policy job can pass');
-    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr));
+    const managed = await managedExemptions(github, repo, pr, files);
+    for (const notice of managed.notices) core.info(notice);
+    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt, managed.protect));
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) {
       if (!pr.assignees?.some(user => user.login === MANUAL_REVIEWER)) {
         await github.rest.issues.addAssignees({...repo, issue_number: pull_number, assignees: [MANUAL_REVIEWER]});
@@ -299,9 +561,12 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       const marker = `<!-- clouseau-intent:${pr.head.sha} -->`;
       const reason = assessment.reason.replaceAll('@', '').slice(0, 2000);
       const selfReview = selfAuthored ? 'This PR was authored by the approval bot. A maintainer must first submit an approving review on this exact revision; the bot cannot approve its own PR.\n\n' : '';
+      const gateNotice = require('./gate-notice.cjs');
+      const noticeContext = gateNoticeContext(context, pr, repo);
+      const cause = gateNotice.intentCause({selfAuthored, scope: scopeReason(files, pr, managed.exempt, managed.protect), controlReason: REVIEW_CONTROL_REASON});
       const summary = `A maintainer's second opinion is required.\n\n${selfReview}${reason}\n\n` +
         `To confirm this change belongs in this repository, comment:\n\n\`/approve-intent ${pr.head.sha}\`\n\n` +
-        'This confirms intent only. All tests and exact 100% line and branch coverage remain mandatory.';
+        `This confirms intent only. All tests and ${COVERAGE.full} remain mandatory.\n\n${gateNotice.intentBlock(cause, noticeContext)}`;
       await finish('action_required', summary);
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pull_number, per_page: 100});
       if (!comments.some(comment => comment.user.type === 'Bot' && comment.body.includes(marker))) {
@@ -337,13 +602,13 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       return;
     }
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
-    const currentProtection = manualMerge ? await protection() : null;
+    const currentProtection = manualMerge || controllerManaged ? await protection() : null;
     if (manualMerge && ownership.automatic && codeownersRequired &&
         !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before manual-mode approval');
     if (!selfAuthored) {
-      await github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
-        body: `All tests and exact 100% line and branch coverage passed: ${technical.url}\n\n` +
-          (humanRequired ? 'Repository intent confirmed by a maintainer.' : `Repository fit and supported intent assessed: ${assessment.reason}`)});
+      await transient('submitting the approval', () => github.rest.pulls.createReview({...repo, pull_number, commit_id: pr.head.sha, event: 'APPROVE',
+        body: `All tests and ${COVERAGE.full} passed: ${technical.url}\n\n` +
+          (humanRequired ? 'Repository intent confirmed by a maintainer.' : `Repository fit and supported intent assessed: ${assessment.reason}`)}));
     }
     if (!ownership.automatic) {
       if (!await codeowners.approved({github, repo, pr, ownership})) {
@@ -352,22 +617,41 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
         if (nativeGate) throw new Error('A current-head code-owner approval is required; automatic merge is disabled');
         return;
       }
-      await finish('success', 'Tests, exact coverage and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.' +
+      await finish('success', `Tests, ${COVERAGE.brief} and code-owner approval passed. Automatic merge remains disabled; a code owner must merge manually.` +
         (currentProtection && !currentProtection.enforced ? `\n\n${currentProtection.reason}` : ''));
       return;
     }
+    if (protectionGaps) {
+      await require('./merge-protection.cjs').postProtectionNotice({github, repo, pull_number, gaps: protectionGaps});
+      await finish('success', `Tests, ${COVERAGE.brief} and approval recorded. Merge was not armed because repository settings are insufficient: ${protectionGaps.join(', ')}. ` +
+        'Cause: `merge_protection_insufficient`; the numbered steps are in the protection notice on the pull request.');
+      return;
+    }
     if (manualMerge) {
-      await finish('success', 'Tests, exact coverage and review passed. Automatic merge is disabled; the code owner must merge manually.' +
+      await finish('success', `Tests, ${COVERAGE.brief} and review passed. Automatic merge is disabled; the code owner must merge manually.` +
         (currentProtection.enforced ? '' : `\n\n${currentProtection.reason}`));
       return;
     }
+    if (controllerManaged) {
+      if (!currentProtection.controllerManaged) throw new Error('Private-plan acceptance mode changed before approval');
+      pr = await require('./private-owner-merge.cjs').finalizePrivateOwner({github, repo, pr, assessment, wait,
+        baseBranch: config.base_branch, verify: async () => {
+          await verifyAcceptance();
+          const current = await protection();
+          if (!current.controllerManaged) throw new Error('Private-plan acceptance mode changed before merge');
+          if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
+        }});
+      await finish('success', `Tests, ${COVERAGE.brief}, validated acceptance and fresh approval passed. Controller-enforced owner merge completed: ${pr.merge_commit_sha}. Native branch protection is unavailable.`);
+      if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
+      return;
+    }
     // Ownership is read again at the write boundary, including current team membership.
-    if (codeownersRequired && !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before automatic approval');
+    if (codeownersRequired && !((value) => value.automatic && (!privateOwnerAutomatic || value.configured !== false))(await codeowners.authority({github, repo, pr, files}))) throw new Error('Code ownership changed before automatic approval');
     await finish('success', `All required tests and coverage passed. Intent ${humanRequired ? 'confirmed by a maintainer' : 'supported by repository fit and evidence'}.\n\n${technical.url}`);
 
     if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
   } catch (error) {
-    await finish('failure', error.message);
+    await finish('failure', require('./gate-notice.cjs').failureBlock(error.message, gateNoticeContext(context, pr, repo)));
     throw error;
   }
 }
@@ -376,19 +660,30 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   wait = sleep, mergePolls = 75, pr, files}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
-  const getPr = async () => (await github.rest.pulls.get({...repo, pull_number})).data;
+  const getPr = async () => (await readPull(github, repo, pull_number)).data;
   if (!pr) pr = await getPr();
   if (assessment.number !== pull_number || pr.head.sha !== assessment.head_sha || pr.base.ref !== config.base_branch) {
     throw new Error('PR changed before merge finalization');
   }
   if (manualMerge) {
-    if (pr.auto_merge) await github.graphql(`mutation($id:ID!) { disablePullRequestAutoMerge(input:{pullRequestId:$id}) { pullRequest { id } } }`, {id: pr.node_id});
+    if (pr.auto_merge) {
+      await retryTransient(() => github.graphql(DISABLE_AUTO_MERGE, {id: pr.node_id}), {operation: 'disabling auto-merge',
+        head: assessment.head_sha, wait, report: message => core.info(message)});
+    }
     core.info('Manual merge mode never arms auto-merge or dispatches deployment. A code owner must merge manually.');
     return;
   }
+  if (privateOwnerAutomatic && !pr.merged) {
+    const checked = await require('./merge-protection.cjs').assertMergeProtection({github, repo,
+      baseBranch: config.base_branch, manual: false, privateOwnerAutomatic,
+      assertProtection: () => assertProtection(github, repo, 'approve-and-merge')});
+    if (checked.insufficient) return;
+    if (checked.controllerManaged) throw new Error('Private owner merge must complete through the validated acceptance gate before finalization');
+  }
   if (codeownersRequired && !pr.merged) {
     if (!files) files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
-    if (!(await require('./codeowners.cjs').authority({github, repo, pr, files})).automatic) {
+    const ownership = await require('./codeowners.cjs').authority({github, repo, pr, files});
+    if (!ownership.automatic || privateOwnerAutomatic && ownership.configured === false) {
       core.info('Code-owner-authored PRs alone qualify for automatic merge; this PR requires manual code-owner merge.');
       return;
     }
@@ -419,8 +714,8 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, requestReassessment, gate, finalize, scopeReason, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 
-module.exports = {createPolicy, intentText};
+module.exports = {createPolicy, intentText, protectedChanges};

@@ -38,10 +38,42 @@ test('bounded record transport preserves the entire record and optional repair d
   assert.deepEqual(transport.decode({...f, payload: transport.encode(f)}), {record: f.record, repair: f.repair});
 });
 
+test('a compact local record travels by its own digest and cannot carry or stand in for a complete record', () => {
+  const f = fixture();
+  const compact = {version: 2, local_receipt_reference: true, local_artifact: 'd'.repeat(40), local_author: 'contributor',
+    previous: {findings: []}, technical: {commands: []}};
+  Object.assign(f, {record: compact});
+  f.assessment.record_reference_digest = digest(compact);
+  const payload = transport.encode(f);
+  assert.deepEqual(transport.decode({...f, payload}), {record: compact, repair: null});
+  assert.ok(Buffer.byteLength(JSON.stringify(envelope(payload))) < 2000, 'only run facts, not the signed review, are transported');
+  for (const record of [{...compact, local_receipt_reference: false}, {...compact, snapshot: f.record.snapshot}, {...compact, local_artifact: 'e'.repeat(40)}]) {
+    assert.throws(() => transport.encode({...f, record}), /compact record digest differs/);
+  }
+  assert.throws(() => transport.encode({...f, repair: {proposal: 'unrequested'}}), /compact record digest differs/);
+  assert.throws(() => transport.encode({...f, assessment: {...f.assessment, repair_digest: 'c'.repeat(64)}}), /compact record digest differs/);
+  assert.throws(() => transport.decode({...f, assessment: {...f.assessment, record_reference_digest: 'c'.repeat(64)}, payload}), /foreign or stale/);
+  assert.throws(() => transport.encode({...f, assessment: {...f.assessment, record_reference_digest: 'invalid'}}), /invalid assessment digest/);
+});
+
+test('a re-run of failed jobs reads the record of an earlier attempt of the same run, never a later one or a forged attempt', () => {
+  const f = fixture(); const payload = transport.encode(f);
+  for (const runAttempt of ['2', '3', '10']) assert.deepEqual(transport.decode({...f, runAttempt, payload}), {record: f.record, repair: null});
+  assert.throws(() => transport.decode({...f, runAttempt: '1', payload}), /foreign or stale/);
+  for (const forged of ['3', '02', 'x', '', 3, null]) {
+    const value = envelope(payload); value.binding.run_attempt = forged;
+    assert.throws(() => transport.decode({...f, payload: raw(value)}), /foreign or stale/);
+  }
+  const other = envelope(payload); other.binding.run_id = '457';
+  assert.throws(() => transport.decode({...f, runAttempt: '3', payload: raw(other)}), /foreign or stale/);
+  const head = envelope(payload); head.binding.head_sha = 'c'.repeat(40);
+  assert.throws(() => transport.decode({...f, runAttempt: '3', payload: raw(head)}), /foreign or stale/);
+});
+
 test('every repository, run, attempt, revision and assessment digest is bound at receipt', () => {
   const f = fixture(); const payload = transport.encode(f);
   for (const mutate of [
-    o => {o.context.repo.repo = 'foreign';}, o => {o.context.runId++;}, o => {o.runAttempt = '3';},
+    o => {o.context.repo.repo = 'foreign';}, o => {o.context.runId++;}, o => {o.runAttempt = '1';},
     o => {o.assessment.head_sha = 'c'.repeat(40);}, o => {o.assessment.base_sha = 'c'.repeat(40);},
     o => {o.assessment.record_digest = 'c'.repeat(64);}, o => {o.assessment.repair_digest = 'c'.repeat(64);},
   ]) {
@@ -87,8 +119,13 @@ test('repair data must exist exactly when the compact assessment binds its diges
 test('incomplete and pending assessments retain their run binding but carry no fabricated review record', () => {
   const f = fixture(); delete f.assessment.record_digest;
   f.assessment.decision = 'review_incomplete'; f.record = null;
-  const payload = transport.encode(f);
-  assert.deepEqual(transport.decode({...f, payload}), {record: null, repair: null});
+  for (const decision of ['review_incomplete', 'pending_technical', 'blocked_technical']) {
+    f.assessment.decision = decision;
+    f.assessment.review_source = 'authenticated_local'; f.assessment.provider_api_calls = 0;
+    const payload = transport.encode(f);
+    assert.deepEqual(transport.decode({...f, payload}), {record: null, repair: null},
+      'verified quality reuse with outstanding technical checks cannot transport an approval record');
+  }
   assert.throws(() => transport.encode({...f, record: {}}), /unexpected review data/);
   assert.throws(() => transport.encode({...f, repair: {}}), /unexpected review data/);
   f.assessment.repair_digest = 'a'.repeat(64);

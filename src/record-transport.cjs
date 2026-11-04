@@ -28,11 +28,12 @@ function binding(assessment, context, runAttempt) {
   const value = {repository: `${context.repo.owner}/${context.repo.repo}`,
     run_id: String(context.runId), run_attempt: String(runAttempt),
     head_sha: assessment.head_sha, base_sha: assessment.base_sha,
-    record_digest: assessment.record_digest ?? null, repair_digest: assessment.repair_digest ?? null};
+    record_digest: assessment.record_digest ?? null, repair_digest: assessment.repair_digest ?? null,
+    reference_digest: assessment.record_reference_digest ?? null};
   requireThat(assessment.version === 2 && /^[^/\s]+\/[^/\s]+$/.test(value.repository) &&
     /^[1-9][0-9]*$/.test(value.run_id) && /^[1-9][0-9]*$/.test(value.run_attempt) &&
     /^[a-f0-9]{40}$/.test(value.head_sha) && /^[a-f0-9]{40}$/.test(value.base_sha), 'incomplete run or revision identity');
-  for (const name of ['record_digest', 'repair_digest']) {
+  for (const name of ['record_digest', 'repair_digest', 'reference_digest']) {
     requireThat(value[name] === null || /^[a-f0-9]{64}$/.test(value[name]), 'invalid assessment digest');
   }
   return value;
@@ -64,6 +65,13 @@ function verifyData(record, repair, expected) {
     requireThat(record === null && repair === null && expected.repair_digest === null, 'unexpected review data');
     return;
   }
+  if (expected.reference_digest !== null) {
+    // A compact local record carries only run facts; the write boundary rehydrates
+    // the complete record from its immutable signed receipt and recomputes it.
+    requireThat(record && repair === null && expected.repair_digest === null && record.local_receipt_reference === true &&
+      !('snapshot' in record) && digest(record) === expected.reference_digest, 'compact record digest differs');
+    return;
+  }
   requireThat(record && digest(record) === expected.record_digest &&
     record.snapshot?.repository === expected.repository && record.snapshot?.head_sha === expected.head_sha &&
     record.snapshot?.base_sha === expected.base_sha, 'record digest or revision differs');
@@ -87,8 +95,12 @@ function decode({payload, assessment, context, runAttempt}) {
   const value = parseJson(unpack(payload));
   requireThat(value && Object.keys(value).sort().join(',') === 'binding,record,repair,version' && value.version === 1,
     'invalid envelope');
+  // A re-run of failed jobs is a later attempt of the same run and reads the earlier attempt's job outputs, so the
+  // producing attempt may be this one or an earlier one. Every other fact must match exactly.
   requireThat(value.binding && Object.keys(value.binding).sort().join(',') === Object.keys(expected).sort().join(',') &&
-    Object.entries(expected).every(([name, item]) => value.binding[name] === item), 'foreign or stale run binding');
+    Object.entries(expected).every(([name, item]) => name === 'run_attempt' || value.binding[name] === item) &&
+    /^[1-9][0-9]*$/.test(value.binding.run_attempt) && Number(value.binding.run_attempt) <= Number(expected.run_attempt),
+  'foreign or stale run binding');
   verifyData(value.record, value.repair, expected);
   return {record: value.record, repair: value.repair};
 }

@@ -9,7 +9,8 @@ function cliApi(execute = cp.execFileSync) {
     }
     const args = ['api', '--hostname', 'github.com', '--method', method, endpoint];
     if (body !== undefined) args.push('--input', '-');
-    return JSON.parse(execute('gh', args, {encoding: 'utf8', maxBuffer: 3000000,
+    // Allow the bounded 3 MB receipt plus GitHub's base64/JSON representation.
+    return JSON.parse(execute('gh', args, {encoding: 'utf8', maxBuffer: 4500000,
       ...(body === undefined ? {} : {input: JSON.stringify(body)})}));
   };
 }
@@ -23,6 +24,7 @@ function githubFromApi(api) {
   };
   const github = {rest: {
     repos: {getContent: endpoint(args => `${repo(args)}/contents/${args.path.split('/').map(encodeURIComponent).join('/')}?${query({ref: args.ref})}`)},
+    git: {getBlob: endpoint(args => `${repo(args)}/git/blobs/${encodeURIComponent(args.file_sha)}`)},
     pulls: {
       get: endpoint(args => `${repo(args)}/pulls/${args.pull_number}`),
       listFiles: endpoint(args => `${repo(args)}/pulls/${args.pull_number}/files?${query({per_page: args.per_page, page: args.page})}`),

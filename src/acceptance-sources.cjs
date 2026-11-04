@@ -2,7 +2,8 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const {digest, MAX_CITATION_LINES} = require('./acceptance.cjs');
+const {LockfileError, MAX_BYTES, LOCKFILE_PATCH, isLockfile, lockfileEvidence, lockfileError} = require('./lockfile-summary.cjs');
+const {digest, MAX_CITATION_LINES, isCodePath, isTestPath, moduleStem, importsOf, coveringTests, showsNoText} = require('./acceptance.cjs');
 
 function proofCatalog(snapshot) {
   return Object.entries(snapshot.sources).flatMap(([source, value], index) => {
@@ -21,32 +22,154 @@ function safePath(value) {
     !value.split('/').some(part => !part || part === '.' || part === '..' || part === '.git');
 }
 
-function refresh(snapshot) {
+const BUDGET = 900000;
+// The combined snapshot of a chunked review (design: chunked review) has no size cap: it is reviewed in bounded unit
+// views, and its record is stored as a multi-part receipt. Only the views are capped, by `BUDGET`.
+const UNBOUNDED = Number.MAX_SAFE_INTEGER;
+const CHANGED_FILE_LIMIT = 1000000;
+function evidenceSize(snapshot) {
   const value = {...snapshot}; delete value.digest;
-  if (JSON.stringify(value).length > 900000) throw new Error('Complete review evidence exceeds the source budget');
+  return JSON.stringify(value).length;
+}
+
+function refresh(snapshot, cap = BUDGET) {
+  if (!Number.isSafeInteger(cap) || cap <= 0) throw new Error('Invalid evidence limit: the cap must be a positive safe integer');
+  const value = {...snapshot}; delete value.digest;
+  if (JSON.stringify(value).length > cap) {
+    // A lockfile that could not be summarized is the specific reason only when its raw evidence is what overflows.
+    const failed = (snapshot.lockfile_failures || []).filter(item => item.path);
+    const paths = new Set(failed.map(item => item.path));
+    const rest = {...value, sources: Object.fromEntries(Object.entries(value.sources).filter(([, source]) => !paths.has(source.path))),
+      files: value.files?.filter(file => !paths.has(file.path))};
+    throw failed.length && JSON.stringify(rest).length <= cap ? lockfileError(failed[0].path, failed[0].reason) : new Error('Complete review evidence exceeds the source budget');
+  }
   snapshot.digest = digest(value);
   return snapshot;
 }
 
-async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source'}) {
-  if (!safePath(filename)) throw new Error('Unsafe repository evidence path');
-  const id = `${ref}:${filename}`;
-  if (snapshot.sources[id]) return id;
+async function fetchText({github, repo, snapshot, filename, ref, limit = 300000}) {
+  if (!safePath(filename)) throw Object.assign(new Error('Unsafe repository evidence path'), {unavailable: true, path: String(filename)});
   const sourceRepo = ref === snapshot.head_sha ? snapshot.head_repository : repo;
   if (!sourceRepo) throw new Error('The immutable head repository is unavailable');
   const {data} = await github.rest.repos.getContent({...sourceRepo, path: filename, ref});
-  if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > 300000) {
-    throw new Error('Complete textual source is unavailable within the evidence budget');
+  if (data.encoding !== 'base64' || typeof data.content !== 'string' || data.size > limit) {
+    throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true, path: filename, reason: 'size'});
   }
-  const content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
-  if (content.includes('\0') || content.length > 300000) throw new Error('Binary or oversized source is not reviewable');
-  snapshot.sources[id] = {path: filename, ref, authority, kind, content};
+  let content;
+  try {content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));}
+  catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true, path: filename, reason: 'text'});}
+  if (content.includes('\0') || content.length > limit) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true, path: filename, reason: 'text'});
+  return content;
+}
+
+// The derived dependency summary replaces a lockfile's raw text and patch. When the lockfile cannot be
+// summarized completely the result names the specific reason and the caller keeps the raw evidence.
+async function summarizeChangedLockfile({github, repo, snapshot, file, baseSha, headSha}) {
+  try {
+    const baseText = file.status === 'added' ? null :
+      await fetchText({github, repo, snapshot, filename: file.previous_filename || file.filename, ref: baseSha, limit: MAX_BYTES});
+    const headText = file.status === 'removed' ? null :
+      await fetchText({github, repo, snapshot, filename: file.filename, ref: headSha, limit: MAX_BYTES});
+    return lockfileEvidence({file, baseSha, headSha, baseText, headText});
+  } catch (error) {
+    const reason = error instanceof LockfileError ? error.reason : error.unavailable ? (error.reason === 'size' ? 'too_large' : 'not_text') : null;
+    if (!reason) throw error;
+    return {reason};
+  }
+}
+
+async function readSource({github, repo, snapshot, filename, ref, authority = 'untrusted', kind = 'source', limit}) {
+  const id = `${ref}:${filename}`;
+  if (snapshot.sources[id]) return id;
+  snapshot.sources[id] = {path: filename, ref, authority, kind, content: await fetchText({github, repo, snapshot, filename, ref, limit})};
   return id;
 }
 
-async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null}) {
+// A review bot rewrites the PR body with its own "Summary by <bot>" section that
+// restates the diff as intent (for example "Bug Fixes: ..."). That text is a
+// model's reading of the change, not the contributor's claim, and carries no
+// authority; it must not be able to supply the justification for what it summarizes.
+function contributorClaim(body) {
+  if (typeof body !== 'string') return body;
+  return body.replace(/^#{1,6} +Summary by [^\n]*(?:\n(?!#{1,6} )[^\n]*)*/gim, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Optional evidence (an existing test, a source a reviewer asked for) that is missing, not
+// textual, too large or beyond the evidence budget is omitted with a stated reason that the
+// reviewers see. Files that actually changed never take this path: they fail closed.
+async function readOptional({github, repo, snapshot, filename, cap = BUDGET}) {
+  try {
+    const id = await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
+    if (evidenceSize(snapshot) > cap) {delete snapshot.sources[id]; throw Object.assign(new Error('over budget'), {omitted: 'would exceed the total evidence budget'});}
+  } catch (error) {
+    const reason = error.omitted || (error.status === 404 ? 'not found at the head revision' : error.unavailable ? 'not available as complete text within the evidence budget' : null);
+    if (!reason) throw error;
+    snapshot.omitted_sources = [...(snapshot.omitted_sources || []).filter(item => item.path !== filename), {path: filename, reason}];
+  }
+}
+
+// Supplies what pins the changed code: tests that name a changed module, importers found by content, and barrels.
+// `files` are {filename, status}. The hosted review and the check of a signed local receipt use this one
+// discovery, so neither applies a weaker or a stronger rule.
+async function supplyTests({github, repo, snapshot, files, baseSha, headSha, cap}) {
+  // Existing tests are not part of the change, so a reviewer cannot see what pins a changed
+  // module unless the controller supplies them. Tests whose path names a changed production
+  // module are read at the head revision; a model's later source_request may add the rest.
+  const code = files.filter(file => file.status !== 'removed' && isCodePath(file.filename));
+  if (code.length) {
+    const {data: tree} = await github.rest.git.getTree({...repo, tree_sha: baseSha, recursive: 'true'});
+    if (tree.truncated) throw new Error('Repository tree is too large to locate the existing tests');
+    const changed = new Set(files.map(file => file.filename));
+    let budget = 150000;
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
+      item.size < 60000 && code.some(file => item.path.split('/').pop().includes(moduleStem(file.filename)))).slice(0, 8)) {
+      if (entry.size > budget) break;
+      budget -= entry.size;
+      await readOptional({github, repo, snapshot, filename: entry.path, cap});
+    }
+    // Tests rarely carry the module's name (utils.test.ts imports attention-color), so importers are
+    // also found by content: other small tests are read once and only their import specifiers are
+    // kept, which keeps the reviewers' evidence small. Barrels that re-export a changed module's
+    // directory are supplied in full so that a chain through them can be followed.
+    const supplied = new Set(Object.values(snapshot.sources).map(source => source.path));
+    // Real tests first, then Storybook fixtures. Each file read costs a request from the shared budget, so the
+    // scan is lazy: it stops as soon as every changed code file is covered, reads real tests before stories,
+    // and is bounded; the extent is stated to the reviewers.
+    const story = item => /\.stories\.|(?:^|\/)stories\//.test(item.path);
+    const others = tree.tree.filter(item => item.type === 'blob' && isTestPath(item.path) && !changed.has(item.path) &&
+      !supplied.has(item.path) && item.size < 60000).sort((a, b) => Number(story(a)) - Number(story(b)));
+    snapshot.test_imports = []; let scanned = 0;
+    const uncovered = () => Object.values(coveringTests(snapshot)).some(list => !list.length);
+    for (const group of [others.filter(item => !story(item)), others.filter(story)]) {
+      for (let offset = 0; offset < group.length && scanned < 100 && uncovered(); offset += 10) {
+        const batch = group.slice(offset, offset + Math.min(10, 100 - scanned));
+        scanned += batch.length;
+        const found = await Promise.all(batch.map(async entry => {
+          try {return {path: entry.path, specifiers: importsOf(entry.path, await fetchText({github, repo, snapshot, filename: entry.path, ref: headSha}))};}
+          catch (error) {if (error.status === 404 || error.unavailable) return null; throw error;}
+        }));
+        snapshot.test_imports.push(...found.filter(item => item && item.specifiers.length));
+      }
+    }
+    snapshot.importer_scan = {tests_found: others.length, tests_scanned: scanned};
+    const directories = new Set(code.flatMap(file => file.filename.split('/').slice(0, -1).map((_, i, parts) => parts.slice(0, parts.length - i).join('/'))));
+    for (const entry of tree.tree.filter(item => item.type === 'blob' && !changed.has(item.path) && /(?:^|\/)(?:index\.[cm]?[jt]sx?|__init__\.py)$/.test(item.path) &&
+      directories.has(item.path.split('/').slice(0, -1).join('/')) && item.size < 60000).slice(0, 6)) {
+      await readOptional({github, repo, snapshot, filename: entry.path, cap});
+    }
+  }
+  snapshot.covering_tests = coveringTests(snapshot);
+  return snapshot;
+}
+
+// `unbounded` is the hosted chunked review (docs/chunked-hosted.md): the combined snapshot has no size cap, because it is
+// reviewed in bounded unit views, and a changed file may be as large as the GitHub contents API returns (1,000,000 bytes).
+async function collectSnapshot({github, repo, pr, files, config, technical, intentConfirmation = null, unbounded = false}) {
+  const cap = unbounded ? UNBOUNDED : BUDGET;
+  const limit = unbounded ? CHANGED_FILE_LIMIT : undefined;
   if (!files.length || files.length !== pr.changed_files || files.some(file =>
-    !safePath(file.filename) || !file.patch || !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
+    !safePath(file.filename) || (!file.patch && !isLockfile(file.filename) && !['added', 'removed', 'renamed'].includes(file.status)) ||
+    !['added', 'modified', 'removed', 'renamed'].includes(file.status))) {
     throw new Error('Changed-file evidence is incomplete');
   }
   const policy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
@@ -68,15 +191,43 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
   }
   for (const file of files) {
     const item = {path: file.filename, status: file.status, patch: file.patch};
-    if (file.status !== 'added') {
-      const filename = file.previous_filename || file.filename;
-      item.base_source = await readSource({github, repo, snapshot, filename, ref: pr.base.sha});
-      const {data} = await github.rest.repos.listCommits({...repo, path: filename, sha: pr.base.sha, per_page: 3});
-      snapshot.history.push({path: filename, commits: data.map(commit => ({sha: commit.sha, message: commit.commit.message}))});
+    const lockfile = isLockfile(file.filename) ?
+      await summarizeChangedLockfile({github, repo, snapshot, file, baseSha: pr.base.sha, headSha: pr.head.sha}) : null;
+    if (lockfile?.reason) {
+      snapshot.lockfile_failures = [...(snapshot.lockfile_failures || []), {path: file.filename, reason: lockfile.reason}];
+      if (!file.patch) throw lockfileError(file.filename, lockfile.reason);
     }
-    if (file.status !== 'removed') item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha});
+    if (lockfile?.id) {
+      snapshot.sources[lockfile.id] = lockfile.source;
+      Object.assign(item, {patch: LOCKFILE_PATCH, lockfile: true});
+    }
+    try {
+      if (file.status !== 'added') {
+        const filename = file.previous_filename || file.filename;
+        if (lockfile?.id) item.base_source = lockfile.id;
+        else item.base_source = await readSource({github, repo, snapshot, filename, ref: pr.base.sha, limit});
+        const {data} = await github.rest.repos.listCommits({...repo, path: filename, sha: pr.base.sha, per_page: 3});
+        snapshot.history.push({path: filename, commits: data.map(commit => ({sha: commit.sha, message: commit.commit.message}))});
+      }
+      if (file.status !== 'removed') {
+        if (lockfile?.id) item.head_source = lockfile.id;
+        else item.head_source = await readSource({github, repo, snapshot, filename: file.filename, ref: pr.head.sha, limit});
+      }
+    } catch (error) {
+      // The raw lockfile is the fallback evidence; when it does not fit either, say why the lockfile failed.
+      if (error.unavailable && lockfile?.reason) throw lockfileError(file.filename, lockfile.reason);
+      throw error;
+    }
+    // GitHub lists no patch for a change that shows no text. Only the immutable sources can prove that nothing was
+    // withheld (an empty file added or removed, a rename of identical content); otherwise the patch is unavailable.
+    if (!file.patch && !lockfile?.id) {
+      const text = id => snapshot.sources[id]?.content;
+      if (!showsNoText(file.status, text(item.base_source), text(item.head_source))) throw new Error('Changed-file evidence is incomplete');
+      item.patch = '';
+    }
     snapshot.files.push(item);
   }
+  await supplyTests({github, repo, snapshot, files, baseSha: pr.base.sha, headSha: pr.head.sha, cap});
   const linked = await github.graphql(`query($owner:String!,$repo:String!,$number:Int!) {
     repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
       closingIssuesReferences(first:10) { nodes { number title body url author { login } } pageInfo { hasNextPage } }
@@ -90,16 +241,17 @@ async function collectSnapshot({github, repo, pr, files, config, technical, inte
     snapshot.sources[`ticket:${ticket.number}:${ref}`] = {path: `issues/${ticket.number}`, ref,
       authority: 'untrusted', kind: 'requirement', content: JSON.stringify(ticket, null, 2)};
   }
-  snapshot.claims = {title: pr.title, description: pr.body};
-  return refresh(snapshot);
+  snapshot.claims = {title: pr.title, description: contributorClaim(pr.body)};
+  return refresh(snapshot, cap);
 }
 
 async function additionalSources({github, repo, snapshot, paths}) {
   if (!Array.isArray(paths) || paths.length === 0 || paths.length > 8 || new Set(paths).size !== paths.length) {
     throw new Error('Additional evidence requires one to eight distinct repository paths');
   }
-  for (const filename of paths) await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
+  for (const filename of paths) await readOptional({github, repo, snapshot, filename});
+  snapshot.covering_tests = coveringTests(snapshot);
   return refresh(snapshot);
 }
 
-module.exports = {proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {BUDGET, UNBOUNDED, evidenceSize, fetchText, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
