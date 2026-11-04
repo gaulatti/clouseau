@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "decision": "incompatible",
+  "changes": [
+    {
+      "path": "src/coverage-istanbul.cjs",
+      "mode": 0,
+      "sha256": "6e52cc0f240a4aab8d5290193c85e3aa83bef74d8a5cfbf2ca7a82ef71c3a37c"
+    },
+    {
+      "path": "src/istanbul-source.cjs",
+      "mode": 0,
+      "sha256": "b6e498b63309a6150adfe7ae4ed37c6fc71b54c8390a2d132f97327f013b2278"
+    },
+    {
+      "path": "src/local-version.cjs",
+      "mode": 0,
+      "sha256": "1152945783206b84358b06b8ccbfb48feff23e4cec6878115f559d26061577bb"
+    }
+  ]
+}

@@ -8,6 +8,9 @@ const {ChunkedRecordError} = require('./chunked-record.cjs');
 const {digest} = require('./acceptance.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 test('signed passing local receipt is verified and graded without a provider', async () => {
   const f = await fixture();
@@ -455,7 +458,16 @@ test('by default the running protected engine statement decides whether a receip
   delete trust.reviewer_digest;
   const other = {...SOURCE, sha: 'd'.repeat(40), digest: 'e'.repeat(64)};
   const options = {...f.expected, trust, engine: other, reviewerSha: undefined, reviewerDigest: other.digest};
-  const statement = semantics.readStatement();
+  // The state the post-merge fold produces: a copy of this engine whose statement describes the copy itself. A pull
+  // request that only declares a semantic change has not been folded yet, so the checked-in statement may be stale.
+  const folded = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-folded-engine-'));
+  for (const entry of semantics.ROOTS) fs.cpSync(path.join(__dirname, '..', entry), path.join(folded, entry), {recursive: true});
+  const live = semantics.semanticsDigest(folded);
+  assert.equal(live, semantics.semanticsDigest());
+  fs.writeFileSync(path.join(folded, semantics.STATEMENT), semantics.render(semantics.next(semantics.readStatement(folded), live, true)));
+  const statement = semantics.readStatement(folded);
+  assert.equal(statement.current, live);
+  options.compatible = semantics.acceptor(folded);
   const earlier = statement.compatible[0] ?? 'a'.repeat(64);
   const issue = reviewerSemantics => issueReceipt({...f.issue, reviewerSemantics});
   // Semantics of this very engine: accepted although the revision and exact digest differ.
@@ -466,6 +478,7 @@ test('by default the running protected engine statement decides whether a receip
   assert.throws(() => verifyReceipt(issueReceipt(f.issue), options), /engine mismatch/);
   // Fixed-digest trust never takes this path.
   assert.throws(() => verifyReceipt(issue(semantics.semanticsDigest()), {...options, trust: f.trust}), /engine mismatch/);
+  fs.rmSync(folded, {recursive: true, force: true});
 });
 
 test('maintainer attestation configuration is protected, explicit and default off', async () => {

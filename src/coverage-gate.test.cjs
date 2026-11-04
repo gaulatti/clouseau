@@ -529,7 +529,7 @@ test('branchless components and empty parts cannot pass a plan', () => plan(({di
   assert.deepEqual(gate.measurePlan(solo, directory).totals, {lines: [1, 1], branches: [0, 0]});
   messages(() => gate.checkPlan(solo, directory), /No branches measured/);
   fs.writeFileSync(path.join(directory, 'frontend.json'), JSON.stringify({[frontend]: {path: frontend, statementMap: {}, s: {}, branchMap: {}, b: {}}}));
-  messages(() => gate.measurePlan(solo, directory), /nonempty application line counters/);
+  messages(() => gate.measurePlan(solo, directory), /No statements measured for application source: .*service\.js/);
 }));
 
 test('invalid plan shapes, formats and extra policy fields fail', () => plan(({directory, parts}) => {

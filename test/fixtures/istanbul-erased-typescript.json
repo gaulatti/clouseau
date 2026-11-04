@@ -1,0 +1,644 @@
+{
+  "producer": {
+    "instrumenter": "6.0.3",
+    "typescript": "5.9.3",
+    "strict_typecheck_passed": true,
+    "scope": "Actual TypeScript ESNext emit and source map fed directly to native Istanbul instrumenter; counters unmodified. Runtime control entries are unexecuted negatives, not fabricated passing measurements."
+  },
+  "ambient": [
+    {
+      "filename": "ambient-constant.ts",
+      "source": "export declare const flavor = \"soda\";\n",
+      "compiled": "export {};\n//# sourceMappingURL=ambient-constant.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "ambient-constant.js",
+        "sourceRoot": "",
+        "sources": [
+          "ambient-constant.ts"
+        ],
+        "names": [],
+        "mappings": "",
+        "sourcesContent": [
+          "export declare const flavor = \"soda\";\n"
+        ]
+      },
+      "report": {
+        "application/ambient-constant.ts": {
+          "path": "application/ambient-constant.ts",
+          "statementMap": {},
+          "fnMap": {},
+          "branchMap": {},
+          "s": {},
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "ambient-constant.js",
+            "sourceRoot": "",
+            "sources": [
+              "ambient-constant.ts"
+            ],
+            "names": [],
+            "mappings": "",
+            "sourcesContent": [
+              "export declare const flavor = \"soda\";\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "ambient-number.ts",
+      "source": "export declare const count = 1;\n",
+      "compiled": "export {};\n//# sourceMappingURL=ambient-number.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "ambient-number.js",
+        "sourceRoot": "",
+        "sources": [
+          "ambient-number.ts"
+        ],
+        "names": [],
+        "mappings": "",
+        "sourcesContent": [
+          "export declare const count = 1;\n"
+        ]
+      },
+      "report": {
+        "application/ambient-number.ts": {
+          "path": "application/ambient-number.ts",
+          "statementMap": {},
+          "fnMap": {},
+          "branchMap": {},
+          "s": {},
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "ambient-number.js",
+            "sourceRoot": "",
+            "sources": [
+              "ambient-number.ts"
+            ],
+            "names": [],
+            "mappings": "",
+            "sourcesContent": [
+              "export declare const count = 1;\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "ambient-namespace.ts",
+      "source": "declare namespace API { const flavor = \"soda\"; }\n",
+      "compiled": "//# sourceMappingURL=ambient-namespace.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "ambient-namespace.js",
+        "sourceRoot": "",
+        "sources": [
+          "ambient-namespace.ts"
+        ],
+        "names": [],
+        "mappings": "",
+        "sourcesContent": [
+          "declare namespace API { const flavor = \"soda\"; }\n"
+        ]
+      },
+      "report": {
+        "application/ambient-namespace.ts": {
+          "path": "application/ambient-namespace.ts",
+          "statementMap": {},
+          "fnMap": {},
+          "branchMap": {},
+          "s": {},
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "ambient-namespace.js",
+            "sourceRoot": "",
+            "sources": [
+              "ambient-namespace.ts"
+            ],
+            "names": [],
+            "mappings": "",
+            "sourcesContent": [
+              "declare namespace API { const flavor = \"soda\"; }\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "ambient-class.ts",
+      "source": "export declare class Options { static readonly flavor = \"soda\"; }\n",
+      "compiled": "export {};\n//# sourceMappingURL=ambient-class.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "ambient-class.js",
+        "sourceRoot": "",
+        "sources": [
+          "ambient-class.ts"
+        ],
+        "names": [],
+        "mappings": "",
+        "sourcesContent": [
+          "export declare class Options { static readonly flavor = \"soda\"; }\n"
+        ]
+      },
+      "report": {
+        "application/ambient-class.ts": {
+          "path": "application/ambient-class.ts",
+          "statementMap": {},
+          "fnMap": {},
+          "branchMap": {},
+          "s": {},
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "ambient-class.js",
+            "sourceRoot": "",
+            "sources": [
+              "ambient-class.ts"
+            ],
+            "names": [],
+            "mappings": "",
+            "sourcesContent": [
+              "export declare class Options { static readonly flavor = \"soda\"; }\n"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "runtime": [
+    {
+      "filename": "runtime-constant.ts",
+      "source": "export const flavor = \"soda\";\n",
+      "compiled": "export const flavor = \"soda\";\n//# sourceMappingURL=runtime-constant.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "runtime-constant.js",
+        "sourceRoot": "",
+        "sources": [
+          "runtime-constant.ts"
+        ],
+        "names": [],
+        "mappings": "AAAA,MAAM,CAAC,MAAM,MAAM,GAAG,MAAM,CAAC",
+        "sourcesContent": [
+          "export const flavor = \"soda\";\n"
+        ]
+      },
+      "report": {
+        "application/runtime-constant.ts": {
+          "path": "application/runtime-constant.ts",
+          "statementMap": {
+            "0": {
+              "start": {
+                "line": 1,
+                "column": 22
+              },
+              "end": {
+                "line": 1,
+                "column": 28
+              }
+            }
+          },
+          "fnMap": {},
+          "branchMap": {},
+          "s": {
+            "0": 0
+          },
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "runtime-constant.js",
+            "sourceRoot": "",
+            "sources": [
+              "runtime-constant.ts"
+            ],
+            "names": [],
+            "mappings": "AAAA,MAAM,CAAC,MAAM,MAAM,GAAG,MAAM,CAAC",
+            "sourcesContent": [
+              "export const flavor = \"soda\";\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "runtime-namespace.ts",
+      "source": "namespace API { export const flavor = \"soda\"; }\n",
+      "compiled": "var API;\n(function (API) {\n    API.flavor = \"soda\";\n})(API || (API = {}));\n//# sourceMappingURL=runtime-namespace.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "runtime-namespace.js",
+        "sourceRoot": "",
+        "sources": [
+          "runtime-namespace.ts"
+        ],
+        "names": [],
+        "mappings": "AAAA,IAAU,GAAG,CAAkC;AAA/C,WAAU,GAAG;IAAgB,UAAM,GAAG,MAAM,CAAC;AAAC,CAAC,EAArC,GAAG,KAAH,GAAG,QAAkC",
+        "sourcesContent": [
+          "namespace API { export const flavor = \"soda\"; }\n"
+        ]
+      },
+      "report": {
+        "application/runtime-namespace.ts": {
+          "path": "application/runtime-namespace.ts",
+          "statementMap": {
+            "0": {
+              "start": {
+                "line": 2,
+                "column": 0
+              },
+              "end": {
+                "line": 4,
+                "column": 22
+              }
+            },
+            "1": {
+              "start": {
+                "line": 3,
+                "column": 4
+              },
+              "end": {
+                "line": 3,
+                "column": 24
+              }
+            }
+          },
+          "fnMap": {
+            "0": {
+              "name": "(anonymous_0)",
+              "decl": {
+                "start": {
+                  "line": 2,
+                  "column": 1
+                },
+                "end": {
+                  "line": 2,
+                  "column": 2
+                }
+              },
+              "loc": {
+                "start": {
+                  "line": 2,
+                  "column": 16
+                },
+                "end": {
+                  "line": 4,
+                  "column": 1
+                }
+              },
+              "line": 2
+            }
+          },
+          "branchMap": {
+            "0": {
+              "loc": {
+                "start": {
+                  "line": 4,
+                  "column": 3
+                },
+                "end": {
+                  "line": 4,
+                  "column": 20
+                }
+              },
+              "type": "binary-expr",
+              "locations": [
+                {
+                  "start": {
+                    "line": 4,
+                    "column": 3
+                  },
+                  "end": {
+                    "line": 4,
+                    "column": 6
+                  }
+                },
+                {
+                  "start": {
+                    "line": 4,
+                    "column": 11
+                  },
+                  "end": {
+                    "line": 4,
+                    "column": 19
+                  }
+                }
+              ],
+              "line": 4
+            }
+          },
+          "s": {
+            "0": 0,
+            "1": 0
+          },
+          "f": {
+            "0": 0
+          },
+          "b": {
+            "0": [
+              0,
+              0
+            ]
+          },
+          "inputSourceMap": {
+            "version": 3,
+            "file": "runtime-namespace.js",
+            "sourceRoot": "",
+            "sources": [
+              "runtime-namespace.ts"
+            ],
+            "names": [],
+            "mappings": "AAAA,IAAU,GAAG,CAAkC;AAA/C,WAAU,GAAG;IAAgB,UAAM,GAAG,MAAM,CAAC;AAAC,CAAC,EAArC,GAAG,KAAH,GAAG,QAAkC",
+            "sourcesContent": [
+              "namespace API { export const flavor = \"soda\"; }\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "runtime-class.ts",
+      "source": "export class Options { static readonly flavor = \"soda\"; }\n",
+      "compiled": "export class Options {\n    static flavor = \"soda\";\n}\n//# sourceMappingURL=runtime-class.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "runtime-class.js",
+        "sourceRoot": "",
+        "sources": [
+          "runtime-class.ts"
+        ],
+        "names": [],
+        "mappings": "AAAA,MAAM,OAAO,OAAO;IAAG,MAAM,CAAU,MAAM,GAAG,MAAM,CAAC",
+        "sourcesContent": [
+          "export class Options { static readonly flavor = \"soda\"; }\n"
+        ]
+      },
+      "report": {
+        "application/runtime-class.ts": {
+          "path": "application/runtime-class.ts",
+          "statementMap": {
+            "0": {
+              "start": {
+                "line": 2,
+                "column": 20
+              },
+              "end": {
+                "line": 2,
+                "column": 26
+              }
+            }
+          },
+          "fnMap": {},
+          "branchMap": {},
+          "s": {
+            "0": 0
+          },
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "runtime-class.js",
+            "sourceRoot": "",
+            "sources": [
+              "runtime-class.ts"
+            ],
+            "names": [],
+            "mappings": "AAAA,MAAM,OAAO,OAAO;IAAG,MAAM,CAAU,MAAM,GAAG,MAAM,CAAC",
+            "sourcesContent": [
+              "export class Options { static readonly flavor = \"soda\"; }\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "mixed-runtime.ts",
+      "source": "export declare const VERSION = 1; export const live = 2;\n",
+      "compiled": "export const live = 2;\n//# sourceMappingURL=mixed-runtime.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "mixed-runtime.js",
+        "sourceRoot": "",
+        "sources": [
+          "mixed-runtime.ts"
+        ],
+        "names": [],
+        "mappings": "AAAkC,MAAM,CAAC,MAAM,IAAI,GAAG,CAAC,CAAC",
+        "sourcesContent": [
+          "export declare const VERSION = 1; export const live = 2;\n"
+        ]
+      },
+      "report": {
+        "application/mixed-runtime.ts": {
+          "path": "application/mixed-runtime.ts",
+          "statementMap": {
+            "0": {
+              "start": {
+                "line": 1,
+                "column": 20
+              },
+              "end": {
+                "line": 1,
+                "column": 21
+              }
+            }
+          },
+          "fnMap": {},
+          "branchMap": {},
+          "s": {
+            "0": 0
+          },
+          "f": {},
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "mixed-runtime.js",
+            "sourceRoot": "",
+            "sources": [
+              "mixed-runtime.ts"
+            ],
+            "names": [],
+            "mappings": "AAAkC,MAAM,CAAC,MAAM,IAAI,GAAG,CAAC,CAAC",
+            "sourcesContent": [
+              "export declare const VERSION = 1; export const live = 2;\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "overload-runtime.ts",
+      "source": "export function choose(value: number): number;\nexport function choose(value: number) { return value + 1; }\n",
+      "compiled": "export function choose(value) { return value + 1; }\n//# sourceMappingURL=overload-runtime.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "overload-runtime.js",
+        "sourceRoot": "",
+        "sources": [
+          "overload-runtime.ts"
+        ],
+        "names": [],
+        "mappings": "AACA,MAAM,UAAU,MAAM,CAAC,KAAa,IAAI,OAAO,KAAK,GAAG,CAAC,CAAC,CAAC,CAAC",
+        "sourcesContent": [
+          "export function choose(value: number): number;\nexport function choose(value: number) { return value + 1; }\n"
+        ]
+      },
+      "report": {
+        "application/overload-runtime.ts": {
+          "path": "application/overload-runtime.ts",
+          "statementMap": {
+            "0": {
+              "start": {
+                "line": 1,
+                "column": 32
+              },
+              "end": {
+                "line": 1,
+                "column": 49
+              }
+            }
+          },
+          "fnMap": {
+            "0": {
+              "name": "choose",
+              "decl": {
+                "start": {
+                  "line": 1,
+                  "column": 16
+                },
+                "end": {
+                  "line": 1,
+                  "column": 22
+                }
+              },
+              "loc": {
+                "start": {
+                  "line": 1,
+                  "column": 30
+                },
+                "end": {
+                  "line": 1,
+                  "column": 51
+                }
+              },
+              "line": 1
+            }
+          },
+          "branchMap": {},
+          "s": {
+            "0": 0
+          },
+          "f": {
+            "0": 0
+          },
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "overload-runtime.js",
+            "sourceRoot": "",
+            "sources": [
+              "overload-runtime.ts"
+            ],
+            "names": [],
+            "mappings": "AACA,MAAM,UAAU,MAAM,CAAC,KAAa,IAAI,OAAO,KAAK,GAAG,CAAC,CAAC,CAAC,CAAC",
+            "sourcesContent": [
+              "export function choose(value: number): number;\nexport function choose(value: number) { return value + 1; }\n"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "filename": "metadata-name-runtime.ts",
+      "source": "export default { declare: true, typeAnnotation: () => 1 };\n",
+      "compiled": "export default { declare: true, typeAnnotation: () => 1 };\n//# sourceMappingURL=metadata-name-runtime.js.map",
+      "source_map": {
+        "version": 3,
+        "file": "metadata-name-runtime.js",
+        "sourceRoot": "",
+        "sources": [
+          "metadata-name-runtime.ts"
+        ],
+        "names": [],
+        "mappings": "AAAA,eAAe,EAAE,OAAO,EAAE,IAAI,EAAE,cAAc,EAAE,GAAG,EAAE,CAAC,CAAC,EAAE,CAAC",
+        "sourcesContent": [
+          "export default { declare: true, typeAnnotation: () => 1 };\n"
+        ]
+      },
+      "report": {
+        "application/metadata-name-runtime.ts": {
+          "path": "application/metadata-name-runtime.ts",
+          "statementMap": {
+            "0": {
+              "start": {
+                "line": 1,
+                "column": 54
+              },
+              "end": {
+                "line": 1,
+                "column": 55
+              }
+            }
+          },
+          "fnMap": {
+            "0": {
+              "name": "(anonymous_0)",
+              "decl": {
+                "start": {
+                  "line": 1,
+                  "column": 48
+                },
+                "end": {
+                  "line": 1,
+                  "column": 49
+                }
+              },
+              "loc": {
+                "start": {
+                  "line": 1,
+                  "column": 54
+                },
+                "end": {
+                  "line": 1,
+                  "column": 55
+                }
+              },
+              "line": 1
+            }
+          },
+          "branchMap": {},
+          "s": {
+            "0": 0
+          },
+          "f": {
+            "0": 0
+          },
+          "b": {},
+          "inputSourceMap": {
+            "version": 3,
+            "file": "metadata-name-runtime.js",
+            "sourceRoot": "",
+            "sources": [
+              "metadata-name-runtime.ts"
+            ],
+            "names": [],
+            "mappings": "AAAA,eAAe,EAAE,OAAO,EAAE,IAAI,EAAE,cAAc,EAAE,GAAG,EAAE,CAAC,CAAC,EAAE,CAAC",
+            "sourcesContent": [
+              "export default { declare: true, typeAnnotation: () => 1 };\n"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

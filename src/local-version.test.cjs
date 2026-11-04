@@ -28,3 +28,30 @@ test('reviewer identity binds executable content, modes, skill and policy indepe
     assert.equal(engineDigest().length, 64);
   } finally {fs.rmSync(root, {recursive: true, force: true});}
 });
+
+test('vendored runtime changes, modes, removal and symbolic substitution change or reject engine identity', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-vendor-identity-'));
+  try {
+    for (const directory of ['src', 'policy', 'bin', 'skills', 'scripts']) fs.mkdirSync(path.join(root, directory));
+    fs.writeFileSync(path.join(root, 'action.yml'), 'name: Fictional fixture\n');
+    fs.writeFileSync(path.join(root, 'src/engine.cjs'), 'module.exports = 1;\n');
+    const withoutVendor = engineDigest(root);
+    const directory = path.join(root, 'vendor');
+    fs.mkdirSync(directory);
+    const parser = path.join(directory, 'parser.cjs');
+    fs.writeFileSync(parser, 'module.exports = 1;\n');
+    const first = engineDigest(root);
+    assert.notEqual(first, withoutVendor);
+    fs.writeFileSync(parser, 'module.exports = 2;\n');
+    const modified = engineDigest(root);
+    assert.notEqual(modified, first);
+    fs.chmodSync(parser, 0o755);
+    assert.notEqual(engineDigest(root), modified);
+    fs.unlinkSync(parser);
+    fs.symlinkSync('../src/engine.cjs', parser);
+    assert.throws(() => engineDigest(root), /symbolic links/);
+    fs.rmSync(directory, {recursive: true});
+    assert.equal(engineDigest(root), withoutVendor);
+    assert.notEqual(engineDigest(root), first);
+  } finally {fs.rmSync(root, {recursive: true, force: true});}
+});

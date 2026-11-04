@@ -5,6 +5,7 @@ const path = require('node:path');
 const {missingSourceExplanation, fail, isObject, get, realPath, isInside, emptyCounts} = require('./coverage-util.cjs');
 
 const {EXCLUDED_DIRECTORIES, DEFAULT_SCOPE} = require('./coverage-scope.cjs');
+const {counterSites} = require('./istanbul-source.cjs');
 
 const productionName = name => !(name.endsWith('.d.ts') || /\.(?:test|spec)\.(?:ts|tsx|js|jsx|cjs|mjs)$/.test(name));
 
@@ -69,6 +70,15 @@ function measureEntry(entry, wantDetail) {
   return {lines: [...lines.values()], branches: branchHits, lineMap: lines, branchItems};
 }
 
+// Distinguish native zero-statement sources by parsing them as data; application code is never executed.
+function requireCounterSites(file, filename, branches) {
+  let required;
+  try {required = counterSites(fs.readFileSync(file, 'utf8'), path.extname(file));}
+  catch {fail(`Cannot inspect statement-free application source: ${file}`);}
+  if (required.statements) fail(`No statements measured for application source: ${filename}`);
+  if (required.branches && !Object.keys(branches).length) fail(`No branches measured for application source: ${filename}`);
+}
+
 function counters(report, sourceDirectory, cwd, detail) {
   const root = realPath(sourceDirectory, cwd);
   const found = candidates(root);
@@ -89,6 +99,9 @@ function counters(report, sourceDirectory, cwd, detail) {
     if (!sources.has(file) || seen.has(file)) fail(`Unexpected or duplicate application coverage: ${filename}`);
     if (!isObject(entry) || entry.path !== filename) fail(`Mismatched Istanbul source path: ${filename}`);
     seen.add(file);
+    if (!Object.keys(pairedMaps(entry, 'statementMap', 's')).length) {
+      requireCounterSites(file, filename, pairedMaps(entry, 'branchMap', 'b'));
+    }
     const measured = measureEntry(entry, Boolean(detail));
     // Changed-line gating detail: line -> covered, and each branch outcome as an inclusive line range.
     if (detail) detail.set(file, {lines: new Map([...measured.lineMap].map(([line, count]) => [line, count > 0])), branches: measured.branchItems});
