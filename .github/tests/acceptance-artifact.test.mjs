@@ -57,7 +57,7 @@ test('the locate step runs only where the download ran, with the same trusted-ev
   assert.equal(evaluate(all[locate].env.ENGINE_ROOT, {github: {event_name: 'pull_request_target'}}), '.clouseau-ci');
 });
 
-async function lookup(job, {artifacts, runId = 41479159933, attempt = '2', sha = 'c'.repeat(40)}) {
+async function lookup(job, {artifacts, runId = 41479159933, attempt = '2', sha = 'c'.repeat(40), base = 'b'.repeat(40)}) {
   const {all, locate} = steps(job);
   const outputs = {};
   // The job checks the frozen engine out at .clouseau-ci; a push event runs the engine at the workspace root.
@@ -68,7 +68,7 @@ async function lookup(job, {artifacts, runId = 41479159933, attempt = '2', sha =
   const previous = {...process.env}; Object.assign(process.env, env);
   try {
     await new AsyncFunction('github', 'context', 'core', 'require', all[locate].with.script)(github,
-      {repo: {owner: 'gaulatti', repo: 'guggiana'}, runId, sha}, {setOutput: (name, value) => {outputs[name] = value;}}, createRequire());
+      {repo: {owner: 'gaulatti', repo: 'guggiana'}, runId, eventName: 'pull_request_target', sha: base, payload: {pull_request: {head: {sha}}}}, {setOutput: (name, value) => {outputs[name] = value;}}, createRequire());
   } finally {process.env = previous; rmSync(workspace, {recursive: true, force: true});}
   return outputs;
 }
