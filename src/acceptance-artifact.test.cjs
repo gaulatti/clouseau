@@ -6,7 +6,10 @@ const {resolveArtifactName} = require('./acceptance-artifact.cjs');
 
 const SHA = 'c'.repeat(40);
 const repo = {owner: 'gaulatti', repo: 'guggiana'};
-const context = {repo, runId: 41479159933, sha: SHA};
+// A pull_request_target run executes at the base branch tip (context.sha); the revision it assessed is the PR head.
+const BASE = 'b'.repeat(40);
+const context = {repo, runId: 41479159933, eventName: 'pull_request_target', sha: BASE, payload: {pull_request: {head: {sha: SHA}}}};
+const pushContext = {repo, runId: 41479159933, eventName: 'push', sha: SHA};
 const artifact = (name, patch = {}) => ({name, expired: false, workflow_run: {id: 41479159933, head_sha: SHA}, ...patch});
 
 function client(artifacts) {
@@ -50,6 +53,26 @@ test('artifacts of another run, revision, attempt or shape are refused', async (
   // A forged record beside the genuine one never displaces it.
   const github = client([...foreign, artifact('clouseau-acceptance-41479159933-1')]);
   assert.equal(await resolveArtifactName({github, context, attempt: '2'}), 'clouseau-acceptance-41479159933-1');
+});
+
+test('a pull_request_target run matches the PR head revision, never the base commit it executes at', async () => {
+  const github = client([artifact('clouseau-acceptance-41479159933-1'), artifact('clouseau-acceptance-41479159933-2', {workflow_run: {id: 41479159933, head_sha: BASE}})]);
+  assert.equal(await resolveArtifactName({github, context, attempt: '2'}), 'clouseau-acceptance-41479159933-1');
+  await assert.rejects(resolveArtifactName({github: client([artifact('clouseau-acceptance-41479159933-1', {workflow_run: {id: 41479159933, head_sha: BASE}})]), context, attempt: '1'}), /No acceptance artifact/);
+});
+
+test('a push run matches the pushed commit', async () => {
+  const github = client([artifact('clouseau-acceptance-41479159933-1')]);
+  assert.equal(await resolveArtifactName({github, context: pushContext, attempt: '1'}), 'clouseau-acceptance-41479159933-1');
+  await assert.rejects(resolveArtifactName({github, context: {...pushContext, sha: BASE}, attempt: '1'}), /No acceptance artifact/);
+});
+
+test('a missing or malformed revision fails before any lookup', async () => {
+  for (const bad of [{...context, payload: {}}, {...context, payload: undefined}, {...context, payload: {pull_request: {head: {sha: 'abc'}}}}, {...pushContext, sha: undefined}, {...pushContext, sha: 'abc'}]) {
+    const github = client([]);
+    github.paginate = async () => assert.fail('must not look up');
+    await assert.rejects(resolveArtifactName({github, context: bad, attempt: '1'}), /requires a frozen 40-character revision/);
+  }
 });
 
 test('a malformed run id or attempt fails before any lookup', async () => {
