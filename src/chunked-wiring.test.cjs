@@ -142,6 +142,20 @@ test('a single file of three million characters is reviewed in segments and neve
     assert.ok(owners.length > 1, 'the oversized file is owned by one unit per segment');
   }));
 
+test('a lockfile and a source file over the 300,000 byte bound (the 327,598 byte battiato shape) are reviewed whole, signed and verified by CI', () =>
+  withChange({rows: {files: [
+    {path: 'package-lock.json', status: 'modified', previous: null, base_size: 327000, head_size: 327598, patch_chars: 900, patch_estimated: true, derived_size: 20000},
+    {path: 'src/big-source.ts', status: 'modified', previous: null, base_size: 320000, head_size: 327598, patch_chars: 900}]}}, async context => {
+    const size = name => fs.statSync(path.join(context.f.directory, name)).size;
+    assert.equal(size('src/big-source.ts'), 327598);
+    assert.equal(size('package-lock.json'), 326498, 'the generated lockfile shape is over the old per-file bound');
+    const {record} = await reviewPublishVerify(context, {expectParts: false});
+    assert.ok(record.partition.units.length > 1);
+    const big = record.snapshot.files.find(file => file.path === 'src/big-source.ts');
+    assert.equal(Buffer.byteLength(record.snapshot.sources[big.head_source].content), 327598, 'the source is kept whole, never truncated');
+    assert.ok(record.snapshot.files.some(file => file.path === 'package-lock.json'));
+  }));
+
 test('protected configuration can disable chunked review: an oversized change then fails as it always did', () =>
   withChange({rows: withLargeFile({files: table.files.slice(0, 2)}, 1000000), chunked: {enabled: false}}, async ({args, deps}) => {
     await assert.rejects(runReview(args, {...deps, ask: harness().ask}), /oversized|source budget/);
