@@ -49,6 +49,15 @@ test('production code changed beside an untouched test module is still held', ()
   assert.match(held(rust(MODULE, '--- a/x\n+++ b/x\n+not in a hunk\n')), HOLD, 'lines outside a hunk have no position');
 });
 
+test('a removal just outside an in-file test module is production code, one inside it is a test change', () => {
+  assert.match(held(rust(MODULE, '@@ -4,3 +4,2 @@\n \n-fn helper() {}\n #[cfg(test)]\n')), HOLD, 'a removal right before the attribute');
+  assert.match(held(rust(MODULE, '@@ -13,2 +13,1 @@\n }\n-fn after() {}\n')), HOLD, 'a removal right after the closing brace');
+  assert.match(held(rust(MODULE, '@@ -13,1 +13,0 @@\n-fn after() {}\n')), HOLD, 'a zero-context removal after the closing brace');
+  assert.match(held(rust(MODULE, '@@ -3,1 +4,0 @@\n-fn before() {}\n')), HOLD, 'a zero-context removal before the attribute');
+  assert.equal(held(rust(MODULE, '@@ -11,1 +10,0 @@\n-    assert!(false);\n')), null, 'a zero-context removal inside the module');
+  assert.equal(held(rust(MODULE, '@@ -12,3 +12,2 @@\n     }\n-    let x = 1;\n }\n')), null, 'a removal before the closing brace');
+});
+
 test('a Rust file without a counting test module is held', () => {
   const change = '@@ -1,1 +1,1 @@\n+pub fn parse() {}\n';
   assert.match(held(rust('pub fn parse() {}\n', change)), HOLD, 'no tests at all');
@@ -98,6 +107,7 @@ test('an integration test that uses the module by its path under the same packag
   rejected('const S: &str = "use monitor::grpc::parse;";\n');
   rejected('use monitor::grpc_other::parse;\n');
   rejected('use monitor::grpcs;\n');
+  assert.match(held(rust(code, change, [['backend/tests/api.rs', 'use monitor::aXb;\n']], 'backend/src/a.b.rs')), /a\.b\.rs$/, 'a dot in a path is not a wildcard');
   rejected('use std::grpc::parse;\n');
   rejected('use core::grpc::parse;\n');
   rejected('use monitor::grpc::parse;\n', 'backend/src/helper.rs');

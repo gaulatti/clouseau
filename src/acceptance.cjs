@@ -388,13 +388,14 @@ function rustTestSpans(source) {
   return spans;
 }
 
-// New-file line numbers of every added line, and of the position of every removed one.
+// New-file line number of every added line; a removed line is the position between the new lines around it
+// (half a line before the next surviving line), so a removal just outside a span is never inside it.
 function changedLines(patch) {
   const lines = []; let at = 0;
   for (const line of `${patch}`.split('\n')) {
-    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
-    if (hunk) at = Number(hunk[1]);
-    else if (at && /^[+-]/.test(line)) {lines.push(at); if (line[0] === '+') at++;}
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))?/.exec(line);
+    if (hunk) at = Number(hunk[1]) + (hunk[2] === '0' ? 1 : 0);
+    else if (at && /^[+-]/.test(line)) {lines.push(line[0] === '+' ? at++ : at - 0.5);}
     else if (at && line[0] === ' ') at++;
   }
   return lines;
@@ -411,7 +412,7 @@ function rustTested(snapshot, file, patch) {
   const segments = module ? module[2].split('/') : [];
   if (segments[segments.length - 1] === 'mod') segments.pop();
   if (!segments.length || (segments.length === 1 && /^(?:lib|main)$/.test(segments[0]))) return false;
-  const use = new RegExp(`^[ \\t]*(?:pub(?:\\([^)]*\\))?[ \\t]+)?use[ \\t]+(?!(?:std|core|alloc)::)(?:crate|[A-Za-z_]\\w*)::${segments.join('::')}(?!\\w)`, 'm');
+  const use = new RegExp(`^[ \\t]*(?:pub(?:\\([^)]*\\))?[ \\t]+)?use[ \\t]+(?!(?:std|core|alloc)::)(?:crate|[A-Za-z_]\\w*)::${segments.map(segment => segment.replace(/\W/g, '\\$&')).join('::')}(?!\\w)`, 'm');
   return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' &&
     source.path.startsWith(`${module[1]}tests/`) && RUST_PATH.test(source.path) && use.test(blankRust(source.content)));
 }
