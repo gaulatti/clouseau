@@ -11,7 +11,7 @@
     ["src/acceptance-rubrics.cjs",0,"9ff9f5b82e68e2a1f46e6181e7d7b99f90f5b43a580a298e0c5e6f6ef74d2246"],
     ["src/acceptance-schema.cjs",0,"a7a2503b603a04de26254b6785d655bcd1c6f8f7a176b1d3b68ca65c4421038b"],
     ["src/acceptance-sources.cjs",0,"b994b8dd4c13816f4b68db9e57dca80fdd33f718a37e230e3e8247fbb5a85c51"],
-    ["src/acceptance.cjs",0,"694370a21c10ff9a2a69aaf415b7b6e9aebda6ce7a2561f841304c74c537484d"],
+    ["src/acceptance.cjs",0,"de878e439719b7386fde022e001cd3ca025b836d66bd0a667766cf88827b8022"],
     ["src/base-reconcile.cjs",0,"1a64281df665f0b6fa23d7dd014472af3ae90a7f2f830a1b513b2341a28b8a24"],
     ["src/branch-conflict.cjs",0,"a6cf605c2ee8b064258dc702ca565e906a679cde9ef630384215bae167ec7dc4"],
     ["src/branch-update.cjs",0,"5d03010d64e4daab7494cdb4eed74546ead6e76e6372ff63a02ea46e26fb2972"],
