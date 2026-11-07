@@ -340,7 +340,7 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       else {
         const {data} = await github.rest.repos.getContent({owner: 'gaulatti', repo: 'clouseau', ref, path: relative});
         reject(data.encoding === 'base64' && typeof data.content === 'string' && data.size <= 300000, 'historical engine evidence unavailable', 'source');
-        content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));
+        content = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(Buffer.from(data.content, 'base64'));
         reject(!content.includes('\0'), 'binary historical engine evidence', 'source');
       }
       reject(content === source.content, 'signed engine evidence differs from the accepted engine', 'source');
