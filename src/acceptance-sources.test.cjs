@@ -465,3 +465,13 @@ test('only raw lockfile evidence that causes the overflow is reported as a lockf
   delete snapshot.lockfile_failures;
   assert.throws(() => refresh(snapshot), /source budget/);
 });
+
+test('a leading byte-order mark is preserved so the reviewed text equals the Git blob bytes', async () => {
+  const bytes = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('a\n')]);
+  assert.equal(bytes.length, 5);
+  const github = {rest: {repos: {getContent: async () => ({data: {content: bytes.toString('base64'), encoding: 'base64', size: bytes.length}})}}};
+  const content = await require('./acceptance-sources.cjs').fetchText({github, repo: {owner: 'o', repo: 'r'},
+    snapshot: {head_sha: 'a'.repeat(40)}, filename: 'src/a.txt', ref: 'b'.repeat(40)});
+  assert.equal(Buffer.from(content, 'utf8').length, 5);
+  assert.equal(content, '﻿a\n');
+});

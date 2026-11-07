@@ -109,7 +109,7 @@ function readEngineEvidence(filename, reviewerSha, root = path.join(__dirname, '
     if (kind !== 'blob') throw new Error('Engine evidence must be a file');
     bytes = cp.execFileSync('git', ['-C', root, 'show', `${ref}:${relative}`], {maxBuffer: 300000});
   }
-  const content = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+  const content = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(bytes);
   if (content.includes('\0') || bytes.length > 300000) throw new Error('Binary or oversized engine evidence');
   return content;
 }

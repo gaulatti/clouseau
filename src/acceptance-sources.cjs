@@ -56,7 +56,7 @@ async function fetchText({github, repo, snapshot, filename, ref, limit = 300000}
     throw Object.assign(new Error('Complete textual source is unavailable within the evidence budget'), {unavailable: true, path: filename, reason: 'size'});
   }
   let content;
-  try {content = new TextDecoder('utf-8', {fatal: true}).decode(Buffer.from(data.content, 'base64'));}
+  try {content = new TextDecoder('utf-8', {fatal: true, ignoreBOM: true}).decode(Buffer.from(data.content, 'base64'));}
   catch {throw Object.assign(new Error('Source is not valid UTF-8 text'), {unavailable: true, path: filename, reason: 'text'});}
   if (content.includes('\0') || content.length > limit) throw Object.assign(new Error('Binary or oversized source is not reviewable'), {unavailable: true, path: filename, reason: 'text'});
   return content;
