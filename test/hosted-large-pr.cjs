@@ -76,7 +76,7 @@ async function largeFixture(run, {count = 40, size = 30000, config = CONFIG, pro
         },
         actions: {
           listWorkflowRuns: async () => ({data: {workflow_runs: [{id: 9, run_attempt: 1, head_sha: HEAD, event: 'pull_request',
-            pull_requests: [{number: 3}], status: 'completed', conclusion: state.failed ? 'failure' : 'success',
+            pull_requests: [{number: state.pr.number}], status: 'completed', conclusion: state.failed ? 'failure' : 'success',
             html_url: 'https://github.com/example/gateway/actions/runs/9'}]}}),
           listJobsForWorkflowRun: endpoint('jobs', async () => ({data: [{id: 10, name: 'verify', conclusion: 'success',
             steps: config.verification.steps.map(name => ({name, conclusion: 'success'}))}]})),
@@ -174,4 +174,36 @@ const finding = (report, name) => {
     repair_paths: [report.accounting[0].path]});
 };
 
-module.exports = {largeFixture, fakeProvider, sources, finding, CONFIG, HEAD, BASE};
+
+// Trust for a signed local review of the fixture: one enrolled fictional key for the PR author. `config` is the acceptance
+// configuration the hosted review ran under, so the receipt binds the same configuration digest the live repository has.
+function signedTrust(config = CONFIG) {
+  const crypto = require('node:crypto');
+  const keys = crypto.generateKeyPairSync('ed25519');
+  return {privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}), config: {...config, local_review: {mode: 'optional',
+    reviewer_sha: 'e'.repeat(40), reviewer_digest: require('../src/local-version.cjs').engineDigest(), max_age_seconds: 172800,
+    keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}}};
+}
+
+// Signs the complete chunked record a hosted run stored as if a local review had produced it (fictional harness sessions),
+// and serves the signed envelope and its parts from the fake repository the way an immutable receipt commit would.
+function signLargeReceipt(f, {privateKey, config}) {
+  const {issueReceipt} = require('../src/local-receipt.cjs');
+  const {partName} = require('../src/receipt-parts.cjs');
+  const wiring = require('../src/chunked-wiring.cjs');
+  const stored = f.read();
+  const usage = stored.result.usage.map((item, index) => ({...item, harness: 'codex', session: `fictional-session-${index}`, transport_digest: digest({index})}));
+  // A local review is made before the pull request exists: its snapshot has number 0 (`f.state.pr.number = 0` while the hosted
+  // fixture review runs), no owner confirmation and no protected controls.
+  const record = {version: 3, snapshot: stored.snapshot, controls: false, partition: stored.partition, seams: stored.seams, previous: stored.previous,
+    result: {...stored.result, usage, execution_digest: digest(usage)}};
+  const bundle = issueReceipt({record, privateKey, keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: 'e'.repeat(40),
+    chunked: wiring.verifierOptions(config.local_review)});
+  const {parts = [], ...envelope} = bundle;
+  const files = new Map([['clouseau-review.json', Buffer.from(JSON.stringify(envelope))],
+    ...parts.map((part, index) => [partName(index), Buffer.from(part, 'base64')])]);
+  return {record, bundle, files, ref: 'c'.repeat(40)};
+}
+
+module.exports = {largeFixture, fakeProvider, sources, finding, signedTrust, signLargeReceipt, CONFIG, HEAD, BASE};

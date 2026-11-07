@@ -80,28 +80,32 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (engine && (digest(record.engine) !== digest(engine) || digest(assessment.engine) !== digest(engine))) {
     throw new Error('Acceptance record belongs to a different frozen engine');
   }
+  let signed = null;
   if (record.local_receipt) {
     // The receipt's own record: for a multi-part receipt the signed payload holds only the root.
-    const signed = require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
+    signed = require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
       engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author, pullNumber: assessment.number,
       headSha: assessment.head_sha, baseSha: assessment.base_sha,
       configDigest: digest(config), policyDigest: policyDigest(),
     });
-    for (const field of ['snapshot', 'result', 'controls']) {
+    for (const field of ['snapshot', 'result', 'controls', ...(Object.hasOwn(signed.record, 'partition') ? ['partition', 'seams'] : [])]) {
       if (digest(record[field]) !== digest(signed.record[field])) throw new Error('Local review record was substituted');
     }
     if (digest(record.previous.findings) !== digest(signed.record.previous.findings)) throw new Error('Local review history was substituted');
   }
   // New shape if present, else current. A local receipt record keeps its own path.
-  const chunked = !record.local_receipt && Object.hasOwn(record, 'partition');
+  // A partitioned local receipt keeps the local path. Its merged reviews are the ones the receipt verification derived from the
+  // signed units, and that verification already requires every integration seam checked for a passing review.
+  const partitioned = Object.hasOwn(record, 'partition');
+  const chunked = !record.local_receipt && partitioned;
   if (assessment.version !== 2 || digest(record) !== assessment.record_digest ||
       record.snapshot.config_digest !== digest(config) || record.snapshot.policy_digest !== policyDigest() ||
       record.snapshot.head_sha !== assessment.head_sha || record.snapshot.base_sha !== assessment.base_sha ||
-      (!record.local_receipt && record.snapshot.number !== assessment.number) || (!chunked && record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest)) {
+      (!record.local_receipt && record.snapshot.number !== assessment.number) || (!partitioned && record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest)) {
     throw new Error('Stale or altered acceptance record');
   }
-  const reviews = chunked ? chunkedReviews(record, config) : record.result.reviews;
-  const result = chunked ? {...record.result, reviews} : record.result;
+  const reviews = chunked ? chunkedReviews(record, config) : signed && partitioned ? signed.reviews : record.result.reviews;
+  const result = reviews === record.result.reviews ? record.result : {...record.result, reviews};
   if (reviews.length !== 2 || reviews.map(item => item.role).join(',') !== 'examiner,challenger') throw new Error('Both independent acceptance reviews are required');
   if (!chunked) for (const review of reviews) {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
@@ -210,7 +214,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         if (!rejected) {
           // The pre-PR stage tolerates unresolved evidence that CI would not: a signed review
           // is reused only when hosted approval's affirmative-evidence rule also holds.
-          const held = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.record.result.reviews});
+          const held = await receiptHold({github, repo, snapshot: verified.record.snapshot, reviews: verified.reviews});
           ({discovery} = held);
           if (held.hold) {
             // Name the rule that held and, for the per-file rule, the files, so the notice is actionable.

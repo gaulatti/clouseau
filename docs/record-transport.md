@@ -68,6 +68,13 @@ write. A missing, substituted or unavailable receipt fails closed at the write
 boundary (the next assessment ignores it and reviews afresh). Complete records produced by earlier engines remain accepted; they are
 distinguished by the absence of `record_reference_digest`.
 
+This is what carries a large chunked review. A partitioned record of several megabytes (stored as a signed multi-part
+receipt, see `chunked-record.md`) can never fit the job-output limits, but its compact reference is under a few kilobytes: the
+signed review exists once, in the immutable receipt commit, and the write boundary reads the envelope and every part from that
+commit, verifies the signature and the signed root over each part, derives the merged reviews from the signed units and
+recomputes the decision. `src/hosted-chunked-flow.test.cjs` pins this end to end with zero CI AI calls, for a record above
+2 MiB both as one receipt and as parts, including a part that is altered, swapped or missing.
+
 ## Data format and limits
 
 `review-record` is a compact canonical JSON array of exactly four strings. They
