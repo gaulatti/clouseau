@@ -78,6 +78,16 @@ test('braces in comments, strings and character literals do not end a test modul
   assert.match(held(rust(tricky, '@@ -11,1 +11,1 @@\n+pub fn tail() {}\n')), HOLD, 'code after the module is production code');
 });
 
+test('every Rust test attribute spelling counts, and a similar attribute does not', () => {
+  const module = attribute => `#[cfg(test)]\nmod tests {\n    ${attribute}\n    fn a() {}\n}\n`;
+  for (const attribute of ['#[test]', '#[tokio::test]', '#[sqlx::test(migrations = "x")]', '#[rstest]', '#[test_case(1)]']) {
+    assert.equal(held(rust(module(attribute), '@@ -3,1 +3,1 @@\n+    fn a() {}\n')), null, attribute);
+  }
+  for (const attribute of ['#[testing]', '#[derive(Debug)]', '#[cfg(testing)]']) {
+    assert.match(held(rust(module(attribute), '@@ -3,1 +3,1 @@\n+    fn a() {}\n')), HOLD, attribute);
+  }
+});
+
 test('an integration test that uses the module by its path under the same package counts', () => {
   const change = '@@ -1,1 +1,1 @@\n+pub fn parse() {}\n';
   const code = 'pub fn parse() {}\n';
