@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {digest} = require('./acceptance.cjs');
 const {verifyRecord} = require('./acceptance-controller.cjs');
-const {largeFixture, finding, sources, CONFIG} = require('../test/hosted-large-pr.cjs');
+const {largeFixture, finding, sources, signedTrust, signLargeReceipt, CONFIG} = require('../test/hosted-large-pr.cjs');
 
 const on = (chunked_hosted = {enabled: true}) => ({...CONFIG, acceptance: {...CONFIG.acceptance, chunked_hosted}});
 const ENABLED = on();
@@ -282,4 +282,84 @@ test('the default caps hold a 4 MB change under $8 and a 1.2 MB change under $2 
       if (process.env.CLOUSEAU_PRINT_COST) console.log(count, f.read().partition.units.length, cost);
     }, {config: ENABLED, count, size: 30000});
   }
+});
+
+// Issue #66: a large signed review is stored once, as the immutable multi-part receipt. CI reuses it through a compact reference,
+// so the job-output transport (2 MiB expanded, 300 KB compressed) never has to carry the record, and the gate rehydrates every byte.
+for (const [count, parted] of [[40, false], [70, true]]) test(`a signed ${parted ? 'multi-part' : 'single-receipt'} chunked review is stored once: CI reuses it by reference with zero AI calls and the gate rehydrates the whole record`, async () => {
+  const {isRoot} = require('./receipt-parts.cjs');
+  const transport = require('./record-transport.cjs');
+  const trust = signedTrust(ENABLED);
+  await largeFixture(async f => {
+    f.state.pr.number = 0;
+    assert.equal((await f.assess()).decision, 'auto_approve');
+    f.state.pr.number = 3;
+    const receipt = signLargeReceipt(f, trust);
+    assert.equal(isRoot(receipt.bundle.payload.record), parted, 'a record above one receipt is signed as parts');
+    const full = fs.statSync(f.recordPath).size;
+    assert.ok(full > transport.MAX_EXPANDED_BYTES, 'the complete record cannot travel as a job output');
+    assert.throws(() => transport.encode({assessment: {version: 2, head_sha: 'a'.repeat(40), base_sha: 'b'.repeat(40), record_digest: digest(f.read())},
+      context: f.context, runAttempt: '1', record: f.read(), repair: null}), /expanded limit|compressed limit/);
+
+    const served = new Map(receipt.files); const reads = [];
+    const original = f.github.rest.repos.getContent;
+    f.github.rest.repos.getContent = async args => {
+      if (!args.path.startsWith('clouseau-review.')) return original(args);
+      reads.push(args.path); assert.equal(args.ref, receipt.ref);
+      const bytes = served.get(args.path);
+      if (!bytes) throw Object.assign(new Error('Not Found'), {status: 404});
+      return {data: {encoding: 'base64', content: bytes.toString('base64'), size: bytes.length}};
+    };
+    f.state.pr.body = `Adds the fictional modules.\n<!-- clouseau-local-review:v1 ${receipt.ref} -->`;
+    fs.rmSync(f.recordPath);
+    const calls = f.state.calls.length;
+    const policy = require('./policy.cjs').createPolicy(trust.config);
+    const refuse = async () => {throw new Error('CI AI must not be called');};
+    const assess = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: refuse, retryWait: async () => {}});
+    const assessment = await assess();
+    assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+    assert.equal(assessment.review_source, 'authenticated_local');
+    assert.equal(assessment.provider_api_calls, 0);
+    assert.equal(f.state.calls.length, calls, 'no provider request was made');
+    assert.deepEqual(reads, ['clouseau-review.json', ...(receipt.bundle.parts ?? []).map((_, index) => require('./receipt-parts.cjs').partName(index))]);
+
+    // The CI record names the receipt and carries only the run facts; the signed review exists once, in the receipt.
+    const compact = f.read();
+    assert.equal(compact.local_receipt_reference, true);
+    assert.equal(compact.local_artifact, receipt.ref);
+    for (const key of ['snapshot', 'partition', 'seams', 'result', 'local_receipt']) assert.equal(Object.hasOwn(compact, key), false, key);
+    assert.ok(fs.statSync(f.recordPath).size < 20000, 'the compact record is small');
+    assert.equal(assessment.record_reference_digest, digest(compact));
+    assert.equal(assessment.record_digest, digest(await policy.rehydrate(compact, assessment, {github: f.github, repo: f.repo})),
+      'record_digest still names the complete rebuilt record');
+
+    // The compact record fits the job-output transport and arrives byte for byte at the write boundary.
+    const outputs = {};
+    const published = {setOutput: (name, value) => {outputs[name] = value;}};
+    transport.publish({mode: 'job-output', assessment, context: f.context, runAttempt: '1', core: published, recordPath: f.recordPath});
+    const chunks = JSON.parse(outputs['review-record']);
+    assert.ok(chunks.join('').length < transport.MAX_ENCODED_BYTES / 10);
+    const sent = fs.readFileSync(f.recordPath, 'utf8'); fs.rmSync(f.recordPath);
+    transport.receive({mode: 'job-output', payload: transport.joinParts(chunks, true), assessment, context: f.context, runAttempt: '1', recordPath: f.recordPath});
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.recordPath, 'utf8')), JSON.parse(sent));
+    assert.equal(f.state.writes.length, 0, 'assessment writes nothing');
+
+    // A part that differs by one byte, a part that is gone, or a stale receipt fails closed at the write boundary before any write.
+    if (parted) for (const tamper of [
+      () => {const bytes = Buffer.from(receipt.files.get('clouseau-review.part-0001')); bytes[10] ^= 1; served.set('clouseau-review.part-0001', bytes);},
+      () => {served.set('clouseau-review.part-0002', receipt.files.get('clouseau-review.part-0001'));},
+      () => {served.delete('clouseau-review.part-0002');},
+    ]) {
+      for (const [name, bytes] of receipt.files) served.set(name, bytes);
+      tamper();
+      await assert.rejects(policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+        recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}}), /differs from the signed root|Not Found/);
+      assert.equal(f.state.writes.length, 0);
+    }
+    for (const [name, bytes] of receipt.files) served.set(name, bytes);
+    await policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+      recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}});
+    assert.deepEqual(names(f), ['create-ledger', 'approve']);
+    assert.equal(f.state.calls.length, calls, 'the gate made no provider request either');
+  }, {config: trust.config, count, size: 30000});
 });

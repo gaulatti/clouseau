@@ -41,7 +41,7 @@ comparison then run unchanged, so there is still one decision derivation.
 `options.chunked = {params: {C, S}, hooks: {partition, unitView, seams, merge}}` is accepted by
 `issueReceipt`, `verifySignedRecord`, `verifyReceipt` and `reviewDecision`. Parameters come only from protected
 configuration (`cap` and `max_units`, bounds of an earlier contract, are still accepted and bound nothing). The hooks are the partition and merge modules, injected so this module does not depend on them.
-`acceptance-controller.cjs` does not pass the option yet, so CI rejects a partitioned record until the integrator change.
+CI verifies a partitioned local receipt through `verifyReceipt`, which takes the parameters from the protected `local_review.chunked`; the controller reuses the merged reviews that verification derives, so a signed chunked review is reused with zero CI AI calls.
 
 ## Quote elision
 
