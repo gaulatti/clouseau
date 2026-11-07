@@ -364,6 +364,58 @@ function linked(snapshot, name, reached) {
     !JS_PATH.test(source.path) && source.content.split('\n').some(line => IMPORT.test(line) && token.test(line)));
 }
 
+// Rust unit tests live inside the production file, in a `#[cfg(test)] mod name { ... }` holding `#[test]`
+// functions, so no separate test file imports the module. Such a file is tested when the change touches a
+// line inside one of its in-file test modules (an added, edited or removed test, new or existing file), or
+// when a supplied integration test of the same package (`<package>/tests/**.rs`) `use`s the module by its
+// path under `<package>/src`. Production lines changed beside an untouched test module are not tested: the
+// engine holds the source and patch, not the executed lines, so it cannot show those tests reach them.
+// That execution and the covered changed lines are proved by the repository's coverage gate.
+const RUST_PATH = /\.rs$/;
+const RUST_LEXEME = /\/\/[^\n]*|\/\*[\s\S]*?\*\/|r(#*)"[\s\S]*?"\1|b?"(?:\\[\s\S]|[^"\\])*"|b?'(?:\\'|\\[^'\n]+|[^\\'\n])'/g;
+const RUST_TEST_MODULE = /#\[cfg\(test\)\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{/g;
+const RUST_TEST_ATTRIBUTE = /#\[(?:\w+::)*(?:test|rstest|test_case)\b/;
+// Comments and literals blanked in place (newlines kept) so braces and attributes inside them are never read.
+const blankRust = source => source.replace(RUST_LEXEME, lexeme => lexeme.replace(/[^\n]/g, ' '));
+
+function rustTestSpans(source) {
+  const text = blankRust(source); const line = index => text.slice(0, index).split('\n').length; const spans = [];
+  for (const module of text.matchAll(RUST_TEST_MODULE)) {
+    let depth = 1; let end = module.index + module[0].length;
+    while (end < text.length && depth) depth += {'{': 1, '}': -1}[text[end++]] ?? 0;
+    if (!depth && RUST_TEST_ATTRIBUTE.test(text.slice(module.index, end))) spans.push([line(module.index), line(end - 1)]);
+  }
+  return spans;
+}
+
+// New-file line numbers of every added line, and of the position of every removed one.
+function changedLines(patch) {
+  const lines = []; let at = 0;
+  for (const line of `${patch}`.split('\n')) {
+    const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line);
+    if (hunk) at = Number(hunk[1]);
+    else if (at && /^[+-]/.test(line)) {lines.push(at); if (line[0] === '+') at++;}
+    else if (at && line[0] === ' ') at++;
+  }
+  return lines;
+}
+
+function rustTested(snapshot, file, patch) {
+  if (!RUST_PATH.test(file.path)) return false;
+  const head = snapshot.sources[file.head_source]?.content;
+  if (typeof head === 'string') {
+    const spans = rustTestSpans(head);
+    if (changedLines(patch).some(at => spans.some(([start, end]) => at >= start && at <= end))) return true;
+  }
+  const module = /^((?:.*\/)?)src\/(.+)\.rs$/.exec(file.path);
+  const segments = module ? module[2].split('/') : [];
+  if (segments[segments.length - 1] === 'mod') segments.pop();
+  if (!segments.length || (segments.length === 1 && /^(?:lib|main)$/.test(segments[0]))) return false;
+  const use = new RegExp(`^[ \\t]*(?:pub(?:\\([^)]*\\))?[ \\t]+)?use[ \\t]+(?!(?:std|core|alloc)::)(?:crate|[A-Za-z_]\\w*)::${segments.join('::')}(?!\\w)`, 'm');
+  return Object.values(snapshot.sources).some(source => source.ref === snapshot.head_sha && source.kind === 'source' &&
+    source.path.startsWith(`${module[1]}tests/`) && RUST_PATH.test(source.path) && use.test(blankRust(source.content)));
+}
+
 // Approval needs affirmative, per-file behavioural evidence. An unresolved
 // integrity or completeness gate, or changed production code with no supplied
 // test that imports it, is missing verification and holds automatic approval.
@@ -384,7 +436,7 @@ function approvalHold(report, snapshot) {
   // A file whose head source has no nonblank line (an empty package marker such as an __init__.py) holds no statement, so
   // there is no production code in it for a test to exercise. A head that was not supplied is not evidence of emptiness.
   const empty = file => typeof snapshot.sources[file.head_source]?.content === 'string' && !snapshot.sources[file.head_source].content.trim();
-  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !empty(file) && !nonBehavioural(patchOf(snapshot, file)) && !linked(snapshot, file.path, reached)).map(file => file.path);
+  const bare = snapshot.files.filter(file => file.status !== 'removed' && isCodePath(file.path) && !empty(file) && !nonBehavioural(patchOf(snapshot, file)) && !linked(snapshot, file.path, reached) && !rustTested(snapshot, file, patchOf(snapshot, file))).map(file => file.path);
   if (bare.length) return `no supplied test imports changed production code: ${bare.join(', ')}`;
   return null;
 }

@@ -551,3 +551,22 @@ the branch itself: a push authenticated with the workflow `GITHUB_TOKEN` does no
 start the verification workflow, so the new head would have no tests, coverage
 or review evidence. A changed head is a new revision and is never reported as a
 base move.
+
+## Rust tests inside the production file
+
+Rust unit tests sit in the file they test, in a `#[cfg(test)] mod tests { ... }` with `#[test]`, `#[tokio::test]`
+(any `path::test`), `#[rstest]` or `#[test_case]` functions, so no separate test imports the file. The supplied-test
+check for a changed `.rs` file therefore also accepts either of:
+
+- a changed line (added, edited or removed, in a new or existing file) inside an in-file test module that holds a test
+  function. Braces, attributes and `#[cfg(test)]` inside comments, strings and character literals are ignored, a module
+  with unbalanced braces or no test function does not count, and `#[cfg(test)] mod tests;` (tests in another file) does
+  not count;
+- a supplied Rust integration test under `<package>/tests/` with a `use <crate>::<module path>` statement (`crate` or
+  any name except `std`, `core` and `alloc`) for the file's module path under `<package>/src` (`src/a/mod.rs` is `a`;
+  `lib.rs`, `main.rs`, `mod.rs` at the root and files outside `src/` have no module path).
+
+Production lines changed in a file whose in-file test module is untouched stay held, as does a file with no tests: the
+engine holds sources and patches, not executed lines, so it cannot show those tests reach the change. That the tests
+run, and that the changed lines are covered, is the repository's coverage gate (`changed_lines`, lcov) and not this
+check. The crate name in a `use` is not resolved against `Cargo.toml`. Other languages are unchanged.
