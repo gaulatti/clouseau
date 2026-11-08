@@ -34,7 +34,7 @@ therefore not proven by a passing gate: the implicit false/no-match exit of an `
 statement), and `select`/`range` zero-entry exits. This is a weaker guarantee than the
 LLVM, Istanbul and coverage.py branch metrics; the check command prints a note saying
 so. Write tests for those outcomes explicitly. A true outcome-level Go branch route is
-tracked separately (gaulatti/clouseau#67).
+the `gooutcomes` format produced by `tools/goinstr` (docs/go-instrumenter.md; gaulatti/clouseau#67).
 
 ## Aggregation and inventory
 

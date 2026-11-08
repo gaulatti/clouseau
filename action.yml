@@ -20,7 +20,7 @@ inputs:
     description: Accepted-base version 2 local recipe with separate native coverage parts (coverage); read as data only
     default: ''
   coverage-format:
-    description: llvm, istanbul, coveragepy or go; require the complete application source inventory
+    description: llvm, istanbul, coveragepy, go or gooutcomes; require the complete application source inventory
     default: llvm
   source-directory:
     description: Application source directory to measure (coverage)

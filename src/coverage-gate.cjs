@@ -6,6 +6,7 @@ const {fail, isObject, get, realPath, isInside, loadReport, emptyCounts, validPa
 const istanbul = require('./coverage-istanbul.cjs');
 const coveragepy = require('./coverage-coveragepy.cjs');
 const go = require('./coverage-go.cjs');
+const gooutcomes = require('./coverage-gooutcomes.cjs');
 const lcov = require('./coverage-lcov.cjs');
 const changed = require('./coverage-changed.cjs');
 const declared = require('./coverage-declared.cjs');
@@ -50,8 +51,9 @@ function counters(report, sourceDirectory, format, cwd, detail, options = {}) {
   if (format === 'istanbul') return istanbul.counters(report, sourceDirectory, cwd, detail);
   if (format === 'coveragepy') return coveragepy.counters(report, sourceDirectory, cwd, detail);
   if (format === 'go') return go.counters(report, sourceDirectory, cwd, detail);
+  if (format === 'gooutcomes') return gooutcomes.counters(report, sourceDirectory, cwd, detail);
   if (format === 'lcov') return lcov.counters(report, sourceDirectory, cwd, detail, options);
-  if (format !== 'llvm') fail('Unknown coverage format; use llvm, istanbul, coveragepy, lcov or go');
+  if (format !== 'llvm') fail('Unknown coverage format; use llvm, istanbul, coveragepy, lcov, go or gooutcomes');
   if (detail) fail('Changed-line coverage needs per-line measurements; the llvm summary format does not provide them');
   return llvmCounters(report, sourceDirectory, cwd);
 }
@@ -94,7 +96,7 @@ function measurePlan(parts, directory, detail, notes) {
   const roots = [];
   const plan = [];
   for (const part of parts) {
-    if (!validPartShape(part) || !['istanbul', 'coveragepy', 'go', 'lcov'].includes(part.format)) {
+    if (!validPartShape(part) || !['istanbul', 'coveragepy', 'go', 'gooutcomes', 'lcov'].includes(part.format)) {
       fail('Each coverage part requires a supported native format, report and source_directory');
     }
     packageDirectory(part);
@@ -260,7 +262,7 @@ function main(argv, {cwd, stdout, stderr}) {
       notes.forEach(note => stdout(`note: ${note}\n`));
       if (format === 'go') stdout('note: go lines are statements and go branches are basic blocks\n');
       enforce(counts);
-    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|lcov|go] [--source-suffixes=.ext,...] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | mode CLOUSEAU_CONFIG | totals REPORT SOURCE_DIRECTORY FORMAT | totals-plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | changed-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF BASELINE | changed-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF BASELINE | declared-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF | declared-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF');
+    } else fail('Usage: check REPORT SOURCE_DIRECTORY [llvm|istanbul|coveragepy|lcov|go|gooutcomes] [--source-suffixes=.ext,...] | plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | mode CLOUSEAU_CONFIG | totals REPORT SOURCE_DIRECTORY FORMAT | totals-plan ACCEPTED_CONFIG [APPLICATION_DIRECTORY] | changed-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF BASELINE | changed-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF BASELINE | declared-check REPORT SOURCE_DIRECTORY FORMAT BASE_REF | declared-plan ACCEPTED_CONFIG APPLICATION_DIRECTORY BASE_REF');
     return 0;
   } catch (error) {
     stderr(`Coverage gate failed: ${error.message}\n`);

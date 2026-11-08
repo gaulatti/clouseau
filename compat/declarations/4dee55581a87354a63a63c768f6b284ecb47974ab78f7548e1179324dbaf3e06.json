@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "action.yml",
+      "mode": 0,
+      "sha256": "acce17cd7d061fc757e979c40002ceaed6e762588ded6d5ff61ac6b4687375e9"
+    },
+    {
+      "path": "src/coverage-declared.cjs",
+      "mode": 0,
+      "sha256": "bf2c278b28a8d36980d93f871983c1879b1b505b53fb18b5cfb551d5292cf19c"
+    },
+    {
+      "path": "src/coverage-gate.cjs",
+      "mode": 0,
+      "sha256": "9e08cd41f19747d0beab75311c9d308211253198da0d1da7f7b79516d8c17f9b"
+    },
+    {
+      "path": "src/coverage-go.cjs",
+      "mode": 0,
+      "sha256": "f099abe76dbc9fa90b3d53820328fb180e9cae974ced725c0f3c962e4decc7a2"
+    },
+    {
+      "path": "src/coverage-gooutcomes.cjs",
+      "mode": 0,
+      "sha256": "61a5491bde314030ce20f194290c28214faa1b54d5360a35dbb3b9ce7861ceda"
+    },
+    {
+      "path": "src/coverage-plan.cjs",
+      "mode": 0,
+      "sha256": "232988092febc4102b4d3370d52f36f9d6eb87fdc5a2172ff9aff54230a7b664"
+    }
+  ]
+}
