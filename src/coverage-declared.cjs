@@ -21,7 +21,7 @@ const METRICS = ['lines', 'branches', 'functions', 'statements'];
 // reported as not enforced; it is never silently treated as met.
 const ENFORCED = ['lines', 'branches'];
 const SAMPLE = 20;
-const PER_FILE_FORMATS = ['istanbul', 'lcov', 'coveragepy'];
+const PER_FILE_FORMATS = ['istanbul', 'lcov', 'coveragepy', 'gooutcomes'];
 const has = (object, key) => Object.hasOwn(object, key);
 
 const PART_FIX = 'In a monorepo, declare the minimum in the package.json of the part\'s package directory, and name that directory in the part\'s `package_directory` field of the accepted coverage recipe when it is not the part\'s source directory; the gate never falls back to another directory\'s package.json.';

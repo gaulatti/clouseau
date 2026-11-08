@@ -47,7 +47,7 @@ Either is parsed strictly, from the base revision
   threshold `n/d` written as a decimal (`87.5` is `875/10`). A metric with a zero
   total (no branches) passes. The shown percent is floored to two decimals.
 * `per-file: true` checks every file against the minimum. It needs per-file
-  counts, so it is available for `istanbul`, `lcov` and `coveragepy` reports only.
+  counts, so it is available for `istanbul`, `lcov`, `coveragepy` and `gooutcomes` reports only.
 * Jest path and glob entries are not read; they fail closed.
 * The same value declared by two tools is fine; different values conflict.
 * Vitest cannot declare thresholds in `package.json`; a project that uses it and

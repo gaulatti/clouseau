@@ -155,4 +155,4 @@ function counters(text, sourceDirectory, cwd, detail) {
   return counts;
 }
 
-module.exports = {counters, inventory};
+module.exports = {counters, inventory, moduleOf};
