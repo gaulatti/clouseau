@@ -1,6 +1,6 @@
 'use strict';
 
-const {test} = require('node:test');
+const {test, after} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -18,8 +18,13 @@ function pick(n) {
 module.exports = {pick};
 `;
 
+// Every fixture directory is removed when this file's tests finish, so a run leaves nothing in the temp directory.
+const created = [];
+after(() => {for (const directory of created) fs.rmSync(directory, {recursive: true, force: true});});
+
 function project(files = {}) {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-v8-')));
+  created.push(root);
   fs.mkdirSync(path.join(root, 'src'));
   for (const [name, text] of Object.entries({'m.cjs': MODULE, ...files})) {
     fs.mkdirSync(path.dirname(path.join(root, 'src', name)), {recursive: true});
@@ -100,6 +105,7 @@ test('reports for files outside the production tree are skipped', () => {
 
 test('an empty production tree is refused instead of passing vacuously', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-v8-empty-'));
+  created.push(root);
   fs.mkdirSync(path.join(root, 'src'));
   assert.throws(() => evaluate({root, source: 'src', coverage: root}), /No production source files under src/);
 });
