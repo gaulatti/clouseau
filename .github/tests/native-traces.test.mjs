@@ -38,7 +38,8 @@ test('the upload retains whole same-run traces without new permissions or replac
   assert.equal(Object.hasOwn(upload.with, 'overwrite'), false);
   assert.deepEqual(workflow.permissions, {contents: 'read'});
   assert.equal(verify.permissions, undefined);
-  assert.equal(verify['timeout-minutes'], 10);
+  // Measured verify steps total 576-590 s on the shared runner, which a 10 minute cap cancelled; 20 minutes is the margin.
+  assert.equal(verify['timeout-minutes'], 20);
   assert.equal(verify['runs-on'], 'ubuntu-latest');
   assert.equal(verify.steps.at(-1), upload);
 });
