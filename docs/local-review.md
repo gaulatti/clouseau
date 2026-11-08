@@ -20,6 +20,23 @@ installed skills with an explicit error. An unavailable update does not silently
 activate stale code. Codex and Claude Code use their existing authenticated
 account stores; Clouseau makes no direct DeepSeek/Jev requests in local mode.
 
+## Temporary directories
+
+A run keeps nothing in the system temp directory. The directories it creates there
+(`clouseau-base-*` for the base-revision coverage baseline, `clouseau-harness-*` for a
+harness call, `clouseau-wiki-index-*` for a wiki publish) are removed when the step that
+made them ends, on success or error, and again when the process exits or receives
+SIGINT, SIGTERM or SIGHUP (exit status 128 plus the signal number). Anything that must
+survive a run, such as a resumed agent exchange, lives under the repository's state
+directory, never in the temp directory.
+
+At startup the launcher also removes directories that an earlier process left behind
+because it was killed outright: names of exactly the form `clouseau-v8-*`,
+`clouseau-v8-empty-*`, `clouseau-base-*` or `clouseau-harness-*` (prefix plus the six
+random characters) that are real directories (symlinks are never followed) and were last
+modified more than 24 hours ago. Errors are ignored. The `clouseau-v8-*` names were
+left by the engine's own coverage tests, which now remove their fixtures.
+
 ## Local-only repository configuration
 
 Commit `.clouseau-local.json` on the accepted base. It is independent of GitHub
