@@ -127,6 +127,11 @@ profile built with `-coverpkg=./...`. Go records statements and basic blocks onl
 short-circuit operands are not measured. See the [native Go coverage
 contract](docs/go-coverage.md) for exact semantics, inventory and failures.
 
+For Swift, produce LCOV with `swift test --enable-code-coverage` and `xcrun llvm-cov export -format=lcov`
+and declare `source_suffixes: [".swift"]` on an `lcov` part. The toolchain records no branch outcomes, so a
+pure Swift part fails the exact gate with `No branches measured`; see the [Swift coverage
+recipe](docs/swift-coverage.md).
+
 Monorepos may use the accepted-base version 2 local recipe with separate native
 Istanbul, coverage.py and Go parts. `operation: coverage` accepts that recipe through
 `coverage-config` and uses the shared per-part and aggregate measurement rules.
