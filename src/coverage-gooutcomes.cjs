@@ -73,7 +73,8 @@ function measure(entry, limit, counts) {
   for (const statement of entry.statements) {
     if (!keysAre(statement, ['line', 'hits'])) fail('Malformed Go statement entry');
     const line = lineOf(statement.line, limit);
-    lines.set(line, (lines.get(line) ?? true) && count(statement.hits) > 0);
+    const ran = count(statement.hits) > 0;
+    lines.set(line, (lines.get(line) ?? true) && ran);
   }
   const keys = new Set();
   const branches = [];

@@ -45,6 +45,12 @@ test('a line is covered only when every statement starting on it ran', () => wit
   assert.deepEqual(measure(report, directory), {lines: [54, 47], branches: [46, 44]});
 }));
 
+test('every statement hit is validated, even after an unhit statement on the same line', () => withTree(directory => {
+  const report = load('full');
+  entry(report, 'decide.go').statements.push({line: 112, hits: 0}, {line: 112, hits: -1});
+  rejects(report, /nonnegative safe integers/, directory);
+}));
+
 test('a file excluded from every declared build or never loaded is an explicit error, never branchless', () => withTree(directory => {
   rejects(load('host-only'), /excluded from every declared build.*platform_windows\.go \(excluded by build constraints/, directory);
   rejects(edit(report => {delete entry(report, 'platform_windows.go').reason;}, 'host-only'), /platform_windows\.go \(no reason given\)/, directory);
