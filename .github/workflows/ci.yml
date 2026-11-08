@@ -84,7 +84,8 @@ jobs:
   verify:
     name: ${{ ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'verify' || 'metadata-only' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The three independent test gates take about 576-590 s on the shared runner; 20 minutes leaves margin.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         if: &verify-code >-
