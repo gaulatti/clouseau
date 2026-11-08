@@ -99,7 +99,7 @@ The program refuses a non-empty `-work` directory unless its manifest carries th
   constrained file, a second build, shard union, and the unsupported-input errors.
 - `src/coverage-gooutcomes.test.cjs` reads the committed real reports (`full.json`, `partial.json`, `host-only.json`)
   without Go and covers every adapter branch. `src/go-instrumenter.test.cjs` rebuilds the report with real Go and
-  compares it with `full.json` (skipped when Go is not installed; the committed reports still gate the adapter).
+  compares it with `full.json` (Go runs once per verification, in `scripts/verify-coverage`, and is skipped when Go is not installed; the committed reports still gate the adapter everywhere).
 
 ## Not yet claimed
 

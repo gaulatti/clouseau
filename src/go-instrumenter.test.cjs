@@ -13,7 +13,10 @@ const gate = require('./coverage-gate.cjs');
 const ROOT = path.join(__dirname, '..');
 const TOOL = path.join(ROOT, 'tools', 'goinstr');
 const FIXTURES = path.join(ROOT, 'test', 'fixtures', 'go-outcomes');
-const hasGo = spawnSync('go', ['version']).status === 0;
+// The verify job has a fixed ten-minute budget and runs this suite three times, so Go executes once, in the coverage
+// verification (scripts/verify-coverage sets NODE_V8_COVERAGE). The adapter tests read the same committed real reports
+// without Go in every pass.
+const hasGo = spawnSync('go', ['version']).status === 0 && Boolean(process.env.NODE_V8_COVERAGE);
 const go = (cwd, args) => {
   const result = spawnSync('go', args, {cwd, encoding: 'utf8'});
   assert.equal(result.status, 0, `go ${args.join(' ')}\n${result.stdout}${result.stderr}`);
