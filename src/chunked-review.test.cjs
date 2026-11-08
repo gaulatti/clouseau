@@ -292,15 +292,25 @@ test('a unit asking for more source refuses the whole review', async () => {
     error => error.code === 'unit_source_request' && typeof error.unit === 'string');
 });
 
-test('a missed deadline names the unit and proposes smaller units; an integration deadline is typed too', async () => {
+test('a missed deadline names the unit and proposes smaller units; an integration deadline is typed too', async t => {
+  // The deadline timer is fake: it fires only when the test advances it, and only once the session under test is
+  // known to be stuck, so no real elapsed time (a loaded machine) can reorder the unit and integration deadlines.
+  t.mock.timers.enable({apis: ['setTimeout']});
   const snapshot = combined();
   const plan = planOf(snapshot);
   const never = new Promise(() => {});
-  const slowUnit = harness(snapshot, plan, {hook: task => (task.phase === 'investigation' ? never : undefined)});
-  await assert.rejects(chunkedReview({snapshot, plan, ask: slowUnit.ask, chunked: {params: {...PARAMS, C: 9}, unit_deadline_ms: 20}}),
+  const stuckAt = async (phase, options, seams) => {
+    let stuck;
+    const reached = new Promise(resolve => {stuck = resolve;});
+    const stuckHarness = harness(snapshot, plan, {hook: task => {if (task.phase !== phase) return undefined; stuck(); return never;}});
+    const review = chunkedReview({snapshot, plan, seams, ask: stuckHarness.ask, chunked: {unit_deadline_ms: 20, ...options}});
+    await reached;
+    t.mock.timers.tick(20);
+    return review;
+  };
+  await assert.rejects(stuckAt('investigation', {params: {...PARAMS, C: 9}}, undefined),
     error => error.code === 'unit_deadline' && /^u\d$/.test(error.unit) &&error.retry_ceiling === 4);
-  const slowIntegration = harness(snapshot, plan, {hook: task => (task.phase === 'integration' ? never : undefined)});
-  await assert.rejects(chunkedReview({snapshot, plan, seams: [seam('s1')], ask: slowIntegration.ask, chunked: {params: PARAMS, unit_deadline_ms: 20}}),
+  await assert.rejects(stuckAt('integration', {params: PARAMS}, [seam('s1')]),
     error => error.code === 'integration_deadline' && typeof error.role === 'string');
 });
 
