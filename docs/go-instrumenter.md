@@ -87,7 +87,7 @@ keyed by absolute path (both the resolved and the shell path are written, so a s
 separate `-work` directories (or one directory reused by several `go test` invocations) merged with repeated `-run`.
 If the overlay is not applied, no counter is written and the gate fails rather than passing.
 
-The program refuses a non-empty `-work` directory that is not one of its own and removes its own on failure.
+The program refuses a non-empty `-work` directory unless its manifest carries the goinstr schema and it holds only goinstr files; it removes its own directory on failure.
 
 ## Verification
 

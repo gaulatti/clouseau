@@ -297,6 +297,22 @@ func TestUnsupportedAndInvalidInputsFail(t *testing.T) {
 	if err := run([]string{"instrument", "-module", module, "-work", work}); err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Fatalf("a foreign work directory is never removed: %v", err)
 	}
+	// A directory that merely has a manifest.json of its own is never removed either.
+	os.WriteFile(filepath.Join(work, "manifest.json"), []byte(`{"schema":"other"}`), 0o644)
+	if err := run([]string{"instrument", "-module", module, "-work", work}); err == nil {
+		t.Fatal("a foreign manifest must not authorize removal")
+	}
+	if _, err := os.Stat(filepath.Join(work, "keep.txt")); err != nil {
+		t.Fatal("the foreign directory was touched")
+	}
+	os.Remove(filepath.Join(work, "keep.txt"))
+	os.Remove(filepath.Join(work, "manifest.json"))
+	if err := run([]string{"instrument", "-module", module, "-work", work}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"instrument", "-module", module, "-work", work}); err != nil {
+		t.Fatalf("a goinstr directory is reusable: %v", err)
+	}
 	for _, args := range [][]string{{}, {"nothing"}, {"report"}, {"instrument"}} {
 		if run(args) == nil {
 			t.Fatalf("%v should fail", args)

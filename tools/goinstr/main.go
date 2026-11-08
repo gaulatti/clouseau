@@ -181,7 +181,7 @@ func runInstrument(args []string) (failure error) {
 		return err
 	}
 	if entries, err := os.ReadDir(work); err == nil && len(entries) > 0 {
-		if _, err := os.Stat(filepath.Join(work, manifestName)); err != nil {
+		if !ownDirectory(work, entries) {
 			return fmt.Errorf("work directory %s is not empty and not a goinstr directory", work)
 		}
 		if err := os.RemoveAll(work); err != nil {
@@ -448,4 +448,21 @@ func overlayAdd(overlay map[string]string, path, target string, roots [2]string)
 			overlay[filepath.Join(roots[1], relative)] = target
 		}
 	}
+}
+
+// ownDirectory is true only for a directory goinstr wrote: its manifest carries the goinstr schema and nothing else is in it.
+func ownDirectory(work string, entries []os.DirEntry) bool {
+	data, err := os.ReadFile(filepath.Join(work, manifestName))
+	var m manifest
+	if err != nil || json.Unmarshal(data, &m) != nil || m.Schema != schema {
+		return false
+	}
+	for _, entry := range entries {
+		switch entry.Name() {
+		case manifestName, "overlay.json", "src", "hits":
+		default:
+			return false
+		}
+	}
+	return true
 }
