@@ -133,3 +133,41 @@ test('the attested operation decides for the pull request in context', async t =
   assert.equal(await decide({...pr, draft: true}), false);
   assert.equal(await decide({...pr, base: {ref: 'other', sha: BASE}}), false);
 });
+
+// Policy side: skipped required steps are accepted only on an attestation. The policy suite stays untouched to keep its evidence small.
+const {createPolicy} = require('./policy.cjs');
+const policyConfig = require('../test/fixtures/config.json');
+const PR_REPO = {owner: 'gaulatti', repo: 'colombo'};
+const small = {number: 8, head: {sha: HEAD, ref: 'fix/naming', repo: {id: 42}}, base: {sha: BASE, ref: 'main'}};
+function ci(stepConclusions) {
+  const steps = policyConfig.verification.steps.map((name, index) => ({name, conclusion: stepConclusions[index] ?? 'success'}));
+  return {rest: {actions: {
+    listWorkflowRuns: async () => ({data: {workflow_runs: [{id: 22, head_sha: HEAD, head_branch: 'fix/naming', head_repository: {id: 42}, pull_requests: [],
+      event: 'pull_request', status: 'completed', conclusion: 'success', html_url: 'https://github.com/gaulatti/colombo/actions/runs/22'}]}}),
+    listJobsForWorkflowRun: async () => ({data: [{name: policyConfig.verification.job, conclusion: 'success', steps}]}),
+  }}, paginate: async (method, options) => (await method(options)).data};
+}
+
+test('skipped required steps count only when a valid receipt attests the verification', async () => {
+  const seen = [];
+  const attesting = answer => createPolicy(policyConfig, {attested: async (github, repository, pull) => {seen.push([repository, pull.number]); return answer;}});
+  const skipped = () => ci(policyConfig.verification.steps.map(() => 'skipped'));
+  assert.match((await attesting(true).technicalRun(skipped(), PR_REPO, small)).url, /runs\/22/);
+  assert.deepEqual(seen, [[PR_REPO, 8]]);
+  assert.match((await attesting(false).technicalRun(skipped(), PR_REPO, small)).failure, /Required verification step "[^"]+" concluded skipped/);
+  assert.match((await createPolicy(policyConfig).technicalRun(skipped(), PR_REPO, small)).failure, /concluded skipped/);
+  // A failed step is never excused by an attestation, and a fully successful job never asks for one.
+  assert.match((await attesting(true).technicalRun(ci(['skipped', 'failure']), PR_REPO, small)).failure, /concluded failure/);
+  seen.length = 0;
+  assert.ok((await attesting(true).technicalRun(ci([]), PR_REPO, small)).url);
+  assert.deepEqual(seen, []);
+});
+
+test('a version 2 policy asks the receipt verifier whether verification is attested', async t => {
+  const calls = [];
+  t.mock.method(attestation, 'receiptAttests', async options => {calls.push(options); return true;});
+  const policy = createPolicy({...policyConfig, version: 2,
+    acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2}}, {engine: null});
+  assert.ok((await policy.technicalRun(ci(policyConfig.verification.steps.map(() => 'skipped')), PR_REPO, small)).url);
+  assert.equal(calls.length, 1); assert.equal(calls[0].pr, small); assert.equal(calls[0].config.version, 2);
+});
