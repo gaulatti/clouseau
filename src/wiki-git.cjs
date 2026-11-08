@@ -1,9 +1,9 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const {execFileSync} = require('node:child_process');
+const temporaryDirectories = require('./temp-dirs.cjs');
 const {validateConfig, validateBundle, planWiki} = require('./wiki.cjs');
 const META = '.clouseau-deployment.json';
 const check = (condition, message) => {if (!condition) throw new Error(message);};
@@ -78,7 +78,7 @@ async function publishWiki({github, context, config, sourceDirectory, wikiDirect
   if (current.previous?.source_sha === context.sha) return {commit: current.identity.wiki_base_sha, changedPages: 0, alreadyDocumented: true};
   const updates = bundle.updates.filter(page => current.wiki[page.path] !== page.content);
   const receipt = {version: 1, repository: current.identity.repository, source_sha: context.sha, deployment_run_id: context.runId};
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-wiki-index-'));
+  const temporary = temporaryDirectories.create('clouseau-wiki-index-');
   const env = {...process.env, GIT_INDEX_FILE: path.join(temporary, 'index'),
     GIT_AUTHOR_NAME: 'github-actions[bot]', GIT_COMMITTER_NAME: 'github-actions[bot]',
     GIT_AUTHOR_EMAIL: '41898282+github-actions[bot]@users.noreply.github.com',
@@ -95,7 +95,7 @@ async function publishWiki({github, context, config, sourceDirectory, wikiDirect
     git(wikiDirectory, ['push', 'origin', `${commit}:refs/heads/${config.wiki_branch}`], undefined, env);
     return {commit, changedPages: updates.length, alreadyDocumented: false};
   } finally {
-    fs.rmSync(temporary, {recursive: true, force: true});
+    temporaryDirectories.dispose(temporary);
   }
 }
 

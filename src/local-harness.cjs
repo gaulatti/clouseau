@@ -1,10 +1,10 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const {digest} = require('./acceptance.cjs');
+const temporaryDirectories = require('./temp-dirs.cjs');
 
 function compactSchema(schema) {
   const definitions = {};
@@ -73,7 +73,7 @@ function assertHarness(harness) {
 async function askHarness({harness, role, phase, schema, prompt, execute = invoke}) {
   assertHarness(harness);
   if (harness === 'codex' && prompt.length > 1048576) throw new Error('Local Codex input exceeds its 1048576-character transport limit; preserve and inspect the complete evidence without truncation');
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-harness-'));
+  const directory = temporaryDirectories.create('clouseau-harness-');
   try {
     const schemaPath = path.join(directory, 'schema.json');
     const resultPath = path.join(directory, 'result.json');
@@ -111,7 +111,7 @@ async function askHarness({harness, role, phase, schema, prompt, execute = invok
     if (!value || typeof session !== 'string' || !session.length) throw new Error('Harness returned no structured result or session identity');
     return {value, provenance: {harness, role, phase, session, request_digest: digest({schema: outputSchema, prompt}),
       response_digest: digest(value), transport_digest: digest(raw)}};
-  } finally {fs.rmSync(directory, {recursive: true, force: true});}
+  } finally {temporaryDirectories.dispose(directory);}
 }
 
 module.exports = {boundedTail, compactSchema, invoke, HARNESSES, assertHarness, askHarness};
