@@ -180,6 +180,9 @@ func runInstrument(args []string) (failure error) {
 	if err != nil {
 		return err
 	}
+	if info, err := os.Lstat(work); err == nil && !info.IsDir() {
+		return fmt.Errorf("work path %s exists and is not a directory", work)
+	}
 	if entries, err := os.ReadDir(work); err == nil && len(entries) > 0 {
 		if !ownDirectory(work, entries) {
 			return fmt.Errorf("work directory %s is not empty and not a goinstr directory", work)

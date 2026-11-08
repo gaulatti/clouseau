@@ -297,6 +297,14 @@ func TestUnsupportedAndInvalidInputsFail(t *testing.T) {
 	if err := run([]string{"instrument", "-module", module, "-work", work}); err == nil || !strings.Contains(err.Error(), "not empty") {
 		t.Fatalf("a foreign work directory is never removed: %v", err)
 	}
+	plain := filepath.Join(t.TempDir(), "plain")
+	os.WriteFile(plain, []byte("x"), 0o644)
+	if err := run([]string{"instrument", "-module", module, "-work", plain}); err == nil || !strings.Contains(err.Error(), "not a directory") {
+		t.Fatalf("a regular file is never a work directory: %v", err)
+	}
+	if _, err := os.Stat(plain); err != nil {
+		t.Fatal("the regular file was removed")
+	}
 	// A directory that merely has a manifest.json of its own is never removed either.
 	os.WriteFile(filepath.Join(work, "manifest.json"), []byte(`{"schema":"other"}`), 0o644)
 	if err := run([]string{"instrument", "-module", module, "-work", work}); err == nil {
