@@ -2,7 +2,7 @@ name: Clouseau
 description: Exact coverage gates and evidence-led PR intent, approval, and auto-merge
 inputs:
   operation:
-    description: verify-engine, test, coverage, await-verification, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, reconcile-base, finalize, plan-wiki, publish-wiki, or evaluate-wiki
+    description: verify-engine, test, coverage, attested, await-verification, verify-local, assess, gate, repair, check-provider, evaluate-review, evaluate-acceptance, request-reassessment, reconcile-base, finalize, plan-wiki, publish-wiki, or evaluate-wiki
     required: true
   wait-for-verification:
     description: Keep the read-only assessment pending until real PR verification completes
@@ -83,6 +83,9 @@ outputs:
   review-record:
     description: Opaque JSON array of four bounded base64url-gzip chunks bound to repository, run, attempt, head, base, and assessment digests
     value: ${{ steps.assess.outputs.review-record }}
+  attested:
+    description: "'true' when the pull request's local review receipt is fully valid and attests every declared verification command and the coverage gate on the exact head; otherwise 'false' and the repository runs its checks (attested)"
+    value: ${{ steps.attested.outputs.attested }}
   verified:
     description: "'true' when PR verification succeeded; 'false' when it had not started within the queue grace and the review should end pending (await-verification)"
     value: ${{ steps.await.outputs.verified }}
@@ -109,7 +112,7 @@ runs:
           *) echo 'ignore-receipt must be true or false' >&2; exit 1 ;;
         esac
         case "$CLOUSEAU_OPERATION" in
-          verify-engine|test|coverage|await-verification|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|reconcile-base|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
+          verify-engine|test|coverage|attested|await-verification|verify-local|assess|gate|repair|check-provider|evaluate-review|evaluate-acceptance|request-reassessment|reconcile-base|finalize|plan-wiki|publish-wiki|evaluate-wiki) ;;
           *) echo 'Unknown Clouseau operation' >&2; exit 1 ;;
         esac
         case "$CLOUSEAU_RECORD_TRANSPORT" in
@@ -190,6 +193,23 @@ runs:
             node "$CLOUSEAU_ROOT/bin/coverage-gate.cjs" changed-check "$COVERAGE_REPORT" "$SOURCE_DIRECTORY" "$COVERAGE_FORMAT" "$COVERAGE_BASE_REF" "$COVERAGE_BASELINE"
           fi
         fi
+    - name: Decide whether a local receipt attests the verification
+      id: attested
+      if: inputs.operation == 'attested'
+      uses: actions/github-script@v7
+      env:
+        CLOUSEAU_ROOT: ${{ github.action_path }}
+        CLOUSEAU_CONFIG: ${{ inputs.config }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('node:path');
+          const root = process.env.CLOUSEAU_ROOT;
+          const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
+          const engine = require(path.join(root, 'src/central-version.cjs')).environmentEngine();
+          const attested = await require(path.join(root, 'src/verification-attestation.cjs')).decide({github, context, config, engine});
+          core.setOutput('attested', String(attested));
+          core.info(attested ? 'A valid local receipt attests the verification; its checks may be skipped.' : 'No valid receipt attests the verification; run the checks.');
     - name: Verify local review or assess repository intent
       id: assess
       if: inputs.operation == 'assess' || inputs.operation == 'verify-local'

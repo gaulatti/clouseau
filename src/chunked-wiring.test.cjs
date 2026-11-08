@@ -54,7 +54,7 @@ async function withChange({rows, chunked, force}, run) {
       commitHead(f.directory, rows);
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Add the fictional change.');
       const args = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};
-      const deps = {state, verify: () => ({fixture_execution_only: true}), installed: () => ({sha: REVIEWER, digest: 'e'.repeat(64), clean: true})};
+      const deps = {state, attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed: () => ({sha: REVIEWER, digest: 'e'.repeat(64), clean: true})};
       await run({f, args, deps, state, config, identity});
     }, directory => {
       writeBase(directory, rows);

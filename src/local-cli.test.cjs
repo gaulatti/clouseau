@@ -181,7 +181,7 @@ test('agent-only local review needs no CI config or provider keys and does not r
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request, harness: 'claude'};
-    const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
+    const deps = {state, ask: fakeHarness(), attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
     const report = await main(['review', '--directory', f.directory, '--base', f.base, '--request-file', request, '--harness', 'claude'], deps);
     assert.equal(report.decision, 'auto_approve'); assert.equal(report.receipt, null);
     assert.equal(report.provider_api_calls, 0); assert.equal(report.harness_invocations, 2);
@@ -224,7 +224,7 @@ test('a completed negative local review retains evidence and never produces a si
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const result = await runReview({directory: f.directory, base: f.base, 'request-file': request},
-      {state, ask: fakeHarness(true), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation});
+      {state, ask: fakeHarness(true), attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation});
     assert.equal(result.decision, 'blocked_integrity'); assert.equal(result.receipt, null);
     assert.equal(JSON.parse(fs.readFileSync(result.record)).result.reviews.length, 2);
     fs.writeFileSync(request, 'A renamed request cannot erase a failed review.');
@@ -241,7 +241,7 @@ test('a failed first harness request remains inspectable and cannot be blindly s
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
     let calls = 0;
-    const deps = {state, verify: () => ({}), installed: fixtureInstallation, ask: async () => {
+    const deps = {state, attest: technical => technical, verify: () => ({}), installed: fixtureInstallation, ask: async () => {
       calls++;
       return invoke(process.execPath, ['-e', 'process.stdout.write("fictional-private-stdout", () => process.stderr.write("fictional-private-diagnostic", () => process.exit(1)))'], {input: ''});
     }};
@@ -288,7 +288,7 @@ for (const central of [false, true]) test(`central=${central}: signed local runn
         assert.equal(value.warnings.length, 1);
         assert.match(value.warnings[0], /^Protected review controls changed \(src\/new\.js\): CI cannot accept a local receipt .*\(\/approve-intent\) and will report review_incomplete/);
       };
-      const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}),
+      const deps = {state, ask: fakeHarness(), attest: technical => technical, verify: () => ({fixture_execution_only: true}),
         installed: () => ({sha: reviewerSha, digest: 'e'.repeat(64), clean: true})};
       const result = await runReview(args, deps);
       assert.ok(result.receipt); assert.equal(result.decision, 'auto_approve'); warned(result);
@@ -346,7 +346,7 @@ test('local history is bounded and a missing concern cannot disappear on a chang
       const args = {'request-file': request};
       const cwd = process.cwd(); process.chdir(f.directory);
       try {
-        const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
+        const deps = {state, ask: fakeHarness(), attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
         await runReview(args, deps);
         const ledger = path.join(state, 'ledgers', `${digest({repository: 'example/local-fixture', branch: 'main'})}.json`);
         const previous = JSON.parse(fs.readFileSync(ledger));
@@ -394,7 +394,7 @@ test('unregistered local signing and source changes stop before any receipt can 
     await repository(async f => {
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
       const args = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};
-      const deps = {state, ask: async () => {throw new Error('Must not invoke a harness');}, verify: () => ({}),
+      const deps = {state, ask: async () => {throw new Error('Must not invoke a harness');}, attest: technical => technical, verify: () => ({}),
         installed: () => ({sha: 'e'.repeat(40), clean: true})};
       await assert.rejects(runReview(args, deps), /already be enrolled/);
       await assert.rejects(runReview({...args, identity: undefined}, {...deps, verify: () => {
@@ -452,7 +452,7 @@ test('a malformed harness report retains a private validation failure and never 
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
     let calls = 0;
-    await assert.rejects(runReview(args, {state, installed: fixtureInstallation, verify: () => ({}), ask: async task => {
+    await assert.rejects(runReview(args, {state, installed: fixtureInstallation, attest: technical => technical, verify: () => ({}), ask: async task => {
       calls++; assert.equal(task.phase, 'investigation');
       return {value: {kind: 'unexpected', report: null, request_sources: []}};
     }}), /Invalid local investigation response.*preserved review evidence/);
@@ -517,7 +517,7 @@ test('a missing source path fails with a structured status instead of a raw git 
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
-    const result = await runReview(args, {state, installed: fixtureInstallation, verify: () => ({}), ask: async () => { throw new SourceNotFound('gone/file.test.tsx'); }});
+    const result = await runReview(args, {state, installed: fixtureInstallation, attest: technical => technical, verify: () => ({}), ask: async () => { throw new SourceNotFound('gone/file.test.tsx'); }});
     assert.deepEqual({status: result.status, reason: result.reason, path: result.path}, {status: 'failed', reason: 'source_not_found', path: 'gone/file.test.tsx'});
     const failure = JSON.parse(fs.readFileSync(path.join(result.evidence, 'failure.json')));
     assert.deepEqual({status: failure.status, reason: failure.reason, path: failure.path, harness: failure.harness},
@@ -531,7 +531,7 @@ test('a mistyped --harness fails naming the valid values before anything is reco
   try {
     const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
     const args = {directory: f.directory, base: f.base, 'request-file': request};
-    const deps = {state, ask: fakeHarness(), verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
+    const deps = {state, ask: fakeHarness(), attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed: fixtureInstallation};
     for (const harness of ['bogus', 'claud']) {
       await assert.rejects(runReview({...args, harness}, {...deps, ask: async () => {throw new Error('Must not invoke a harness');}}),
         error => { assert.match(error.message, /Unsupported --harness .*codex, claude/); return true; });
@@ -615,6 +615,40 @@ test('the local protected-control warning holds package.json only when its decla
 });
 
 // Opt-in maintainer attestation (docs/local-review.md): an enrolled key signs a receipt for another author's pull request.
+test('a signature is refused unless every declared command passed, and a signed receipt attests the verification', async () => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-attest-fixture-'));
+  try {
+    const identity = initializeIdentity(state, 'fixture-author');
+    const reviewerSha = 'e'.repeat(40);
+    const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: 'AGENTS.md', readme: 'README.md',
+      acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
+      local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity]}};
+    await repository(async f => {
+      const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
+      const args = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};
+      const deps = {state, ask: fakeHarness(), installed: () => ({sha: reviewerSha, digest: 'e'.repeat(64), clean: true})};
+      const command = {argv: ['npm', 'test'], exit_code: 0};
+      const passing = {commands: [command], verification_status: 'passed', local_config_digest: 'c'.repeat(64),
+        coverage: {status: 'exact', passed: true, artifact_freshness: 'observed_current_run'}};
+      const failing = {...passing, commands: [{argv: ['cargo', 'llvm-cov'], exit_code: null, error: {code: 'ENOENT', message: 'spawn cargo'}}], verification_status: 'failed'};
+      await assert.rejects(runReview(args, {...deps, verify: () => failing}),
+        /no receipt is signed: cargo llvm-cov could not run \(ENOENT\); install the tool it needs/);
+      assert.deepEqual(fs.existsSync(path.join(state, 'reviews')) ? fs.readdirSync(path.join(state, 'reviews')).filter(id => fs.existsSync(path.join(state, 'reviews', id, 'receipt.json'))) : [], []);
+      const signed = await runReview(args, {...deps, verify: () => passing});
+      const record = JSON.parse(fs.readFileSync(signed.receipt)).payload.record;
+      const attested = JSON.parse(record.snapshot.sources.verification.content);
+      assert.deepEqual(attested.attestation, {version: 1, recipe: 'c'.repeat(64), commands: 1, coverage_mode: 'exact', gate: 'passed'});
+      assert.ok(require('./verification-attestation.cjs').attestationOf(attested));
+      // Without an enrolled identity nothing is signed, so the advisory review still runs on failing verification.
+      const advisory = await runReview({...args, identity: undefined}, {...deps, state: path.join(state, 'advisory'), verify: () => failing});
+      assert.equal(advisory.receipt, null);
+    }, directory => {
+      fs.mkdirSync(path.join(directory, '.github'));
+      fs.writeFileSync(path.join(directory, '.github/clouseau.json'), JSON.stringify(config));
+    });
+  } finally {fs.rmSync(state, {recursive: true, force: true});}
+});
+
 test('--pr attests another author\'s pull request only when the protected configuration allows that author, and binds author and number', async () => {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-attest-fixture-'));
   try {
@@ -637,7 +671,7 @@ test('--pr attests another author\'s pull request only when the protected config
     };
     const unreachable = async () => {throw new Error('Must not invoke a harness');};
     const run = (f, extra, deps) => runReview({directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file, pr: '7', ...extra},
-      {state: fs.mkdtempSync(path.join(state, 'run-')), ask: unreachable, verify: () => ({}), installed, execute: gh(f.directory), ...deps});
+      {state: fs.mkdtempSync(path.join(state, 'run-')), ask: unreachable, attest: technical => technical, verify: () => ({}), installed, execute: gh(f.directory), ...deps});
 
     // Default off: --pr without the protected opt-in is refused and no review runs.
     await repository(async f => {
@@ -664,9 +698,9 @@ test('--pr attests another author\'s pull request only when the protected config
       assert.deepEqual(payload.attestation, {author: 'dependabot[bot]', number: 7, signer: 'fixture-maintainer'});
       // Same inputs reuse the cached attested receipt (verified against the live author and number); another number is a new review.
       const base = {directory: f.directory, base: f.base, 'request-file': request, identity: identity.identity_file};
-      const reuse = await runReview({...base, pr: '7'}, {state: reviewState, ask: unreachable, verify: () => ({}), installed, execute: gh(f.directory)});
+      const reuse = await runReview({...base, pr: '7'}, {state: reviewState, ask: unreachable, attest: technical => technical, verify: () => ({}), installed, execute: gh(f.directory)});
       assert.equal(reuse.reused, true); assert.deepEqual(reuse.maintainer_attested, {author: 'dependabot[bot]', pull_request: 7});
-      const other = await runReview({...base, pr: '8'}, {state: reviewState, ask: fakeHarness(), verify: () => ({}), installed,
+      const other = await runReview({...base, pr: '8'}, {state: reviewState, ask: fakeHarness(), attest: technical => technical, verify: () => ({}), installed,
         execute: () => JSON.stringify(pullFor(f.directory))});
       assert.equal(other.reused, undefined); assert.equal(other.maintainer_attested.pull_request, 8);
       // The published artifact reports the attestation.

@@ -53,13 +53,50 @@ jobs:
         with:
           provenance: summary
 
+  # Optional: skip the checks a valid local receipt already attests (docs/local-review.md, "Receipt-attested verification").
+  # Any other outcome, including an error here, leaves `attested` unset and `verify` runs every check.
+  attested:
+    needs: resolve-clouseau
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      attested: ${{ steps.decide.outputs.attested }}
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - name: Decide whether a local receipt attests the verification
+        id: decide
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: ./.clouseau-ci
+        with:
+          operation: attested
+          config: .github/clouseau.json
+
   verify:
     # Schedule the job so GitHub resolves its name, including metadata events.
     # Step guards keep those events from running contributor code.
     name: >-
       ${{ (github.event_name == 'pull_request' ||
           (github.event_name == 'workflow_dispatch' && inputs.pull_request == '' && !inputs.check_author)) && 'verify' || 'metadata-only' }}
-    needs: resolve-clouseau
+    needs: [resolve-clouseau, attested]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -67,9 +104,12 @@ jobs:
       CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
+        # `attested` is 'true' only for a pull request whose receipt attests this exact head; then every step is skipped and the
+        # engine accepts the skipped required steps because it verifies the same receipt itself.
         if: &verify-code >-
-          github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '' && !inputs.check_author)
+          (github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '' && !inputs.check_author)) &&
+          needs.attested.outputs.attested != 'true'
         with:
           persist-credentials: false
           fetch-depth: 0
