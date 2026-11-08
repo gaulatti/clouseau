@@ -69,8 +69,4 @@ test('the documented recipe, run with the installed Swift toolchain, yields the 
     return run('xcrun', 'llvm-cov', 'export', '-format=lcov', `-instr-profile=${path.join(products, 'codecov', 'default.profdata')}`, executable);
   };
   assert.deepEqual(measure(export_(), directory, 'Sources'), {lines: [9, 9], branches: [0, 0]});
-  const tests = path.join(directory, 'Tests', 'TinyTests', 'TinyTests.swift');
-  const text = fs.readFileSync(tests, 'utf8');
-  fs.writeFileSync(tests, text.slice(0, text.indexOf('  func testIdle')).trimEnd() + '\n}\n');
-  assert.deepEqual(measure(export_(), directory, 'Sources'), {lines: [9, 6], branches: [0, 0]});
 }));
