@@ -169,7 +169,7 @@ function readPull({repo, number, base, head, execute}) {
 }
 
 async function runReview(args, {ask = askHarness, execute = cp.execFileSync, verify = executeVerification, state = stateDirectory(), installed = installation,
-  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, reuse = {}, title, continued = pinning.argvFor(args)} = {}) {
+  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, attest = require('./verification-attestation.cjs').evaluate, reuse = {}, title, continued = pinning.argvFor(args)} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
   const agent = args.agent;
@@ -305,6 +305,8 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   else if (resuming) technical = JSON.parse(fs.readFileSync(technicalPath, 'utf8'));
   else {
     technical = verify({directory, config, additional});
+    // A signature attests the whole declared verification: with an enrolled identity, anything that did not run and pass refuses it.
+    if (identityPath) technical = attest({directory, config, technical, ciConfig, baseSha, verify, exec: execute});
     if (agent) {
       // The agent exchange spans several commands; persist the one real verification so later commands cannot rerun it.
       technical = JSON.parse(JSON.stringify(technical));

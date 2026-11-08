@@ -339,6 +339,34 @@ test('failed, skipped, incomplete or stale technical checks cannot approve', asy
   }
 });
 
+test('skipped required steps count only when a valid receipt attests the verification', async () => {
+  const skipped = () => {const f = fixture(); f.state.jobs[0].steps.forEach(step => {step.conclusion = 'skipped';}); return f;};
+  const seen = [];
+  const attesting = answer => createPolicy(require('../test/fixtures/config.json'), {attested: async (github, repository, pull) => {seen.push([repository, pull.number]); return answer;}});
+  const f = skipped();
+  assert.match((await attesting(true).technicalRun(f.github, repo, small)).url, /runs\/22/);
+  assert.deepEqual(seen, [[repo, 8]]);
+  assert.match((await attesting(false).technicalRun(f.github, repo, small)).failure, /Required verification step "[^"]+" concluded skipped/);
+  assert.match((await technicalRun(f.github, repo, small)).failure, /concluded skipped/);
+  // A failed step is never excused by an attestation, and a fully successful job never asks for one.
+  const failed = skipped(); failed.state.jobs[0].steps[1].conclusion = 'failure';
+  assert.match((await attesting(true).technicalRun(failed.github, repo, small)).failure, /concluded failure/);
+  seen.length = 0;
+  assert.ok((await attesting(true).technicalRun(fixture().github, repo, small)).url);
+  assert.deepEqual(seen, []);
+});
+
+test('a version 2 policy asks the receipt verifier whether verification is attested', async t => {
+  const attestation = require('./verification-attestation.cjs');
+  const calls = [];
+  t.mock.method(attestation, 'receiptAttests', async options => {calls.push(options); return true;});
+  const policy = createPolicy({...require('../test/fixtures/config.json'), version: 2,
+    acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2}}, {engine: null});
+  const f = fixture(); f.state.jobs[0].steps.forEach(step => {step.conclusion = 'skipped';});
+  assert.ok((await policy.technicalRun(f.github, repo, small)).url);
+  assert.equal(calls.length, 1); assert.equal(calls[0].pr, small); assert.equal(calls[0].config.version, 2);
+});
+
 test('the exact successful verify job on a fork head is accepted', async () => {
   const {github} = fixture();
   assert.match((await technicalRun(github, repo, small)).url, /runs\/22/);

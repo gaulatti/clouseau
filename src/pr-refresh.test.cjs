@@ -283,7 +283,7 @@ function signedFixture(t, localReview = {}) {
     acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
     local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity], ...localReview}};
   const calls = [];
-  const runtime = f => ({state, ask: fakeHarness(calls), verify: () => ({fixture_execution_only: true}), installed, execute: f.execute, available: () => true});
+  const runtime = f => ({state, ask: fakeHarness(calls), attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed, execute: f.execute, available: () => true});
   const refresh = (f, extra = {}) => main(['refresh', '--pr', '7', '--directory', f.work,
     ...extra.request === null ? [] : ['--request-file', extra.request || request(f.root)], '--harness', 'claude'], runtime(f));
   return {state, config, calls, runtime, refresh};
@@ -421,7 +421,7 @@ test('an agent-driven refresh continues on its pinned engine with the user\'s ow
       f.advance('docs.md', 'moved\n');
       const requestFile = request(f.root);
       const argv = ['refresh', '--pr', '7', '--directory', f.work, '--request-file', requestFile, '--agent', 'claude'];
-      const started = {state, verify: () => ({fixture_execution_only: true}), installed: () => ({sha: pin.reviewer_sha, digest: pin.reviewer_digest, clean: true}),
+      const started = {state, attest: technical => technical, verify: () => ({fixture_execution_only: true}), installed: () => ({sha: pin.reviewer_sha, digest: pin.reviewer_digest, clean: true}),
         cacheRoot: cache, execute: f.execute, available: () => true};
       const first = await main(argv, started);
       assert.equal(first.status, 'awaiting_agent'); assert.equal(first.pushed, false); assert.match(first.then, /identical refresh command/);

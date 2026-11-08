@@ -30,11 +30,13 @@ function protectedChanges(config, files) {
     .filter((name, index, all) => name && matchesPath(name, sensitive) && all.indexOf(name) === index);
 }
 
-function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false} = {}) {
+function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false, attested = null} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
   const {local_review, merge_mode, exact_revert, ...legacyConfig} = config;
-  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic'});
+  // Required verification steps a workflow skipped count only when a fully valid receipt attests the verification (verification-attestation.cjs).
+  const attested = (github, repo, pr) => require('./verification-attestation.cjs').receiptAttests({github, repo, pr, config, engine});
+  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
 const COVERAGE = require('./coverage-changed.cjs').requirement(config);
@@ -395,12 +397,15 @@ function judgeVerification(run, jobs) {
   if (!listed.length) return waiting(`job "${verify.name}" lists no steps yet`);
   const open = listed.find(step => !step.conclusion || !FINAL_STEP.has(step.conclusion));
   if (open) return waiting(`step "${open.name}" has no final conclusion yet`);
+  let skipped = null;
   for (const name of VERIFY_STEPS) {
     const step = listed.find(item => item.name === name);
     if (!step) return {final: true, failure: `Required verification step "${name}" was not found in job "${verify.name}"`};
-    if (step.conclusion !== 'success') return {final: true, failure: `Required verification step "${name}" concluded ${step.conclusion}`};
+    if (step.conclusion === 'skipped') skipped ??= `Required verification step "${name}" concluded skipped`;
+    else if (step.conclusion !== 'success') return {final: true, failure: `Required verification step "${name}" concluded ${step.conclusion}`};
   }
-  return {final: true, verify};
+  // A skipped step is a failure unless the caller proves a valid receipt attests the verification.
+  return {final: true, verify, ...(skipped ? {skipped} : {})};
 }
 
 async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = {}) {
@@ -437,6 +442,7 @@ async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = 
     await wait(2000 * 2 ** read);
   }
   if (verdict.failure) return {failure: verdict.failure};
+  if (verdict.skipped && !(attested && await attested(github, repo, pr))) return {failure: verdict.skipped};
   if (!verdict.final) return {pending: true, state: 'finalizing', detail: verdict.waiting};
   const verify = verdict.verify;
   return receipt ? {url: run.html_url, run_id: run.id, attempt: run.run_attempt,

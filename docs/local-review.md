@@ -278,6 +278,38 @@ produces an approval receipt. This initial receipt path targets a new PR without
 an unresolved existing GitHub review ledger; it rejects an existing incompatible
 ledger rather than dropping its findings.
 
+## Receipt-attested verification
+
+A receipt signed by an enrolled identity attests the repository's whole declared verification. `clouseau review` runs every command of the
+accepted base `.clouseau-local.json` (plus any `--additional-checks`) and, **before spending any AI review, refuses to sign** (non-zero exit,
+no receipt, no marker) unless all of the following hold on the exact head:
+
+- every command ran and exited 0 (a tool that is not installed, such as `cargo llvm-cov` or `coverage.py`, is a refusal that names the
+  command and the missing tool, never a partial signature);
+- native coverage was produced by this run;
+- the coverage gate CI enforces passes: exact 100%, or for the protected `coverage.mode` of `changed_lines` the changed lines and branches are
+  covered with no repository-wide regression (the base revision is measured locally in a temporary clean worktree, as CI measures it), or
+  for `declared` the minimums declared at the base.
+
+Declare every check you want skipped in CI (tests, coverage, fmt, lint, frontend, infrastructure) as a command of `.clouseau-local.json`.
+Without an enrolled identity nothing is signed and the review remains advisory. The signed verification record then carries
+`attestation: {version, recipe, commands, coverage_mode, gate: "passed"}`; receipts issued before this change carry none, stay valid for the
+AI review, and attest no verification.
+
+In CI, `operation: attested` (inputs `config`, `github-token`; output `attested`) answers `'true'` only when the pull request's receipt passes
+every check the assessment applies (signature, enrolled key and author, expiry, exact head and base, engine, signed sources against live
+GitHub) AND attests the accepted base recipe. Anything else (no marker, expired, wrong head, old receipt, an error) is `'false'`. Gate any
+workflow on it in a small job, as `examples/consumer-ci.yml` does:
+
+```yaml
+if: needs.attested.outputs.attested != 'true'   # on each test step, or on a whole job in another workflow
+```
+
+The skip is advisory; the enforcement is in the engine. When the configured `verification.job` succeeds with required steps `skipped`,
+the engine accepts them only after verifying the same receipt itself in the trusted workflow; without a valid attesting receipt a skipped
+required step is the failure it always was. A receipt expires (`max_age_seconds`), so re-run the workflow after expiry and the checks run.
+The job named in `verification.job` must still exist and succeed, so keep it as a job whose steps are skipped rather than removing it.
+
 ## Evidence size
 
 The review cache's `snapshot.json`, the `record` output and the signed `receipt.json` are
