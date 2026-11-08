@@ -8,9 +8,9 @@
 // CI side: `receiptAttests` answers whether the pull request's receipt is fully valid (signature, head, base, engine, expiry, sources)
 // AND carries that attestation. Any other answer is false and the repository's own verification runs exactly as before.
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
+const temporaryDirectories = require('./temp-dirs.cjs');
 
 const VERSION = 1;
 const GATE_MODES = ['exact', 'changed_lines', 'declared'];
@@ -37,10 +37,10 @@ function attestationOf(technical) {
 
 // Baseline totals of the base revision, measured the way the CI job measures them: the same recipe on a clean checkout of the base.
 function withBaseline({directory, baseSha, config, parts, verify, exec, gate}, use) {
-  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-base-'));
+  const temporary = temporaryDirectories.create('clouseau-base-');
   const tree = path.join(temporary, 'tree');
-  exec('git', ['-C', directory, 'worktree', 'add', '--detach', tree, baseSha], {stdio: 'pipe'});
   try {
+    exec('git', ['-C', directory, 'worktree', 'add', '--detach', tree, baseSha], {stdio: 'pipe'});
     const result = verify({directory: tree, config});
     if (result.verification_status !== 'passed') {
       throw new Error(`the base revision's own verification failed (${result.commands.filter(item => item.exit_code !== 0 || item.error).map(describe).join('; ')}), so no coverage baseline exists`);
@@ -50,7 +50,7 @@ function withBaseline({directory, baseSha, config, parts, verify, exec, gate}, u
     return use(file);
   } finally {
     try {exec('git', ['-C', directory, 'worktree', 'remove', '--force', tree], {stdio: 'pipe'});} catch { /* the temporary directory is removed next */ }
-    fs.rmSync(temporary, {recursive: true, force: true});
+    temporaryDirectories.dispose(temporary);
   }
 }
 
