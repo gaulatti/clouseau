@@ -14,18 +14,26 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {digest} = require('./acceptance.cjs');
 const {git} = require('./local-git.cjs');
-const {screenReceipt} = require('./local-receipt.cjs');
+const {screenReceipt, MAX_RECEIPT_BYTES} = require('./local-receipt.cjs');
 const {describe} = require('./receipt-rejection.cjs');
 const {SOURCE} = require('./central-version.cjs');
 
 const POLICY = path.join(__dirname, '../policy/change-acceptance.md');
 
+// The most `gh api` may print for one receipt read: the blob endpoint returns the receipt (at most MAX_RECEIPT_BYTES) as base64
+// wrapped every 60 characters (each break is the two JSON characters \n), plus fixed metadata. Node's default 1 MiB buffer is smaller than a maximal receipt.
+const BASE64_BYTES = Math.ceil(MAX_RECEIPT_BYTES / 3) * 4;
+const RECEIPT_RESPONSE_LIMIT = BASE64_BYTES + Math.ceil(BASE64_BYTES / 60) * 2 + 65536;
+
 // The two reads of the GitHub API that loading a receipt makes, through `gh`; a missing object carries `status` 404 as it does in CI.
 function githubReader(execute) {
   const get = async route => {
     try {
-      return {data: JSON.parse(execute('gh', ['api', route], {encoding: 'utf8'}))};
+      return {data: JSON.parse(execute('gh', ['api', route], {encoding: 'utf8', maxBuffer: RECEIPT_RESPONSE_LIMIT}))};
     } catch (error) {
+      if (error.code === 'ENOBUFS') {
+        throw new Error(`GitHub's response for ${route} exceeds the ${RECEIPT_RESPONSE_LIMIT}-byte read limit derived from the ${MAX_RECEIPT_BYTES}-byte receipt size cap; the receipt was not read`);
+      }
       if (/HTTP 404/.test(String(error.stderr))) error.status = 404;
       throw error;
     }
@@ -49,4 +57,4 @@ async function receiptStanding({directory, base, repo, pull, execute, installed}
   return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};
 }
 
-module.exports = {receiptStanding, githubReader};
+module.exports = {receiptStanding, githubReader, RECEIPT_RESPONSE_LIMIT};
