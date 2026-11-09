@@ -64,7 +64,7 @@
     ["src/receipt-parts.cjs",0,"da88c6d8631ed0fe7cf161bfcbca38fa9c03051ac5701ff604e99e5dfbfa6f48"],
     ["src/receipt-patch.cjs",0,"b5615b57958ede2a42d9c312e6c08bf3adfb18f3e6d96b0704cd83a0e7a7af88"],
     ["src/receipt-rejection.cjs",0,"1f2a617eeb2e4950d7c7f69b60f1ec123b74679977b2ef6c6a25ee1fcfcec668"],
-    ["src/receipt-standing.cjs",0,"51cd51da9050034eeca09370ced0ebbbf6df87a68e62a6fd2a76ffeffeb2ecf9"],
+    ["src/receipt-standing.cjs",0,"f2503ab206676c9d735082121e3c8d6e56fed8987c5506888a0af8ddf9fcd44d"],
     ["src/record-transport.cjs",0,"118a86b07541ea7841d8ee8ba4671a179eab66c26be0ecd64f42b1e4eda4762f"],
     ["src/review-partition.cjs",0,"b78823610451053c045591362d45c452ff7b47d9562ba50e30d0893054ab5108"],
     ["src/review-provider.cjs",0,"4da2494a664d4b8ecf69d4edc149d8e32e6e4fc1fa7cc1ce73dd99bb08f7eabe"],
