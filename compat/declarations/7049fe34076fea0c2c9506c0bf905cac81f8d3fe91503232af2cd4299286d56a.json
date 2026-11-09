@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/receipt-standing.cjs",
+      "mode": 0,
+      "sha256": "f2503ab206676c9d735082121e3c8d6e56fed8987c5506888a0af8ddf9fcd44d"
+    }
+  ]
+}
