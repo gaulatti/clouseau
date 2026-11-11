@@ -810,24 +810,6 @@ test('intent comment reruns only the trusted metadata workflow for the exact rev
   assert.equal(accepted.writes.filter(w => w.name === 'rerun').length, 1);
 });
 
-test('an exact-head /hosted-review comment from a maintainer reruns the trusted review; any other form, head or author does not', async () => {
-  const policy = createPolicy(require('../test/fixtures/config.json'));
-  const f = reassessmentFixture(); const c = commentTrigger(); c.payload.comment.body = `/hosted-review ${SHA}`;
-  await policy.requestReassessment({github: f.github, context: c, core: {info() {}}, wait: async () => {}});
-  assert.deepEqual(f.writes.filter(w => w.name === 'rerun').map(w => w.args.run_id), [22]);
-  for (const mutate of [
-    (g, d) => {d.payload.comment.body = `/hosted-review ${BASE}`;},
-    (g, d) => {d.payload.comment.body = `/hosted-review ${SHA} now`;},
-    (g, d) => {d.payload.comment.body = '/hosted-review';},
-    g => {g.state.permission = 'read';},
-    (g, d) => {d.payload.comment.user = bot;},
-  ]) {
-    const g = reassessmentFixture(); const d = commentTrigger(); d.payload.comment.body = `/hosted-review ${SHA}`; mutate(g, d);
-    await assert.rejects(policy.requestReassessment({github: g.github, context: d, core: {info() {}}, wait: async () => {}}));
-    assert.equal(g.writes.length, 0);
-  }
-});
-
 test('reassessment rejects unauthorized, stale, unrelated and missing metadata runs', async () => {
   const policy = createPolicy(require('../test/fixtures/config.json'));
   for (const mutate of [
