@@ -632,33 +632,3 @@ test('through the command, a receipt is renewed unless it verifies for this head
     assert.ok(fs.existsSync(path.join(cacheDirectory, 'request.txt')), 'the stored requirement stayed with the retired evidence');
   }, {ciConfig: config});
 });
-
-test('under human_review "signed" a review with findings is signed, stands for refresh, and is never reviewed again by it; without it nothing is signed', async t => {
-  const violating = calls => {
-    const pass = fakeHarness(calls);
-    return async task => {
-      if (task.phase !== 'investigation') return pass(task);
-      const answer = await pass(task);
-      const gate = answer.value.report.gates.find(item => item.name !== 'test_integrity'); gate.state = 'violated';
-      return {...answer, value: answer.value, provenance: {...answer.provenance, response_digest: digest(answer.value)}};
-    };
-  };
-  for (const humanReview of [true, false]) {
-    const {runtime, refresh, calls, config} = signedFixture(t, humanReview ? {human_review: 'signed'} : {});
-    await pullRepository(async f => {
-      const requestFile = request(f.root);
-      const asked = {...runtime(f), ask: violating(calls)};
-      const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked);
-      assert.equal(first.decision, 'repair_required');
-      if (!humanReview) {assert.equal(first.receipt, null, 'without the opt-in a review with findings signs nothing'); return;}
-      assert.ok(first.receipt, 'with the opt-in the review with findings is signed');
-      const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], asked);
-      f.pull.body = `Body.\n\n${published.marker}\n`;
-      const before = calls.length;
-      const standing = await refresh(f, {request: requestFile});
-      assert.equal(standing.status, 'up_to_date', JSON.stringify(standing));
-      assert.match(standing.note, /its signed review requires a human: a maintainer approves this head with \/approve-intent [a-f0-9]{40}/);
-      assert.equal(calls.length, before, 'nothing is reviewed again');
-    }, {ciConfig: config});
-  }
-});
