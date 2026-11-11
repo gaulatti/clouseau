@@ -22,7 +22,9 @@ const NEXT_STEPS = Object.freeze({
   local_receipt_unusable: ['Run the local Clouseau review on this exact head and update the receipt marker in the pull request description (`clouseau review ...`, then `clouseau publish --directory . --receipt RECEIPT_FILE`).',
     'Or remove the `clouseau-local-review` marker from the description: editing it re-runs this check through the CI AI reviewer.'],
   hosted_review_manual: ['Publish a valid local review receipt for this exact head (`clouseau review ...`, then `clouseau publish --directory . --receipt RECEIPT_FILE`, or `clouseau refresh --pr {number}`) and put its marker in the pull request description.',
-    'Or a maintainer requests the CI AI review of this exact head by commenting exactly `/hosted-review {head}` on this pull request.'],
+    'Or a maintainer requests the CI AI review of this exact head by commenting exactly `/hosted-review {head}` on this pull request.',
+    // The engine never sees a comment its workflow does not route, so a missing trigger can only be named here, in advance.
+    'If that comment starts no workflow run, the repository workflow does not route `/hosted-review` comments: add `startsWith(github.event.comment.body, \'/hosted-review \')` to its `issue_comment` condition, as `examples/consumer-ci.yml` does.'],
   review_output_invalid: ['The reviewer model answered in an invalid form on every bounded attempt. ' + RERUN, 'If it repeats, report it with the link to this workflow run.'],
   provider_incomplete: ['The reviewer model did not finish its answer within the bounded budget. ' + RERUN],
   evidence_budget: ['Split the change so that the changed files together fit the 900 KB review evidence budget.', 'Push the smaller change as a new revision.'],

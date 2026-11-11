@@ -744,6 +744,11 @@ request with no usable receipt starts by itself:
 | absent or `"automatic"` | today's behavior: the CI AI review runs (optional mode), or `local_receipt_required` (required mode) |
 | `"manual"` | `review_incomplete`, cause `hosted_review_manual`, no provider call, until a maintainer requests the review |
 
+The request reaches the engine only through the repository workflow: its `issue_comment` condition must start a run for
+`/hosted-review ` comments, as `examples/consumer-ci.yml` does. The engine never sees a comment that starts no run, so it
+cannot detect a workflow without that trigger; the hold notice therefore names the missing condition as its last step. A
+consumer that sets `hosted_review: "manual"` adds the condition in the same change.
+
 The request is a comment `/hosted-review <head sha>` on the pull request, validated as `/approve-intent` is: the exact current
 head, a real user (not a bot), write permission or higher, and re-read by the engine itself from the pull request's comments.
 How the run was started never matters, only such a comment. With a valid request the run proceeds as `"automatic"` would; a

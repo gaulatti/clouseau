@@ -190,6 +190,8 @@ test('the protected hosted_review setting accepts only "automatic" or "manual", 
   for (const value of ['Manual', '', null, true, ['manual']]) assert.throws(() => validateConfig({...config, hosted_review: value}), /hosted review mode/);
   assert.throws(() => validateConfig({...require('../test/fixtures/config.json'), hosted_review: 'manual'}), /hosted review mode/);
   assert.ok(NEXT_STEPS.hosted_review_manual.some(step => step.includes('`/hosted-review {head}`')));
+  // A consumer whose workflow does not route the comment is told how to fix it, since the engine never sees that comment.
+  assert.ok(NEXT_STEPS.hosted_review_manual.some(step => step.includes("startsWith(github.event.comment.body, '/hosted-review ')") && step.includes('examples/consumer-ci.yml')));
   const text = body({number: 4, head_sha: 'a'.repeat(40), decision: 'review_incomplete', cause: 'hosted_review_manual', reason: 'Held.'}, 'u');
   assert.ok(text.includes('**Cause:** `hosted_review_manual`')); assert.ok(text.includes(`\`/hosted-review ${'a'.repeat(40)}\``));
 });
