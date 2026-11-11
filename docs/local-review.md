@@ -717,7 +717,13 @@ reviews the change itself. To sign again, the author commits (an empty commit is
 head, or `clouseau refresh --pr N`. The earlier findings carry over: the local finding history passes them to the new
 review as prior findings, which it must retain with their identity or resolve with current-source evidence. A new review
 that drops one is incomplete and signs nothing. The new review itself is a fresh investigation, so it may also report new
-findings. An approval of the earlier head never carries over: `/approve-intent` names one exact head. Without the setting nothing changes: such a review signs nothing.
+findings. An approval of the earlier head never carries over: `/approve-intent` names one exact head.
+
+While the hold waits, the gate publishes the signed findings in the pull request's acceptance ledger. The run that a
+maintainer's approval starts finds that ledger on the pull request; under this setting a ledger whose findings equal exactly
+what the signed record publishes is that record's own output, so the assessment and the gate accept it and keep the signed
+history in the record. A ledger with any other findings is still a change in history (`receipt_history_changed` at the
+assessment, "Acceptance history changed" at the gate). Without the setting nothing changes: such a review signs nothing.
 
 ### A receipt that does not verify is ignored
 

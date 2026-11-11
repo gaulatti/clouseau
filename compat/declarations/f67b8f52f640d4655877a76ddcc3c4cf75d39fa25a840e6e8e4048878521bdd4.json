@@ -5,7 +5,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "512c5708e2797b66485b5d29e471f996ffe329e2dcaebccf1a5c488faf84bd05"
+      "sha256": "283c2ee8159aea6544fc1dc1a1c85b857291dab6e10c2825bc591b776c5b1053"
     },
     {
       "path": "src/local-cli.cjs",

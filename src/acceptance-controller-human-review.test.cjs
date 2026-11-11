@@ -176,8 +176,23 @@ for (const setting of [undefined, 'signed']) test(`human_review=${setting}: a si
   await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: held.result, nativeGate: true, wait: async () => {}}), /A maintainer intent confirmation is required/);
   assert.equal(approvals(), 0, 'a stale approval leaves the signed findings held');
   f.state.reviews = [];
-  f.state.comments = [...f.state.comments, {id: 950, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
-  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: held.result, nativeGate: true, wait: async () => {}});
+  // As on GitHub, the pull request now shows the ledger the gate published; any other history still voids the receipt.
+  const published = {id: 7001, user: {login: 'github-actions[bot]', type: 'Bot'}, body: ledger.args.body};
+  // A ledger whose findings differ from what this record publishes (here one finding is marked corrected) is a change in history.
+  const state = /<!-- clouseau-state:([A-Za-z0-9+/=]+) -->/;
+  const value = JSON.parse(Buffer.from(ledger.args.body.match(state)[1], 'base64').toString('utf8'));
+  assert.ok(value.findings.length > 0, 'the published ledger carries the signed findings');
+  value.findings[0] = {...value.findings[0], state: 'corrected', blocking: false};
+  const tampered = {...published, body: ledger.args.body.replace(state, `<!-- clouseau-state:${Buffer.from(JSON.stringify(value)).toString('base64')} -->`)};
+  f.state.comments = [...f.state.comments, tampered];
+  const rewritten = await assess();
+  assert.equal(rewritten.result.cause, 'receipt_history_changed', 'a ledger this record did not publish is a change in history');
+  f.state.comments = [...f.state.comments.filter(item => item.id !== 7001), published,
+    {id: 950, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+  // The run the approval starts reassesses with that ledger present and still holds as the owner decision, now confirmed.
+  const confirmed = await assess();
+  assert.equal(confirmed.result.decision, 'owner_decision', confirmed.result.reason); assert.equal(confirmed.providerCalls, 0);
+  await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: confirmed.result, nativeGate: true, wait: async () => {}});
   assert.equal(approvals(), 1, 'the maintainer approval of the exact head clears the signed findings');
   // A change the fixed rules send to a human (here a protected path) is the same hold instead of an unusable receipt.
   f.state.comments = [];
@@ -195,9 +210,17 @@ for (const setting of [undefined, 'signed']) test(`human_review=${setting}: a si
     assessment: controls.result, nativeGate: true, wait: async () => {}});
   await assert.rejects(gateControls(), /A maintainer intent confirmation is required/);
   assert.equal(approvals(), approved);
-  f.state.comments = [{id: 951, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
-  await gateControls();
+  // As on GitHub: the ledger that hold published is on the pull request when the approval reruns the assessment.
+  const controlsLedger = [...f.state.writes].reverse().find(item => ['create-ledger', 'update-ledger'].includes(item.name) && /Authenticated local review/.test(item.args.body));
+  f.state.comments = [{id: 7101, user: {login: 'github-actions[bot]', type: 'Bot'}, body: controlsLedger.args.body},
+    {id: 951, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+  const confirmedControls = await assess(createPolicy(guarded));
+  assert.equal(confirmedControls.result.decision, 'owner_decision', confirmedControls.result.reason);
+  await createPolicy(guarded).gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
+    assessment: confirmedControls.result, nativeGate: true, wait: async () => {}});
   assert.equal(approvals(), approved + 1, 'the exact-head confirmation clears the protected-controls hold');
+  // The checks below are against the earlier held assessment and its record.
+  fs.writeFileSync(f.recordPath, JSON.stringify(compact)); f.state.comments = [];
   f.state.comments = [];
   await assert.rejects(createPolicy(withoutFieldConfig(guarded)).gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
     assessment: controls.result, nativeGate: true, wait: async () => {}}), /Invalid compact local review record/);
