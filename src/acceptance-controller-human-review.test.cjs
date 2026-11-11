@@ -169,6 +169,13 @@ for (const setting of [undefined, 'signed']) test(`human_review=${setting}: a si
   // Claiming a pass for that record is a decision mismatch, never an approval.
   await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: {...held.result, decision: 'auto_approve'}, nativeGate: true, wait: async () => {}}), /cannot approve or merge|decision/i);
   assert.equal(approvals(), 0);
+  // An approval of an older head, by comment or by review, never clears the hold of this head.
+  const older = 'c'.repeat(40);
+  f.state.comments = [...f.state.comments, {id: 949, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${older}`}];
+  f.state.reviews = [{id: 1, user: {login: 'gaulatti', type: 'User'}, state: 'APPROVED', commit_id: older}];
+  await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: held.result, nativeGate: true, wait: async () => {}}), /A maintainer intent confirmation is required/);
+  assert.equal(approvals(), 0, 'a stale approval leaves the signed findings held');
+  f.state.reviews = [];
   f.state.comments = [...f.state.comments, {id: 950, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
   await policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: held.result, nativeGate: true, wait: async () => {}});
   assert.equal(approvals(), 1, 'the maintainer approval of the exact head clears the signed findings');

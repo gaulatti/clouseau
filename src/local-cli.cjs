@@ -242,6 +242,11 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   const priorFindings = previous?.findings || [];
   const sameRevision = previous && previous.head_sha === head && previous.base_sha === baseSha && previous.reviewer_digest === reviewer.digest;
   if (sameRevision && previous.decision !== 'auto_approve') {
+    // A signed review that requires a human is never sampled again on the same revision, even once its receipt expires.
+    if (previous.decision === 'repair_required' && previous.has_receipt === true) {
+      throw new Error('This revision already has a signed review that requires a human; it is never reviewed again. Ask a maintainer for /approve-intent ' +
+        'of this head, or commit (an empty commit is enough) and review the new head, which must retain or resolve its findings');
+    }
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,

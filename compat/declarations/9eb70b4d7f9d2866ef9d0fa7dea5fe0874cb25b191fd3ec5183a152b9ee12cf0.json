@@ -10,7 +10,7 @@
     {
       "path": "src/local-cli.cjs",
       "mode": 0,
-      "sha256": "372f62bf25c33e9de17fabe68f765094792a1381c6ea50996d406111dc062179"
+      "sha256": "473b8ea14fb06f5249aea9d0e8dfb4875ee22f04c2d5e1511e4d893ed34f721b"
     },
     {
       "path": "src/local-receipt.cjs",

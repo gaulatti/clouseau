@@ -711,7 +711,13 @@ and CI makes no AI call. A signed non-pass is never acceptable as a pass: every 
 is the assessment or the gate of a repository with this setting, which turn it into the hold; `operation: attested` never
 accepts it, so CI runs the tests; a claimed `auto_approve` for it is a decision mismatch. `clouseau refresh` treats it as up to
 date and names the approval it waits for. The same revision is never reviewed again, so an unchanged verdict cannot be
-resampled: once its receipt expires (`max_age_seconds`, at most 48 hours), a new commit is reviewed instead. Without the setting nothing changes: such a review signs nothing.
+resampled. When its receipt expires (`max_age_seconds`, at most 48 hours) before a maintainer approves, CI ignores it and
+reviews the change itself. To sign again, the author commits (an empty commit is enough:
+`git commit --allow-empty -m "chore: request a new review"`) and runs `clouseau review` and `clouseau publish` on the new
+head, or `clouseau refresh --pr N`. The earlier findings carry over: the local finding history passes them to the new
+review as prior findings, which it must retain with their identity or resolve with current-source evidence. A new review
+that drops one is incomplete and signs nothing. The new review itself is a fresh investigation, so it may also report new
+findings. An approval of the earlier head never carries over: `/approve-intent` names one exact head. Without the setting nothing changes: such a review signs nothing.
 
 ### A receipt that does not verify is ignored
 
