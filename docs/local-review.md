@@ -256,8 +256,8 @@ challenger investigation and grading phases. The controller cannot itself prove
 that a subagent was isolated from the implementer, so this independence rests on
 the runner's trust boundary and on the enrolled engine revision: CI accepts a
 receipt only from a Clouseau revision the protected configuration enrolls, which is
-where an owner decides whether to trust agent-driven receipts. The signed handoff,
-`independent_ci_required` and `merge_authority: false` are unchanged.
+where an owner decides whether to trust agent-driven receipts. The signed handoff
+and the CLI result fields (below) are unchanged.
 
 Outside an AI harness, use `--harness claude` to run Claude Code headlessly. The controller runs real verification,
 records its actual outcomes, captures immutable base/head sources and accepted
@@ -275,13 +275,17 @@ unavailable coverage alone does not force a failing AI quality verdict; actual
 behavioral defects, deceptive tests and missing material evidence still do. The
 review never rewrites failed or unavailable verification into a test pass.
 
-New and cached CLI results identify `decision_scope: review_reuse_only`,
-`independent_ci_required: true` and `merge_authority: false`, with local
-verification and coverage status separate from the AI decision. A local
-`auto_approve` verdict means passing AI quality evidence eligible for signed
-reuse, not technical approval. CI audit, workflow and container execution remains
-independent; a local receipt does not claim those results or authorize GitHub
-approval. CI must pass every mandatory technical gate before approval or merge.
+New and cached CLI results identify `decision_scope: signed_review_reuse`,
+`ci_verification: attested_by_receipt_or_run_in_ci`, `approval_authority: ci_gate`
+and `trust_boundary: enrolled_workstation_key`, with local verification and
+coverage status separate from the AI decision. A local `auto_approve` verdict means
+passing AI quality evidence eligible for signed reuse; CI accepts the signed receipt
+in place of its own AI review, and the receipt attests the declared verification
+only when every declared command and the coverage gate passed on the reviewed head
+(see "Attested verification"). Otherwise CI runs that verification itself. Audit,
+workflow and container checks that are not declared local commands are not
+attested and run in CI. The CI gate alone decides approval, owner confirmation and
+merge, and every technical gate must pass, in CI or attested, before either.
 
 A source-line reference can be normalized only to an existing immutable catalog
 block containing that line. The controller preserves the observation and reads
@@ -597,7 +601,7 @@ class `attestation`. The pull request comment and job summary say
 
 An attested receipt is exactly as strong as any other: it never authorizes a change
 to protected review controls (`/approve-intent` is still required and unchanged),
-tests and exact coverage still must pass, and a push to the pull request head makes
+tests and exact coverage must pass in CI unless the receipt attests them, and a push to the pull request head makes
 it stale. A bot that rewrites the pull request body or rebases (Dependabot does)
 removes the marker or the matching head, so publish for the final head and place the
 marker last.
@@ -650,8 +654,9 @@ existing native approval, merge-authority and protection checks. Missing, stale,
 revoked, altered, non-passing or unauthorized receipts cannot approve; one that
 does not verify is ignored and CI performs every check itself.
 
-Tests, exact 100% coverage and the applicable shared protection/owner-merge
-rules remain mandatory before approval or merge. Review-control changes retain
+Tests and exact 100% coverage must pass before approval or merge, run in CI or
+attested by a valid receipt, and the applicable shared
+protection/owner-merge rules still apply. Review-control changes retain
 their existing exact-revision owner installation requirements.
 Post-deployment wiki generation and factual review remain separate operations.
 
@@ -798,7 +803,7 @@ They must leave the observed coverage artifacts unchanged; rewriting an artifact
 is an integrity failure, not a route to better counters. Every actual command
 result and the additional plan are bound to the review and cache identity. This can record consumer workflow-test execution without
 changing application scripts or triggering deployment. It requires no CI keys
-and creates no CI installation. Independent hosted checks remain mandatory.
+and creates no CI installation. Hosted checks still run in CI unless a valid receipt attests the declared verification.
 
 Local harness presentation preserves every source byte and prior observation.
 It sends verbatim source with indexed proof coordinates and replaces a duplicate

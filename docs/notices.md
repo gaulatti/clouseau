@@ -139,10 +139,10 @@ When the approval gate stops, its check summary shows the gate's own sentence fo
 | `auto_merge_not_armed` | Allow auto-merge for the repository: `gh repo edit {repo} --enable-auto-merge`. |
 | `auto_merge_must_be_off` | Turn auto-merge off for this pull request: `gh pr merge {number} --disable-auto --repo {repo}`. |
 | `assessment_pending` | Wait for the AI assessment to finish after verification; the gate runs again with its result. |
-| `intent_required` | A maintainer comments exactly `/approve-intent {head}` on this pull request. This confirms intent only; all tests and coverage remain mandatory. |
+| `intent_required` | A maintainer comments exactly `/approve-intent {head}` on this pull request. This confirms intent only; tests and coverage must still pass in CI or be attested by a valid receipt. |
 | `revision_changed` | A push or a base change happened while the gate ran, so its result belongs to an older revision. |
 | `verification_not_finished` | If this pull request comes from a fork, a maintainer approves its workflow runs (Actions tab, "Approve and run"). |
-| `confirmation_withdrawn` | A maintainer comments exactly `/approve-intent {head}` on this pull request. This confirms intent only; all tests and coverage remain mandatory. |
+| `confirmation_withdrawn` | A maintainer comments exactly `/approve-intent {head}` on this pull request. This confirms intent only; tests and coverage must still pass in CI or be attested by a valid receipt. |
 | `ownership_changed` | Code ownership changed while the gate ran. Re-run the failed job: `gh run rerun {run} --failed --repo {repo}`. |
 | `code_owner_approval_required` | A code owner approves the current head of this pull request: `gh pr review {number} --approve --repo {repo}`. |
 | `protection_mode_changed` | The repository protection settings changed while the gate ran. Re-run the failed job: `gh run rerun {run} --failed --repo {repo}`. |
