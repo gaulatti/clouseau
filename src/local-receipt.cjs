@@ -67,12 +67,13 @@ function validateTrust(trust) {
 // The decisions a receipt may carry: a pass, and only with the protected opt-in, findings that a maintainer may clear.
 // A maintainer clears findings only: `repair_required` also results from a violated or unresolved gate (scope, security,
 // compatibility, completeness), which no owner confirmation waives, so every gate of both reviews must be satisfied or
-// inapplicable. A review without a report to read is never signable this way.
+// inapplicable. A review without a report to read is never signable this way. Nor is one that left an earlier blocking
+// finding neither retained nor resolved: the maintainer would see only the new findings, so it is incomplete.
 const HUMAN_REVIEW = 'repair_required';
 const gatesClear = reviews => Array.isArray(reviews) && reviews.length > 0 && reviews.every(item =>
   Array.isArray(item?.report?.gates) && item.report.gates.every(gate => ['satisfied', 'inapplicable'].includes(gate.state)));
-const signable = (decision, humanReview, reviews) => decision === 'auto_approve' ||
-  (humanReview === true && decision === HUMAN_REVIEW && gatesClear(reviews));
+const signable = (decision, humanReview, reviews, unresolved = 0) => decision === 'auto_approve' ||
+  (humanReview === true && decision === HUMAN_REVIEW && unresolved === 0 && gatesClear(reviews));
 
 // A record without `partition` takes the unchanged path below. A chunked record is verified by the chunked verifier
 // (new shape if present, else current); it only supplies the merged reviews, and the single derivation continues here.
@@ -104,7 +105,8 @@ function reviewDecision(record, {chunked = null} = {}) {
   const combined = combine(reviews);
   const decision = state.unresolved.length && combined === 'auto_approve' ? 'review_incomplete' : combined;
   reject(result.decision === decision, 'claimed decision differs from calculated decision', 'record');
-  return {decision, reviews};
+  // The count of earlier findings left unresolved is not enumerable, so the verified result keeps its shape for every caller.
+  return Object.defineProperty({decision, reviews}, 'unresolved', {value: state.unresolved.length});
 }
 
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
@@ -112,7 +114,7 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   // With `humanReview` (the protected `human_review: "signed"`) a review with findings that require a human is signed too.
   // Integrity violations and incomplete reviews never are; failed verification never reaches signing (verification-attestation.cjs).
   const derived = reviewDecision(record, {chunked});
-  requireReceipt(signable(derived.decision, humanReview, derived.reviews), 'only a passing review can be signed');
+  requireReceipt(signable(derived.decision, humanReview, derived.reviews, derived.unresolved), 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
   'invalid runner revision, challenge or lifetime');
@@ -222,7 +224,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const result = reviewDecision(record, {chunked: chunkedOptions});
   // Only a caller that asked for it (the assessment and the gate of a repository with `human_review: "signed"`) ever receives
   // a signed non-pass, marked `human_review`; every other caller refuses it as before, so it can never stand for a pass.
-  reject(signable(result.decision, humanReview, result.reviews), 'review did not pass', 'not_passing');
+  reject(signable(result.decision, humanReview, result.reviews, result.unresolved), 'review did not pass', 'not_passing');
   return {record, ...result, ...(result.decision === HUMAN_REVIEW ? {human_review: true} : {}), attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
 }
 

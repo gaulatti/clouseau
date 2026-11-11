@@ -699,6 +699,7 @@ outcome is signed and CI enforces it instead of repeating it:
 | tests or the coverage gate fail | nothing (no review is run) | nothing to reuse; the author fixes |
 | test integrity violated (`blocked_integrity`) | nothing | nothing to reuse; the author fixes |
 | another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing | nothing to reuse; CI reviews the change itself |
+| an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) | nothing to reuse; CI reviews the change itself |
 | findings at or above the threshold, every gate satisfied (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer approves the exact head (`/approve-intent <head sha>` or an approving review of that head) |
 | a change the fixed rules send to a human (protected review controls, sensitive paths) | the passing review | the same `owner_decision` hold, instead of today's `receipt_protected_controls` |
 | clean | the passing review | approve and merge as today |

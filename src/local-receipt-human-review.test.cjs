@@ -67,3 +67,23 @@ test('human_review "signed": a review that requires a human is signed only with 
   assert.deepEqual(await screen({}), {ref: null, rejected: 'not_passing', detail: {}});
   assert.equal((await screen({humanReview: true})).verified.human_review, true);
 });
+
+test('human_review "signed": a review that leaves an earlier blocking finding unresolved is incomplete and never signed', async () => {
+  const {reconcile} = require('./acceptance-ledger.cjs');
+  const {refresh} = require('./acceptance-sources.cjs');
+  const f = await fixture();
+  const first = withFinding(f.record);
+  const prior = reconcile({...first.result, reviews: reviewDecision(first).reviews}, first.snapshot, []).findings;
+  assert.equal(prior.length, 1); assert.equal(prior[0].blocking, true);
+  // The next review reports only a different defect and says nothing about the earlier one.
+  const next = withFinding(f.record, copy => {
+    Object.assign(copy.result.reviews[0].report.findings[0], {id: 'other-defect', cause: 'A separate storage exception is swallowed before acceptance.'});
+    copy.snapshot.prior_findings = prior; copy.local_previous = {findings: prior}; refresh(copy.snapshot);
+    copy.result.snapshot = copy.snapshot.digest; for (const item of copy.result.reviews) item.report.snapshot = copy.snapshot.digest;
+  });
+  const derived = reviewDecision(next);
+  assert.equal(derived.decision, 'repair_required'); assert.equal(derived.unresolved, 1);
+  assert.equal(Object.keys(derived).includes('unresolved'), false, 'the count does not change the shape of a verified result');
+  assert.throws(() => issueReceipt({...f.issue, record: next, humanReview: true}), /only a passing review can be signed/);
+  assert.ok(issueReceipt({...f.issue, record: first, humanReview: true}));
+});

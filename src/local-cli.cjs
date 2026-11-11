@@ -407,10 +407,10 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
   let receipt = null;
   // With the protected `human_review: "signed"` a review whose findings alone send it to a maintainer is signed as well (its
-  // verification passed: with an identity, anything else stopped before review). Integrity violations, incomplete reviews and
-  // any violated or unresolved gate never are: the same rule `issueReceipt` enforces.
+  // verification passed: with an identity, anything else stopped before review). Integrity violations, incomplete reviews (an
+  // earlier finding left unresolved included) and any violated or unresolved gate never are: the same rule `issueReceipt` enforces.
   const humanReview = identity !== null && ciConfig.local_review.human_review === 'signed';
-  if (identity && signable(result.decision, humanReview, chunking ? reviews : result.reviews)) {
+  if (identity && signable(result.decision, humanReview, chunking ? reviews : result.reviews, findings.unresolved.length)) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
