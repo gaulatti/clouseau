@@ -326,7 +326,9 @@ if: needs.attested.outputs.attested != 'true'   # on each test step, or on a who
 
 The skip is advisory; the enforcement is in the engine. When the configured `verification.job` succeeds with required steps `skipped`,
 the engine accepts them only after verifying the same receipt itself in the trusted workflow; without a valid attesting receipt a skipped
-required step is the failure it always was. A receipt expires (`max_age_seconds`), so re-run the workflow after expiry and the checks run.
+required step is the failure it always was. A receipt expires (`max_age_seconds`), so re-run the workflow after expiry and the checks run;
+the failure then names the receipt class (`receipt_expired` with its expiry instant) and that step, or `clouseau refresh --pr N` to renew
+the receipt ([notices](notices.md#skipped-verification-step-without-an-attesting-receipt)).
 The job named in `verification.job` must still exist and succeed, so keep it as a job whose steps are skipped rather than removing it.
 
 ## Evidence size
@@ -386,8 +388,10 @@ release enrollment PRs.
 
 Receipt lifetime: `issueReceipt` defaults to 48 hours (172800 seconds), and the
 trust validator rejects `max_age_seconds` above 172800. Each consumer sets its
-own `max_age_seconds` in its protected `.github/clouseau.json`; consumers that
-still say 3600 keep one-hour receipts until raised separately. The first
+own `max_age_seconds` in its protected `.github/clouseau.json`; the example
+configuration uses 172800, and consumers that still say 3600 keep one-hour
+receipts until raised separately. A receipt that expires after CI skipped the
+tests on its strength fails the skipped step, naming `receipt_expired` (see above). The first
 [initial-installation](initial-installation.md) authorization deliberately stays
 at one hour, and installation receipts are capped by it. A receipt remains bound
 to the exact head SHA (or, under the protected `binding: "diff"`, to its

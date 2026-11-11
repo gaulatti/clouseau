@@ -146,6 +146,25 @@ test('under binding "diff" the receipt waives the tests after a base move only w
   assert.equal(await attestation.receiptAttests({github: liveRecipe(recipe), repo: {owner: 'o', repo: 'r'}, pr: moved, config: {...diffConfig, local_review: trust}, engine: null}), false);
 });
 
+test('explained, the same decision also names the class of a refused receipt and nothing else', async t => {
+  const explain = (value = pr) => attestation.receiptAttests({github: github(value), repo: {owner: 'o', repo: 'r'}, pr: value, config, engine: null, explain: true});
+  assert.deepEqual(await attestation.receiptAttests({github: github(), repo: {}, pr, config: {}, engine: null, explain: true}), {attests: false, rejected: null, detail: {}});
+  screen(t, {ref: null, rejected: null});
+  assert.deepEqual(await explain(), {attests: false, rejected: null, detail: {}});
+  screen(t, {ref: null, rejected: 'expired', detail: {expires: '2026-11-01T00:00:00.000Z'}});
+  assert.deepEqual(await explain(), {attests: false, rejected: 'expired', detail: {expires: '2026-11-01T00:00:00.000Z'}});
+  screen(t, {ref: null, rejected: 'malformed'});
+  assert.deepEqual(await explain(), {attests: false, rejected: 'malformed', detail: {}});
+  screen(t, verified(), 'source');
+  assert.deepEqual(await explain(), {attests: false, rejected: 'source', detail: {}});
+  screen(t, verified());
+  assert.deepEqual(await explain(), {attests: true, rejected: null, detail: {}});
+  screen(t, verified({verification: {content: '{'}, config: source()}));
+  assert.deepEqual(await explain(), {attests: false, rejected: null, detail: {}});
+  screen(t, verified({verification: {content: JSON.stringify(technical())}, config: source()}));
+  assert.deepEqual(await explain(), {attests: false, rejected: null, detail: {}});
+});
+
 test('the attested operation decides for the pull request in context', async t => {
   screen(t, verified());
   const context = {repo: {owner: 'o', repo: 'r'}, payload: {pull_request: {number: 8}}};
@@ -186,6 +205,29 @@ test('skipped required steps count only when a valid receipt attests the verific
   assert.deepEqual(seen, []);
 });
 
+test('a skipped required step names why the receipt no longer attests, and only a refused receipt changes the message', async () => {
+  const answering = answer => createPolicy(policyConfig, {attested: async () => answer});
+  const skipped = () => ci(policyConfig.verification.steps.map(() => 'skipped'));
+  const plain = /^Required verification step "[^"]+" concluded skipped$/;
+  const failure = async (answer, pull = small) => (await answering(answer).technicalRun(skipped(), PR_REPO, pull)).failure;
+  // No receipt at all, a valid receipt that attests nothing, or a plain boolean: the failure is exactly as before.
+  assert.match(await failure({attests: false, rejected: null, detail: {}}), plain);
+  assert.match(await failure(false), plain);
+  assert.match(await failure(null), plain);
+  assert.match(await failure({attests: false, rejected: 'not-a-class', detail: {}}), plain);
+  assert.ok((await answering({attests: true, rejected: null, detail: {}}).technicalRun(skipped(), PR_REPO, small)).url);
+  // An expired receipt: the class, its expiry instant and the steps that fix it, with nothing from the receipt itself.
+  const expired = await failure({attests: false, rejected: 'expired', detail: {expires: '2026-11-01T00:00:00.000Z', injected: '@someone <b>'}});
+  assert.match(expired, /^Required verification step "[^"]+" concluded skipped: the pull request's local review receipt no longer attests the verification \(cause: `receipt_expired`: it is expired or not yet valid \(it expires `2026-11-01T00:00:00.000Z`\)\)\. Re-run the verification workflow for this head so CI runs the step itself, or renew the receipt first with `clouseau refresh --pr 8` so the step can be skipped again\.$/);
+  assert.doesNotMatch(expired, /someone|<b>/);
+  // A malformed expiry is not shown; an unknown number stays a placeholder.
+  assert.match(await failure({attests: false, rejected: 'expired', detail: {expires: 'tomorrow'}}, {...small, number: 0}),
+    /\(cause: `receipt_expired`: it is expired or not yet valid\)\. .*`clouseau refresh --pr PR_NUMBER`/);
+  // Any other class names itself and the one generic step.
+  assert.match(await failure({attests: false, rejected: 'revision_head', detail: {}}),
+    /\(cause: `receipt_revision_head`: [^)]+\)\. Re-run the verification workflow for this head so CI runs the step itself\.$/);
+});
+
 test('a version 2 policy asks the receipt verifier whether verification is attested', async t => {
   const calls = [];
   t.mock.method(attestation, 'receiptAttests', async options => {calls.push(options); return true;});
@@ -193,4 +235,5 @@ test('a version 2 policy asks the receipt verifier whether verification is attes
     acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2}}, {engine: null});
   assert.ok((await policy.technicalRun(ci(policyConfig.verification.steps.map(() => 'skipped')), PR_REPO, small)).url);
   assert.equal(calls.length, 1); assert.equal(calls[0].pr, small); assert.equal(calls[0].config.version, 2);
+  assert.equal(calls[0].explain, true);
 });

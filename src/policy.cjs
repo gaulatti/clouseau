@@ -35,7 +35,7 @@ const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
   const {local_review, merge_mode, exact_revert, ...legacyConfig} = config;
   // Required verification steps a workflow skipped count only when a fully valid receipt attests the verification (verification-attestation.cjs).
-  const attested = (github, repo, pr) => require('./verification-attestation.cjs').receiptAttests({github, repo, pr, config, engine});
+  const attested = (github, repo, pr) => require('./verification-attestation.cjs').receiptAttests({github, repo, pr, config, engine, explain: true});
   const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
@@ -408,6 +408,17 @@ function judgeVerification(run, jobs) {
   return {final: true, verify, ...(skipped ? {skipped} : {})};
 }
 
+// A skipped required step whose receipt was refused names the receipt's fixed class (with only the values that class may
+// show) and the one step that fixes it; no receipt, or a valid one that attests nothing, keeps the plain failure.
+function skippedFailure(text, answer, number) {
+  const found = typeof answer === 'object' && answer !== null ? require('./receipt-rejection.cjs').describe(answer.rejected, {detail: answer.detail, number}) : null;
+  if (!found) return text;
+  const pull = Number.isSafeInteger(number) && number > 0 ? number : 'PR_NUMBER';
+  return `${text}: the pull request's local review receipt no longer attests the verification (cause: \`${found.code}\`: ${found.sentence}). ` +
+    'Re-run the verification workflow for this head so CI runs the step itself' +
+    (answer.rejected === 'expired' ? `, or renew the receipt first with \`clouseau refresh --pr ${pull}\` so the step can be skipped again.` : '.');
+}
+
 async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = {}) {
   // A conditional request: an unchanged answer is HTTP 304, which does not count against the primary limit.
   const listed = await conditionalGet(etags, `${repo.owner}/${repo.repo}@${pr.head.sha}`, headers => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
@@ -442,7 +453,11 @@ async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = 
     await wait(2000 * 2 ** read);
   }
   if (verdict.failure) return {failure: verdict.failure};
-  if (verdict.skipped && !(attested && await attested(github, repo, pr))) return {failure: verdict.skipped};
+  if (verdict.skipped) {
+    // `attested` answers true/false, or {attests, rejected, detail} when it can name why a claimed receipt no longer attests.
+    const answer = attested ? await attested(github, repo, pr) : false;
+    if (!(answer === true || typeof answer === 'object' && answer !== null && answer.attests === true)) return {failure: skippedFailure(verdict.skipped, answer, pr.number)};
+  }
   if (!verdict.final) return {pending: true, state: 'finalizing', detail: verdict.waiting};
   const verify = verdict.verify;
   return receipt ? {url: run.html_url, run_id: run.id, attempt: run.run_attempt,
