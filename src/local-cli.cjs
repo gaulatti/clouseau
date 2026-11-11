@@ -447,8 +447,10 @@ function controlWarnings(config, paths, {directory, baseSha, headSha}) {
     hits.push(...paths.filter(file => declared.isPackageFile(file) && declaredChanged(directory, baseSha, headSha, file)));
   }
   if (!hits.length) return [];
+  // Under the protected `human_review: "signed"` CI holds such a receipt as an owner decision rather than reporting it incomplete.
+  const outcome = config?.local_review?.human_review === 'signed' ? 'will hold it as owner_decision until then' : 'will report review_incomplete';
   const warning = `Protected review controls changed (${hits.slice(0, 5).join(', ')}): CI cannot accept a local receipt for this change ` +
-    'without the exact-head owner confirmation (/approve-intent) and will report review_incomplete. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.';
+    `without the exact-head owner confirmation (/approve-intent) and ${outcome}. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.`;
   process.stderr.write(`warning: ${warning}\n`);
   return [warning];
 }

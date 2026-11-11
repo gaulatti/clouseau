@@ -51,7 +51,10 @@ test('human_review "signed": a review that requires a human is signed only with 
   // Every verifier that did not ask for it refuses the signed non-pass exactly as it refuses any failing review.
   assert.throws(() => verifyReceipt(signed, f.expected), error => error.reason === 'not_passing');
   assert.throws(() => verifyReceipt(signed, {...f.expected, humanReview: 'yes'}), error => error.reason === 'not_passing');
-  assert.throws(() => verifyReceipt(signed, {...f.expected, reviewerSha: '0'.repeat(40), humanReview: false}), error => error.reason === 'not_passing' || error.reason === 'engine');
+  // Under another engine the signed claim is checked first: without the opt-in it is not a pass; with it, the claim is admitted
+  // and the receipt is then refused only because the engine differs, which a passing receipt would meet the same way.
+  assert.throws(() => verifyReceipt(signed, {...f.expected, reviewerSha: '0'.repeat(40), humanReview: false}), error => error.reason === 'not_passing');
+  assert.throws(() => verifyReceipt(signed, {...f.expected, reviewerSha: '0'.repeat(40), humanReview: true}), error => error.reason === 'engine');
   // Only the caller that asked for it receives it, marked as requiring a human; a pass never carries that mark.
   const held = verifyReceipt(signed, {...f.expected, humanReview: true});
   assert.equal(held.decision, 'repair_required'); assert.equal(held.human_review, true);

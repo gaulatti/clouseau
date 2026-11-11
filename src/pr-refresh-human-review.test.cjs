@@ -163,3 +163,15 @@ test('under human_review "signed" a review with findings is signed, stands for r
     }, {ciConfig: config});
   }
 });
+
+test('under human_review "signed" the protected-controls warning names the owner-decision hold instead of an incomplete review', () => {
+  const {controlWarnings} = require('./local-cli.cjs');
+  const fixture = require('../test/fixtures/config.json');
+  const base = {...fixture, version: 2, sensitive_paths: [...(fixture.sensitive_paths || []), 'src/guarded.js'], local_review: {mode: 'optional'}};
+  const paths = ['src/guarded.js'];
+  const [today] = controlWarnings(base, paths, {directory: process.cwd(), baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40)});
+  assert.match(today, /and will report review_incomplete\./);
+  const [held] = controlWarnings({...base, local_review: {mode: 'optional', human_review: 'signed'}}, paths, {directory: process.cwd(), baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40)});
+  assert.match(held, /and will hold it as owner_decision until then\./);
+  assert.doesNotMatch(held, /review_incomplete/);
+});

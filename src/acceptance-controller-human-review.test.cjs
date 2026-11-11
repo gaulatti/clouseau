@@ -182,6 +182,16 @@ for (const setting of [undefined, 'signed']) test(`human_review=${setting}: a si
   // The transported hold flag is never trusted: it must be exactly true, and only where the protected setting allows it.
   const compact = JSON.parse(fs.readFileSync(f.recordPath, 'utf8'));
   assert.equal(compact.local_controls, true);
+  // The valid hold record reaches the gate and holds there until the maintainer confirms this exact head; then it approves.
+  const approved = approvals();
+  const gateControls = () => createPolicy(guarded).gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
+    assessment: controls.result, nativeGate: true, wait: async () => {}});
+  await assert.rejects(gateControls(), /A maintainer intent confirmation is required/);
+  assert.equal(approvals(), approved);
+  f.state.comments = [{id: 951, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`}];
+  await gateControls();
+  assert.equal(approvals(), approved + 1, 'the exact-head confirmation clears the protected-controls hold');
+  f.state.comments = [];
   await assert.rejects(createPolicy(withoutFieldConfig(guarded)).gate({github: f.github, context: f.context, core, recordPath: f.recordPath,
     assessment: controls.result, nativeGate: true, wait: async () => {}}), /Invalid compact local review record/);
   const forged = {...compact, local_controls: 'yes'};
