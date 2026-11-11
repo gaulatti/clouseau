@@ -3,6 +3,8 @@
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const attestation = require('./verification-attestation.cjs');
 const gate = require('./coverage-gate.cjs');
 const receipts = require('./local-receipt.cjs');
@@ -12,6 +14,14 @@ const BASE = 'b'.repeat(40);
 const HEAD = 'a'.repeat(40);
 const recipe = {version: 2, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['run', 'tests']],
   coverage: [{format: 'lcov', report: 'cov/lcov.info', source_directory: 'src', source_suffixes: ['.rs']}]};
+function scratch(t) {
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-attestation-test-')));
+  t.after(() => fs.rmSync(root, {recursive: true, force: true}));
+  return root;
+}
+// A private work root so refusal cases never create the real home state directory.
+const WORK = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-attestation-work-'));
+process.on('exit', () => fs.rmSync(WORK, {recursive: true, force: true}));
 const command = (extra = {}) => ({argv: ['run', 'tests'], exit_code: 0, ...extra});
 const technical = (extra = {}) => ({commands: [command()], verification_status: 'passed', local_config_digest: digest(recipe),
   coverage: {status: 'exact', passed: true, artifact_freshness: 'observed_current_run'}, ...extra});
@@ -33,7 +43,7 @@ test('a record attests only when it says so and its own facts agree', () => {
   }
 });
 
-const refused = (value, pattern, options = {}) => assert.throws(() => attestation.evaluate({directory: '/x', config: recipe, ciConfig: {}, baseSha: BASE, verify: () => {}, ...options, technical: value}),
+const refused = (value, pattern, options = {}) => assert.throws(() => attestation.evaluate({directory: '/x', config: recipe, ciConfig: {}, baseSha: BASE, verify: () => {}, work: WORK, ...options, technical: value}),
   error => pattern.test(error.message) && /no receipt is signed/.test(error.message));
 
 test('a signature is refused unless every declared command ran and passed', () => {
@@ -65,12 +75,31 @@ test('changed_lines measures the base revision in a clean worktree and removes i
   let baseline;
   t.mock.method(gate, 'changedPlan', (parts, directory, base, file) => {baseline = JSON.parse(fs.readFileSync(file, 'utf8')); assert.equal(base, BASE); assert.equal(directory, '/x');});
   const verify = options => {verified.push(options.directory); return {verification_status: 'passed', commands: []};};
-  const result = attestation.evaluate({directory: '/x', config: recipe, technical: technical(), ciConfig: {coverage: {mode: 'changed_lines'}}, baseSha: BASE, verify, exec});
+  const work = path.join(scratch(t), 'state', 'work');
+  const result = attestation.evaluate({directory: '/x', config: recipe, technical: technical(), ciConfig: {coverage: {mode: 'changed_lines'}}, baseSha: BASE, verify, exec, work});
   assert.equal(result.attestation.coverage_mode, 'changed_lines');
   assert.deepEqual(baseline, {lines: [4, 4], branches: [2, 2]});
   assert.match(verified[0], /clouseau-base-.*tree$/);
+  // The checkout is under the stated work root, created on demand, and nothing is left in it afterwards.
+  assert.equal(path.dirname(path.dirname(verified[0])), work);
   assert.deepEqual(calls.map(call => call.split(' ')[0]), ['worktree', 'worktree']);
   assert.ok(!fs.existsSync(verified[0]));
+  assert.deepEqual(fs.readdirSync(work), []);
+});
+
+test('without a stated root the base checkout goes under the home state directory, never the system temp directory', t => {
+  const home = scratch(t);
+  const tmp = fs.realpathSync(os.tmpdir());
+  const previous = process.env.HOME; process.env.HOME = home;
+  t.after(() => {process.env.HOME = previous;});
+  t.mock.method(gate, 'measurePlan', () => ({totals: {lines: [1, 1], branches: [0, 0]}}));
+  t.mock.method(gate, 'changedPlan', () => {});
+  const verified = [];
+  attestation.evaluate({directory: '/x', config: recipe, technical: technical(), ciConfig: {coverage: {mode: 'changed_lines'}}, baseSha: BASE, exec() {},
+    verify: options => {verified.push(options.directory); return {verification_status: 'passed', commands: []};}});
+  assert.equal(path.dirname(path.dirname(verified[0])), path.join(home, '.local/share/clouseau/work'));
+  assert.notEqual(path.dirname(path.dirname(path.dirname(verified[0]))), tmp);
+  assert.deepEqual(fs.readdirSync(path.join(home, '.local/share/clouseau/work')), []);
 });
 
 test('changed_lines refuses a changed line left uncovered, a failing base and a worktree that cannot be removed', t => {

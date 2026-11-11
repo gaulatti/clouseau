@@ -36,8 +36,10 @@ function attestationOf(technical) {
 }
 
 // Baseline totals of the base revision, measured the way the CI job measures them: the same recipe on a clean checkout of the base.
-function withBaseline({directory, baseSha, config, parts, verify, exec, gate}, use) {
-  const temporary = temporaryDirectories.create('clouseau-base-');
+// The checkout lives under the work directory, not the system temp directory, so a recipe step that bind-mounts it into a
+// container (Docker Compose under Colima, which shares only the home directory by default) sees the files.
+function withBaseline({directory, baseSha, config, parts, verify, exec, gate, work}, use) {
+  const temporary = temporaryDirectories.create('clouseau-base-', work);
   const tree = path.join(temporary, 'tree');
   try {
     exec('git', ['-C', directory, 'worktree', 'add', '--detach', tree, baseSha], {stdio: 'pipe'});
@@ -55,7 +57,7 @@ function withBaseline({directory, baseSha, config, parts, verify, exec, gate}, u
 }
 
 // Returns `technical` with its attestation, or throws naming exactly why a signature must not be issued.
-function evaluate({directory, config, technical, ciConfig, baseSha, verify, exec = cp.execFileSync}) {
+function evaluate({directory, config, technical, ciConfig, baseSha, verify, exec = cp.execFileSync, work = temporaryDirectories.workDirectory()}) {
   const refuse = problems => {throw new Error(`Local verification is not complete on this head, so no receipt is signed: ${problems.join('; ')}`);};
   const failed = technical.commands.filter(command => command.exit_code !== 0 || command.error || command.signal);
   if (failed.length) refuse(failed.map(describe));
@@ -70,7 +72,7 @@ function evaluate({directory, config, technical, ciConfig, baseSha, verify, exec
     } else {
       const parts = require('./coverage-plan.cjs').coverageParts(config);
       if (mode === 'declared') gate.declaredPlan(parts, directory, baseSha);
-      else withBaseline({directory, baseSha, config, parts, verify, exec, gate}, file => gate.changedPlan(parts, directory, baseSha, file));
+      else withBaseline({directory, baseSha, config, parts, verify, exec, gate, work}, file => gate.changedPlan(parts, directory, baseSha, file));
     }
   } catch (error) {
     refuse([`the ${mode} coverage gate fails: ${error.message}`]);
