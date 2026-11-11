@@ -294,12 +294,17 @@ test('diff binding: GitHub joining two git hunks across one unchanged line is th
   verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${two}\n`]), files: [live('src/a.js', 'modified', joined)], ...DIFF});
 });
 
-test('diff binding: a summarized lockfile and a change that shows no text bind their path and status', () => {
+test('diff binding: a summarized lockfile binds its path and status, and a file without a GitHub patch is refused', () => {
   const {LOCKFILE_PATCH} = require('./lockfile-summary.cjs');
-  const snapshot = {files: [{path: 'package-lock.json', status: 'modified', patch: LOCKFILE_PATCH, lockfile: true},
-    {path: 'empty.txt', status: 'added', patch: 'diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n', head_source: 'e'}],
-  sources: {e: {path: 'empty.txt', content: ''}}};
-  const result = verifyPatches({snapshot, files: [live('package-lock.json', 'modified', '@@ -1 +1 @@\n-a\n+b'), live('empty.txt', 'added', undefined)], ...DIFF});
+  const lockfile = {path: 'package-lock.json', status: 'modified', patch: LOCKFILE_PATCH, lockfile: true};
+  const result = verifyPatches({snapshot: {files: [lockfile], sources: {}}, files: [live('package-lock.json', 'modified', '@@ -1 +1 @@\n-a\n+b')], ...DIFF});
   assert.equal(result.signed, result.live);
-  mismatch(() => verifyPatches({snapshot, files: [live('package-lock.json', 'removed', '@@'), live('empty.txt', 'added', undefined)], ...DIFF}), 'package-lock.json');
+  mismatch(() => verifyPatches({snapshot: {files: [lockfile], sources: {}}, files: [live('package-lock.json', 'removed', '@@')], ...DIFF}), 'package-lock.json');
+  // An empty file signed without a hunk is accepted without the binding, where the live sources are compared. Under the
+  // binding they are not read, and the same patchless file could now hold binary or oversized content, so it is refused.
+  const snapshot = {files: [lockfile, {path: 'empty.txt', status: 'added', patch: 'diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n', head_source: 'e'}],
+    sources: {e: {path: 'empty.txt', content: ''}}};
+  const files = [live('package-lock.json', 'modified', '@@ -1 +1 @@\n-a\n+b'), live('empty.txt', 'added', undefined)];
+  assert.equal(verifyPatches({snapshot, files}), null);
+  assert.throws(() => verifyPatches({snapshot, files, ...DIFF}), /Changed-file evidence is incomplete/);
 });

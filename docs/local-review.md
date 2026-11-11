@@ -524,7 +524,8 @@ one apart from the revision it names.
 | signed full-file sources compared with the live repository | compared | not compared: the signed record is what was reviewed; each source must still name a signed revision |
 | lines added above a hunk on the base | `receipt_source` | covered |
 | any change to an added, removed or context line, or to whitespace | `receipt_source` | `receipt_source`, naming the file |
-| a file added, removed or re-statused, another rename, a file without a GitHub patch | refused | refused, unchanged |
+| a file added, removed or re-statused, another rename | refused | refused, unchanged |
+| a file without a GitHub patch | refused, unless the live sources prove it shows no text | refused, even an empty file or an identical rename: the live sources are not read |
 | signature, enrolled key, author, expiry, repository, protected configuration and policy digests, engine and review semantics, passing decision | bound | bound, unchanged |
 
 The test waiver follows the same binding: `operation: attested` answers `'true'` for a receipt whose diff matches and whose
@@ -685,7 +686,8 @@ GitHub also supplies no `patch` for a change that shows no text: an empty file a
 sources prove it (the head source of an added file is empty, the base source of a removed file is empty, or the
 two sides of a rename are equal). A signed `git diff` of such a file is a header without a hunk and equals the absent
 hosted patch. An empty source has no line to cite, so the review accounts for it without a citation, a finding is
-anchored in the next changed file that has a line, and any other missing patch still fails closed.
+anchored in the next changed file that has a line, and any other missing patch still fails closed. A receipt bound
+by `binding: "diff"` never covers a file without a patch, because the live sources that would prove it empty are not read.
 
 Only after actual CI tests and exact coverage pass may the controller emit an
 approval assessment. It revalidates the receipt at the write gate and uses the

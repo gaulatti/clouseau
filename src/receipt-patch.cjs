@@ -140,8 +140,10 @@ function verifyPatches({snapshot, files, binding = null}) {
     return Boolean(item) && item.status === live.status && hostedForm(signedPatch(snapshot, item), live) === '' &&
       showsNoText(item.status, text(item.base_source), text(item.head_source));
   };
+  // Under binding "diff" the live sources are never read, so nothing at the live head proves that a file without a patch
+  // still shows no text: an empty file that later gains binary or oversized content would also arrive without one.
   if (files.some(file => (typeof file.patch !== 'string' || !file.patch) &&
-    !(signed.has(file.filename) && summarized(signed.get(file.filename))) && !textless(file))) {
+    !(signed.has(file.filename) && summarized(signed.get(file.filename))) && !(binding !== 'diff' && textless(file)))) {
     throw new Error('Changed-file evidence is incomplete');
   }
   for (const file of snapshot.files) if (!files.some(live => live.filename === file.path)) throw new ReceiptPatchMismatch(file.path);
@@ -154,7 +156,7 @@ function verifyPatches({snapshot, files, binding = null}) {
     }
     if (!item || item.status !== live.status) throw new ReceiptPatchMismatch(live.filename);
     if (binding === 'diff') {
-      if (canonicalHunks(hostedForm(signedPatch(snapshot, item), live) ?? '\0') !== canonicalHunks(live.patch ?? '')) throw new ReceiptPatchMismatch(live.filename);
+      if (canonicalHunks(hostedForm(signedPatch(snapshot, item), live) ?? '\0') !== canonicalHunks(live.patch)) throw new ReceiptPatchMismatch(live.filename);
       continue;
     }
     const signedText = withoutHeading(hostedForm(signedPatch(snapshot, item), live) ?? '');
@@ -162,13 +164,14 @@ function verifyPatches({snapshot, files, binding = null}) {
     if (signedText !== hostedText && !joinsSingleGaps(signedText, hostedText)) throw new ReceiptPatchMismatch(live.filename);
   }
   if (binding !== 'diff') return null;
+  // Every live file here has a patch: a patchless one was refused above unless it is a summarized lockfile.
   // The binding itself: one SHA-256 over the signed patches and one over GitHub's, which the per-file comparison above proved equal.
   const previousOf = item => snapshot.sources?.[item.base_source]?.path ?? null;
   const signedDigest = diffDigest(snapshot.files.map(item => summarized(item) ? entry(item.path, item.status, null, 'lockfile-summary') :
     entry(item.path, item.status, previousOf(item), canonicalHunks(hostedForm(signedPatch(snapshot, item),
       {filename: item.path, status: item.status, previous_filename: item.status === 'renamed' ? previousOf(item) : undefined}) ?? '\0'))));
   const liveDigest = diffDigest(files.map(live => summarized(signed.get(live.filename)) ? entry(live.filename, live.status, null, 'lockfile-summary') :
-    entry(live.filename, live.status, live.previous_filename ?? null, canonicalHunks(live.patch ?? ''))));
+    entry(live.filename, live.status, live.previous_filename ?? null, canonicalHunks(live.patch))));
   if (signedDigest !== liveDigest) throw new ReceiptPatchMismatch(snapshot.files[0].path);
   return {signed: signedDigest, live: liveDigest};
 }

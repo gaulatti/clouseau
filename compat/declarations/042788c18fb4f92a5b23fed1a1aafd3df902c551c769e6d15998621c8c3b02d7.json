@@ -20,7 +20,7 @@
     {
       "path": "src/receipt-patch.cjs",
       "mode": 0,
-      "sha256": "8bd9dff7cfbb12599b08c02af97ac6c98645962980cdcef104c46ec2b481c60a"
+      "sha256": "81c78ae55ed1b3a8ab057a101c8dc156048edabb861328c0975b3c94c1fd276c"
     },
     {
       "path": "src/receipt-standing.cjs",
