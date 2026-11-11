@@ -1542,6 +1542,93 @@ test('the hosted fallback after an unusable receipt never reads the receipt, rev
   assert.equal(artifactReads, reads);
 }));
 
+for (const setting of [undefined, 'automatic', 'manual']) test(`hosted_review=${setting}: a valid receipt is used; without one, only "manual" holds until a maintainer requests the review of this head`, () => fixture(async f => {
+  const crypto = require('node:crypto');
+  const {issueReceipt} = require('./local-receipt.cjs');
+  const {refresh} = require('./acceptance-sources.cjs');
+  await f.assess();
+  const record = JSON.parse(fs.readFileSync(f.recordPath));
+  const keys = crypto.generateKeyPairSync('ed25519');
+  const trusted = {...config, ...(setting ? {hosted_review: setting} : {}), local_review: {mode: 'optional', reviewer_sha: 'e'.repeat(40),
+    reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800,
+    keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
+  record.snapshot.number = 0; record.snapshot.config_digest = digest(trusted); refresh(record.snapshot);
+  record.result.snapshot = record.snapshot.digest; record.result.config_digest = record.snapshot.config_digest;
+  record.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
+    ({role, phase, harness: 'codex', session: `fictional-${role}-${phase}`, request_digest: digest(role),
+      response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
+  record.result.execution_digest = digest(record.result.usage);
+  for (const item of record.result.reviews) item.report.snapshot = record.snapshot.digest;
+  const bundle = issueReceipt({record, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}),
+    keyId: 'fixture', issuer: 'fixture-runner', reviewerSha: trusted.local_review.reviewer_sha});
+  const original = f.github.rest.repos.getContent;
+  f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
+    encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length}} : original(args);
+  const permissions = {maintainer: 'write', reader: 'read'};
+  f.github.rest.repos.getCollaboratorPermissionLevel = async ({username}) => ({data: {permission: permissions[username] ?? 'none'}});
+  const policy = createPolicy(trusted);
+  const marker = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
+  const run = async (body, extra = {}) => {
+    f.state.pr.body = body;
+    const calls = f.state.calls;
+    const result = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, ...extra});
+    return {result, providerCalls: f.state.calls - calls};
+  };
+  const manual = setting === 'manual';
+  // A valid receipt is used whatever the setting, with no provider call.
+  const valid = await run(marker);
+  assert.equal(valid.result.review_source, 'authenticated_local'); assert.equal(valid.providerCalls, 0);
+  const head = f.state.pr.head.sha;
+  const command = (login, sha = head, type = 'User') => ({id: 900 + f.state.comments.length, user: {login, type}, body: `/hosted-review ${sha}`});
+  const expired = Date.now() + 172800001; const realNow = Date.now;
+  const outcomes = async () => {
+    const absent = await run('No receipt here.');
+    Date.now = () => expired;
+    try {return {absent, unusable: await run(marker), route: await run(marker, {receiptOnly: true}), fallback: await run(marker, {ignoreReceipt: true})};}
+    finally {Date.now = realNow;}
+  };
+  const held = ({result, providerCalls}) => {
+    assert.equal(result.decision, 'review_incomplete'); assert.equal(result.cause, 'hosted_review_manual'); assert.equal(providerCalls, 0);
+    assert.ok(result.reason.includes(`\`/hosted-review ${head}\``));
+  };
+  const reviewed = ({result, providerCalls}) => {assert.equal(result.decision, 'auto_approve', result.reason); assert.ok(providerCalls > 0);};
+  // No request, and requests that do not count: another head, a reader, a bot, a near miss.
+  for (const comments of [[], [command('maintainer', 'c'.repeat(40))], [command('reader')], [command('github-actions[bot]', head, 'Bot')],
+    [{...command('maintainer'), body: `/hosted-review  ${head} please`}]]) {
+    f.state.comments = comments;
+    const found = await outcomes();
+    if (manual) {
+      held(found.absent); held(found.unusable); held(found.route); held(found.fallback);
+      assert.equal(found.absent.result.receipt_notice, 'absent'); assert.equal(found.unusable.result.receipt_notice, 'expired');
+    } else {
+      reviewed(found.absent); reviewed(found.unusable); reviewed(found.fallback);
+      assert.equal(found.route.result.cause, 'local_receipt_unusable'); assert.equal(found.route.providerCalls, 0);
+    }
+  }
+  // A maintainer's request for this exact head: the run proceeds as "automatic" would, and the receipt-only route keeps the
+  // cause the reference workflow's hosted fallback keys on.
+  f.state.comments = [command('reader'), command('maintainer')];
+  const requested = await outcomes();
+  reviewed(requested.absent); reviewed(requested.unusable); reviewed(requested.fallback);
+  assert.equal(requested.route.result.cause, 'local_receipt_unusable'); assert.equal(requested.route.providerCalls, 0);
+  // A repository that requires receipts keeps its own outcome.
+  const required = createPolicy({...trusted, local_review: {...trusted.local_review, mode: 'required'}});
+  f.state.comments = []; f.state.pr.body = 'No receipt here.';
+  assert.equal((await required.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl})).cause, 'local_receipt_required');
+}));
+
+test('the protected hosted_review setting accepts only "automatic" or "manual", and only for protocol version two', () => {
+  const {validateConfig} = require('./config.cjs');
+  for (const value of [undefined, 'automatic', 'manual']) assert.doesNotThrow(() => validateConfig({...config, hosted_review: value}));
+  for (const value of ['Manual', '', null, true, ['manual']]) assert.throws(() => validateConfig({...config, hosted_review: value}), /hosted review mode/);
+  assert.throws(() => validateConfig({...require('../test/fixtures/config.json'), hosted_review: 'manual'}), /hosted review mode/);
+  const {body, NEXT_STEPS} = require('./incomplete.cjs');
+  assert.ok(NEXT_STEPS.hosted_review_manual.some(step => step.includes('`/hosted-review {head}`')));
+  const text = body({number: 4, head_sha: 'a'.repeat(40), decision: 'review_incomplete', cause: 'hosted_review_manual', reason: 'Held.'}, 'u');
+  assert.ok(text.includes('**Cause:** `hosted_review_manual`')); assert.ok(text.includes(`\`/hosted-review ${'a'.repeat(40)}\``));
+});
+
 test('optional local review on the receipt-only route names the real condition instead of claiming a receipt is required', () => fixture(async f => {
   const keys = require('node:crypto').generateKeyPairSync('ed25519');
   const optional = createPolicy({...config, local_review: {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(),
