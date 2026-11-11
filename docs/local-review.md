@@ -684,6 +684,28 @@ main CI resolved is one more receipt that does not verify (class `engine`, below
 Refresh and review again to reuse the local review. The selected commit and digest are in
 the run summary and engine artifact.
 
+### Signing a review that requires a human (opt-in)
+
+By default only a passing local review is signed, so CI reviews every other change again to rediscover a verdict that already
+existed. With the protected `local_review.human_review: "signed"` in `.github/clouseau.json` on the base branch, a second
+outcome is signed and CI enforces it instead of repeating it:
+
+| Local result | Signed outcome | CI |
+| --- | --- | --- |
+| tests or the coverage gate fail | nothing (no review is run) | nothing to reuse; the author fixes |
+| test integrity violated (`blocked_integrity`) | nothing | nothing to reuse; the author fixes |
+| findings at or above the threshold (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer approves the exact head (`/approve-intent <head sha>` or an approving review of that head) |
+| a change the fixed rules send to a human (protected review controls, sensitive paths) | the passing review | the same `owner_decision` hold, instead of today's `receipt_protected_controls` |
+| clean | the passing review | approve and merge as today |
+
+The hold is the existing owner-decision path; there is no second approval mechanism. A maintainer's approval of the exact head
+may clear findings at or above the threshold; it never clears a failed test run, a failed coverage gate or a test-integrity
+violation, which sign nothing and must be fixed. The pull request shows the verdict and its findings from the signed record,
+and CI makes no AI call. A signed non-pass is never acceptable as a pass: every verifier refuses it as `not_passing` unless it
+is the assessment or the gate of a repository with this setting, which turn it into the hold; `operation: attested` never
+accepts it, so CI runs the tests; a claimed `auto_approve` for it is a decision mismatch. `clouseau refresh` treats it as up to
+date and names the approval it waits for. Without the setting nothing changes: such a review signs nothing.
+
 ### A receipt that does not verify is ignored
 
 CI applies one rule to a local review receipt. A receipt that verifies in every
@@ -767,7 +789,10 @@ A change to any protected control path (the CI workflow, `.github/ci/`,
 policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs exact-head
 owner confirmation (`/approve-intent <head sha>` from the configured maintainer).
 A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
-cause `receipt_protected_controls` and a reason naming the protected controls.
+cause `receipt_protected_controls` and a reason naming the protected controls
+(under the protected `local_review.human_review: "signed"` the same PR is instead
+held as `owner_decision` until that confirmation, see
+[signing a review that requires a human](#signing-a-review-that-requires-a-human-opt-in)).
 `clouseau review` and `clouseau publish` print the same condition as a
 `warning:` on stderr and a `warnings` entry in their JSON result, naming only
 the repository paths. This includes the mandatory agent-standard updater commit

@@ -47,6 +47,9 @@ function validateTrust(trust) {
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
     trust.max_age_seconds <= 172800, 'explicit trust policy and maximum age required');
   if (trust.attest !== undefined) validateAttest(trust.attest);
+  // Opt-in, protected: whether a local review whose findings send it to a human is signed ("signed"), so CI holds it for the
+  // maintainer instead of reviewing it again. Absent: only a passing review is ever signed.
+  requireReceipt(trust.human_review === undefined || trust.human_review === 'signed', 'human_review must be "signed" when set');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -60,6 +63,10 @@ function validateTrust(trust) {
   }
   return trust;
 }
+
+// The decisions a receipt may carry: a pass, and only with the protected opt-in, findings that a maintainer may clear.
+const HUMAN_REVIEW = 'repair_required';
+const signable = (decision, humanReview) => decision === 'auto_approve' || (humanReview === true && decision === HUMAN_REVIEW);
 
 // A record without `partition` takes the unchanged path below. A chunked record is verified by the chunked verifier
 // (new shape if present, else current); it only supplies the merged reviews, and the single derivation continues here.
@@ -95,8 +102,10 @@ function reviewDecision(record, {chunked = null} = {}) {
 }
 
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
-  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation}) {
-  requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
+  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation, humanReview = false}) {
+  // With `humanReview` (the protected `human_review: "signed"`) a review with findings that require a human is signed too.
+  // Integrity violations and incomplete reviews never are; failed verification never reaches signing (verification-attestation.cjs).
+  requireReceipt(signable(reviewDecision(record, {chunked}).decision, humanReview), 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
   'invalid runner revision, challenge or lifetime');
@@ -144,7 +153,7 @@ function signingKey(bundle, trust) {
 const engineVouches = claim => require('./review-semantics.cjs').acceptor()(claim);
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  pullNumber, now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches}) {
+  pullNumber, now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches, humanReview = false}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;
@@ -187,7 +196,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     (!reviewerSha || p.reviewer_sha === reviewerSha) && p.reviewer_digest === reviewerDigest &&
     (engine || trust.reviewer_digest === reviewerDigest);
   if (!engineMatches) {
-    reject(record.result.decision === 'auto_approve', 'review did not pass', 'not_passing');
+    reject(signable(record.result.decision, humanReview), 'review did not pass', 'not_passing');
     // A different revision is accepted only when the protected engine that is running vouches for the receipt's review
     // semantics (`compatible` reads nothing but that engine's own checkout). Without a vouching decision, or for a
     // fixed-digest trust, the exact comparison above stands and the receipt is ignored.
@@ -204,8 +213,10 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   reject(wiring.problem(trust.chunked) === null, 'invalid protected chunked review configuration', 'settings');
   const chunkedOptions = chunked !== undefined ? chunked : (Object.hasOwn(record, 'partition') ? wiring.verifierOptions(trust) : null);
   const result = reviewDecision(record, {chunked: chunkedOptions});
-  reject(result.decision === 'auto_approve', 'review did not pass', 'not_passing');
-  return {record, ...result, attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
+  // Only a caller that asked for it (the assessment and the gate of a repository with `human_review: "signed"`) ever receives
+  // a signed non-pass, marked `human_review`; every other caller refuses it as before, so it can never stand for a pass.
+  reject(signable(result.decision, humanReview), 'review did not pass', 'not_passing');
+  return {record, ...result, ...(result.decision === HUMAN_REVIEW ? {human_review: true} : {}), attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
 }
 
 function verifyReceipt(bundle, options) {
@@ -384,7 +395,7 @@ const detailOf = error => error instanceof ReceiptRejected ? error.detail : {};
 
 // The one decision for a claimed receipt: `ref` is set only when it verifies in every respect. Any other outcome returns
 // the fixed class in `rejected` (or neither, when no receipt is claimed) and the receipt is never consulted again.
-async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest, reviewerDigest}) {
+async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest, reviewerDigest, humanReview = false}) {
   let ref;
   try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason, detail: error.detail};}
   if (!ref) return {ref: null, rejected: null};
@@ -396,7 +407,7 @@ async function screenReceipt({github, repo, pr, engine, trust, configDigest, pol
   }
   try {
     const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, pullNumber: pr.number,
-      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest, reviewerDigest});
+      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest, reviewerDigest, humanReview});
     return {ref, bundle, verified, rejected: null};
   } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed', detail: detailOf(error)};}
 }

@@ -51,8 +51,11 @@ async function receiptStanding({directory, base, repo, pull, execute, installed}
   const reviewer = installed();
   const screened = await screenReceipt({github: githubReader(execute), repo, engine: {...SOURCE, sha: reviewer.sha, digest: reviewer.digest},
     pr: {number: pull.number, body: pull.body, user: {login: pull.author}, head: {sha: pull.head}, base: {sha: pull.base_sha}},
-    trust: config.local_review, configDigest: digest(config), policyDigest: digest(fs.readFileSync(POLICY, 'utf8')), reviewerDigest: reviewer.digest});
-  if (screened.ref) return {applicable: true, usable: true};
+    trust: config.local_review, configDigest: digest(config), policyDigest: digest(fs.readFileSync(POLICY, 'utf8')), reviewerDigest: reviewer.digest,
+    humanReview: config.local_review.human_review === 'signed'});
+  // Under the protected `human_review: "signed"` a signed review that requires a human stands too, as CI holds it for the
+  // maintainer: nothing is reviewed again for it.
+  if (screened.ref) return {applicable: true, usable: true, ...(screened.verified.human_review ? {human_review: true} : {})};
   const cause = describe(screened.rejected ?? 'absent', {detail: screened.detail});
   return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};
 }

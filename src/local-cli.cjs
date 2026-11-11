@@ -406,15 +406,18 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   fs.mkdirSync(path.dirname(output), {recursive: true});
   fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
   let receipt = null;
-  if (result.decision === 'auto_approve' && identity) {
+  // With the protected `human_review: "signed"` a review whose findings send it to a maintainer is signed as well (its
+  // verification passed: with an identity, anything else stopped before review). Integrity and incomplete reviews never are.
+  const humanReview = identity !== null && ciConfig.local_review.human_review === 'signed';
+  if ((result.decision === 'auto_approve' || (humanReview && result.decision === 'repair_required')) && identity) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
       reviewerSemantics: require('./review-semantics.cjs').semanticsDigest(),
-      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null});
+      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null, humanReview});
     verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: pull ? pull.author : identity.github_actor, pullNumber: pull?.number,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
-      configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
+      configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest, humanReview});
     receipt = path.join(cache, 'receipt.json');
     fs.writeFileSync(receipt, JSON.stringify(bundle) + '\n', {mode: 0o600});
   }
