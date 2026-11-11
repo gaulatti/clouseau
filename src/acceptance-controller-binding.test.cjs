@@ -157,8 +157,11 @@ for (const binding of [undefined, 'diff']) test(`binding=${binding}: after the b
   assert.equal(moved.result.decision, 'auto_approve', moved.result.reason);
   assert.equal(moved.result.review_source, 'authenticated_local'); assert.equal(moved.providerCalls, 0);
   assert.equal(moved.result.head_sha, f.state.pr.head.sha); assert.equal(moved.result.receipt_notice, undefined);
-  assert.ok(!reads.some(read => read.ref === f.state.pr.head.sha || read.ref === f.state.pr.base.sha),
-    'no signed full-file source is compared with the live revisions');
+  // Only the repository's own contracts (and the declared recipe) are read at the live base; no other signed source is.
+  const governing = new Set(['README.md', '.github/clouseau.md', '.clouseau-local.json']);
+  assert.ok(!reads.some(read => read.ref === f.state.pr.head.sha || (read.ref === f.state.pr.base.sha && !governing.has(read.path))),
+    'no other signed full-file source is compared with the live revisions');
+  assert.ok(reads.some(read => read.ref === f.state.pr.base.sha && read.path === 'README.md'), 'the README contract is compared at the live base');
   await policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
     recordPath: f.recordPath, assessment: moved.result, nativeGate: true, wait: async () => {}});
   assert.equal(f.state.writes.filter(item => item.name === 'approve').length, 1);

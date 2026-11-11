@@ -76,11 +76,36 @@ test('binding "diff": the signed revisions stand in for the live ones, full-file
   }
   const files = hostedFiles(f.snapshot);
   const reads = [];
-  const github = {rest: {repos: {getContent: async args => {reads.push(args); return f.github.rest.repos.getContent(args);}}}};
+  // The live base serves the repository's contracts; `liveContract` replaces one of them to model a base that changed it.
+  const signedContract = path => Object.values(f.snapshot.sources).find(source => source.kind === 'contract' && source.path === path).content;
+  let liveContract = {};
+  const github = {rest: {repos: {getContent: async args => {
+    reads.push(args);
+    if (args.ref === 'e'.repeat(40)) {
+      const text = liveContract[args.path] ?? signedContract(args.path);
+      return {data: {encoding: 'base64', content: Buffer.from(text).toString('base64'), size: Buffer.byteLength(text)}};
+    }
+    return f.github.rest.repos.getContent(args);
+  }}}};
   const pr = {changed_files: 1, base: {sha: 'e'.repeat(40)}, head: {sha: 'd'.repeat(40), repo: {owner: {login: f.repo.owner}, name: f.repo.repo}}};
   const options = {github, repo: f.repo, pr, files, snapshot: f.snapshot, config: {readme: 'README.md', repository_policy: '.github/clouseau.md', local_review: {binding: 'diff'}}};
   await verifySources(options);
-  assert.deepEqual(reads, [], 'no signed full-file source is fetched from the live revisions');
+  assert.deepEqual(reads.map(item => `${item.ref}:${item.path}`).sort(), [`${'e'.repeat(40)}:.github/clouseau.md`, `${'e'.repeat(40)}:README.md`],
+    'only the repository contracts are read, at the live base; no other signed full-file source is fetched');
+  // A base that changed either contract voids the receipt and names the file.
+  for (const changed of ['README.md', '.github/clouseau.md']) {
+    liveContract = {[changed]: `${signedContract(changed)}\nA rule added on the base.\n`};
+    await assert.rejects(verifySources(options), error => error.reason === 'source' && error.detail?.file === changed && /contract changed on the live base/.test(error.message), changed);
+  }
+  liveContract = {'README.md': {symlink: true}};
+  github.rest.repos.getContent = async args => {
+    reads.push(args);
+    if (args.ref === 'e'.repeat(40) && args.path === 'README.md') return {data: {type: 'symlink', target: signedContract('README.md')}};
+    if (args.ref === 'e'.repeat(40)) return {data: {encoding: 'base64', content: Buffer.from(signedContract(args.path)).toString('base64')}};
+    return f.github.rest.repos.getContent(args);
+  };
+  await verifySources(options);
+  liveContract = {};
   // Today the same live revisions refuse the signed sources.
   await assert.rejects(verifySources({...options, config: {...options.config, local_review: {}}}), /outside exact repository revisions|evidence omitted/);
   // The diff still decides, and the evidence must still be bound to the signed revisions.

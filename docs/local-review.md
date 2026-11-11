@@ -526,6 +526,7 @@ one apart from the revision it names.
 | a different head commit (GitHub's branch update, a merge of the base) | `receipt_revision_head` | covered while the diff is unchanged |
 | a different base commit | `receipt_revision_base` | covered while the diff is unchanged |
 | signed full-file sources compared with the live repository | compared | not compared: the signed record is what was reviewed; each source must still name a signed revision |
+| the repository's contracts (`readme`, `repository_policy`, for example `.github/clouseau.md` and `README.md`) | compared at the signed base, which must be the live base | compared at the **live** base: a base move that changed either voids the receipt (`receipt_source`, naming the file) |
 | lines added above a hunk on the base | `receipt_source` | covered |
 | any change to an added, removed or context line, or to whitespace | `receipt_source` | `receipt_source`, naming the file |
 | a file added, removed or re-statused, another rename | refused | refused, unchanged |
@@ -535,12 +536,22 @@ one apart from the revision it names.
 The test waiver follows the same binding: `operation: attested` answers `'true'` for a receipt whose diff matches and whose
 signed `.clouseau-local.json` equals the live base's, so the tests are **not** rerun after a base move or an update-branch
 merge. This is deliberate and has a cost: a break caused only by the base move (a semantic conflict between the reviewed change
-and the new base) is found after merge, by the next run on the base. The run-consistency checks that compare the live pull
+and the new base) is found after merge, by the next run on the base. **Accepted limit:** no CI step reruns the attested tests
+of a diff-bound receipt for any base move, including one that changed a file the pull request imports or calls but does not
+edit; only a change to the declared recipe (`.clouseau-local.json`) or to the pull request's own diff makes CI run them. The run-consistency checks that compare the live pull
 request between the assessment and the gate are unchanged; they protect one CI run from a push that lands mid-run.
 
 `clouseau refresh` uses the same decision: under the binding it judges the receipt (including the diff, from the files GitHub
-lists) before merging anything, and answers `up_to_date` whenever CI would accept it, rerunning nothing. A receipt that no longer
-covers the diff is refreshed or renewed as usual. Where the binding applies: `verifySignedRecord` (the head and base comparison),
+lists) before merging anything. When the base moved only in files the pull request does not change, the merge provably keeps
+every changed file's patch, so refresh merges the base and pushes the merge (a plain push, never forced) with no review and no
+new receipt, and answers `updated`. That keeps the branch strictly ahead of the base, which the controller-managed merge
+requires. When the base moved inside a changed file, refresh merges and reviews as it does without the binding, because the
+merged patch's context can differ. On an up-to-date branch it answers `up_to_date` whenever CI would accept the receipt. Who
+updates the branch is therefore the author: by `clouseau refresh`, by GitHub's "Update branch" (`gh pr update-branch`), or by a
+plain merge and push; the workflow token cannot, because its push starts no verification. A merge commit that leaves the
+diff unchanged keeps the receipt valid end to end, at the assessment and at the gate (`verifyRecord`, and `verifySources` at
+the gate's write boundary), which `src/acceptance-controller-binding.test.cjs` proves through an assessment and gate approval
+of the merged head with zero AI calls. A receipt that no longer covers the diff is refreshed or renewed as usual. Where the binding applies: `verifySignedRecord` (the head and base comparison),
 `verifySources` (revisions, sources, contract and verification refs, the lockfile summary, and the diff through `verifyPatches`),
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.

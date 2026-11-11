@@ -31,8 +31,11 @@ test('a moved base fails closed with one explicit secret-free needs-branch-updat
   assert.equal(created[0].issue_number, 4);
   assert.ok(created[0].body.startsWith(`<!-- ${MARKER}:${head}:${moved} -->\n`));
   assert.match(created[0].body, /update-branch 4/);
+  // Under the protected diff binding a receipt can survive the update, so the notice does not claim every receipt is void.
+  assert.match(created[0].body, /neither is a local review receipt, unless the protected `local_review\.binding` is `"diff"` and the update leaves its diff unchanged/);
+  assert.match(created[0].body, /run `clouseau refresh --pr 4`, which merges the base/);
   assert.match(created[0].body, /Re-running the failed job cannot succeed/);
-  assert.match(created[0].body, /local review receipt: run `clouseau review` and `clouseau publish` again on the new head/);
+  assert.match(created[0].body, /local review receipt: run `clouseau refresh --pr 4`, which merges the base and, unless a `binding: "diff"` receipt still covers the unchanged diff, reviews and publishes the new head/);
   assert.match(created[0].body, /\*\*Cause:\*\* `base_moved`/);
   assert.match(created[0].body, /\*\*Next steps:\*\*\n\n1\. .*gh pr update-branch 4.*\n2\. Wait.*\n3\. Only if/);
   assert.ok(created[0].body.includes(base.slice(0, 12)) && created[0].body.includes(moved.slice(0, 12)));

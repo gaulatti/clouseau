@@ -302,7 +302,9 @@ async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, fi
 async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha, installation = null}) {
   // Under the protected `binding: "diff"` (never for an installation) the receipt is bound to the change: the signed diff must
   // equal the pull request's, and the signed revisions take the place of the live ones for every revision check below. The
-  // signed full-file sources are then not compared with the live repository; they are the record of what was reviewed.
+  // signed full-file sources are then not compared with the live repository; they are the record of what was reviewed. The
+  // repository's own contracts (`readme`, `repository_policy`) are the exception: they are what the change was judged
+  // against, so each must still equal its file at the live base, as the declared recipe must (verification-attestation.cjs).
   const diff = !installation && config.local_review?.binding === 'diff';
   const revisions = diff ? {base: snapshot.base_sha, head: snapshot.head_sha} : {base: pr.base.sha, head: pr.head.sha};
   reject(files.length === pr.changed_files && files.length > 0 &&
@@ -364,7 +366,15 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     const contract = (source.ref === revisions.base || (installation && source.ref === pr.head.sha)) && [config.readme, config.repository_policy].includes(source.path);
     reject(source.authority === (contract ? 'trusted' : 'untrusted') &&
       source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted', 'source');
-    if (diff) continue;
+    if (diff) {
+      if (contract) {
+        const {data} = await github.rest.repos.getContent({...repo, path: source.path, ref: pr.base.sha});
+        reject(data.type === 'symlink' ? data.target === source.content :
+          data.encoding === 'base64' && Buffer.from(data.content, 'base64').toString('utf8') === source.content,
+        'repository contract changed on the live base', 'source', {file: source.path});
+      }
+      continue;
+    }
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
     const {data} = await github.rest.repos.getContent({...sourceRepo, path: source.path, ref: source.ref});
     // The Contents API describes a symlink by its target; `git show` yields the same bytes locally.

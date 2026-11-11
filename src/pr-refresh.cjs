@@ -66,6 +66,15 @@ function bindsDiff(directory, remoteBase) {
   }
 }
 
+// The base moved only in files the pull request does not change: merging it then leaves every changed file's patch, and so
+// the diff a `binding: "diff"` receipt covers, exactly as it was. Renames count by both paths.
+function baseLeavesDiff(directory, remoteBase) {
+  const base = git(directory, ['merge-base', 'HEAD', remoteBase]).trim();
+  const names = range => new Set(git(directory, ['diff', '--name-only', '--no-renames', range]).split('\n').filter(Boolean));
+  const theirs = names(`${base}..${remoteBase}`);
+  return [...names(`${base}..HEAD`)].every(name => !theirs.has(name));
+}
+
 function merge({directory, remoteBase, branch}) {
   try {
     git(directory, ['merge-tree', '--write-tree', '--name-only', 'HEAD', remoteBase]);
@@ -133,13 +142,18 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       }
       renewal = judged;
       process.stderr.write(`Renewing the local review receipt of pull request ${number} (cause: ${renewal.cause}): ${renewal.sentence}\n`);
-    } else if (bindsDiff(directory, remoteBase)) {
+    } else if (bindsDiff(directory, remoteBase) && baseLeavesDiff(directory, remoteBase)) {
       // Under the protected `binding: "diff"` a receipt whose diff still equals the pull request's stands after a base move, as
-      // CI judges it: nothing is merged, reviewed or pushed. Updating the branch (GitHub's update or a plain merge) keeps it.
+      // CI judges it. When the base moved only outside the changed files, the merge provably keeps that diff, so the branch is
+      // brought up to date (a controller-managed merge needs it strictly ahead of the base) with no review and no new receipt.
       const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
       if (judged.usable) {
-        return {status: 'up_to_date', pull_request: number, head_sha: head, base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: false,
-          note: `The local review receipt of pull request ${number} still covers its diff (protected binding: diff), so CI accepts it after the base moved; nothing to refresh. Update the branch if branch protection requires it: the receipt keeps covering a merge that leaves the diff unchanged`};
+        merge({directory, remoteBase, branch});
+        // A plain push, never forced: a pull request that moved meanwhile rejects it and nothing on GitHub changes.
+        git(directory, ['push', 'origin', `HEAD:refs/heads/${pull.ref}`]);
+        return {status: 'updated', pull_request: number, previous_head_sha: head, head_sha: git(directory, ['rev-parse', 'HEAD']).trim(),
+          base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: true,
+          note: `Merged ${remoteBase} into pull request ${number} and pushed it. Its local review receipt still covers the unchanged diff (protected binding: diff); nothing was reviewed or published`};
       }
     }
   }
@@ -183,4 +197,4 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   return {...result, ...context, status: 'refreshed', pushed: true, ...fields};
 }
 
-module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff};
+module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff, baseLeavesDiff};

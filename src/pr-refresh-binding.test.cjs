@@ -9,7 +9,7 @@ const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {initializeIdentity, main} = require('./local-cli.cjs');
 const crypto = require('node:crypto');
-const {refreshPull, withMarker, bindsDiff} = require('./pr-refresh.cjs');
+const {refreshPull, withMarker, bindsDiff, baseLeavesDiff} = require('./pr-refresh.cjs');
 const {receiptStanding, githubReader} = require('./receipt-standing.cjs');
 const {issueReceipt} = require('./local-receipt.cjs');
 
@@ -137,21 +137,39 @@ function signedFixture(t, localReview = {}) {
   return {state, config, calls, runtime, refresh};
 }
 
-test('under binding "diff" a receipt whose diff is unchanged after a base move is up to date: nothing is merged, reviewed or pushed', async () => {
+test('under binding "diff" a base move outside the changed files is merged and pushed with no review; one inside them is reviewed', async () => {
   const diff = {local_review: {binding: 'diff'}};
   await pullRepository(async f => {
     const before = f.head();
-    f.advance('docs.md', 'moved\n');
+    const moved = f.advance('docs.md', 'moved\n');
+    git(f.work, ['fetch', '-q', 'origin', 'main']);
+    assert.equal(baseLeavesDiff(f.work, 'origin/main'), true);
     const covered = {...stub({standing: {applicable: true, usable: true, binding: 'diff'}}), execute: f.execute, available: () => true};
     const result = await refreshPull(args(f), covered);
-    assert.equal(result.status, 'up_to_date'); assert.equal(result.pushed, false);
-    assert.match(result.note, /still covers its diff \(protected binding: diff\)/);
-    assert.deepEqual([...covered.seen.reviews, ...covered.seen.publishes], []); unchanged(f, before);
+    assert.equal(result.status, 'updated', JSON.stringify(result)); assert.equal(result.pushed, true); assert.equal(result.previous_head_sha, before);
+    assert.match(result.note, /still covers the unchanged diff \(protected binding: diff\); nothing was reviewed or published/);
+    assert.deepEqual([...covered.seen.reviews, ...covered.seen.publishes], []);
+    assert.equal(f.remoteHead(), f.head(), 'the merge is pushed'); assert.equal(result.head_sha, f.head());
+    assert.equal(git(f.work, ['merge-base', '--is-ancestor', moved, 'HEAD']) !== null, true, 'the branch now contains the moved base');
     assert.equal(bindsDiff(f.work, 'origin/main'), true);
+    f.pull.head = f.head();
     // A receipt that does not cover the diff: the ordinary merge and review.
+    f.advance('docs.md', 'moved again\n');
     const voided = {...stub({head: () => f.head(), standing: {applicable: true, usable: false, cause: 'receipt_source', sentence: 'x'}}), execute: f.execute, available: () => true};
     assert.equal((await refreshPull(args(f), voided)).status, 'refreshed'); assert.equal(voided.seen.reviews.length, 1);
   }, {ciConfig: diff});
+  // The base moves inside a changed file, on lines the pull request does not touch: the merge is clean, but the patch's context
+  // may change, so the merge is reviewed as before even though the receipt still stands for the unmerged head.
+  const long = Array.from({length: 20}, (_, index) => `const line${index} = ${index};`).join('\n') + '\n';
+  await pullRepository(async f => {
+    f.write(f.work, 'src/long.js', long.replace('line1 = 1', 'line1 = 101')); f.commit(f.work, 'fix: change an early line');
+    git(f.work, ['push', '-q', 'origin', 'feature']); f.pull.head = f.head();
+    f.advance('src/long.js', long.replace('line18 = 18', 'line18 = 118'));
+    git(f.work, ['fetch', '-q', 'origin', 'main']);
+    assert.equal(baseLeavesDiff(f.work, 'origin/main'), false);
+    const covered = {...stub({head: () => f.head(), standing: {applicable: true, usable: true, binding: 'diff'}}), execute: f.execute, available: () => true};
+    assert.equal((await refreshPull(args(f), covered)).status, 'refreshed'); assert.equal(covered.seen.reviews.length, 1);
+  }, {ciConfig: diff, files: {'src/long.js': long}});
   await pullRepository(async f => {
     assert.equal(bindsDiff(f.work, 'origin/main'), false);
   });
@@ -167,10 +185,13 @@ test('through the command under binding "diff": the receipt stands across a base
     f.pull.body = `Body.\n\n${published.marker}\n`;
     const asked = calls.length;
     const before = f.head();
-    // The base moves elsewhere: the receipt still covers the diff, and refresh changes nothing.
+    // The base moves elsewhere: refresh merges it and pushes with no review, and the receipt keeps covering the diff.
     f.advance('docs.md', 'moved\n');
     const moved = await refresh(f, {request: requestFile});
-    assert.equal(moved.status, 'up_to_date', JSON.stringify(moved)); assert.equal(f.head(), before); assert.equal(calls.length, asked);
+    assert.equal(moved.status, 'updated', JSON.stringify(moved)); assert.notEqual(f.head(), before); assert.equal(calls.length, asked);
+    assert.equal(f.remoteHead(), f.head()); f.pull.head = f.head();
+    const stands = await refresh(f, {request: requestFile});
+    assert.equal(stands.status, 'up_to_date', JSON.stringify(stands)); assert.match(stands.note, /still verifies/); assert.equal(calls.length, asked);
     // GitHub updates the branch with a plain merge that leaves the diff unchanged: still up to date, as CI will judge it.
     git(f.work, ['fetch', '-q', 'origin', 'main']); git(f.work, ['merge', '-q', '--no-ff', '--no-edit', 'origin/main']);
     git(f.work, ['push', '-q', 'origin', 'HEAD:refs/heads/feature']); f.pull.head = f.head();
