@@ -118,9 +118,8 @@ against its frozen, checked-out source. A receipt cannot supply its own accepted
 digest. No version-label or implicit cross-version compatibility is supported.
 
 A matching eligible signature reuses the independent local review with zero CI
-AI calls. Current source, base, policy and configuration checks still apply; tests
-and exact 100% line and branch coverage run in CI unless the receipt attests the
-declared verification. Review-control changes require a separate, current-head owner purpose
+AI calls. Independent tests, exact 100% line and branch coverage, current source,
+base, policy and configuration checks remain mandatory. Review-control changes require a separate, current-head owner purpose
 confirmation. The receipt supplies the scored review only; CI records and
 revalidates that separate authorization before approval. Missing receipts in optional mode use
 the ordinary CI AI reviewer. So does any receipt that does not verify in every
