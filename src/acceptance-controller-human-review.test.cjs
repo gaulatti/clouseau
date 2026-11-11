@@ -12,6 +12,7 @@ const {digest} = require('./acceptance.cjs');
 const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
+const {withFinding} = require('../test/local-review-fixture.cjs');
 const {describe} = require('./receipt-rejection.cjs');
 // The one notice a run reports for an ignored receipt: its header names the cause class and its lead says what the run did.
 const isNotice = (reason, mode = 'optional') => line => line.startsWith(`Local review receipt not used (cause: \`receipt_${reason}\`): `) &&
@@ -130,11 +131,8 @@ for (const setting of [undefined, 'signed']) test(`human_review=${setting}: a si
     return issueReceipt({record: copy, privateKey: keys.privateKey.export({type: 'pkcs8', format: 'pem'}), keyId: 'fixture', issuer: 'fixture-runner',
       reviewerSha: local.reviewer_sha, humanReview: true});
   };
-  // Findings at or above the threshold: one non-integrity gate violated, so the recalculated decision is repair_required.
-  const findings = copy => {
-    copy.result.reviews[0].report.gates.find(gate => gate.name !== 'test_integrity').state = 'violated';
-    for (const decision of ['repair_required', 'review_incomplete']) {copy.result.decision = decision; try {reviewDecision(copy); return;} catch { /* next */ }}
-  };
+  // A finding at or above the threshold with every gate satisfied, so the recalculated decision is repair_required.
+  const findings = copy => {Object.assign(copy, withFinding(copy));};
   const trusted = {...config, local_review: local};
   let served = sign(trusted, findings);
   assert.equal(served.payload.record.result.decision, 'repair_required');

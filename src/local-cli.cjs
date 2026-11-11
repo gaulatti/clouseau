@@ -9,7 +9,7 @@ const {digest} = require('./acceptance.cjs');
 const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
 const {askHarness, assertHarness} = require('./local-harness.cjs');
-const {issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
+const {signable, issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
@@ -406,10 +406,11 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   fs.mkdirSync(path.dirname(output), {recursive: true});
   fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
   let receipt = null;
-  // With the protected `human_review: "signed"` a review whose findings send it to a maintainer is signed as well (its
-  // verification passed: with an identity, anything else stopped before review). Integrity and incomplete reviews never are.
+  // With the protected `human_review: "signed"` a review whose findings alone send it to a maintainer is signed as well (its
+  // verification passed: with an identity, anything else stopped before review). Integrity violations, incomplete reviews and
+  // any violated or unresolved gate never are: the same rule `issueReceipt` enforces.
   const humanReview = identity !== null && ciConfig.local_review.human_review === 'signed';
-  if ((result.decision === 'auto_approve' || (humanReview && result.decision === 'repair_required')) && identity) {
+  if (identity && signable(result.decision, humanReview, chunking ? reviews : result.reviews)) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,

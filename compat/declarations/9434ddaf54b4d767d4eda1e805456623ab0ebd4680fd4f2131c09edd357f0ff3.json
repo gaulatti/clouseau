@@ -10,12 +10,12 @@
     {
       "path": "src/local-cli.cjs",
       "mode": 0,
-      "sha256": "499e4d07c2f1b8f6a4dac8feaafe4ae0aef604b54b23e9cb49c2fe37ff090d22"
+      "sha256": "452f7026270dc111cf88bd3912ee13b454333772cbfe40e53053a7ed33c4c91c"
     },
     {
       "path": "src/local-receipt.cjs",
       "mode": 0,
-      "sha256": "a874a9143824736132f77d447240dff26ed336b4365e9ae92cb1cca389e23c04"
+      "sha256": "ed333ceb6c08184be5077f16af11d27902166bcbdfae54b60c133d301f90b184"
     },
     {
       "path": "src/pr-refresh.cjs",

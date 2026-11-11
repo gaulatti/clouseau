@@ -2,7 +2,7 @@
 // Receipt signing and verification under the protected local_review.human_review setting. Kept apart from local-receipt.test.cjs so a change here does not resend that file as review evidence.
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
-const {fixture} = require('../test/local-review-fixture.cjs');
+const {fixture, withFinding} = require('../test/local-review-fixture.cjs');
 const {issueReceipt, verifyReceipt, validateTrust, reviewDecision, marker, loadReceipt, verifySources,
   screenReceipt, screenSources, attestable} = require('./local-receipt.cjs');
 const {ChunkedRecordError} = require('./chunked-record.cjs');
@@ -29,8 +29,17 @@ test('human_review "signed": a review that requires a human is signed only with 
   const f = await fixture();
   assert.doesNotThrow(() => validateTrust({...f.trust, human_review: 'signed'}));
   for (const value of ['on', '', true, null]) assert.throws(() => validateTrust({...f.trust, human_review: value}), /human_review must be "signed"/);
-  const findings = withDecision(f.record, 'other');
+  const findings = withFinding(f.record);
   assert.equal(findings.result.decision, 'repair_required');
+  // A violated or unresolved gate also yields repair_required, but no maintainer approval clears it, so it is never signed.
+  const gated = withDecision(f.record, 'other');
+  assert.equal(gated.result.decision, 'repair_required');
+  assert.throws(() => issueReceipt({...f.issue, record: gated, humanReview: true}), /only a passing review can be signed/);
+  for (const state of ['violated', 'unresolved']) {
+    const both = withFinding(f.record, copy => {copy.result.reviews[1].report.gates.find(item => item.name === 'review_completeness').state = state;});
+    assert.equal(both.result.decision, 'repair_required');
+    assert.throws(() => issueReceipt({...f.issue, record: both, humanReview: true}), /only a passing review can be signed/, state);
+  }
   const integrity = withDecision(f.record, 'integrity');
   assert.equal(integrity.result.decision, 'blocked_integrity');
   // Without the opt-in nothing but a pass is signed; with it, findings are, an integrity violation never is.

@@ -65,8 +65,14 @@ function validateTrust(trust) {
 }
 
 // The decisions a receipt may carry: a pass, and only with the protected opt-in, findings that a maintainer may clear.
+// A maintainer clears findings only: `repair_required` also results from a violated or unresolved gate (scope, security,
+// compatibility, completeness), which no owner confirmation waives, so every gate of both reviews must be satisfied or
+// inapplicable. A review without a report to read is never signable this way.
 const HUMAN_REVIEW = 'repair_required';
-const signable = (decision, humanReview) => decision === 'auto_approve' || (humanReview === true && decision === HUMAN_REVIEW);
+const gatesClear = reviews => Array.isArray(reviews) && reviews.length > 0 && reviews.every(item =>
+  Array.isArray(item?.report?.gates) && item.report.gates.every(gate => ['satisfied', 'inapplicable'].includes(gate.state)));
+const signable = (decision, humanReview, reviews) => decision === 'auto_approve' ||
+  (humanReview === true && decision === HUMAN_REVIEW && gatesClear(reviews));
 
 // A record without `partition` takes the unchanged path below. A chunked record is verified by the chunked verifier
 // (new shape if present, else current); it only supplies the merged reviews, and the single derivation continues here.
@@ -105,7 +111,8 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation, humanReview = false}) {
   // With `humanReview` (the protected `human_review: "signed"`) a review with findings that require a human is signed too.
   // Integrity violations and incomplete reviews never are; failed verification never reaches signing (verification-attestation.cjs).
-  requireReceipt(signable(reviewDecision(record, {chunked}).decision, humanReview), 'only a passing review can be signed');
+  const derived = reviewDecision(record, {chunked});
+  requireReceipt(signable(derived.decision, humanReview, derived.reviews), 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
   'invalid runner revision, challenge or lifetime');
@@ -196,7 +203,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     (!reviewerSha || p.reviewer_sha === reviewerSha) && p.reviewer_digest === reviewerDigest &&
     (engine || trust.reviewer_digest === reviewerDigest);
   if (!engineMatches) {
-    reject(signable(record.result.decision, humanReview), 'review did not pass', 'not_passing');
+    reject(signable(record.result.decision, humanReview, record.result.reviews), 'review did not pass', 'not_passing');
     // A different revision is accepted only when the protected engine that is running vouches for the receipt's review
     // semantics (`compatible` reads nothing but that engine's own checkout). Without a vouching decision, or for a
     // fixed-digest trust, the exact comparison above stands and the receipt is ignored.
@@ -215,7 +222,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const result = reviewDecision(record, {chunked: chunkedOptions});
   // Only a caller that asked for it (the assessment and the gate of a repository with `human_review: "signed"`) ever receives
   // a signed non-pass, marked `human_review`; every other caller refuses it as before, so it can never stand for a pass.
-  reject(signable(result.decision, humanReview), 'review did not pass', 'not_passing');
+  reject(signable(result.decision, humanReview, result.reviews), 'review did not pass', 'not_passing');
   return {record, ...result, ...(result.decision === HUMAN_REVIEW ? {human_review: true} : {}), attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
 }
 
@@ -427,4 +434,4 @@ async function screenSources(options) {
   }
 }
 
-module.exports = {screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, validateAttest, attestable, AUTHOR, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {signable, screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, validateAttest, attestable, AUTHOR, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};

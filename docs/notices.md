@@ -142,7 +142,7 @@ When a maintainer's second opinion is required, the comment and the check summar
 | `intent_incomplete_patch` | Reduce the change so GitHub returns a patch for every file, or review the withheld files by hand. |
 | `intent_owner_decision` | Read the review above; if it is correct, have a maintainer confirm the change belongs in this repository. |
 
-Under the protected `local_review.human_review: "signed"`, a receipt for a change to protected review controls (instead of `receipt_protected_controls`) reaches this request until a maintainer's `/approve-intent` of the exact head, and so does a signed local review whose findings require a human: the review above lists its signed findings, and a maintainer's `/approve-intent` (or approving review) of the exact head clears them, or the author repairs and reviews again. A failed test run, a failed coverage gate or a test-integrity violation never reaches it ([local review](local-review.md#signing-a-review-that-requires-a-human-opt-in)).
+Under the protected `local_review.human_review: "signed"`, a receipt for a change to protected review controls (instead of `receipt_protected_controls`) reaches this request until a maintainer's `/approve-intent` of the exact head, and so does a signed local review whose findings require a human: the review above lists its signed findings, and a maintainer's `/approve-intent` (or approving review) of the exact head clears them, or the author repairs and reviews again. A failed test run, a failed coverage gate, a test-integrity violation or any other violated or unresolved review gate never reaches it ([local review](local-review.md#signing-a-review-that-requires-a-human-opt-in)).
 
 ## Gate stopped
 

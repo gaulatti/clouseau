@@ -698,13 +698,14 @@ outcome is signed and CI enforces it instead of repeating it:
 | --- | --- | --- |
 | tests or the coverage gate fail | nothing (no review is run) | nothing to reuse; the author fixes |
 | test integrity violated (`blocked_integrity`) | nothing | nothing to reuse; the author fixes |
-| findings at or above the threshold (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer approves the exact head (`/approve-intent <head sha>` or an approving review of that head) |
+| another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing | nothing to reuse; CI reviews the change itself |
+| findings at or above the threshold, every gate satisfied (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer approves the exact head (`/approve-intent <head sha>` or an approving review of that head) |
 | a change the fixed rules send to a human (protected review controls, sensitive paths) | the passing review | the same `owner_decision` hold, instead of today's `receipt_protected_controls` |
 | clean | the passing review | approve and merge as today |
 
 The hold is the existing owner-decision path; there is no second approval mechanism. A maintainer's approval of the exact head
-may clear findings at or above the threshold; it never clears a failed test run, a failed coverage gate or a test-integrity
-violation, which sign nothing and must be fixed. The pull request shows the verdict and its findings from the signed record,
+may clear findings at or above the threshold; it never clears a failed test run, a failed coverage gate, a test-integrity
+violation or any other violated or unresolved gate, which sign nothing and must be fixed. The pull request shows the verdict and its findings from the signed record,
 and CI makes no AI call. A signed non-pass is never acceptable as a pass: every verifier refuses it as `not_passing` unless it
 is the assessment or the gate of a repository with this setting, which turn it into the hold; `operation: attested` never
 accepts it, so CI runs the tests; a claimed `auto_approve` for it is a decision mismatch. `clouseau refresh` treats it as up to

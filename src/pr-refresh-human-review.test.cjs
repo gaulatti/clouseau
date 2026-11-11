@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {git} = require('./local-git.cjs');
-const {digest} = require('./acceptance.cjs');
+const {digest, FACTORS} = require('./acceptance.cjs');
 const {initializeIdentity, main} = require('./local-cli.cjs');
 const crypto = require('node:crypto');
 const {refreshPull, withMarker} = require('./pr-refresh.cjs');
@@ -122,24 +122,36 @@ function signedFixture(t, localReview = {}) {
   return {state, config, calls, runtime, refresh};
 }
 
-test('under human_review "signed" a review with findings is signed, stands for refresh, and is never reviewed again by it; without it nothing is signed', async t => {
-  const violating = calls => {
+test('under human_review "signed" a review with findings is signed, stands for refresh, and is never reviewed again by it; without it, or with a violated gate, nothing is signed', async t => {
+  // The examiner reports one defect (graded at the top level, so it blocks), or violates a gate with no finding.
+  const failing = (calls, kind) => {
     const pass = fakeHarness(calls);
     return async task => {
-      if (task.phase !== 'investigation') return pass(task);
+      if (task.phase !== 'investigation' || task.role !== 'examiner') return pass(task);
       const answer = await pass(task);
-      const gate = answer.value.report.gates.find(item => item.name !== 'test_integrity'); gate.state = 'violated';
-      return {...answer, value: answer.value, provenance: {...answer.provenance, response_digest: digest(answer.value)}};
+      const {report} = answer.value;
+      if (kind === 'gate') report.gates.find(item => item.name !== 'test_integrity').state = 'violated';
+      else {
+        const [anchor] = report.accounting[0].evidence;
+        report.findings.push({id: 'fictional-defect', title: 'Fictional defect', anchor,
+          cause: 'The changed path no longer preserves the accepted contract.', trigger: 'A fictional input.', consequence: 'A fictional regression.',
+          obligation: 'Restore the accepted contract.', evidence: [anchor],
+          factors: Object.fromEntries(FACTORS.defect.map(factor => [factor, {evidence: [anchor], reason: 'Established by the cited source.'}])),
+          blast_radius: 1, opportunity: {mechanical: false, beneficial: false, within_scope: false, verified: false},
+          repair_paths: [report.accounting[0].path]});
+      }
+      return {...answer, provenance: {...answer.provenance, response_digest: digest(answer.value)}};
     };
   };
-  for (const humanReview of [true, false]) {
+  for (const [humanReview, kind] of [[true, 'finding'], [false, 'finding'], [true, 'gate']]) {
     const {runtime, refresh, calls, config} = signedFixture(t, humanReview ? {human_review: 'signed'} : {});
     await pullRepository(async f => {
       const requestFile = request(f.root);
-      const asked = {...runtime(f), ask: violating(calls)};
+      const asked = {...runtime(f), ask: failing(calls, kind)};
       const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked);
       assert.equal(first.decision, 'repair_required');
       if (!humanReview) {assert.equal(first.receipt, null, 'without the opt-in a review with findings signs nothing'); return;}
+      if (kind === 'gate') {assert.equal(first.receipt, null, 'a violated gate is never signed, whatever the setting'); return;}
       assert.ok(first.receipt, 'with the opt-in the review with findings is signed');
       const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], asked);
       f.pull.body = `Body.\n\n${published.marker}\n`;
