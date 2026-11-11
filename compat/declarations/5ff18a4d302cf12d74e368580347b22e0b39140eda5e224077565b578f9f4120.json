@@ -5,7 +5,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "3b863266ebcbda4c898ef4ddb90312745afdefd7621b2f9337f7576021e5528e"
+      "sha256": "c7230a2d2924625ae5a6bd60d27c5831b889b02348638806a522a253ebe075ac"
     },
     {
       "path": "src/config.cjs",
@@ -21,6 +21,11 @@
       "path": "src/policy.cjs",
       "mode": 0,
       "sha256": "4021c22d4b6f99950884191a1a8856ebbfbedeaec0e0609b9128fb6c8f33cffb"
+    },
+    {
+      "path": "src/receipt-rejection.cjs",
+      "mode": 0,
+      "sha256": "214097ddb240bd05a551b9d712d9a78714e17d1a8fb64f1b6b93a592bb0c9fe9"
     }
   ]
 }

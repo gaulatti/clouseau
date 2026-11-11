@@ -13,6 +13,7 @@ const {verifyRecord, numberFor, decided} = require('./acceptance-controller.cjs'
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
 const {describe} = require('./receipt-rejection.cjs');
+const {body, NEXT_STEPS} = require('./incomplete.cjs');
 // The one notice a run reports for an ignored receipt: its header names the cause class and its lead says what the run did.
 const isNotice = (reason, mode = 'optional') => line => line.startsWith(`Local review receipt not used (cause: \`receipt_${reason}\`): `) &&
   line.includes(describe(reason, {mode}).lead) && /\n\n1\. /.test(line);
@@ -126,7 +127,8 @@ for (const setting of [undefined, 'automatic', 'manual']) test(`hosted_review=${
   const original = f.github.rest.repos.getContent;
   f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' ? {data: {
     encoding: 'base64', content: Buffer.from(JSON.stringify(bundle)).toString('base64'), size: JSON.stringify(bundle).length}} : original(args);
-  const permissions = {maintainer: 'write', reader: 'read'};
+  // The bot is given write permission so that only its account type can make its request not count.
+  const permissions = {maintainer: 'write', reader: 'read', 'github-actions[bot]': 'write'};
   f.github.rest.repos.getCollaboratorPermissionLevel = async ({username}) => ({data: {permission: permissions[username] ?? 'none'}});
   const policy = createPolicy(trusted);
   const marker = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
@@ -152,6 +154,9 @@ for (const setting of [undefined, 'automatic', 'manual']) test(`hosted_review=${
   const held = ({result, providerCalls}) => {
     assert.equal(result.decision, 'review_incomplete'); assert.equal(result.cause, 'hosted_review_manual'); assert.equal(providerCalls, 0);
     assert.ok(result.reason.includes(`\`/hosted-review ${head}\``));
+    // The notice never claims that CI reviewed the change: it names the manual setting instead.
+    const notice = body(result, 'u');
+    assert.ok(!notice.includes('no action is needed')); assert.ok(notice.includes('only when a maintainer comments `/hosted-review <head sha>`'));
   };
   const reviewed = ({result, providerCalls}) => {assert.equal(result.decision, 'auto_approve', result.reason); assert.ok(providerCalls > 0);};
   // No request, and requests that do not count: another head, a reader, a bot, a near miss.
@@ -184,7 +189,6 @@ test('the protected hosted_review setting accepts only "automatic" or "manual", 
   for (const value of [undefined, 'automatic', 'manual']) assert.doesNotThrow(() => validateConfig({...config, hosted_review: value}));
   for (const value of ['Manual', '', null, true, ['manual']]) assert.throws(() => validateConfig({...config, hosted_review: value}), /hosted review mode/);
   assert.throws(() => validateConfig({...require('../test/fixtures/config.json'), hosted_review: 'manual'}), /hosted review mode/);
-  const {body, NEXT_STEPS} = require('./incomplete.cjs');
   assert.ok(NEXT_STEPS.hosted_review_manual.some(step => step.includes('`/hosted-review {head}`')));
   const text = body({number: 4, head_sha: 'a'.repeat(40), decision: 'review_incomplete', cause: 'hosted_review_manual', reason: 'Held.'}, 'u');
   assert.ok(text.includes('**Cause:** `hosted_review_manual`')); assert.ok(text.includes(`\`/hosted-review ${'a'.repeat(40)}\``));

@@ -185,7 +185,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         configDigest: digest(config), policyDigest: policyDigest()});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;
-      const mode = receiptOnly || config.local_review?.mode === 'required' ? 'required' : 'optional';
+      const mode = receiptOnly || config.local_review?.mode === 'required' ? 'required' : config.hosted_review === 'manual' ? 'manual' : 'optional';
       const ignore = (reason, detail) => {
         receiptRef = null;
         identity.receipt_notice = reason;

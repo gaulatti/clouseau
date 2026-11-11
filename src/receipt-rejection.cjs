@@ -132,6 +132,8 @@ const LEAD = Object.freeze({
   required: 'This repository requires a valid receipt, so nothing is approved until you do the following.',
   receipt_only: 'This receipt-only run did not review the change itself. Do the following, or remove the `clouseau-local-review:` marker from the description so the CI AI reviewer runs.',
   optional: 'CI reviewed this change itself, so no action is needed. To use a receipt instead, do the following.',
+  // Protected `hosted_review: "manual"`: CI reviews the change itself only on a maintainer's exact-head request.
+  manual: 'This repository runs the CI AI review only when a maintainer comments `/hosted-review <head sha>`. To use a receipt instead, do the following.',
 });
 
 class ReceiptRejected extends Error {
@@ -158,13 +160,14 @@ function describe(reason, {mode = 'optional', detail: raw, number = 0} = {}) {
 
 const numbered = steps => steps.map((step, index) => `${index + 1}. ${step}`).join('\n');
 
-// The fixed notice for a class. `mode` is `required`, `receipt_only` or `optional`.
+// The fixed notice for a class. `mode` is `required`, `receipt_only`, `manual` or `optional`.
 function noticeText(reason, context = {}) {
   const found = describe(reason, context);
   return `Local review receipt not used (cause: \`${found.code}\`): ${found.sentence}. ${found.lead}\n\n${numbered(found.steps)}`;
 }
 
-const modeOf = cause => cause === 'local_receipt_required' ? 'required' : cause === 'local_receipt_unusable' ? 'receipt_only' : 'optional';
+const modeOf = cause => cause === 'local_receipt_required' ? 'required' : cause === 'local_receipt_unusable' ? 'receipt_only' :
+  cause === 'hosted_review_manual' ? 'manual' : 'optional';
 
 // The value comes from an earlier job's output, so only a known class is ever rendered.
 function noticeLine(assessment) {

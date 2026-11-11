@@ -18,6 +18,7 @@ A receipt named by the `clouseau-local-review:` marker in the pull request descr
 | --- | --- |
 | Local review is required | Nothing is approved until you publish a valid receipt. Shown as an incomplete-review comment with cause `local_receipt_required`. |
 | Receipt-only route (a marker is present, no provider key) | This run did not review the change itself. Publish a valid receipt, or remove the marker so the CI AI reviewer runs. Cause `local_receipt_unusable`. |
+| Protected `hosted_review: "manual"`, with no maintainer request for this head | CI did not review the change. Publish a valid receipt, or a maintainer comments `/hosted-review <head sha>`. Cause `hosted_review_manual`. |
 | Anything else | CI reviewed the change itself; no action is needed. A paragraph at the end of the review comment names the cause. |
 
 The notice reads `Local review receipt not used (cause: \`receipt_<class>\`): <sentence>`, and the incomplete-review comment shows it as `**Cause:** \`local_receipt_required\` (\`receipt_<class>\`)`.
