@@ -206,3 +206,17 @@ test('through the command under binding "diff": the receipt stands across a base
     assert.equal(changed.status, 'renewed', JSON.stringify(changed)); assert.match(changed.cause, /receipt_source/); assert.ok(calls.length > asked);
   }, {ciConfig: config});
 });
+
+test('the local normalized diff names a rename by both paths and a change that shows no text by an empty patch', async () => {
+  await pullRepository(async f => {
+    const base = git(f.work, ['merge-base', 'HEAD', 'origin/main']).trim();
+    const before = localDiff(f.work, base, 'HEAD');
+    git(f.work, ['mv', 'src/unrelated.js', 'src/renamed.js']); f.write(f.work, 'src/empty.js', ''); f.commit(f.work, 'chore: rename and add an empty file');
+    const after = localDiff(f.work, base, 'HEAD');
+    assert.notEqual(after, before);
+    // The same revisions give the same digest, and the rename's previous path counts.
+    assert.equal(localDiff(f.work, base, 'HEAD'), after);
+    git(f.work, ['mv', 'src/renamed.js', 'src/elsewhere.js']); f.commit(f.work, 'chore: rename again');
+    assert.notEqual(localDiff(f.work, base, 'HEAD'), after);
+  });
+});

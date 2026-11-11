@@ -79,6 +79,7 @@ test('under binding "diff" any change to the diff, another lineage or incomplete
   await voided({live: [file({patch: undefined})]});
   await voided({earlier: [file({patch: ''})]});
   await voided({earlier: []});
+  await voided({earlier: null});
   await voided({earlier: Array.from({length: 300}, (_, index) => file({filename: `src/f${index}.js`}))});
   await voided({failure: {on: `${OLD}..${HEAD}`, error: Object.assign(new Error('Not Found'), {status: 404})}});
   await voided({failure: {on: `${BASE}..${OLD}`, error: Object.assign(new Error('Unprocessable'), {status: 422})}});
