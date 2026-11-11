@@ -479,8 +479,10 @@ Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`.
 1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, the receipt in the
    pull request body decides: one that still verifies for this head ends the command with `up_to_date`, any other is
    [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch). Under the
-   protected `binding: "diff"`, when the pull request does not contain the base tip, a receipt that still covers its diff ends
-   the command with `up_to_date` too, before anything is merged; otherwise the steps continue;
+   protected `binding: "diff"`, when the pull request does not contain the base tip and its receipt still covers its diff, the
+   base is merged and the normalized diff recomputed; if it is unchanged the merge is pushed with no review and the command
+   ends with `updated` (see [Binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)); otherwise the steps
+   continue on that merge;
 2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
    `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
 3. run the ordinary local review of the head (`clouseau review`, including its verification) with the answers reused as
