@@ -80,18 +80,26 @@ function evaluate({directory, config, technical, ciConfig, baseSha, verify, exec
 }
 
 // CI: does this pull request carry a receipt that is valid in every respect and attests verification? Never throws on a
-// receipt that does not verify; that is simply `false` (the repository then runs its checks itself).
-async function receiptAttests({github, repo, pr, config, engine}) {
-  if (!config.local_review) return false;
+// receipt that does not verify; that is simply `false` (the repository then runs its checks itself). With `explain`, the
+// answer is `{attests, rejected, detail}`: `rejected` is the fixed receipt class (receipt-rejection.cjs) when a claimed
+// receipt was refused, else null, and `detail` holds only the values that class may show. The decision is the same.
+async function receiptAttests(options) {
+  const verdict = await attestationVerdict(options);
+  return options.explain ? verdict : verdict.attests;
+}
+
+async function attestationVerdict({github, repo, pr, config, engine}) {
+  const no = (rejected = null, detail = {}) => ({attests: false, rejected, detail});
+  if (!config.local_review) return no();
   const receipts = require('./local-receipt.cjs');
   const {digest} = require('./acceptance.cjs');
   const {policyDigest} = require('./acceptance-controller.cjs');
   const screened = await receipts.screenReceipt({github, repo, pr, engine, trust: config.local_review, configDigest: digest(config), policyDigest: policyDigest()});
-  if (!screened.ref) return false;
+  if (!screened.ref) return no(screened.rejected ?? null, screened.detail ?? {});
   const files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: pr.number, per_page: 100});
   const rejected = await receipts.screenSources({github, repo, pr, snapshot: screened.verified.record.snapshot, config, files,
     reviewerSha: screened.bundle.payload.reviewer_sha});
-  if (rejected) return false;
+  if (rejected) return no(rejected);
   const {sources} = screened.verified.record.snapshot;
   // The attested recipe must be the accepted base's own `.clouseau-local.json`, which screenSources bound to the base revision.
   const recipe = Object.values(sources).find(item => item.path === '.clouseau-local.json' && item.ref === pr.base.sha);
@@ -100,8 +108,8 @@ async function receiptAttests({github, repo, pr, config, engine}) {
   try {
     technical = JSON.parse(sources.verification.content);
     accepted = digest(JSON.parse(recipe.content));
-  } catch { return false; }
-  return attestationOf(technical) !== null && technical.local_config_digest === accepted;
+  } catch { return no(); }
+  return {attests: attestationOf(technical) !== null && technical.local_config_digest === accepted, rejected: null, detail: {}};
 }
 
 // The decision the `attested` action operation publishes for a workflow's `if:` conditions.
