@@ -98,6 +98,19 @@ A provider that refuses a request is told apart by its status: 401 or 403 is `pr
 | `verification_pending_finalizing` | Verification just finished and its results are being recorded; nothing is needed. The review runs again automatically. |
 | `verification_pending_unknown` | Verification has not reported a final state; nothing is needed. The review runs again automatically when verification completes. |
 
+## Skipped verification step without an attesting receipt
+
+When the verification job succeeds with a required step `skipped` (a workflow gated it on `operation: attested`) and the engine,
+re-checking the receipt in the trusted workflow, finds that it no longer attests the verification, the verification counts as
+failed (a `blocked_technical` decision) with the reason `Required verification step "NAME" concluded skipped`. When a receipt was claimed and refused,
+the reason continues with its receipt class and the values that class may show, for example:
+
+> … concluded skipped: the pull request's local review receipt no longer attests the verification (cause: `receipt_expired`: it is expired or not yet valid (it expires `2026-11-01T00:00:00.000Z`)). Re-run the verification workflow for this head so CI runs the step itself, or renew the receipt first with `clouseau refresh --pr PR_NUMBER` so the step can be skipped again.
+
+Any other class names itself the same way and ends with the one step: re-run the verification workflow for this head, so CI runs
+the step itself. Without a marker, or with a valid receipt that attests no verification, the reason is the plain sentence as before.
+Nothing from the receipt itself appears in the reason.
+
 ## Branch update needed
 
 Cause class `base_moved`. The base branch moved after the revision was assessed, so the assessment, any receipt and the exact-head approval are bound to the old base. The comment names both short commit ids and numbers three steps: `gh pr update-branch PR_NUMBER` (or merge the base; never rebase), wait for the automatic re-review, and, only where a receipt is required, review and publish again on the new head.
