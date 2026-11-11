@@ -57,6 +57,15 @@ function resumable({directory, head, pullHead, remoteBase}) {
   return parents.length === 3 && parents[1] === pullHead && ancestor(directory, parents[2], remoteBase);
 }
 
+// Whether the protected configuration of the fetched base binds receipts to their diff (receipt-patch.cjs).
+function bindsDiff(directory, remoteBase) {
+  try {
+    return JSON.parse(git(directory, ['show', `${remoteBase}:.github/clouseau.json`])).local_review?.binding === 'diff';
+  } catch {
+    return false;
+  }
+}
+
 function merge({directory, remoteBase, branch}) {
   try {
     git(directory, ['merge-tree', '--write-tree', '--name-only', 'HEAD', remoteBase]);
@@ -92,7 +101,7 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   }
   const branch = git(directory, ['rev-parse', '--abbrev-ref', 'HEAD']).trim();
   const readPull = () => JSON.parse(execute('gh', ['api', `repos/${slug}/pulls/${number}`, '--jq',
-    '{number: .number, author: .user.login, state: .state, base: .base.ref, base_sha: .base.sha, head: .head.sha, ref: .head.ref, repository: .head.repo.full_name, title: .title, body: (.body // "")}'], {encoding: 'utf8'}));
+    '{number: .number, author: .user.login, state: .state, base: .base.ref, base_sha: .base.sha, head: .head.sha, ref: .head.ref, repository: .head.repo.full_name, title: .title, body: (.body // ""), changed_files: .changed_files}'], {encoding: 'utf8'}));
   const pull = readPull();
   if (pull.state !== 'open') throw new Error(`Pull request ${number} is not open`);
   if (pull.repository !== slug) throw new Error(`Pull request ${number} comes from ${pull.repository}; refresh pushes only to a branch of ${slug}`);
@@ -124,6 +133,14 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       }
       renewal = judged;
       process.stderr.write(`Renewing the local review receipt of pull request ${number} (cause: ${renewal.cause}): ${renewal.sentence}\n`);
+    } else if (bindsDiff(directory, remoteBase)) {
+      // Under the protected `binding: "diff"` a receipt whose diff still equals the pull request's stands after a base move, as
+      // CI judges it: nothing is merged, reviewed or pushed. Updating the branch (GitHub's update or a plain merge) keeps it.
+      const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
+      if (judged.usable) {
+        return {status: 'up_to_date', pull_request: number, head_sha: head, base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: false,
+          note: `The local review receipt of pull request ${number} still covers its diff (protected binding: diff), so CI accepts it after the base moved; nothing to refresh. Update the branch if branch protection requires it: the receipt keeps covering a merge that leaves the diff unchanged`};
+      }
     }
   }
   // Without a file, the requirement is the one of the last accepted review of this branch, if its head provably belongs to this
@@ -166,4 +183,4 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   return {...result, ...context, status: 'refreshed', pushed: true, ...fields};
 }
 
-module.exports = {refreshPull, withMarker, merge, resumable};
+module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff};

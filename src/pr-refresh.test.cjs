@@ -8,7 +8,7 @@ const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {initializeIdentity, main} = require('./local-cli.cjs');
 const crypto = require('node:crypto');
-const {refreshPull, withMarker} = require('./pr-refresh.cjs');
+const {refreshPull, withMarker, bindsDiff} = require('./pr-refresh.cjs');
 const {receiptStanding, githubReader} = require('./receipt-standing.cjs');
 const {issueReceipt} = require('./local-receipt.cjs');
 
@@ -37,6 +37,16 @@ function fakeHarness(calls) {
 const handler = (body, tail) => `// Handler.\nconst MARK = 1;\nmodule.exports = input => ${body};\nconst END = 2;\n// tail: ${tail}\n`;
 
 // A pull request fixture: a bare "GitHub" origin, a working clone on the feature branch, and a second clone that moves main.
+function githubFiles(bare, head) {
+  const base = git(bare, ['merge-base', 'refs/heads/main', head]).trim();
+  const statuses = {A: 'added', M: 'modified', D: 'removed'};
+  return git(bare, ['diff', '--name-status', base, head]).trim().split('\n').filter(Boolean).map(line => {
+    const [code, filename] = line.split('\t');
+    const text = git(bare, ['diff', '--no-ext-diff', '--no-textconv', base, head, '--', filename]);
+    return {filename, status: statuses[code[0]], patch: text.slice(text.indexOf('@@')).replace(/\n$/, '')};
+  });
+}
+
 async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-refresh-'));
   try {
@@ -88,8 +98,13 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
         try {text = git(bare, ['show', `${content[2]}:${content[1]}`]);} catch {throw Object.assign(new Error('gh failed'), {stderr: 'gh: Not Found (HTTP 404)'});}
         return JSON.stringify({type: 'file', encoding: 'base64', content: Buffer.from(text).toString('base64'), size: Buffer.byteLength(text)});
       }
+      // The changed files of the pull request as GitHub lists them: the three-dot diff, each patch without its git header.
+      if (/^repos\/example\/local-fixture\/pulls\/7\/files\?per_page=100&page=1$/.test(args[1])) return JSON.stringify(githubFiles(bare, pull.head));
       events.push('read');
-      return JSON.stringify({...pull, base_sha: git(bare, ['rev-parse', 'refs/heads/main']).trim()});
+      // The count GitHub reports; a fictional or unrelated head has none.
+      let changed;
+      try {changed = githubFiles(bare, pull.head).length;} catch {changed = undefined;}
+      return JSON.stringify({...pull, base_sha: git(bare, ['rev-parse', 'refs/heads/main']).trim(), changed_files: changed});
     };
     return await run({root, bare, work, other, advance, head, remoteHead, pull, events, execute, commit, write});
   } finally {delete process.env.GIT_SSH_COMMAND; fs.rmSync(root, {recursive: true, force: true});}
@@ -630,5 +645,52 @@ test('through the command, a receipt is renewed unless it verifies for this head
     const resignedFile = path.join(f.root, 'resigned.json'); fs.writeFileSync(resignedFile, JSON.stringify(resigned));
     await assert.rejects(main(['publish', '--directory', f.work, '--receipt', resignedFile], runtime(f)), /already exists with other content; nothing was published/);
     assert.ok(fs.existsSync(path.join(cacheDirectory, 'request.txt')), 'the stored requirement stayed with the retired evidence');
+  }, {ciConfig: config});
+});
+
+test('under binding "diff" a receipt whose diff is unchanged after a base move is up to date: nothing is merged, reviewed or pushed', async () => {
+  const diff = {local_review: {binding: 'diff'}};
+  await pullRepository(async f => {
+    const before = f.head();
+    f.advance('docs.md', 'moved\n');
+    const covered = {...stub({standing: {applicable: true, usable: true, binding: 'diff'}}), execute: f.execute, available: () => true};
+    const result = await refreshPull(args(f), covered);
+    assert.equal(result.status, 'up_to_date'); assert.equal(result.pushed, false);
+    assert.match(result.note, /still covers its diff \(protected binding: diff\)/);
+    assert.deepEqual([...covered.seen.reviews, ...covered.seen.publishes], []); unchanged(f, before);
+    assert.equal(bindsDiff(f.work, 'origin/main'), true);
+    // A receipt that does not cover the diff: the ordinary merge and review.
+    const voided = {...stub({head: () => f.head(), standing: {applicable: true, usable: false, cause: 'receipt_source', sentence: 'x'}}), execute: f.execute, available: () => true};
+    assert.equal((await refreshPull(args(f), voided)).status, 'refreshed'); assert.equal(voided.seen.reviews.length, 1);
+  }, {ciConfig: diff});
+  await pullRepository(async f => {
+    assert.equal(bindsDiff(f.work, 'origin/main'), false);
+  });
+});
+
+test('through the command under binding "diff": the receipt stands across a base move and GitHub\'s update, and a new change voids it', async t => {
+  const {runtime, refresh, calls, config} = signedFixture(t, {binding: 'diff'});
+  await pullRepository(async f => {
+    const requestFile = request(f.root);
+    const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], runtime(f));
+    assert.equal(first.decision, 'auto_approve');
+    const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], runtime(f));
+    f.pull.body = `Body.\n\n${published.marker}\n`;
+    const asked = calls.length;
+    const before = f.head();
+    // The base moves elsewhere: the receipt still covers the diff, and refresh changes nothing.
+    f.advance('docs.md', 'moved\n');
+    const moved = await refresh(f, {request: requestFile});
+    assert.equal(moved.status, 'up_to_date', JSON.stringify(moved)); assert.equal(f.head(), before); assert.equal(calls.length, asked);
+    // GitHub updates the branch with a plain merge that leaves the diff unchanged: still up to date, as CI will judge it.
+    git(f.work, ['fetch', '-q', 'origin', 'main']); git(f.work, ['merge', '-q', '--no-ff', '--no-edit', 'origin/main']);
+    git(f.work, ['push', '-q', 'origin', 'HEAD:refs/heads/feature']); f.pull.head = f.head();
+    const updated = await refresh(f, {request: requestFile});
+    assert.equal(updated.status, 'up_to_date', JSON.stringify(updated)); assert.match(updated.note, /still verifies/); assert.equal(calls.length, asked);
+    // A commit that changes a reviewed line voids it: the receipt is renewed by a new review.
+    f.write(f.work, 'src/new.js', 'module.exports = 2;\n'); f.commit(f.work, 'fix: change the pull request itself');
+    git(f.work, ['push', '-q', 'origin', 'HEAD:refs/heads/feature']); f.pull.head = f.head();
+    const changed = await refresh(f, {request: requestFile});
+    assert.equal(changed.status, 'renewed', JSON.stringify(changed)); assert.match(changed.cause, /receipt_source/); assert.ok(calls.length > asked);
   }, {ciConfig: config});
 });

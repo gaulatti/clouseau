@@ -123,6 +123,29 @@ test('only a fully valid receipt that attests the accepted recipe lets CI skip v
   screen(t, verified({verification: {content: JSON.stringify(technical())}, config: source()})); assert.equal(await run(), false);
 });
 
+test('under binding "diff" the receipt waives the tests after a base move only while the live base declares the same recipe', async t => {
+  const SIGNED_BASE = 's'.repeat(40);
+  const diffConfig = {base_branch: 'main', local_review: {...trust, binding: 'diff'}};
+  const moved = {...pr, base: {ref: 'main', sha: BASE}};
+  const signedSources = {verification: {content: JSON.stringify(attested())}, config: {...source(), ref: SIGNED_BASE}};
+  const screened = {ref: 'r'.repeat(40), bundle: {payload: {reviewer_sha: 'e'.repeat(40)}},
+    verified: {record: {snapshot: {base_sha: SIGNED_BASE, sources: signedSources}}}};
+  const reads = [];
+  const liveRecipe = value => ({paginate: async () => [], rest: {pulls: {listFiles() {}}, repos: {getContent: async args => {
+    reads.push(args);
+    if (value instanceof Error) throw value;
+    return {data: {content: Buffer.from(JSON.stringify(value)).toString('base64')}};
+  }}}});
+  const ask = github => attestation.receiptAttests({github, repo: {owner: 'o', repo: 'r'}, pr: moved, config: diffConfig, engine: null});
+  screen(t, screened);
+  assert.equal(await ask(liveRecipe(recipe)), true);
+  assert.deepEqual(reads[0], {owner: 'o', repo: 'r', path: '.clouseau-local.json', ref: BASE});
+  assert.equal(await ask(liveRecipe({...recipe, verification: [['other']]})), false, 'the base changed the declared verification');
+  assert.equal(await ask(liveRecipe(Object.assign(new Error('Not Found'), {status: 404}))), false);
+  // Without the binding the signed recipe must sit at the live base itself, as today.
+  assert.equal(await attestation.receiptAttests({github: liveRecipe(recipe), repo: {owner: 'o', repo: 'r'}, pr: moved, config: {...diffConfig, local_review: trust}, engine: null}), false);
+});
+
 test('the attested operation decides for the pull request in context', async t => {
   screen(t, verified());
   const context = {repo: {owner: 'o', repo: 'r'}, payload: {pull_request: {number: 8}}};
