@@ -66,13 +66,19 @@ function bindsDiff(directory, remoteBase) {
   }
 }
 
-// The base moved only in files the pull request does not change: merging it then leaves every changed file's patch, and so
-// the diff a `binding: "diff"` receipt covers, exactly as it was. Renames count by both paths.
-function baseLeavesDiff(directory, remoteBase) {
-  const base = git(directory, ['merge-base', 'HEAD', remoteBase]).trim();
-  const names = range => new Set(git(directory, ['diff', '--name-only', '--no-renames', range]).split('\n').filter(Boolean));
-  const theirs = names(`${base}..${remoteBase}`);
-  return [...names(`${base}..HEAD`)].every(name => !theirs.has(name));
+// The normalized diff (receipt-patch.cjs) between two local revisions: what a `binding: "diff"` receipt covers. Computed from
+// git's own patches on both sides of a comparison, so the same file shows the same hunks whatever produced the revision.
+function localDiff(directory, from, to) {
+  const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
+  const statuses = {A: 'added', M: 'modified', D: 'removed', R: 'renamed'};
+  return diffDigest(git(directory, ['diff', '--name-status', '-M', from, to]).split('\n').filter(Boolean).map(line => {
+    const [code, first, second] = line.split('\t');
+    const status = statuses[code[0]];
+    const paths = status === 'renamed' ? [first, second] : [first];
+    const text = git(directory, ['diff', '--no-ext-diff', '--no-textconv', '-M', from, to, '--', ...paths]);
+    const at = text.indexOf('@@');
+    return {path: paths.at(-1), status, previous: status === 'renamed' ? first : null, patch: canonicalHunks(at === -1 ? '' : text.slice(at).replace(/\n$/, ''))};
+  }));
 }
 
 function merge({directory, remoteBase, branch}) {
@@ -132,6 +138,7 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   }
   // A refresh interrupted after its merge (an agent-driven review awaiting an answer) continues on the base it began with.
   let renewal = null;
+  let merged = false;
   if (!resuming) {
     git(directory, ['fetch', 'origin', `+refs/heads/${pull.base}:refs/remotes/${remoteBase}`]);
     if (ancestor(directory, remoteBase, 'HEAD')) {
@@ -142,13 +149,19 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       }
       renewal = judged;
       process.stderr.write(`Renewing the local review receipt of pull request ${number} (cause: ${renewal.cause}): ${renewal.sentence}\n`);
-    } else if (bindsDiff(directory, remoteBase) && baseLeavesDiff(directory, remoteBase)) {
+    } else if (bindsDiff(directory, remoteBase)) {
       // Under the protected `binding: "diff"` a receipt whose diff still equals the pull request's stands after a base move, as
-      // CI judges it. When the base moved only outside the changed files, the merge provably keeps that diff, so the branch is
-      // brought up to date (a controller-managed merge needs it strictly ahead of the base) with no review and no new receipt.
+      // CI judges it. The base is merged locally and the normalized diff recomputed: when it equals the diff before the merge,
+      // the branch is brought up to date (a controller-managed merge needs it strictly ahead of the base) with no review and no
+      // new receipt. When the merge changed it (the base moved a line inside a hunk's context), the merged head is reviewed.
       const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
+      let before = null;
       if (judged.usable) {
+        before = localDiff(directory, git(directory, ['merge-base', 'HEAD', remoteBase]).trim(), 'HEAD');
         merge({directory, remoteBase, branch});
+        merged = true;
+      }
+      if (merged && localDiff(directory, remoteBase, 'HEAD') === before) {
         // A plain push, never forced: a pull request that moved meanwhile rejects it and nothing on GitHub changes.
         git(directory, ['push', 'origin', `HEAD:refs/heads/${pull.ref}`]);
         return {status: 'updated', pull_request: number, previous_head_sha: head, head_sha: git(directory, ['rev-parse', 'HEAD']).trim(),
@@ -162,7 +175,7 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   // merged has that pull request's head in the base too.) Nothing has been changed yet when this refuses.
   const requestFile = args['request-file'] || readRequirement({state, repository: slug, branch,
     contains: sha => ancestor(directory, sha, pull.head) && !ancestor(directory, sha, remoteBase)}).file;
-  if (!resuming && !renewal) merge({directory, remoteBase, branch});
+  if (!resuming && !renewal && !merged) merge({directory, remoteBase, branch});
   const result = await review({directory, base: remoteBase, 'request-file': requestFile, harness: args.harness, agent: args.agent,
     identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine}, {title: pull.title});
   // A review continued on a pinned engine runs this very command there, publishes and pushes; its result is the final one.
@@ -197,4 +210,4 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   return {...result, ...context, status: 'refreshed', pushed: true, ...fields};
 }
 
-module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff, baseLeavesDiff};
+module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff, localDiff};

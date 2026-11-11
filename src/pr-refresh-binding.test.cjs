@@ -9,7 +9,7 @@ const {git} = require('./local-git.cjs');
 const {digest} = require('./acceptance.cjs');
 const {initializeIdentity, main} = require('./local-cli.cjs');
 const crypto = require('node:crypto');
-const {refreshPull, withMarker, bindsDiff, baseLeavesDiff} = require('./pr-refresh.cjs');
+const {refreshPull, withMarker, bindsDiff, localDiff} = require('./pr-refresh.cjs');
 const {receiptStanding, githubReader} = require('./receipt-standing.cjs');
 const {issueReceipt} = require('./local-receipt.cjs');
 
@@ -137,13 +137,11 @@ function signedFixture(t, localReview = {}) {
   return {state, config, calls, runtime, refresh};
 }
 
-test('under binding "diff" a base move outside the changed files is merged and pushed with no review; one inside them is reviewed', async () => {
+test('under binding "diff" a base move that leaves the normalized diff unchanged is merged and pushed with no review; one that changes it is reviewed', async () => {
   const diff = {local_review: {binding: 'diff'}};
   await pullRepository(async f => {
     const before = f.head();
     const moved = f.advance('docs.md', 'moved\n');
-    git(f.work, ['fetch', '-q', 'origin', 'main']);
-    assert.equal(baseLeavesDiff(f.work, 'origin/main'), true);
     const covered = {...stub({standing: {applicable: true, usable: true, binding: 'diff'}}), execute: f.execute, available: () => true};
     const result = await refreshPull(args(f), covered);
     assert.equal(result.status, 'updated', JSON.stringify(result)); assert.equal(result.pushed, true); assert.equal(result.previous_head_sha, before);
@@ -158,18 +156,22 @@ test('under binding "diff" a base move outside the changed files is merged and p
     const voided = {...stub({head: () => f.head(), standing: {applicable: true, usable: false, cause: 'receipt_source', sentence: 'x'}}), execute: f.execute, available: () => true};
     assert.equal((await refreshPull(args(f), voided)).status, 'refreshed'); assert.equal(voided.seen.reviews.length, 1);
   }, {ciConfig: diff});
-  // The base moves inside a changed file, on lines the pull request does not touch: the merge is clean, but the patch's context
-  // may change, so the merge is reviewed as before even though the receipt still stands for the unmerged head.
+  // The base moves inside a changed file. A distant line leaves every hunk, so the diff, unchanged: merged and pushed with no
+  // review. A line inside a hunk's context changes that hunk: the merged head is reviewed.
   const long = Array.from({length: 20}, (_, index) => `const line${index} = ${index};`).join('\n') + '\n';
-  await pullRepository(async f => {
-    f.write(f.work, 'src/long.js', long.replace('line1 = 1', 'line1 = 101')); f.commit(f.work, 'fix: change an early line');
-    git(f.work, ['push', '-q', 'origin', 'feature']); f.pull.head = f.head();
-    f.advance('src/long.js', long.replace('line18 = 18', 'line18 = 118'));
-    git(f.work, ['fetch', '-q', 'origin', 'main']);
-    assert.equal(baseLeavesDiff(f.work, 'origin/main'), false);
-    const covered = {...stub({head: () => f.head(), standing: {applicable: true, usable: true, binding: 'diff'}}), execute: f.execute, available: () => true};
-    assert.equal((await refreshPull(args(f), covered)).status, 'refreshed'); assert.equal(covered.seen.reviews.length, 1);
-  }, {ciConfig: diff, files: {'src/long.js': long}});
+  for (const [line, reviewed] of [[18, false], [3, true]]) {
+    await pullRepository(async f => {
+      f.write(f.work, 'src/long.js', long.replace('line1 = 1;', 'line1 = 101;')); f.commit(f.work, 'fix: change an early line');
+      git(f.work, ['push', '-q', 'origin', 'feature']); f.pull.head = f.head();
+      const signed = localDiff(f.work, git(f.work, ['merge-base', 'HEAD', 'origin/main']).trim(), 'HEAD');
+      f.advance('src/long.js', long.replace(`line${line} = ${line};`, `line${line} = ${100 + line};`));
+      const covered = {...stub({head: () => f.head(), standing: {applicable: true, usable: true, binding: 'diff'}}), execute: f.execute, available: () => true};
+      const result = await refreshPull(args(f), covered);
+      assert.equal(result.status, reviewed ? 'refreshed' : 'updated', `line ${line}: ${JSON.stringify(result)}`);
+      assert.equal(covered.seen.reviews.length, reviewed ? 1 : 0, `line ${line}`);
+      assert.equal(localDiff(f.work, 'origin/main', 'HEAD') === signed, !reviewed, `line ${line}: the merged diff ${reviewed ? 'differs' : 'is unchanged'}`);
+    }, {ciConfig: diff, files: {'src/long.js': long}});
+  }
   await pullRepository(async f => {
     assert.equal(bindsDiff(f.work, 'origin/main'), false);
   });

@@ -18,9 +18,14 @@
       "sha256": "a36f93bfaea67ad3788e1d63c22398171814e543f67776c92a03031e4269d25d"
     },
     {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "831bcc4b30d6f0463969bdff8ebd3a04a010b8a42344c42bfb052dec0a5fd844"
+    },
+    {
       "path": "src/pr-refresh.cjs",
       "mode": 0,
-      "sha256": "f0d3879ce3c47609b78b575e30e85d0e9dfea400950f3f34f902586df53d69d2"
+      "sha256": "8f47c0f38d9a0342eef4326b5c4543373a76265e90784e90aa54fdf80cd78ae0"
     },
     {
       "path": "src/receipt-patch.cjs",

@@ -542,16 +542,24 @@ edit; only a change to the declared recipe (`.clouseau-local.json`) or to the pu
 request between the assessment and the gate are unchanged; they protect one CI run from a push that lands mid-run.
 
 `clouseau refresh` uses the same decision: under the binding it judges the receipt (including the diff, from the files GitHub
-lists) before merging anything. When the base moved only in files the pull request does not change, the merge provably keeps
-every changed file's patch, so refresh merges the base and pushes the merge (a plain push, never forced) with no review and no
-new receipt, and answers `updated`. That keeps the branch strictly ahead of the base, which the controller-managed merge
-requires. When the base moved inside a changed file, refresh merges and reviews as it does without the binding, because the
-merged patch's context can differ. On an up-to-date branch it answers `up_to_date` whenever CI would accept the receipt. Who
+lists) before merging anything. When it stands, refresh merges the base locally and recomputes the normalized diff: if it
+equals the diff before the merge (the base moved elsewhere, or on lines of a changed file outside every hunk), refresh pushes
+the merge (a plain push, never forced) with no review and no new receipt, and answers `updated`. That keeps the branch strictly
+ahead of the base, which the controller-managed merge requires. Only when the merge changed the diff (the base moved a line
+inside a hunk's context) does refresh review the merged head, as it does without the binding. On an up-to-date branch it answers `up_to_date` whenever CI would accept the receipt. Who
 updates the branch is therefore the author: by `clouseau refresh`, by GitHub's "Update branch" (`gh pr update-branch`), or by a
 plain merge and push; the workflow token cannot, because its push starts no verification. A merge commit that leaves the
 diff unchanged keeps the receipt valid end to end, at the assessment and at the gate (`verifyRecord`, and `verifySources` at
 the gate's write boundary), which `src/acceptance-controller-binding.test.cjs` proves through an assessment and gate approval
-of the merged head with zero AI calls. A receipt that no longer covers the diff is refreshed or renewed as usual. Where the binding applies: `verifySignedRecord` (the head and base comparison),
+of the merged head with zero AI calls. A receipt that no longer covers the diff is refreshed or renewed as usual.
+
+The owner's confirmation follows the same binding. Without it, `/approve-intent <sha>` and an approving review count only for
+the exact head they name, so every branch update needs a new confirmation. Under `binding: "diff"` a confirmation of an
+earlier head (comment or approving review) also counts for the current head when that earlier commit is an ancestor of the
+head and its normalized diff, taken from its merge base with the live base, equals the pull request's current diff. A branch
+update that leaves the change unchanged therefore keeps the confirmation; any push that changes the diff voids it. A
+patchless or truncated file list, an unknown commit or another lineage never matches, and any other API failure surfaces.
+The recorded authorization then names both the head it was applied to and the `confirmed_sha` it was given for. Where the binding applies: `verifySignedRecord` (the head and base comparison),
 `verifySources` (revisions, sources, contract and verification refs, the lockfile summary, and the diff through `verifyPatches`),
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
