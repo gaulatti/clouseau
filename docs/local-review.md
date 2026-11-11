@@ -710,8 +710,8 @@ violation or any other violated or unresolved gate, which sign nothing and must 
 and CI makes no AI call. A signed non-pass is never acceptable as a pass: every verifier refuses it as `not_passing` unless it
 is the assessment or the gate of a repository with this setting, which turn it into the hold; `operation: attested` never
 accepts it, so CI runs the tests; a claimed `auto_approve` for it is a decision mismatch. `clouseau refresh` treats it as up to
-date and names the approval it waits for. Once its receipt expires, reviewing the same revision again renews it; any other
-non-passing review still needs a repair before that revision is reviewed again. Without the setting nothing changes: such a review signs nothing.
+date and names the approval it waits for. The same revision is never reviewed again, so an unchanged verdict cannot be
+resampled: once its receipt expires (`max_age_seconds`, at most 48 hours), a new commit is reviewed instead. Without the setting nothing changes: such a review signs nothing.
 
 ### A receipt that does not verify is ignored
 

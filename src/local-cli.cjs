@@ -241,10 +241,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   const previous = readHistory(historyPath, repository, branch);
   const priorFindings = previous?.findings || [];
   const sameRevision = previous && previous.head_sha === head && previous.base_sha === baseSha && previous.reviewer_digest === reviewer.digest;
-  // Under the protected `human_review: "signed"` a signed review that requires a human is a standing outcome, not a failure:
-  // reviewing the same revision again renews its receipt once it has expired. Any other non-passing review still needs a repair.
-  const renewable = previous?.decision === 'repair_required' && previous.has_receipt === true && ciConfig?.local_review?.human_review === 'signed';
-  if (sameRevision && previous.decision !== 'auto_approve' && !renewable) {
+  if (sameRevision && previous.decision !== 'auto_approve') {
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,

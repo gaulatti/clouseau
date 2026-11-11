@@ -151,12 +151,7 @@ test('under human_review "signed" a review with findings is signed, stands for r
       const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked);
       assert.equal(first.decision, 'repair_required');
       if (!humanReview) {assert.equal(first.receipt, null, 'without the opt-in a review with findings signs nothing'); return;}
-      if (kind === 'gate') {
-        assert.equal(first.receipt, null, 'a violated gate is never signed, whatever the setting');
-        await assert.rejects(main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked),
-          /already has a non-passing local review/, 'an unsigned non-pass still needs a repair before the same revision is reviewed again');
-        return;
-      }
+      if (kind === 'gate') {assert.equal(first.receipt, null, 'a violated gate is never signed, whatever the setting'); return;}
       assert.ok(first.receipt, 'with the opt-in the review with findings is signed');
       const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], asked);
       f.pull.body = `Body.\n\n${published.marker}\n`;
@@ -165,9 +160,6 @@ test('under human_review "signed" a review with findings is signed, stands for r
       assert.equal(standing.status, 'up_to_date', JSON.stringify(standing));
       assert.match(standing.note, /its signed review requires a human: a maintainer approves this head with \/approve-intent [a-f0-9]{40}/);
       assert.equal(calls.length, before, 'nothing is reviewed again');
-      // Once that receipt has expired, reviewing the same revision again renews it instead of refusing a non-passing review.
-      const renewed = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked);
-      assert.equal(renewed.decision, 'repair_required'); assert.ok(renewed.receipt, 'the signed review is issued again for the same head');
     }, {ciConfig: config});
   }
 });
