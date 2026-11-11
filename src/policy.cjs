@@ -7,13 +7,6 @@ const {requestReview} = require('./provider.cjs');
 const {retryTransient} = require('./transient-retry.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
-// The commit an `/approve-intent <sha>` comment names, with the text it confirms; null for anything else.
-function intentAny(body) {
-  if (typeof body !== 'string') return null;
-  const match = /^\/approve-intent ([a-f0-9]{40})(?:\n\nAccepted purpose:\n([\s\S]*\S))?$/.exec(body.trim());
-  return match ? {sha: match[1], text: intentText(body, match[1])} : null;
-}
-
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
   const match = new RegExp(`^/approve-intent ${sha}(?:\\n\\nAccepted purpose:\\n([\\s\\S]*\\S))?$`).exec(body.trim());
@@ -37,15 +30,13 @@ function protectedChanges(config, files) {
     .filter((name, index, all) => name && matchesPath(name, sensitive) && all.indexOf(name) === index);
 }
 
-function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false, attested = null, intentDiff = false} = {}) {
+function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false, attested = null} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
   const {local_review, merge_mode, exact_revert, ...legacyConfig} = config;
   // Required verification steps a workflow skipped count only when a fully valid receipt attests the verification (verification-attestation.cjs).
   const attested = (github, repo, pr) => require('./verification-attestation.cjs').receiptAttests({github, repo, pr, config, engine, explain: true});
-  // Under the protected `local_review.binding: "diff"` an owner confirmation follows the diff as a receipt does (confirms()).
-  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested,
-    intentDiff: local_review?.binding === 'diff'});
+  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
 const COVERAGE = require('./coverage-changed.cjs').requirement(config);
@@ -296,8 +287,7 @@ async function reassess({github, context, core, wait, api}) {
     pull_number = numberFor(context);
     pr = (await api(() => readPull(github, repo, pull_number))).data;
     const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-    const named = context.eventName === 'issue_comment' ? intentAny(context.payload.comment.body) : null;
-    if (context.eventName === 'issue_comment' && !(named && await api(() => confirms(github, repo, pr, named.sha)))) {
+    if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
       throw new Error('Stale or malformed intent confirmation');
     }
     const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
@@ -352,48 +342,16 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   }
 }
 
-// Whether a confirmation of commit `sha` (an `/approve-intent` comment or an approving review) covers the pull request's head.
-// It always does for the exact head. Only with the protected `local_review.binding: "diff"` (`intentDiff`) does it also cover a
-// later head of the same pull request whose normalized diff (receipt-patch.cjs) equals the diff `sha` had from its merge base
-// with the live base: a branch update that leaves the change unchanged keeps the owner's confirmation, any other push voids
-// it. `sha` must be an ancestor of the head; a patchless or truncated file list, or an unknown commit, never matches.
-const confirmations = new Map();
-async function confirms(github, repo, pr, sha) {
-  if (sha === pr.head.sha) return true;
-  if (!intentDiff || typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return false;
-  const key = `${repo.owner}/${repo.repo}#${pr.number}:${pr.base.sha}:${pr.head.sha}:${sha}`;
-  if (!confirmations.has(key)) confirmations.set(key, (async () => {
-    const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
-    const normalized = files => files.length === 0 || files.length >= 300 || files.some(file => typeof file.patch !== 'string' || !file.patch) ? null :
-      diffDigest(files.map(file => ({path: file.filename, status: file.status, previous: file.status === 'renamed' ? file.previous_filename : null, patch: canonicalHunks(file.patch)})));
-    const compare = async (base, head) => {
-      try {return (await github.rest.repos.compareCommits({...repo, base, head})).data;}
-      catch (error) {if (error.status === 404 || error.status === 422) return null; throw error;}
-    };
-    const lineage = await compare(sha, pr.head.sha);
-    if (!lineage || !['ahead', 'identical'].includes(lineage.status)) return false;
-    const earlier = await compare(pr.base.sha, sha);
-    const live = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: pr.number, per_page: 100});
-    const confirmed = earlier ? normalized(earlier.files || []) : null;
-    return confirmed !== null && live.length === pr.changed_files && confirmed === normalized(live);
-  })());
-  return confirmations.get(key);
-}
-
 async function purposeConfirmation(github, repo, pr, comments) {
-  let comment = null;
-  let intent = null;
-  for (const item of [...comments].reverse()) {
-    if (!(item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER && Number.isSafeInteger(item.id) && item.id > 0)) continue;
-    const named = intentAny(item.body);
-    if (named && await confirms(github, repo, pr, named.sha)) {comment = item; intent = named; break;}
-  }
+  const comment = [...comments].reverse().find(item =>
+    item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER &&
+    Number.isSafeInteger(item.id) && item.id > 0 &&
+    intentText(item.body, pr.head.sha));
   if (!comment) return null;
   const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
   if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
   return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
-    ...(intent.sha === pr.head.sha ? {} : {confirmed_sha: intent.sha}),
-    actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intent.text};
+    actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intentText(comment.body, pr.head.sha)};
 }
 
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
@@ -408,13 +366,12 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
     if (review.state !== 'COMMENTED' && review.state !== 'PENDING') latest.set(review.user?.login, review);
   }
   for (const review of latest.values()) {
-    if (review.state === 'APPROVED' && await confirms(github, repo, pr, review.commit_id) && await canConfirm(review.user)) return true;
+    if (review.state === 'APPROVED' && review.commit_id === pr.head.sha && await canConfirm(review.user)) return true;
   }
   if (reviewOnly) return false;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number, per_page: 100});
   for (const comment of comments) {
-    const named = intentAny(comment.body);
-    if (named && await confirms(github, repo, pr, named.sha) && await canConfirm(comment.user)) return true;
+    if (intentText(comment.body, pr.head.sha) && await canConfirm(comment.user)) return true;
   }
   return false;
 }
