@@ -114,7 +114,7 @@ Nothing from the receipt itself appears in the reason.
 
 ## Branch update needed
 
-Cause class `base_moved`. The base branch moved after the revision was assessed, so the assessment, any receipt and the exact-head approval are bound to the old base. The comment names both short commit ids and numbers three steps: `gh pr update-branch PR_NUMBER` (or merge the base; never rebase), wait for the automatic re-review, and, only where a receipt is required, review and publish again on the new head.
+Cause class `base_moved`. The base branch moved after the revision was assessed, so the assessment and the exact-head approval are bound to the old base, and so is a receipt unless the protected `local_review.binding` is `"diff"` and the update leaves its diff unchanged. The comment names both short commit ids and numbers three steps: `gh pr update-branch PR_NUMBER` (or merge the base; never rebase), wait for the automatic re-review, and, only where a receipt is required, run `clouseau refresh --pr PR_NUMBER`, which merges the base and reviews and publishes the new head unless a diff-bound receipt still covers the unchanged diff.
 
 ## Merge conflict with the base
 

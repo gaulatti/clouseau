@@ -102,12 +102,20 @@ async function attestationVerdict({github, repo, pr, config, engine}) {
   if (rejected) return no(rejected);
   const {sources} = screened.verified.record.snapshot;
   // The attested recipe must be the accepted base's own `.clouseau-local.json`, which screenSources bound to the base revision.
-  const recipe = Object.values(sources).find(item => item.path === '.clouseau-local.json' && item.ref === pr.base.sha);
+  // Under the protected `binding: "diff"` the receipt names its own base, so its recipe must also equal the live base's recipe:
+  // a base move that changed the declared verification never lets CI skip the new one.
+  const diff = config.local_review.binding === 'diff';
+  const base = diff ? screened.verified.record.snapshot.base_sha : pr.base.sha;
+  const recipe = Object.values(sources).find(item => item.path === '.clouseau-local.json' && item.ref === base);
   let technical = null;
   let accepted = null;
   try {
     technical = JSON.parse(sources.verification.content);
     accepted = digest(JSON.parse(recipe.content));
+    if (diff) {
+      const {data} = await github.rest.repos.getContent({...repo, path: '.clouseau-local.json', ref: pr.base.sha});
+      if (digest(JSON.parse(Buffer.from(data.content, 'base64').toString('utf8'))) !== accepted) return no();
+    }
   } catch { return no(); }
   return {attests: attestationOf(technical) !== null && technical.local_config_digest === accepted, rejected: null, detail: {}};
 }

@@ -14,7 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {digest} = require('./acceptance.cjs');
 const {git} = require('./local-git.cjs');
-const {screenReceipt, MAX_RECEIPT_BYTES} = require('./local-receipt.cjs');
+const {screenReceipt, screenSources, MAX_RECEIPT_BYTES} = require('./local-receipt.cjs');
 const {describe} = require('./receipt-rejection.cjs');
 const {SOURCE} = require('./central-version.cjs');
 
@@ -52,6 +52,24 @@ async function receiptStanding({directory, base, repo, pull, execute, installed}
   const screened = await screenReceipt({github: githubReader(execute), repo, engine: {...SOURCE, sha: reviewer.sha, digest: reviewer.digest},
     pr: {number: pull.number, body: pull.body, user: {login: pull.author}, head: {sha: pull.head}, base: {sha: pull.base_sha}},
     trust: config.local_review, configDigest: digest(config), policyDigest: digest(fs.readFileSync(POLICY, 'utf8')), reviewerDigest: reviewer.digest});
+  // Under the protected `binding: "diff"` the head no longer binds the receipt, so its diff must equal the pull request's, as
+  // CI checks it (screenSources), on the changed files GitHub reports now.
+  if (screened.ref && config.local_review.binding === 'diff') {
+    const files = [];
+    for (let page = 1; ; page++) {
+      const batch = JSON.parse(execute('gh', ['api', `repos/${repo.owner}/${repo.repo}/pulls/${pull.number}/files?per_page=100&page=${page}`], {encoding: 'utf8', maxBuffer: RECEIPT_RESPONSE_LIMIT}));
+      files.push(...batch);
+      if (batch.length < 100) break;
+    }
+    const rejected = await screenSources({github: githubReader(execute), repo, snapshot: screened.verified.record.snapshot, config, files,
+      reviewerSha: screened.bundle.payload.reviewer_sha, pr: {number: pull.number, changed_files: pull.changed_files,
+        head: {sha: pull.head, repo: {owner: {login: repo.owner}, name: repo.repo}}, base: {sha: pull.base_sha}}});
+    if (rejected) {
+      const cause = describe(rejected, {});
+      return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};
+    }
+    return {applicable: true, usable: true, binding: 'diff'};
+  }
   if (screened.ref) return {applicable: true, usable: true};
   const cause = describe(screened.rejected ?? 'absent', {detail: screened.detail});
   return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};

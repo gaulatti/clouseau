@@ -100,7 +100,10 @@ function verifyRecord(record, assessment, config, engine = null) {
   const chunked = !record.local_receipt && partitioned;
   if (assessment.version !== 2 || digest(record) !== assessment.record_digest ||
       record.snapshot.config_digest !== digest(config) || record.snapshot.policy_digest !== policyDigest() ||
-      record.snapshot.head_sha !== assessment.head_sha || record.snapshot.base_sha !== assessment.base_sha ||
+      // A receipt bound to its diff (protected `binding: "diff"`) names its own revisions; the assessment's sources check bound
+      // that diff to this pull request, and the gate's run-consistency checks below still compare the live pull request.
+      (!(record.local_receipt && config.local_review?.binding === 'diff') &&
+        (record.snapshot.head_sha !== assessment.head_sha || record.snapshot.base_sha !== assessment.base_sha)) ||
       (!record.local_receipt && record.snapshot.number !== assessment.number) || (!partitioned && record.snapshot.digest !== refresh(structuredClone(record.snapshot)).digest)) {
     throw new Error('Stale or altered acceptance record');
   }

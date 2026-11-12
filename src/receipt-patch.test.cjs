@@ -232,3 +232,79 @@ test('GitHub joining two hunks that git leaves one unchanged line apart is the s
   const hosted = `${['@@ -1,14 +1,15 @@', ...first.slice(1)].join('\n')}\n\\ No newline at end of file\n line 8\n${second.slice(1).join('\n')}`;
   verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${marker}\n`]), files: [live('src/a.js', 'modified', hosted)]});
 });
+
+// Protected `local_review.binding: "diff"`: the change is bound, not the trees.
+const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
+const DIFF = {binding: 'diff'};
+const at = (old, now, text = '') => `@@ -${old},3 +${now},3 @@${text}\n a\n-b\n+B\n c`;
+
+test('diff binding: hunk headers count only as @@, so lines added above the hunk on the base keep the receipt', () => {
+  const signed = snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${at(10, 10, ' function run()')}\n`]);
+  const result = verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(14, 14))], ...DIFF});
+  assert.match(result.signed, /^[a-f0-9]{64}$/); assert.equal(result.signed, result.live);
+  // The same offset without the binding is today's mismatch.
+  mismatch(() => verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(14, 14))]}), 'src/a.js');
+  // The digest is SHA-256 over the normalized entries and depends on nothing but them.
+  assert.equal(diffDigest([{path: 'b', status: 'modified', previous: null, patch: '@@'}, {path: 'a', status: 'added', previous: null, patch: '@@'}]),
+    diffDigest([{path: 'a', status: 'added', previous: null, patch: '@@'}, {path: 'b', status: 'modified', previous: null, patch: '@@'}]));
+  assert.equal(diffDigest([]), require('node:crypto').createHash('sha256').update(JSON.stringify(['clouseau.receipt-diff.v1', []])).digest('hex'));
+});
+
+test('diff binding: any change to an added, removed or context line, or to whitespace, voids the receipt and names the file', () => {
+  const signed = snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${at(1, 1)}\n`]);
+  for (const changed of [at(1, 1).replace('+B', '+C'), at(1, 1).replace('-b', '-x'), at(1, 1).replace(' a', ' z'), at(1, 1).replace(' c', '  c'),
+    `${at(1, 1)}\n d`, at(1, 1).replace('\n c', '')]) {
+    mismatch(() => verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', changed)], ...DIFF}), 'src/a.js');
+  }
+  // A signed header that is not a known git header never matches.
+  mismatch(() => verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', `prose\n${at(1, 1)}\n`]), files: [live('src/a.js', 'modified', at(1, 1))], ...DIFF}), 'src/a.js');
+});
+
+test('diff binding: a commit that adds a file, a removed file, a new status or another rename voids the receipt', () => {
+  const signed = snapshotOf(['src/a.js', 'modified', at(1, 1)], ['src/b.js', 'modified', at(5, 5)]);
+  verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(2, 2)), live('src/b.js', 'modified', at(9, 9))], ...DIFF});
+  mismatch(() => verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(1, 1)), live('src/b.js', 'modified', at(5, 5)), live('src/c.js', 'added', at(1, 1))], ...DIFF}), 'src/c.js');
+  mismatch(() => verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(1, 1))], ...DIFF}), 'src/b.js');
+  mismatch(() => verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(1, 1)), live('src/b.js', 'added', at(5, 5))], ...DIFF}), 'src/b.js');
+  assert.throws(() => verifyPatches({snapshot: signed, files: [live('src/a.js', 'modified', at(1, 1)), live('src/b.js', 'modified', undefined)], ...DIFF}), /Changed-file evidence is incomplete/);
+  // A rename binds its previous path: the same rename keeps the receipt, another one voids it.
+  const rename = from => `diff --git a/${from} b/src/new.js\nsimilarity index 90%\nrename from ${from}\nrename to src/new.js\n--- a/${from}\n+++ b/src/new.js\n${at(1, 1)}\n`;
+  const renamed = {files: [{path: 'src/new.js', status: 'renamed', patch: rename('src/old.js'), base_source: 'old'}], sources: {old: {path: 'src/old.js'}}};
+  verifyPatches({snapshot: renamed, files: [live('src/new.js', 'renamed', at(4, 4), {previous_filename: 'src/old.js'})], ...DIFF});
+  mismatch(() => verifyPatches({snapshot: renamed, files: [live('src/new.js', 'renamed', at(4, 4), {previous_filename: 'src/other.js'})], ...DIFF}), 'src/new.js');
+  // The digests themselves disagree when the signed previous path is not the rename GitHub reports.
+  const lying = {...renamed, sources: {old: {path: 'src/elsewhere.js'}}};
+  mismatch(() => verifyPatches({snapshot: lying, files: [live('src/new.js', 'renamed', at(4, 4), {previous_filename: 'src/old.js'})], ...DIFF}), 'src/new.js');
+  const unsourced = {...renamed, sources: undefined};
+  mismatch(() => verifyPatches({snapshot: unsourced, files: [live('src/new.js', 'renamed', at(4, 4), {previous_filename: 'src/old.js'})], ...DIFF}), 'src/new.js');
+});
+
+test('diff binding: GitHub joining two git hunks across one unchanged line is the same diff; any other run is not', () => {
+  const two = '@@ -1,5 +1,5 @@ x\n a\n-b\n+B\n c\n d\n e\n@@ -9,5 +9,5 @@\n f\n g\n h\n-i\n+I\n j';
+  const joined = '@@ -1,13 +1,13 @@\n a\n-b\n+B\n c\n d\n e\n JOIN\n f\n g\n h\n-i\n+I\n j';
+  assert.equal(canonicalHunks(two), canonicalHunks(joined));
+  assert.equal(canonicalHunks(joined), '@@\n a\n-b\n+B\n c\n d\n e\n@@\n f\n g\n h\n-i\n+I\n j');
+  // Six or eight unchanged lines are not GitHub's join; leading and trailing runs of seven are not between two changes.
+  assert.equal(canonicalHunks('@@\n-b\n c\n d\n e\n f\n g\n h\n-i'), '@@\n-b\n c\n d\n e\n f\n g\n h\n-i');
+  assert.equal(canonicalHunks('@@\n-b\n c\n d\n e\n f\n g\n h\n i\n j\n-k'), '@@\n-b\n c\n d\n e\n f\n g\n h\n i\n j\n-k');
+  const seven = Array.from({length: 7}, (_, index) => ` ${index}`).join('\n');
+  assert.equal(canonicalHunks(`@@\n${seven}\n-b`), `@@\n${seven}\n-b`);
+  assert.equal(canonicalHunks(`@@\n-b\n${seven}`), `@@\n-b\n${seven}`);
+  assert.equal(canonicalHunks(`@@\n-b\n${seven}\n\\ No newline at end of file`), `@@\n-b\n${seven}\n\\ No newline at end of file`);
+  verifyPatches({snapshot: snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${two}\n`]), files: [live('src/a.js', 'modified', joined)], ...DIFF});
+});
+
+test('diff binding: a summarized lockfile binds its path and status, and a file without a GitHub patch is refused', () => {
+  const {LOCKFILE_PATCH} = require('./lockfile-summary.cjs');
+  const lockfile = {path: 'package-lock.json', status: 'modified', patch: LOCKFILE_PATCH, lockfile: true};
+  const result = verifyPatches({snapshot: {files: [lockfile], sources: {}}, files: [live('package-lock.json', 'modified', '@@ -1 +1 @@\n-a\n+b')], ...DIFF});
+  assert.equal(result.signed, result.live);
+  mismatch(() => verifyPatches({snapshot: {files: [lockfile], sources: {}}, files: [live('package-lock.json', 'removed', '@@')], ...DIFF}), 'package-lock.json');
+  // An empty file signed without a hunk is accepted without the binding, where the live sources are compared. Under the
+  // binding they are not read, and the same patchless file could now hold binary or oversized content, so it is refused.
+  const snapshot = {files: [lockfile, {path: 'empty.txt', status: 'added', patch: 'diff --git a/empty.txt b/empty.txt\nnew file mode 100644\nindex 0000000..e69de29\n', head_source: 'e'}],
+    sources: {e: {path: 'empty.txt', content: ''}}};
+  const files = [live('package-lock.json', 'modified', '@@ -1 +1 @@\n-a\n+b'), live('empty.txt', 'added', undefined)];
+  assert.equal(verifyPatches({snapshot, files}), null);
+  assert.throws(() => verifyPatches({snapshot, files, ...DIFF}), /Changed-file evidence is incomplete/);
+});
