@@ -293,3 +293,24 @@ test('under confirmation "diff" the reassessment an earlier-head confirmation st
   await exact.reassess(`/approve-intent ${HEAD}`);
   assert.deepEqual(exact.writes.map(item => item.name), ['rerun']);
 });
+
+// The five branch-update cases, for the confirmation. `OLD` was confirmed; the live head `HEAD` is the branch after the update.
+test('under confirmation "diff" the five branch-update cases: merge and shifted hunks keep it; rebase, a new commit and an altered resolution void it', async () => {
+  const confirmed = async options => {
+    const f = world({comments: [comment(OLD)], ...options});
+    return f.policy.maintainerConfirmed(f.github, repo, f.pr);
+  };
+  // (a) main merged into the branch, unrelated files: the branch's own diff is unchanged.
+  assert.equal(await confirmed({}), true, '(a) merge of main');
+  // (b) the branch rebased onto the new main: the confirmed commit is no longer an ancestor of the head, so it voids today
+  // even though the diff is the same. Lineage is how a confirmation proves the commit it names was this branch's.
+  assert.equal(await confirmed({lineage: 'diverged'}), false, '(b) rebase');
+  // (c) main changed the same file in other hunks and merged cleanly: only the hunk offsets move, which the normalized diff
+  // ignores; a main change inside the branch hunk's context lines changes the diff and voids it.
+  assert.equal(await confirmed({live: [file({patch: patch().replace('@@ -1,2 +1,2 @@', '@@ -40,2 +40,2 @@')})]}), true, '(c) offsets only');
+  assert.equal(await confirmed({live: [file({patch: patch().replace(' context', ' context edited on main')})]}), false, '(c) context changed');
+  // (d) a real new commit on the branch changes the diff.
+  assert.equal(await confirmed({live: [file(), file({filename: 'src/new.js', status: 'added'})]}), false, '(d) new commit');
+  // (e) a conflict resolution that alters the branch's own added line.
+  assert.equal(await confirmed({live: [file({patch: patch('one, resolved')})]}), false, '(e) altered resolution');
+});
