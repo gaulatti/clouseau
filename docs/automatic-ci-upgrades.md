@@ -305,9 +305,39 @@ The `actions/github-script` client defaults to `retries: 0`, so a single HTTP 5x
 `GET /pulls/{n}` within about a minute of a pull request being opened was observed returning 503 to several runs at once.
 Every packaged step of the Clouseau action now installs a read retry first (`src/github-retry.cjs`): GET and HEAD are
 retried on 5xx or a short rate limit with the shared 2 s / 6 s / 15 s backoff, while writes keep their own handling, which
-checks that an earlier attempt did not land, so a review, comment or merge is never sent twice. A consumer workflow
-upgrades by adding `retries: 3` under `with:` of each of its own inline `actions/github-script` steps, which only read.
-For the reference template these are the five steps of `assess-intent` and `check-author`.
+checks that an earlier attempt did not land, so a review, comment or merge is never sent twice.
+
+**Consumer upgrade: add `retries: 3` only to inline steps that make no write.** The `retries` input of
+`actions/github-script` turns on the Octokit retry plugin for the whole step, and that plugin repeats *writes* too: a step
+that comments, labels, dispatches, approves or merges and gets a 5xx after GitHub already applied the write would apply it
+twice. So, for each inline `actions/github-script` step in your workflows:
+
+1. Find them: `grep -rn "actions/github-script" .github/workflows`.
+2. Read the step's `script:`, including every engine function it calls (`require(...)` of `.clouseau-ci/src/...`), and look
+   for any write: a `github.rest.*.create*`, `update*`, `delete*`, `merge*`, `add*`, `remove*`, `set*`, `enable*`,
+   `disable*`, `submit*` or `dismiss*` call, a `github.request('POST' | 'PUT' | 'PATCH' | 'DELETE' ...)`, or a GraphQL
+   mutation.
+3. If the step makes no write, add `retries: 3` under its `with:` block. If it writes, leave it at the default
+   `retries: 0` (it then fails on a 5xx as before), or move the write into a packaged Clouseau operation, whose writes have
+   their own landed check.
+
+Not upgrading changes nothing: the step keeps today's behaviour. The packaged steps of the Clouseau action need no change;
+they retry reads themselves.
+
+In the reference template, these steps carry `retries: 3`. All of them read only, end to end (audited against the engine on
+`main`):
+
+| Job, step | GitHub calls |
+|---|---|
+| `assess-intent`, "Verify the owner-authorized frozen reviewer installation" | `pulls.get`, `issues.listComments` |
+| `assess-intent`, "Wait for tests and exact coverage" | `pulls.get`; then `policy.technicalRun`: `actions.listWorkflowRuns`, `actions.listJobsForWorkflowRun`, and, when verification steps were skipped, the receipt check `verification-attestation.receiptAttests`: `repos.getContent`, `git.getBlob`, `pulls.listFiles` |
+| `assess-intent`, "Select authenticated local review or the installed CI reviewer" | none (reads the event payload) |
+| `assess-intent`, "Hand an unusable receipt to the separate hosted review" | none (reads a job output) |
+| `check-author`, "Verify independent repair author without writing" | `users.getAuthenticated`, `repos.get` |
+
+The workflow test `.github/tests/github-script-retries.test.mjs` fails if an inline step with `retries` contains a write
+call in its own script text. It cannot see inside the engine functions a script calls, which is why the table above records
+those calls by hand.
 
 When the `attested` decision still fails, the checks run in full as before, but the job summary and a warning now say
 `Receipt not consulted: GitHub API unavailable; verification ran in full.`, so a full run is never mistaken for a normal one.
