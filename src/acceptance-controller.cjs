@@ -385,7 +385,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
   async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT), recordPath = RECORD, ...options}) {
     const hold = reason => legacy.gate({github, context, core, ...options,
       assessment: {...assessment, decision: 'blocked_technical', reason}});
-    const stale = await require('./stale-assessment.cjs').newerConfirmation({github, context, assessment, legacy, number: numberFor(context)});
+    const stale = await require('./stale-assessment.cjs').newerConfirmation({github, context, assessment, legacy, number: numberFor(context), baseBranch: config.base_branch});
     if (stale) return hold(stale);
     if (!assessment.record_digest) {
       if (assessment.decision === 'review_incomplete') await require('./incomplete.cjs').post({github, context, assessment});

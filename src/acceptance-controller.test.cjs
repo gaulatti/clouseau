@@ -1841,19 +1841,29 @@ test('a confirmation the assessment could have read, an approvable assessment or
     await assert.rejects(gate(assessment), error => !/assessment_predates_confirmation/.test(error.message), JSON.stringify(assessment.assessed_at));
   }
   const {newerConfirmation} = require('./stale-assessment.cjs');
+  // A closed, draft or other-base pull request, or one whose base moved, takes the gate's own path: no stale notice.
+  const stamped = {...base, assessed_at: '2026-11-12T14:21:10.000Z'};
+  f.state.comments.push({id: 91, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${head}`, created_at: '2026-11-12T14:36:19Z'});
+  for (const change of [pr => {pr.state = 'closed';}, pr => {pr.draft = true;}, pr => {pr.base.ref = 'release';}, pr => {pr.base.sha = 'f'.repeat(40);}]) {
+    const saved = structuredClone(f.state.pr); change(f.state.pr);
+    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy, baseBranch: 'main', assessment: stamped}), null);
+    f.state.pr = saved;
+  }
+  assert.ok(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy, baseBranch: 'main', assessment: stamped}), 'the ready case is still detected');
+  f.state.comments.pop();
   // Only the hold an owner confirmation resolves is checked; any other hold keeps its own reason.
   for (const other of [{decision: 'blocked_technical', cause: undefined}, {decision: 'pending_technical', cause: 'verification_pending'},
     {decision: 'review_incomplete', cause: 'local_receipt_required'}, {decision: 'blocked_integrity', cause: undefined}]) {
-    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
+    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy, baseBranch: 'main',
       assessment: {...base, ...other, assessed_at: '2026-11-12T14:21:10.000Z'}}), null, JSON.stringify(other));
   }
   for (const decision of ['auto_approve', 'owner_decision']) {
-    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
+    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy, baseBranch: 'main',
       assessment: {...base, decision, assessed_at: '2026-11-12T14:21:10.000Z'}}), null, decision);
   }
   // Another user's comment, or one that names another head, is not a confirmation of this head.
   f.state.comments.splice(0, 1, {id: 89, user: {login: 'someone-else', type: 'User'}, body: `/approve-intent ${head}`, created_at: '2026-11-12T14:36:19Z'},
     {id: 90, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${'e'.repeat(40)}`, created_at: '2026-11-12T14:36:19Z'});
-  assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
+  assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy, baseBranch: 'main',
     assessment: {...base, assessed_at: '2026-11-12T14:21:10.000Z'}}), null);
 }));

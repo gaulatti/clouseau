@@ -12,7 +12,7 @@ const MARKER = 'clouseau-stale-assessment';
 // `assessed_at` is when the assessment last listed the comments, on GitHub's clock (watchCommentReads), so a confirmation
 // created after it was not in that listing. Any other decision is never stale, and an assessment without the stamp (an older engine, or one
 // that read no comment) is never checked.
-async function newerConfirmation({github, context, assessment, legacy, number}) {
+async function newerConfirmation({github, context, assessment, legacy, number, baseBranch}) {
   // Only the hold an owner confirmation resolves: a receipt that changed protected controls without one. Any other hold keeps
   // its own reason.
   if (typeof assessment.assessed_at !== 'string' || assessment.decision !== 'review_incomplete' || assessment.cause !== 'receipt_protected_controls') return null;
@@ -20,7 +20,9 @@ async function newerConfirmation({github, context, assessment, legacy, number}) 
   if (!Number.isFinite(assessedAt)) return null;
   const repo = context.repo;
   const {data: pr} = await readPull(github, repo, number);
-  if (pr.head.sha !== assessment.head_sha) return null;
+  // Only an open, ready pull request on the configured base whose assessed head and base are still live: anything else takes the
+  // gate's own path (a closed or draft PR is skipped there, a moved base gets the branch-update path).
+  if (pr.state !== 'open' || pr.draft || pr.base.ref !== baseBranch || pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) return null;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
   const confirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
   const comment = confirmation && comments.find(item => item.id === confirmation.comment_id);
