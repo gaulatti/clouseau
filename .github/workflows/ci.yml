@@ -313,7 +313,11 @@ jobs:
 
   assess-installation:
     needs: [prepare-installation, verify]
-    if: *install-event
+    # Explicit results, not the implicit success(): verify's own needs (`attested`, `resolve-clouseau`) are skipped on an
+    # installation push, and a skipped job anywhere up the chain would otherwise skip this one.
+    if: >-
+      ${{ !cancelled() && needs.prepare-installation.result == 'success' && needs.verify.result == 'success' &&
+      github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 70
     permissions:

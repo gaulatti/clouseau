@@ -48,8 +48,10 @@ Everything else answers no.
 A pull request never rewrites the statement. Two pull requests that each change semantic files therefore never touch the
 same line, and merge in either order without a manual re-bump.
 
-**In the pull request.** When semantic files change, `src/review-semantics.test.cjs` (the required `verify` job) fails with
-"Undeclared review-semantics change" until the author records the decision, which adds one new file:
+**In the pull request.** When semantic files change, `src/review-semantics.test.cjs` (in the required `verify` job) fails with
+"Undeclared review-semantics change" until the author records the decision, which adds one new file. A receipt that attests
+the verification skips that suite, so Clouseau's CI also runs `scripts/review-compatibility verify` in its always-run
+`self-tests` job, against the tree the run verifies:
 
 - `scripts/review-compatibility declare --compatible`: the change cannot alter what a review attests (refactor, comment,
   performance, a notice). Earlier receipts stay acceptable.

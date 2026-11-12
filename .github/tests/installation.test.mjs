@@ -62,6 +62,22 @@ test('the actual installer guard accepts only an owner-confirmed frozen same-rep
 
 test('ordinary PRs always load main; installation requires successful read-only preparation and exact source selection', () => {
   assert.deepEqual(assess.needs, ['prepare-installation', 'verify']);
+  // The guard names its results explicitly: verify's own needs are skipped on an installation push, and the implicit success()
+  // would skip this job for a skipped job anywhere up the chain.
+  const cancelled = {name: 'cancelled', minArgs: 0, maxArgs: 0, call: () => new data.BooleanData(false)};
+  const ran = (prepared, verified, event = context()) => {
+    const value = {...event, needs: {...event.needs, 'prepare-installation': {...event.needs['prepare-installation'], result: prepared},
+      verify: {result: verified}}};
+    const expression = assess.if.trim().replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+    const ast = new Parser(new Lexer(expression).lex().tokens, Object.keys(value), [cancelled]).parse();
+    return new Evaluator(ast, typed(value), new Map([['cancelled', cancelled]])).evaluate().value;
+  };
+  assert.equal(ran('success', 'success'), true);
+  for (const [prepared, verified] of [['success', 'failure'], ['success', 'skipped'], ['skipped', 'success'], ['failure', 'success']]) {
+    assert.equal(ran(prepared, verified), false, `${prepared}/${verified}`);
+  }
+  assert.equal(ran('success', 'success', context('push', 'refs/heads/main')), false);
+  assert.equal(ran('success', 'success', context('pull_request')), false);
   assert.ok(Object.values(prepare.permissions).every(value => value === 'read'));
   assert.ok(Object.values(assess.permissions).every(value => value === 'read'));
   assert.equal(assess.steps[0].with.ref, '${{ needs.prepare-installation.outputs.head }}');

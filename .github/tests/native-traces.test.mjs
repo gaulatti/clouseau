@@ -96,3 +96,14 @@ test('a receipt skips exactly the receipt-covered steps; the self-tests and the 
   assert.deepEqual(decide.with, {operation: 'attested', config: '.github/clouseau.json'});
   assert.deepEqual(attested.permissions, {contents: 'read', 'pull-requests': 'read'});
 });
+
+test('this repository sets hosted_review "manual" and its reassessment trigger starts on /hosted-review, as the docs require', () => {
+  const config = JSON.parse(readFileSync(new URL('../clouseau.json', import.meta.url), 'utf8'));
+  assert.equal(config.hosted_review, 'manual');
+  const condition = workflow.jobs['request-reassessment'].if;
+  const comment = body => ({github: {event_name: 'issue_comment', event: {issue: {pull_request: {}}, comment: {body}}},
+    inputs: {pull_request: '', evaluate_acceptance: false}});
+  const head = 'a'.repeat(40);
+  for (const body of [`/approve-intent ${head}`, `/hosted-review ${head}`]) assert.equal(evaluate(condition, comment(body)), true, body);
+  for (const body of ['/hosted-review', 'please /hosted-review', 'looks good']) assert.equal(evaluate(condition, comment(body)), false, body);
+});
