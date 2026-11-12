@@ -170,7 +170,9 @@ jobs:
           npm ci --prefix .github/tests --ignore-scripts --no-audit --no-fund
           npm test --prefix .github/tests
       # The engine's own self-tests and the review-semantics declarations run whatever a receipt says: no receipt attests them.
-      # The checkout, Node and coverage.py setup above run for them too (`self-test-code` never reads `attested`).
+      # Of the setup above, only the checkout and Node setup (`self-test-code`, which never reads `attested`) always run; the
+      # Python setup and the coverage.py install are `verify-code` steps, skipped with the other receipt-covered steps under an
+      # attesting receipt, so nothing below may depend on them.
       # The declarations are checked against the tree this run verifies (the pull request's merge with its base), so a
       # declaration left stale by a merge fails here even when a receipt attests every other check (docs/receipt-compatibility.md).
       - name: Check review-semantics declarations against the verified tree
