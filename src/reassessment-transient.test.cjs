@@ -130,3 +130,12 @@ test('a rerun retried by the rate-limit wait after landing is not requested twic
   await w.run();
   assert.deepEqual(w.calls.reruns, [40], 'the second attempt saw the run already rerunning');
 });
+
+test('a status-less transient failure after validation and an exhausted rerun write both reach the notice with their own wording', async () => {
+  const graph = world({runsList: () => {throw new Error('Something went wrong while executing your query. Please try again');}});
+  await assert.rejects(graph.run(), /could not be requested: GitHub kept failing transiently \(HTTP error\)\./);
+  assert.equal(graph.calls.comments.length, 1);
+  const exhausted = world({rerun: () => {throw unavailable();}});
+  await assert.rejects(exhausted.run(), /could not be requested: GitHub kept failing transiently \(4 attempts\)\./);
+  assert.equal(exhausted.calls.reruns.length, 4); assert.equal(exhausted.calls.comments.length, 1);
+});

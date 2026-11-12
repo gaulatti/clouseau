@@ -384,8 +384,7 @@ const UNREQUESTED = 'clouseau-reassessment-unrequested';
 // The visible notice for a reassessment asked for on a pull request (a comment or a dispatch naming it) that could not be
 // requested. A notice that cannot be written is logged and never hides the original failure.
 async function reportUnrequested({github, context, core, transient, why}) {
-  if (!['issue_comment', 'workflow_dispatch'].includes(context.eventName)) return;
-  // Both events read the number before any API call, so a transient failure here always has a valid one.
+  // Only a validated comment or dispatch request gets here, and both read the number before any API call.
   const number = numberFor(context);
   const asked = context.eventName === 'issue_comment' ? String(context.payload.comment.body).trim().split('\n')[0].slice(0, 120) : 'the dispatched reassessment';
   // One notice per request (the comment, or the dispatched run), so a retry can tell whether an earlier attempt had posted it.
