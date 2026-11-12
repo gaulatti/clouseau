@@ -1064,6 +1064,13 @@ view it can only record as missing coverage, which leaves `review_completeness` 
 Nothing activates on merge: without `partition` every review is `/1`, exactly as before (the same partition, views,
 prompts and record). Turning `/2` on is a change to the protected base-branch configuration; rollback is removing it.
 
+**When a repository needs `/2`.** Landing the scheme is a mechanics change with no effect on existing consumers. Opting a
+repository in is a review-semantics change for that repository: its unit reviewers receive the other ends of their seams
+among the changed files, so their findings and completeness can differ from a `/1` review of the same change. Receipts
+signed under `/1` still verify (below). Turn `/2` on when the repository's changes are being chunked and CI refuses
+their receipts for completeness (`receipt_completeness`: units recorded each other's files as missing). A repository whose
+changes are never chunked, or whose chunked receipts CI accepts, gains nothing from it.
+
 ### Receipts under each scheme
 
 The record names its scheme (`partition.scheme`), and the verifier recomputes the partition, the context of every unit, the
