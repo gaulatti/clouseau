@@ -318,7 +318,7 @@ The `native-gate` and `wait-for-verification` action inputs default to `true`.
 The native job summary preserves detailed reasons; no additional API check is
 created in native mode. A `GITHUB_TOKEN` API check can attach to another run's
 suite and is insufficient as the required approval result for this flow. Comment/manual handlers call
-`request-reassessment` with actions write, contents and pull-requests read, and issues
+`request-reassessment` with actions write, contents read, and issues and pull-requests
 write access; they rerun the current revision's existing `pull_request_target` run. Its test job
 is skipped, so confirming intent does not rebuild the container. The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
@@ -326,7 +326,7 @@ GitHub 5xx and short rate-limit failures are retried with the shared transient b
 step retries its reads; see the upgrade notes).
 A request that still cannot be made is never silent: the pull request gets a
 `clouseau-reassessment-unrequested` notice saying the comment was received and how
-to recover (that notice is the only reason for issues write). When the gate is
+to recover (that notice is the only reason for the write access; commenting on a pull request needs both). When the gate is
 re-run on its own ("Re-run failed jobs") with an assessment made before an owner
 confirmation of the same head, it fails with cause `assessment_predates_confirmation`.
 It posts one notice per head and confirmation asking for **Re-run all jobs**, and it

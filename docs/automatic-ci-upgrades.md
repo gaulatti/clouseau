@@ -321,13 +321,14 @@ changing that job's `permissions` to:
 ```yaml
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
       actions: write
 ```
 
-The job still checks out only trusted `main` and the frozen engine, never pull request code. Without issues: write
-the retry still works; the notice itself then fails visibly, and the log names the missing permission.
+The job still checks out only trusted `main` and the frozen engine, never pull request code. Commenting on a pull request
+needs both write permissions (see the reconcile notes below). Without them the retry still works; the notice itself then
+fails visibly, and the log names the missing permissions.
 A separate `workflow_run` reassessment file needs no change: no person asked for that request, so it posts nothing.
 
 The packaged `assess` step now stamps `assessed_at` into the assessment: the moment its last listing of the pull request's

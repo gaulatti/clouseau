@@ -452,11 +452,12 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.check_author)
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    # issues: write only for the notice that a requested reassessment could not be requested (an issue comment on the pull
-    # request); the job runs trusted main and the frozen engine, never pull request code.
+    # issues and pull-requests write only for the notice that a requested reassessment could not be requested. Commenting on a
+    # pull request with the workflow token needs both (issue 142: issues: write alone got HTTP 403). The job runs trusted main
+    # and the frozen engine, never pull request code.
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
       actions: write
     needs: resolve-clouseau

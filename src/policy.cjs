@@ -385,7 +385,7 @@ async function reportUnrequested({github, context, core, transient, why}) {
     '(not "Re-run failed jobs": that reuses the assessment made before your comment), or post the same comment again.';
   try {await transient(() => github.rest.issues.createComment({...context.repo, issue_number: number, body}));} catch (error) {
     core.info(`The reassessment notice could not be posted on PR ${number} (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}); ` +
-      'commenting needs the job permission issues: write.');
+      'commenting on a pull request needs the job permissions issues: write and pull-requests: write.');
   }
 }
 

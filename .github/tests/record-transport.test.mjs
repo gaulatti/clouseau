@@ -57,6 +57,7 @@ async function execute(step, options = {}) {
   const policy = {
     async assess(args) {
       state.assess++; state.receiptOnly = args.receiptOnly; state.ignoreReceipt = args.ignoreReceipt;
+      if (options.readComments) await args.github.request({method: 'GET', url: '/repos/{owner}/{repo}/issues/{issue_number}/comments'});
       mkdirSync('work', {recursive: true}); writeFileSync(RECORD, JSON.stringify(record));
       if (options.bundle) writeFileSync(`${RECORD}.repair.json`, JSON.stringify(options.bundle));
       if (options.diagnostic) writeFileSync(`${RECORD}.diagnostic.json`, options.diagnostic);
@@ -73,7 +74,10 @@ async function execute(step, options = {}) {
   const controller = {RECORD, verifyRecord: (actual, actualAssessment) => {
     state.verify++; assert.deepEqual(JSON.parse(JSON.stringify(actual)), record); assert.deepEqual(JSON.parse(JSON.stringify(actualAssessment)), assessment);
   }};
-  const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}, hook: {wrap() {}, before() {}}};
+  // A client shaped like Octokit's hooks: a `before` hook sees every request the packaged step's assessment makes.
+  const before = [];
+  const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}, hook: {wrap() {}, before: (name, fn) => before.push(fn)},
+    request: async options => {before.forEach(fn => fn(options)); return {data: []};}};
   const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line), warning: line => (state.warnings ??= []).push(line)};
   try {
     process.chdir(dir);
@@ -179,11 +183,15 @@ test('packaged artifact mode leaves the existing artifact path and gate unchange
 test('packaged repair transports its bound bundle before the existing verifier and independent-author boundary', async () => {
   const f = fixture(); const bundle = {proposal: {edits: []}};
   const assessment = {...f.assessment, repair_digest: digest(bundle)};
-  const produced = await execute(assess, {assessment, bundle});
+  const produced = await execute(assess, {assessment, bundle, readComments: true});
   const values = {assessment: produced.outputs.assessment, 'review-record': produced.outputs['review-record']};
-  // The packaged assess step stamps when it last read comments (none here: no stamp); the repair receives what it produced.
+  // The packaged assess step stamps when the assessment last listed the comments; the stamped assessment crosses the
+  // transport to the repair unchanged, and the record still verifies against it.
   const stamped = JSON.parse(produced.outputs.assessment);
-  assert.deepEqual(stamped, assessment);
+  assert.deepEqual({...stamped, assessed_at: undefined}, {...assessment, assessed_at: undefined});
+  assert.ok(Math.abs(Date.parse(stamped.assessed_at) - Date.now()) < 60000, 'stamped by the comment read');
+  const unread = JSON.parse((await execute(assess, {assessment, bundle})).outputs.assessment);
+  assert.deepEqual(unread, assessment, 'an assessment that read no comment carries no stamp');
   await assert.rejects(execute(repair, {inputs: values, assessment: stamped}), error => {
     assert.equal(error.transportState.verify, 1); assert.equal(error.transportState.repair, 0);
     return /independent GitHub author credential/.test(error.message);
