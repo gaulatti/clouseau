@@ -35,9 +35,10 @@ test('every cause names its class and has numbered steps; unknown causes fall to
     assert.ok(!/\{[a-z]+\}/.test(text), `${cause}: every placeholder is filled`);
     assert.ok(text.includes('Reason owner second line'), 'mentions are neutralized and whitespace collapsed');
     assert.ok(text.includes('actions/runs/9') && text.includes('aaaaaaaaaaaa'));
-    // Only the maintainer command carries the full revision.
-    assert.equal(text.includes('a'.repeat(13)), cause === 'receipt_protected_controls');
+    // Only the maintainer commands carry the full revision.
+    assert.equal(text.includes('a'.repeat(13)), ['receipt_protected_controls', 'hosted_review_manual'].includes(cause));
     if (cause === 'receipt_protected_controls') assert.ok(text.includes(`\`/approve-intent ${assessment.head_sha}\``));
+    if (cause === 'hosted_review_manual') assert.ok(text.includes(`\`/hosted-review ${assessment.head_sha}\``));
     assert.ok(!text.includes('artifact'), 'no incomplete notice names an artifact that may not exist in this transport');
     assert.match(text, /no secret values/);
   }

@@ -832,6 +832,32 @@ nothing is approved until you do the following.` and the outcome is
 (`local_receipt_unusable`) the reason itself carries the cause sentence. While tests are pending or failing, an ignored receipt behaves exactly like
 an unstamped change (the pending or blocked result carries the notice).
 
+#### Manual hosted review (opt-in)
+
+The protected top-level `hosted_review` in `.github/clouseau.json` on the base branch says whether the CI AI review of a pull
+request with no usable receipt starts by itself:
+
+| `hosted_review` | No usable receipt (absent, expired or otherwise unusable) |
+| --- | --- |
+| absent or `"automatic"` | today's behavior: the CI AI review runs (optional mode), or `local_receipt_required` (required mode) |
+| `"manual"` | `review_incomplete`, cause `hosted_review_manual`, no provider call, until a maintainer requests the review |
+
+The request reaches the engine only through the repository workflow: its `issue_comment` condition must start a run for
+`/hosted-review ` comments, as `examples/consumer-ci.yml` does. The engine never sees a comment that starts no run, so it
+cannot detect a workflow without that trigger; the hold notice therefore names the missing condition as its last step. A
+consumer that sets `hosted_review: "manual"` adds the condition in the same change.
+
+The request is a comment `/hosted-review <head sha>` on the pull request, validated as `/approve-intent` is: the exact current
+head, a real user (not a bot), write permission or higher, and re-read by the engine itself from the pull request's comments.
+How the run was started never matters, only such a comment. With a valid request the run proceeds as `"automatic"` would; a
+request for an older head, from a reader or from a bot is ignored. A valid receipt is used whatever the setting, and a
+repository in `required` mode keeps `local_receipt_required`. The receipt-only job still holds no provider secret: in manual
+mode it returns `local_receipt_unusable` only when a valid request exists, so the reference workflow's hosted fallback below
+starts exactly then, and the hosted job checks the request again. In the reference workflow (`examples/consumer-ci.yml`) a
+`/hosted-review ` comment starts the reassessment the same way `/approve-intent ` does (the engine's `request-reassessment`
+accepts an exact-head `/hosted-review` from a maintainer as it accepts `/approve-intent`); a consumer carrying an older copy adds
+`|| startsWith(github.event.comment.body, '/hosted-review ')` to its `request-reassessment` job condition.
+
 #### Hosted review after an unusable receipt (reference consumer workflow)
 
 A workflow that routes a PR whose description carries a receipt marker to a
