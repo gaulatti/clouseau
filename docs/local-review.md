@@ -1001,7 +1001,7 @@ A missing or unreadable part, or a part that does not join to the signed root, i
 
 `clouseau review` (and `respond`/`publish`, which continue and publish the same review) never refuses a change for its size.
 It collects the change as before; when the complete evidence does not fit one 900,000-character snapshot (or a changed file is
-over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`), bounded unit views
+over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`, or `/2` when configured), bounded unit views
 (a file too large for one unit is split into segments), both roles on every unit through the unchanged reviewer, controller-computed
 seams, one blind integration pass per role (none when there are no seams), merge, one grading round per role, one chunked record (`version 3`, multi-part
 when it exceeds one receipt) and ONE signed receipt. A change that fits is reviewed and signed exactly as before (record `version 2`,
@@ -1020,6 +1020,7 @@ values) can only **tighten** it:
 | `integration_cap` | integration session input | at most 250000 |
 | `integration_call_seams` | seams one integration session is given (more seams, more sessions) | at most 60 |
 | `integration_max_seams` | seams the integration pass examines at all; the rest are recorded `missing` and hold approval | at most 400 |
+| `partition` | the partition scheme a local review produces: `1` (`clouseau-partition/1`) or `2` (`clouseau-partition/2`, below) | `1` when absent |
 
 No argument or environment variable changes them. A unit that misses the deadline stops the review with `unit_deadline` and the
 ceiling to use; lower `params.C` in the protected configuration and review again. A crashed headless review resumes from its journal
@@ -1027,9 +1028,61 @@ ceiling to use; lower `params.C` in the protected configuration and review again
 
 The hosted CI review has its own dark, opt-in counterpart for a pull request that has no usable receipt: see `docs/chunked-hosted.md` (`acceptance.chunked_hosted`).
 
+### When a change is chunked
+
+The 900,000-character budget counts the whole base and head text of every changed file, plus its patch, not the size of the
+diff. A change that touches a few large files is therefore chunked however small its diff: this document alone is about
+87,000 characters, so a one-line edit to it costs about 180,000 characters of the budget (base text, head text and patch,
+as the planner prices it), and five such files fill it. Consumers with large source or documentation files hit chunking routinely, so what a unit can
+see decides whether a chunked review can approve at all.
+
+### What a unit sees: partition schemes
+
+Both schemes group files into the same units (above, and "Review partition" below); they differ only in the `context_ids`
+each unit is reviewed with. A unit can never request a source (a request refuses the whole review), so what is not in its
+view it can only record as missing coverage, which leaves `review_completeness` unresolved; CI then holds approval
+(`acceptance.cjs` `approvalHold`) and refuses to reuse the receipt.
+
+* **`clouseau-partition/1`** (the default). A unit sees its own files' base and head sources, shared context (contracts,
+  the verification record, the request, unchanged sources such as the engine, within S), the change manifest (every changed
+  path and its owning unit), and the patches only (`foreign_hunks`) of changed files its own JavaScript files import. It sees
+  no source of another unit's changed files, so a unit whose file is imported by, imports, or is tested by another unit's
+  file records that file as missing. A change to `src/policy.cjs`, `src/local-cli.cjs` and `src/acceptance-controller.cjs`
+  with their tests ends with every unit listing the others as missing.
+* **`clouseau-partition/2`** (`"partition": 2`). Each unit additionally sees, as whole read-only sources in `context_ids`,
+  the other end of every seam it is an end of (`src/seam-context.cjs`): the changed files it imports, that import it,
+  whose removed path it still imports, and the subjects or tests across a unit boundary. Ends are added most relevant seam
+  first (removed import, consumed export, test subject, plain import; `src/integration-plan.cjs`), each read at head (at
+  base for a file the change removes), while the unit's view still fits 900,000 characters; an end that does not fit is
+  skipped whole and smaller ones are still tried, never cut. Only changed files of the same snapshot are added, never an
+  unchanged caller or test (those are not collected), so the shared context of other units does not move. The unit prompt
+  then says that `evidence.unit.context_ids` are other units' files to read as context, accounted for by their own units.
+  The context is a pure function of the snapshot and the protected parameters: no model chooses it and no session is added.
+  A unit that still lacks evidence (an unchanged caller, an end too large to fit) records it as missing, as under `/1`.
+  Each unit's input grows up to the same cap, so the hosted `max_input_tokens` estimate counts the context too.
+
+Nothing activates on merge: without `partition` every review is `/1`, exactly as before (the same partition, views,
+prompts and record). Turning `/2` on is a change to the protected base-branch configuration; rollback is removing it.
+
+### Receipts under each scheme
+
+The record names its scheme (`partition.scheme`), and the verifier recomputes the partition, the context of every unit, the
+views and the seams under **that** scheme from the signed snapshot and the protected `{C, S}`, whatever scheme the protected
+configuration currently makes local review produce. So:
+
+* every `/1` receipt, including those issued before `/2` existed, is recomputed with empty context exactly as before and
+  stays valid, before and after `partition: 2` is set (`src/seam-context.test.cjs` verifies a `/1` record produced by the
+  earlier engine byte for byte);
+* a `/2` receipt exists only once the setting is on, and is recomputed with the controller's seam context; a unit whose
+  `context_ids` differ in any way from the recomputation (`context of unit … differs`) or a scheme the verifier does not
+  know (`unknown or malformed partition scheme`) is refused, so the receipt is ignored and CI reviews;
+* the scheme is bound into `plan_digest` and every `view_digest`, so the reuse of remembered unit answers (`unit-reuse`)
+  misses once for every unit when the scheme changes.
+
 ## Review partition
 
-`src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
+`src/review-partition.cjs` implements schemes `clouseau-partition/1` and `/2` (identical grouping; `/2` units also get seam
+context, see "What a unit sees" above), the first stage of reviewing a change
 whose complete evidence exceeds the 900,000-character snapshot budget in bounded units. It is deterministic
 and model-free; `clouseau review` uses it for a change that does not fit one snapshot.
 

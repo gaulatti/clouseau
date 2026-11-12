@@ -86,8 +86,10 @@ function checkTransport(mode, text) {
 const held = (cause, message) => new HostedChunkedHold(cause, message);
 const raise = 'A maintainer can raise it in the protected base-branch Clouseau configuration';
 
-function preflight(plan, active) {
-  const tokens = Math.ceil(2 * plan.units.reduce((sum, unit) => sum + unit.cost, 0) / CHARS_PER_TOKEN);
+// A clouseau-partition/2 unit also reads its seam context (`context_ids`, sources of `snapshot`), so that counts too.
+function preflight(plan, active, snapshot) {
+  const context = unit => (unit.context_ids ?? []).reduce((sum, id) => sum + snapshot.sources[id].content.length, 0);
+  const tokens = Math.ceil(2 * plan.units.reduce((sum, unit) => sum + unit.cost + context(unit), 0) / CHARS_PER_TOKEN);
   if (plan.units.length > active.max_units) {
     throw held('chunked_unit_cap', `Held, not failed: this change needs ${plan.units.length} review units, above the protected cap ` +
       `acceptance.chunked_hosted.max_units = ${active.max_units}. Nothing was skipped. ${raise} (raise max_units; estimated ` +
@@ -146,10 +148,10 @@ function meter(active) {
 // Plans the change, enforces the caps before any provider call, and runs the chunked review. Returns the pieces of a
 // version 3 record: {result, partition, seams}.
 async function review({snapshot, active, config, fetchImpl, wait, log, observe, journal, scope}) {
-  const hooks = wiring.hooksFor(active.params);
+  const hooks = wiring.activeHooks(active);
   const plan = hooks.plan(snapshot);
   const seams = hooks.seams({snapshot, plan});
-  preflight(plan, active);
+  preflight(plan, active, snapshot);
   const ask = hostedAsk({config, charge: meter(active), fetchImpl, wait, log, observe});
   try {
     const {result, partition} = await chunkedReview({snapshot, plan, seams, ask, journal, scope,

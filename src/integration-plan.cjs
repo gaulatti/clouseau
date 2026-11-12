@@ -38,4 +38,4 @@ function overflowEntry(overflow, maxSeams) {
       reason: `Not examined: beyond the ${maxSeams} most relevant seams the integration pass may be given.`}))};
 }
 
-module.exports = {RANK, selectSeams, overflowEntry};
+module.exports = {RANK, relevance, selectSeams, overflowEntry};
