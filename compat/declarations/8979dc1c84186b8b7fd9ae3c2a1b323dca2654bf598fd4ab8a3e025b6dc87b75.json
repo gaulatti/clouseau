@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "6578cffd96885094ad7c7af13002625a66c5659cd1b78b9ffa4d539d98ba69fc"
+    },
+    {
+      "path": "src/local-cli.cjs",
+      "mode": 0,
+      "sha256": "b663c2a4d7945f633306fbebf7f147f90ff41ff7dea8acf82da1ca5c30b5d6ef"
+    },
+    {
+      "path": "src/local-receipt.cjs",
+      "mode": 0,
+      "sha256": "af36478779343ab477a59fe5b019aa55ea031e52c9d551f1b8c897021af58df7"
+    },
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "d66ddc09c693d13cce8449ee8601cb162de2e242cbce849804cca7b1edba59f1"
+    },
+    {
+      "path": "src/pr-refresh.cjs",
+      "mode": 0,
+      "sha256": "c10b7707b6a8fb9b7b8becd62607622be069780d6c5f29baef3a1f92a4f90f9a"
+    },
+    {
+      "path": "src/receipt-standing.cjs",
+      "mode": 0,
+      "sha256": "84efa9c7975b0a5acef4a018c4fba6265740ab03e4f4605bc4a8dbd17b65af2b"
+    }
+  ]
+}
