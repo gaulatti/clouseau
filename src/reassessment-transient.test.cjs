@@ -139,3 +139,13 @@ test('a status-less transient failure after validation and an exhausted rerun wr
   await assert.rejects(exhausted.run(), /could not be requested: GitHub kept failing transiently \(4 attempts\)\./);
   assert.equal(exhausted.calls.reruns.length, 4); assert.equal(exhausted.calls.comments.length, 1);
 });
+
+test('a re-run of the job finds the notice its earlier run posted and does not post it again', async () => {
+  const w = world({runsList: () => {throw unavailable();}});
+  await assert.rejects(w.run(), /could not be requested/);
+  assert.equal(w.calls.landed.length, 1);
+  // The same request, the same job re-run: its first attempt looks first.
+  await assert.rejects(w.run(), /could not be requested/);
+  assert.equal(w.calls.landed.length, 1, 'one notice per request across runs');
+  assert.equal(w.calls.comments.length, 1, 'the re-run posted nothing');
+});

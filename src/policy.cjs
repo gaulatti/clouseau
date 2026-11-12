@@ -387,18 +387,18 @@ async function reportUnrequested({github, context, core, transient, why}) {
   // Only a validated comment or dispatch request gets here, and both read the number before any API call.
   const number = numberFor(context);
   const asked = context.eventName === 'issue_comment' ? String(context.payload.comment.body).trim().split('\n')[0].slice(0, 120) : 'the dispatched reassessment';
-  // One notice per request (the comment, or the dispatched run), so a retry can tell whether an earlier attempt had posted it.
+  // One notice per request (the comment, or the dispatched run): every attempt, including the first of a re-run job, first
+  // looks for it, so neither a retry nor a re-run of this job posts it twice.
   const marker = `<!-- ${UNREQUESTED}:${context.eventName === 'issue_comment' ? `comment-${context.payload.comment.id}` : `run-${context.runId}`} -->`;
   const body = `${marker}\n## Clouseau: reassessment not requested\n\n` +
     `Your request (\`${asked.replaceAll('`', '')}\`) was received, but Clouseau could not request the reassessment: ${why}\n\n` +
     '**Nothing was lost.** To recover, open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** ' +
     '(not "Re-run failed jobs": that reuses the assessment made before your comment), or post the same comment again.';
-  let tries = 0;
   const posted = async () => (await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: number, per_page: 100}))
     .some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`));
   try {
     await transient(async () => {
-      if (tries++ > 0 && await posted()) return;
+      if (await posted()) return;
       await github.rest.issues.createComment({...context.repo, issue_number: number, body});
     });
   } catch (error) {
