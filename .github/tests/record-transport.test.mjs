@@ -73,7 +73,7 @@ async function execute(step, options = {}) {
   const controller = {RECORD, verifyRecord: (actual, actualAssessment) => {
     state.verify++; assert.deepEqual(JSON.parse(JSON.stringify(actual)), record); assert.deepEqual(JSON.parse(JSON.stringify(actualAssessment)), assessment);
   }};
-  const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}};
+  const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}, hook: {wrap() {}}};
   const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line), warning: line => (state.warnings ??= []).push(line)};
   try {
     process.chdir(dir);
