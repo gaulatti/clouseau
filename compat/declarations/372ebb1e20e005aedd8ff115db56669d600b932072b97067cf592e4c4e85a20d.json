@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/pr-refresh.cjs",
+      "mode": 0,
+      "sha256": "3643eccedb5130ec349023a8c691925f83601cfa39a60d125c7cbda494aeadb1"
+    }
+  ]
+}

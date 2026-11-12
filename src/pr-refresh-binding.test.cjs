@@ -220,3 +220,35 @@ test('the local normalized diff names a rename by both paths and a change that s
     assert.notEqual(localDiff(f.work, base, 'HEAD'), after);
   });
 });
+
+test('the local normalized diff reads paths git would quote or treat as globs as the same literal paths', async () => {
+  await pullRepository(async f => {
+    const base = git(f.work, ['merge-base', 'HEAD', 'origin/main']).trim();
+    for (const name of ['src/café.js', 'src/[ab].js', 'src/tab\there.js']) {
+      const before = localDiff(f.work, base, 'HEAD');
+      f.write(f.work, name, 'module.exports = 1;\n'); f.commit(f.work, `chore: add ${JSON.stringify(name)}`);
+      const added = localDiff(f.work, base, 'HEAD');
+      assert.notEqual(added, before, `${JSON.stringify(name)} is in the diff`);
+      f.write(f.work, name, 'module.exports = 2;\n'); f.commit(f.work, `chore: change ${JSON.stringify(name)}`);
+      assert.notEqual(localDiff(f.work, base, 'HEAD'), added, `a change to ${JSON.stringify(name)} changes the diff: its patch is not empty`);
+    }
+  });
+});
+
+test('under binding "diff" a refresh that merged the base and then has no requirement leaves the branch as it found it', async () => {
+  const long = Array.from({length: 20}, (_, index) => `const line${index} = ${index};`).join('\n') + '\n';
+  await pullRepository(async f => {
+    f.write(f.work, 'src/long.js', long.replace('line1 = 1;', 'line1 = 101;')); f.commit(f.work, 'fix: change an early line');
+    git(f.work, ['push', '-q', 'origin', 'feature']); f.pull.head = f.head();
+    const before = f.head();
+    // The base changes a line inside the hunk's context, so the merge changes the diff and a review would be needed.
+    f.advance('src/long.js', long.replace('line3 = 3;', 'line3 = 103;'));
+    // An empty state directory: no stored requirement for this branch.
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-refresh-empty-'));
+    const covered = {...stub({head: () => f.head(), standing: {applicable: true, usable: true, binding: 'diff'}}), state, execute: f.execute, available: () => true};
+    try {await assert.rejects(refreshPull(args(f, {'request-file': undefined}), covered), /requirement/i);}
+    finally {fs.rmSync(state, {recursive: true, force: true});}
+    unchanged(f, before);
+    assert.deepEqual([...covered.seen.reviews, ...covered.seen.publishes], []);
+  }, {ciConfig: {local_review: {binding: 'diff'}}, files: {'src/long.js': long}});
+});
