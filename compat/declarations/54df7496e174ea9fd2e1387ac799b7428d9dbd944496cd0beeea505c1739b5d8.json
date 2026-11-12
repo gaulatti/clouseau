@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "80d81a6934020ba0afe240ac3617ab8d1e7bf561a9c97aba66916f4e940ad19b"
+    }
+  ]
+}
