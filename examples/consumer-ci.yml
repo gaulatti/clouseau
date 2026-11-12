@@ -54,7 +54,7 @@ jobs:
           provenance: summary
 
   # Optional: skip the checks a valid local receipt already attests (docs/local-review.md, "Receipt-attested verification").
-  # Any other outcome, including an error here, leaves `attested` unset and `verify` runs every check.
+  # Any other outcome leaves `attested` other than "true" (an error here sets it "false" and says so in the job summary), and `verify` runs every check.
   attested:
     needs: resolve-clouseau
     runs-on: ubuntu-latest

@@ -13,24 +13,14 @@
       "sha256": "c5020b548cbede353bf1fd9f67466d8183e6ce23046195ef305982840e8c7cca"
     },
     {
-      "path": "src/github-retry.cjs",
-      "mode": 0,
-      "sha256": "991887fd0f419e9af1e5be92fde903853f0ff46005ee45b36e3f5d52c31d16ea"
-    },
-    {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "7a893313f5a5d02db5c78497a298c97c7397c9977424c4a5971a4cd292eda625"
+      "sha256": "79929684bb6b4699803f95892a3aff58da1898a0864fd4212e5a37401fce0be8"
     },
     {
       "path": "src/stale-assessment.cjs",
       "mode": 0,
       "sha256": "39d09cb00be7bf612ac233716ceade6676b70517dbec38c8013ae49a004367f3"
-    },
-    {
-      "path": "src/verification-attestation.cjs",
-      "mode": 0,
-      "sha256": "91b3a3b728a8789d02630c0abe320db44228a9885b16c067c860ebb3c2060b81"
     }
   ]
 }

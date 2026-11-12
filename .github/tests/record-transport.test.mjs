@@ -74,7 +74,7 @@ async function execute(step, options = {}) {
   const controller = {RECORD, verifyRecord: (actual, actualAssessment) => {
     state.verify++; assert.deepEqual(JSON.parse(JSON.stringify(actual)), record); assert.deepEqual(JSON.parse(JSON.stringify(actualAssessment)), assessment);
   }};
-  // A client shaped like Octokit's hooks: a `before` hook sees every request the packaged step's assessment makes.
+  // A client shaped like Octokit's hooks: an `after` hook sees every response to a request the packaged step's assessment makes.
   const after = [];
   const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}, hook: {wrap() {}, after: (name, fn) => after.push(fn)},
     request: async options => {const response = {data: [], headers: {date: new Date().toUTCString()}}; after.forEach(fn => fn(response, options)); return response;}};

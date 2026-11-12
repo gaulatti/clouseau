@@ -401,11 +401,22 @@ async function reportUnrequested({github, context, core, transient, why}) {
   }
 }
 
+// The heads a force push of this pull request replaced or produced, read by the engine from the pull request's own timeline
+// (never from comment text). More force pushes than one page holds is evidence the engine did not read: none is returned.
+const FORCE_PUSHES = 'query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){' +
+  'timelineItems(itemTypes:[HEAD_REF_FORCE_PUSHED_EVENT],first:100){totalCount nodes{...on HeadRefForcePushedEvent{beforeCommit{oid} afterCommit{oid}}}}}}}';
+async function forcePushedHeads(github, repo, number) {
+  const items = (await github.graphql(FORCE_PUSHES, {owner: repo.owner, repo: repo.repo, number})).repository?.pullRequest?.timelineItems;
+  if (!items || items.totalCount > items.nodes.length) return null;
+  return [...new Set(items.nodes.flatMap(node => [node?.beforeCommit?.oid, node?.afterCommit?.oid]).filter(oid => /^[a-f0-9]{40}$/.test(String(oid))))];
+}
+
 // Whether a confirmation of commit `sha` (an `/approve-intent` comment or an approving review) covers the pull request's head.
 // It always does for the exact head. Only with the protected `local_review.confirmation: "diff"` (`intentDiff`) does it also cover a
 // later head of the same pull request whose normalized diff (receipt-patch.cjs) equals the diff `sha` had from its merge base
 // with the live base: a branch update that leaves the change unchanged keeps the owner's confirmation, any other push voids
-// it. `sha` must be an ancestor of the head; a patchless or truncated file list, or an unknown commit, never matches. The
+// it. `sha` must have been a head of this pull request: an ancestor of its head, or (after a rebase) of a head that one of its
+// force pushes replaced or made. A patchless or truncated file list, or an unknown commit, never matches. The
 // base `sha` was confirmed against must carry the same protected configuration and purpose contract as the live base: a
 // confirmation never carries across a base change to either.
 const confirmations = new Map();
@@ -422,8 +433,15 @@ async function confirms(github, repo, pr, sha) {
       try {return (await github.rest.repos.compareCommits({...repo, base, head})).data;}
       catch (error) {if (error.status === 404 || error.status === 422) return null; throw error;}
     };
-    const lineage = await compare(sha, pr.head.sha);
-    if (!lineage || !['ahead', 'identical'].includes(lineage.status)) return false;
+    // `sha` must have been this pull request's: an ancestor of its head, or of a head a force push (a rebase) replaced or made.
+    const within = async tip => ['ahead', 'identical'].includes((await compare(sha, tip))?.status);
+    if (!await within(pr.head.sha)) {
+      const tips = await forcePushedHeads(github, repo, pr.number);
+      if (!tips) return false;
+      let ours = false;
+      for (const tip of tips) if (tip === sha || tip !== pr.head.sha && await within(tip)) {ours = true; break;}
+      if (!ours) return false;
+    }
     const earlier = await compare(pr.base.sha, sha);
     const confirmedBase = earlier?.merge_base_commit?.sha;
     if (typeof confirmedBase !== 'string') return false;
