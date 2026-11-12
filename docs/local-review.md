@@ -622,7 +622,9 @@ validation, like `confirmation`):
 
 The update needs the gate step's `update-token` input: a token whose push **starts workflows**, with contents: write on the
 repository (a fine-grained PAT or an App token, like `repair-token`; the reference template passes the same
-`CLOUSEAU_REPAIR_TOKEN` secret to both). The workflow `GITHUB_TOKEN` cannot be used: a push made with it starts no workflow, so
+`CLOUSEAU_REPAIR_TOKEN` secret to both). When the base brings changes to `.github/workflows/`, GitHub also requires workflows
+permission (workflows: write for a fine-grained token or App, the `workflow` scope for a classic token). Without it GitHub
+refuses the update and the gate fails with that refusal, updating nothing. The workflow `GITHUB_TOKEN` cannot be used: a push made with it starts no workflow, so
 the new head would have no verification. Without `update-token` the gate holds as under `"hold"`, and the notice says to set
 the `update-token` input of the gate step. A head in a fork is never updated (the notice says so). When GitHub refuses with
 HTTP 422 (a merge conflict with the base, or a head that moved) the gate falls back to the notice, which says so and asks the

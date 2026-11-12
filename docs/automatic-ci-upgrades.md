@@ -420,7 +420,10 @@ PR in one run instead of one at a time. Upgrade steps:
 1. Pass `update-token` to the gate step of `approve-and-merge`. The reference template passes
    `update-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}`, the same secret as `repair-token`: one token serves both. Use
    whatever secret your workflow already passes as `repair-token` (this repository's own workflow calls it `DEPLOYMENT_TOKEN`).
-2. That token must start workflows (a `GITHUB_TOKEN` push starts none) and needs contents: write on the repository.
+2. That token must start workflows (a `GITHUB_TOKEN` push starts none) and needs contents: write on the repository. When the
+   base brings changes to `.github/workflows/`, GitHub refuses the update unless the token may also change workflows
+   (a fine-grained token or GitHub App with workflows: write, or a classic token with the `workflow` scope). The gate then
+   fails with GitHub's refusal and nothing is updated. Grant it, or update such a branch by hand.
 3. Set `"base_moved": "update"` under `local_review` in `.github/clouseau.json` (a protected change, confirmed by the owner).
 
 On the updated head only the new head's own `pull_request` run follows: `verify` skips the receipt-covered steps while the
