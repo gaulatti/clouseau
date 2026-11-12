@@ -339,7 +339,10 @@ test('under confirmation "diff" a rebased confirmation carries only when this pu
   assert.equal((await confirmed({})).result, false, 'no force push at all');
   assert.equal((await confirmed({forcePushes: [[PRIOR, HEAD]], tips: {[PRIOR]: 'diverged'}})).result, false, 'unrelated to every head');
   // Evidence the engine could not read never carries: more force pushes than one page, a missing pull request, an unknown commit.
-  assert.equal((await confirmed({timeline: {repository: {pullRequest: {timelineItems: {totalCount: 101, nodes: []}}}}})).result, false, 'unread pages');
+  // More force pushes than one page: even a page that would prove the commit was this pull request's head does not carry.
+  const proving = [{beforeCommit: {oid: OLD}, afterCommit: {oid: HEAD}}];
+  assert.equal((await confirmed({timeline: {repository: {pullRequest: {timelineItems: {totalCount: 1, nodes: proving}}}}})).result, true, 'one complete page');
+  assert.equal((await confirmed({timeline: {repository: {pullRequest: {timelineItems: {totalCount: 101, nodes: proving}}}}})).result, false, 'unread pages');
   assert.equal((await confirmed({timeline: {repository: {pullRequest: null}}})).result, false, 'no pull request');
   assert.equal((await confirmed({forcePushes: [[PRIOR, HEAD]], failure: {on: `${OLD}..${PRIOR}`, error: Object.assign(new Error('Not Found'), {status: 404})}})).result,
     false, 'a garbage-collected commit');
