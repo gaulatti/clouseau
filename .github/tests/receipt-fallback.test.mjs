@@ -123,3 +123,12 @@ test('every consumer of the review decision uses the same single selection, so o
     'approve-and-merge': {result: 'failure'}}});
   assert.equal(truthy(repair), true, 'a repair proposed by the hosted review is applied');
 });
+
+test('a /hosted-review comment starts the reassessment exactly as /approve-intent does; other comments do not', () => {
+  const condition = jobs['request-reassessment'].if;
+  const comment = body => ({github: {event_name: 'issue_comment', event: {issue: {pull_request: {}}, comment: {body}}}, inputs: {pull_request: '', check_author: false}});
+  for (const body of [`/approve-intent ${'a'.repeat(40)}`, `/hosted-review ${'a'.repeat(40)}`]) assert.equal(truthy(evaluate(condition, comment(body))), true, body);
+  for (const body of ['/hosted-review', 'please /hosted-review', 'looks good']) assert.equal(truthy(evaluate(condition, comment(body))), false, body);
+  const issue = {...comment(`/hosted-review ${'a'.repeat(40)}`)}; issue.github.event.issue = {};
+  assert.equal(truthy(evaluate(condition, issue)), false, 'a comment on an issue, not a pull request');
+});
