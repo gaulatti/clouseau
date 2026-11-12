@@ -341,10 +341,21 @@ test('source investigation cannot run indefinitely or discard a causal concern w
   assert.equal(converged.inspections.length, 2);
   f.report.snapshot = f.snapshot.digest;
   const draft = structuredClone(f.report); draft.findings.push(finding());
-  assert.throws(() => validateInspection(f.report, f.snapshot, [draft]), /prior investigation concern/);
+  // The rejection names the concern, so a fresh session can retain or resolve it without guessing.
+  const id = JSON.stringify(draft.findings[0].id);
+  assert.throws(() => validateInspection(f.report, f.snapshot, [draft]), error => error.message.startsWith('A prior investigation concern') &&
+    error.message.includes(`finding ${id} from the earlier draft is neither retained under that identifier nor resolved`));
   assert.ok(validateInspection(f.report, f.snapshot));
   const retained = structuredClone(draft);
   assert.ok(validateInspection(retained, f.snapshot, [draft]));
+  // A restatement under the same id names the first field that differs and quotes the earlier draft's text for it. (A
+  // different path is refused earlier: the path is derived from the finding's anchor.)
+  for (const field of ['cause', 'obligation']) {
+    const restated = structuredClone(draft); restated.findings[0][field] = `${draft.findings[0][field]} (reworded)`;
+    assert.throws(() => validateInspection(restated, f.snapshot, [draft]), error =>
+      error.message.includes(`finding ${id} is restated with a different ${field} than the earlier draft`) &&
+      error.message.includes(JSON.stringify(draft.findings[0][field])), field);
+  }
   retained.findings[0].cause = 'A different root cannot silently reuse the identifier.';
   assert.throws(() => validateInspection(retained, f.snapshot, [draft]), /prior investigation concern/);
   const closed = structuredClone(f.report);
