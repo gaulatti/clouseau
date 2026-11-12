@@ -823,6 +823,37 @@ main CI resolved is one more receipt that does not verify (class `engine`, below
 Refresh and review again to reuse the local review. The selected commit and digest are in
 the run summary and engine artifact.
 
+### Signing a review that requires a human (opt-in)
+
+By default only a passing local review is signed. The protected `local_review.human_review` in `.github/clouseau.json` on
+the base branch accepts exactly one value, `"signed"`; any other value (an empty string, `true`, `null`, another word) makes
+the configuration invalid (`human_review must be "signed" when set`). Absent, nothing changes: only a passing review is
+ever signed.
+
+With `"signed"`, `clouseau review` also signs a review whose only blocker is graded findings:
+
+| Local result | Signed outcome |
+| --- | --- |
+| tests or the coverage gate fail | nothing (no review is run) |
+| test integrity violated (`blocked_integrity`) | nothing |
+| another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing |
+| an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) |
+| findings at or above the threshold, every gate of both reviews satisfied or inapplicable (`repair_required`) | the review, signed with its findings |
+| clean | the passing review, as today |
+
+`issueReceipt` enforces the same rule as `clouseau review`, so no other caller can sign more. A signed non-pass is never
+acceptable as a pass: every verifier (`verifySignedRecord`, and through it `verifyReceipt` and `screenReceipt`) refuses it as
+`not_passing` unless its caller explicitly asks for it, and only `receipt-standing.cjs` (used by `clouseau refresh`) asks.
+`clouseau refresh` treats such a receipt as up to date and does not review it again, and `clouseau review` never reviews
+the same revision again once it has a signed review that requires a human. To sign again, the author commits (an empty
+commit is enough) and reviews the new head, which must retain or resolve the earlier findings.
+
+**Until CI holds such a receipt for a maintainer, the setting is dark and fails closed.** CI does not ask for the signed
+non-pass: the assessment, the gate and `operation: attested` refuse the receipt as `not_passing`, exactly as they refuse any
+failing review. An optional-mode repository ignores it and reviews the change itself; a repository that requires a receipt
+reports `review_incomplete` (`local_receipt_required`). Nothing is approved or merged on its strength, and a maintainer's
+`/approve-intent` does not clear its findings.
+
 ### A receipt that does not verify is ignored
 
 CI applies one rule to a local review receipt. A receipt that verifies in every

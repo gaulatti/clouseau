@@ -153,7 +153,8 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
       if (!judged.applicable || judged.usable) {
         return {status: 'up_to_date', pull_request: number, head_sha: head, base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: false,
-          note: `Pull request ${number} already contains ${remoteBase}${judged.applicable ? ' and its local review receipt still verifies' : ''}; nothing to refresh`};
+          note: `Pull request ${number} already contains ${remoteBase}${judged.applicable ? ' and its local review receipt still verifies' : ''}${judged.human_review ?
+            ` (its signed review requires a human: a maintainer approves this head with /approve-intent ${head}, or repair and review again)` : ''}; nothing to refresh`};
       }
       renewal = judged;
       process.stderr.write(`Renewing the local review receipt of pull request ${number} (cause: ${renewal.cause}): ${renewal.sentence}\n`);
