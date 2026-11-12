@@ -131,4 +131,23 @@ async function decide({github, context, config, engine}) {
   return receiptAttests({github, repo: context.repo, pr, config, engine});
 }
 
-module.exports = {VERSION, GATE_MODES, attestationOf, evaluate, receiptAttests, decide};
+// The packaged step's decision. Any failure leaves the checks to run (the step continues on error), but never quietly: the
+// job summary and a warning say the receipt was not consulted and why, so the full run is not mistaken for a normal one.
+async function decideVisibly({github, context, config, engine, core}) {
+  try {
+    const attested = await decide({github, context, config, engine});
+    core.setOutput('attested', String(attested));
+    core.info(attested ? 'A valid local receipt attests the verification; its checks may be skipped.' : 'No valid receipt attests the verification; run the checks.');
+    return attested;
+  } catch (error) {
+    const why = require('./transient-retry.cjs').isTransient(error) ? 'GitHub API unavailable' :
+      `the decision failed (${Number.isInteger(error?.status) ? `HTTP ${error.status}` : 'no HTTP status'})`;
+    const line = `Receipt not consulted: ${why}; verification ran in full.`;
+    core.setOutput('attested', 'false');
+    core.warning(line);
+    await core.summary.addRaw(`## Clouseau: receipt not consulted\n\n${line}\n`).write();
+    throw error;
+  }
+}
+
+module.exports = {VERSION, GATE_MODES, attestationOf, evaluate, receiptAttests, decide, decideVisibly};
