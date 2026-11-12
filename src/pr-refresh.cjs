@@ -71,11 +71,19 @@ function bindsDiff(directory, remoteBase) {
 function localDiff(directory, from, to) {
   const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
   const statuses = {A: 'added', M: 'modified', D: 'removed', R: 'renamed'};
-  return diffDigest(git(directory, ['diff', '--name-status', '-M', from, to]).split('\n').filter(Boolean).map(line => {
-    const [code, first, second] = line.split('\t');
+  // NUL-separated, unquoted names, passed back as literal pathspecs: a path with non-ASCII, quote, tab or glob characters is the
+  // same path in both commands, so its patch is never silently empty.
+  const fields = git(directory, ['-c', 'core.quotePath=false', 'diff', '-z', '--name-status', '-M', from, to]).split('\0');
+  const entries = [];
+  for (let index = 0; index < fields.length - 1;) {
+    const code = fields[index++];
     const status = statuses[code[0]];
-    const paths = status === 'renamed' ? [first, second] : [first];
-    const text = git(directory, ['diff', '--no-ext-diff', '--no-textconv', '-M', from, to, '--', ...paths]);
+    const paths = status === 'renamed' ? [fields[index++], fields[index++]] : [fields[index++]];
+    entries.push({status, paths});
+  }
+  return diffDigest(entries.map(({status, paths}) => {
+    const first = paths[0];
+    const text = git(directory, ['--literal-pathspecs', 'diff', '--no-ext-diff', '--no-textconv', '-M', from, to, '--', ...paths]);
     const at = text.indexOf('@@');
     return {path: paths.at(-1), status, previous: status === 'renamed' ? first : null, patch: canonicalHunks(at === -1 ? '' : text.slice(at).replace(/\n$/, ''))};
   }));
@@ -173,8 +181,15 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   // Without a file, the requirement is the one of the last accepted review of this branch, if its head provably belongs to this
   // pull request alone: in the pull request's history and not in the base. (A branch name reused after an earlier pull request
   // merged has that pull request's head in the base too.) Nothing has been changed yet when this refuses.
-  const requestFile = args['request-file'] || readRequirement({state, repository: slug, branch,
-    contains: sha => ancestor(directory, sha, pull.head) && !ancestor(directory, sha, remoteBase)}).file;
+  let requestFile;
+  try {
+    requestFile = args['request-file'] || readRequirement({state, repository: slug, branch,
+      contains: sha => ancestor(directory, sha, pull.head) && !ancestor(directory, sha, remoteBase)}).file;
+  } catch (error) {
+    // A diff-bound refresh may already have merged the base locally; refusing leaves the branch as it found it.
+    if (merged) git(directory, ['reset', '--quiet', '--hard', head]);
+    throw error;
+  }
   if (!resuming && !renewal && !merged) merge({directory, remoteBase, branch});
   const result = await review({directory, base: remoteBase, 'request-file': requestFile, harness: args.harness, agent: args.agent,
     identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine}, {title: pull.title});
