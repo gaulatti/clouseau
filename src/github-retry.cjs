@@ -16,15 +16,17 @@ function install(github, {wait = sleep, delays = DELAYS_MS, report = () => {}} =
   if (github[INSTALLED]) return github;
   github.hook.wrap('request', async (request, options) => {
     if (!READS.has(String(options.method).toUpperCase())) return request(options);
-    for (let attempt = 0; ; attempt++) {
+    const send = async attempt => {
       try {return await request(options);} catch (error) {
         if (!isTransient(error) || attempt >= delays.length) throw error;
         const delay = Math.max(delays[attempt], rateLimitDelay(error) ?? 0);
         report(`GitHub answered ${options.method} ${options.url} with ${Number.isInteger(error.status) ? `HTTP ${error.status}` : 'a transient error'}; ` +
           `retry ${attempt + 1}/${delays.length} in ${delay / 1000} s.`);
         await wait(delay);
+        return send(attempt + 1);
       }
-    }
+    };
+    return send(0);
   });
   Object.defineProperty(github, INSTALLED, {value: true});
   return github;

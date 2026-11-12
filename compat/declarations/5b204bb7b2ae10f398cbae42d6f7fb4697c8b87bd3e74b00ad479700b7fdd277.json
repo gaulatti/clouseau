@@ -15,7 +15,7 @@
     {
       "path": "src/github-retry.cjs",
       "mode": 0,
-      "sha256": "13078de69b98e448036a01ef0cb12b13e96d66e1aca75e752efdd8a13d5b1a65"
+      "sha256": "991887fd0f419e9af1e5be92fde903853f0ff46005ee45b36e3f5d52c31d16ea"
     },
     {
       "path": "src/policy.cjs",
