@@ -268,3 +268,57 @@ test('findings with confirmation "diff" off: a confirmation names the exact head
   assert.deepEqual(earlier.compared.filter(item => item.includes(LATER)), [], 'nothing is compared without the setting');
   carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: MERGED, head: MERGED, lineage}));
 }));
+
+// The controller-managed private-owner path (private repository, unprotected branch, the upgrade-plan 403, `merge_mode:
+// "automatic"`): the gate approves and makes the atomic write itself, recorded as `atomic`.
+function privateOwner(f) {
+  f.state.pr.auto_merge = null;
+  f.state.pr.head.repo.node_id = 'R_private'; f.state.pr.base.repo = {node_id: 'R_private'};
+  f.github.rest.repos.get = async () => ({data: {private: true, allow_auto_merge: false, node_id: 'R_private'}});
+  f.github.rest.repos.getBranch = async () => ({data: {protected: false,
+    commit: {sha: f.state.pr.merged ? f.state.pr.head.sha : f.state.pr.base.sha}}});
+  f.github.request = async () => {throw Object.assign(new Error('Upgrade to GitHub Pro or make this repository public to enable this feature.'), {status: 403});};
+  f.github.rest.checks = {create: async () => ({data: {id: 71}}), update: async () => ({data: {}})};
+  const graphql = f.github.graphql;
+  f.github.graphql = async (query, args) => {
+    if (!query.includes('updateRefs')) return graphql(query, args);
+    f.state.writes.push({name: 'atomic', args});
+    Object.assign(f.state.pr, {merged: true, state: 'closed', merge_commit_sha: f.state.pr.head.sha});
+    return {updateRefs: {clientMutationId: null}};
+  };
+  // After the bot approves, before the atomic write: `between` changes what the write boundary reads.
+  const between = {run: () => {}};
+  f.github.rest.pulls.createReview = Object.assign(async args => {
+    f.state.writes.push({name: 'approve', args});
+    f.state.reviews.push({user: {login: 'github-actions[bot]', type: 'Bot'}, state: 'APPROVED', commit_id: args.commit_id});
+    between.run();
+    return {data: {}};
+  }, {endpointName: 'approve'});
+  return between;
+}
+
+test('findings on the private-owner path: the write boundary revalidates the owner authorization by the signed reviewed head', () => fixture(async f => {
+  const w = await signedWorld(f, diffConfirmation);
+  // Protected review controls, so the receipt records the owner authorization the private-merge revalidation re-reads.
+  const trusted = {...config, merge_mode: 'automatic', sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js', 'src/upload.js'], local_review: w.trust};
+  const R = w.signedHead;
+  const between = privateOwner(f);
+  const atomic = () => f.state.writes.filter(item => item.name === 'atomic').length;
+  // The owner confirmed EARLIER; the author re-reviewed at R after it (an empty commit, the live head). Diff and lineage match.
+  const lineage = {[`${R}..${EARLIER}`]: 'behind', [`${EARLIER}..${R}`]: 'ahead'};
+  holds(await w.run({trusted, bundle: w.sign(trusted), confirmed: EARLIER, head: R, lineage}));
+  assert.equal(atomic(), 0);
+  assert.equal(f.state.pr.merged, undefined);
+  // The exact head reaches the private-owner merge.
+  carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage}));
+  assert.equal(atomic(), 1, 'the exact-head confirmation completes the controller-managed merge');
+  // At the write boundary a later stale `/approve-intent EARLIER` by the same maintainer is on the pull request. Read under the
+  // signed reviewed head it confirms nothing, so the recorded exact-head authorization still stands; read without it, it would
+  // replace that authorization and void the merge.
+  delete f.state.pr.merged; f.state.pr.state = 'open'; delete f.state.pr.merge_commit_sha;
+  between.run = () => {between.run = () => {};
+    f.state.comments.push({id: 951, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${EARLIER}`});};
+  carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage}));
+  assert.equal(atomic(), 1, 'the stale confirmation does not disturb the exact-head authorization at the atomic write');
+  assert.ok(f.state.comments.some(item => item.id === 951), 'the stale confirmation was present at the write boundary');
+}));
