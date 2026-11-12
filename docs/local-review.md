@@ -22,20 +22,32 @@ account stores; Clouseau makes no direct DeepSeek/Jev requests in local mode.
 
 ## Temporary directories
 
-A run keeps nothing in the system temp directory. The directories it creates there
-(`clouseau-base-*` for the base-revision coverage baseline, `clouseau-harness-*` for a
-harness call, `clouseau-wiki-index-*` for a wiki publish) are removed when the step that
-made them ends, on success or error, and again when the process exits or receives
-SIGINT, SIGTERM or SIGHUP (exit status 128 plus the signal number). Anything that must
-survive a run, such as a resumed agent exchange, lives under the repository's state
-directory, never in the temp directory.
+A run leaves no temporary directory behind. It creates `clouseau-harness-*` for a
+harness call and `clouseau-wiki-index-*` for a wiki publish in the system temp
+directory. It creates `clouseau-base-*`, the clean base-revision checkout used for the
+`changed_lines` coverage baseline, in the work directory
+`~/.local/share/clouseau/work` (inside the CLI's state directory, created with mode
+0700 when missing). Each directory is removed when the step that made it ends, on
+success or error, and again when the process exits or receives SIGINT, SIGTERM or
+SIGHUP (exit status 128 plus the signal number). Anything that must survive a run, such
+as a resumed agent exchange, lives under the state directory, never in a temporary
+directory.
+
+The base checkout lives under the home directory because the base revision's
+verification runs the repository's own recipe there, and a recipe step may bind-mount
+that checkout into a container with Docker Compose. Docker VMs on macOS, such as
+Colima's `default` profile, share only the home directory by default. The system temp
+directory (`/var/folders/...` on macOS) is not shared, so a container started against a
+checkout there would see empty mounts. No extra Colima mount is needed.
 
 At startup the launcher also removes directories that an earlier process left behind
-because it was killed outright: names of exactly the form `clouseau-v8-*`,
-`clouseau-v8-empty-*`, `clouseau-base-*` or `clouseau-harness-*` (prefix plus the six
-random characters) that are real directories (symlinks are never followed) and were last
-modified more than 24 hours ago. Errors are ignored. The `clouseau-v8-*` names were
-left by the engine's own coverage tests, which now remove their fixtures.
+because it was killed outright, in both the system temp directory and the work
+directory: names of exactly the form `clouseau-v8-*`, `clouseau-v8-empty-*`,
+`clouseau-base-*` or `clouseau-harness-*` (prefix plus the six random characters) that
+are real directories (symlinks are never followed) and were last modified more than 24
+hours ago. Errors are ignored. The `clouseau-v8-*` names were left by the engine's own
+coverage tests, which now remove their fixtures. A `git worktree` entry whose checkout
+was removed this way is pruned by `git worktree prune`.
 
 ## Local-only repository configuration
 

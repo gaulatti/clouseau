@@ -1,7 +1,6 @@
 'use strict';
 
 const fs = require('node:fs');
-const os = require('node:os');
 const path = require('node:path');
 const cp = require('node:child_process');
 const crypto = require('node:crypto');
@@ -26,7 +25,7 @@ const root = path.join(__dirname, '..');
 // Characters of each output stream kept as review evidence; the digests always cover the whole stream.
 const PASSED_OUTPUT_TAIL = 128;
 const FAILED_OUTPUT_TAIL = 4096;
-const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
+const {stateDirectory, workDirectory} = require('./temp-dirs.cjs');
 
 function options(argv) {
   const [command, ...args] = argv;
@@ -306,7 +305,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   else {
     technical = verify({directory, config, additional});
     // A signature attests the whole declared verification: with an enrolled identity, anything that did not run and pass refuses it.
-    if (identityPath) technical = attest({directory, config, technical, ciConfig, baseSha, verify, exec: execute});
+    if (identityPath) technical = attest({directory, config, technical, ciConfig, baseSha, verify, exec: execute, work: workDirectory(state)});
     if (agent) {
       // The agent exchange spans several commands; persist the one real verification so later commands cannot rerun it.
       technical = JSON.parse(JSON.stringify(technical));
