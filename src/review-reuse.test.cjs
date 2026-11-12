@@ -164,3 +164,45 @@ test('a stored answer that no longer validates, is damaged, is another version o
     assert.equal(unkeyed.commit('auto_approve') + tricky.commit('auto_approve'), 0);
   } finally {s.cleanup();}
 });
+
+test('outcome keying names complete coverage by its outcome, keeps incomplete counters, and never shares keys with the exact keying', () => {
+  const withCoverage = (lines, branches, reports = lines) => taskOf({...packetOf(), evidence: {...packetOf().evidence, sources: {...packetOf().evidence.sources,
+    verification: {kind: 'verification', ref: HEAD, content: JSON.stringify({commands: [{argv: ['npm', 'test'], exit_code: 0}], exact_coverage: {lines, branches},
+      coverage_reports: [{report: 'x.json', report_digest: 'e'.repeat(64), exact_coverage: {lines: reports, branches}}]})}}}});
+  const outcome = task => keyOf(task, {subs: subsOf(), semantics: 's'.repeat(64), outcome: true});
+  // Main added code elsewhere: the counters moved, coverage stayed complete. Same outcome key; different exact keys.
+  assert.equal(outcome(withCoverage([10, 10], [4, 4])), outcome(withCoverage([12, 12], [5, 5])));
+  assert.notEqual(keyFor(withCoverage([10, 10], [4, 4])), keyFor(withCoverage([12, 12], [5, 5])));
+  // Coverage that is not complete keeps its counters, at the top level and per report.
+  assert.notEqual(outcome(withCoverage([9, 10], [4, 4])), outcome(withCoverage([10, 10], [4, 4])));
+  assert.notEqual(outcome(withCoverage([10, 10], [4, 4], [9, 10])), outcome(withCoverage([10, 10], [4, 4])));
+  assert.notEqual(outcome(withCoverage([9, 10], [4, 4])), outcome(withCoverage([8, 10], [4, 4])));
+  // A malformed coverage object is kept as it is.
+  for (const odd of [null, 'x', {lines: [1, 1]}, {lines: [1, 1], branches: [1]}, {lines: [1.5, 1.5], branches: [1, 1]}, {lines: [1, 1], branches: [1, 1], extra: 1}]) {
+    const task = taskOf({...packetOf(), evidence: {...packetOf().evidence, sources: {...packetOf().evidence.sources,
+      verification: {kind: 'verification', ref: HEAD, content: JSON.stringify({commands: [], exact_coverage: odd})}}}});
+    assert.deepEqual(JSON.parse(neutral(JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1)), true).evidence.sources.verification.content).exact_coverage, odd);
+  }
+  // The keying is part of the key: an answer stored under one is never read under the other; without the option the key is today's.
+  const task = withCoverage([10, 10], [4, 4]);
+  assert.notEqual(outcome(task), keyFor(task));
+  assert.equal(keyOf(task, {subs: subsOf(), semantics: 's'.repeat(64), outcome: false}), keyFor(task));
+});
+
+test('a reading review under outcome keying takes answers stored under it, and an exact-keyed store is not read', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-reuse-outcome-'));
+  try {
+    const task = taskOf(packetOf());
+    const literals = () => ({base: BASE, head: HEAD, digests: [DIGEST]});
+    const answer = {value: {kind: 'report'}};
+    const exact = createReuse({directory, semantics: 's'.repeat(64), literals});
+    await exact.wrap(async () => answer)(task); exact.commit('auto_approve');
+    const reader = createReuse({directory, read: true, outcome: true, semantics: 's'.repeat(64), literals});
+    let asked = 0;
+    await reader.wrap(async () => {asked++; return answer;})(task);
+    assert.equal(asked, 1, 'an exact-keyed answer is not an outcome-keyed one'); reader.commit('auto_approve');
+    const again = createReuse({directory, read: true, outcome: true, semantics: 's'.repeat(64), literals});
+    await again.wrap(async () => {asked++; return answer;})(task);
+    assert.equal(asked, 1); assert.equal(again.stats.reused, 1);
+  } finally {fs.rmSync(directory, {recursive: true, force: true});}
+});

@@ -100,8 +100,12 @@ function reviewDecision(record, {chunked = null} = {}) {
   return {decision, reviews};
 }
 
+// The only shape of the review reuse claim: the keying and two counts of reviewer calls.
+const reuseClaim = claim => claim !== null && typeof claim === 'object' && Object.keys(claim).sort().join(',') === 'fresh,mode,reused' &&
+  claim.mode === 'outcome' && [claim.reused, claim.fresh].every(count => Number.isSafeInteger(count) && count >= 0);
+
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
-  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation}) {
+  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation, reviewReuse}) {
   requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
@@ -109,6 +113,7 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   requireReceipt(attestation === undefined || attestation && Object.keys(attestation).sort().join(',') === 'author,number,signer' &&
     AUTHOR.test(attestation.author) && ACTOR.test(attestation.signer) && Number.isSafeInteger(attestation.number) && attestation.number > 0,
   'invalid maintainer attestation');
+  requireReceipt(reviewReuse === undefined || reuseClaim(reviewReuse), 'invalid review reuse claim');
   const key = crypto.createPrivateKey(privateKey);
   requireReceipt(key.asymmetricKeyType === 'ed25519', 'Ed25519 signing key required');
   // A partitioned record too large for one receipt is signed as a root over consecutive parts (receipt-parts.cjs); the
@@ -121,6 +126,9 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
     // Optional signed claim that a maintainer reviewed someone else's pull request: it names the signer, the exact
     // pull request author and the pull request number. Receipts without it are bound to the signer's own login, as before.
     ...(attestation === undefined ? {} : {attestation}),
+    // Optional signed claim that the review took stored answers under outcome keying (review-reuse.cjs): how many of its
+    // reviewer calls were reused and how many were asked. Receipts without it reused none, or used the exact keying of a refresh.
+    ...(reviewReuse === undefined ? {} : {review_reuse: reviewReuse}),
     issued_at: Math.floor(now / 1000), expires_at: Math.floor(now / 1000) + lifetime,
     nonce, record_digest: digest(record), record: split ? split.root : record};
   const signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(payload)}`), key).toString('base64url');
@@ -137,8 +145,9 @@ function signingKey(bundle, trust) {
     Buffer.byteLength(JSON.stringify({payload: bundle.payload, signature: bundle.signature})) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
   const p = bundle.payload;
   const fields = 'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type';
-  reject(p && Object.keys(p).filter(name => !['attestation', 'reviewer_semantics'].includes(name)).sort().join(',') === fields &&
-    p.type === DOMAIN && (!Object.hasOwn(p, 'reviewer_semantics') || /^[a-f0-9]{64}$/.test(p.reviewer_semantics)),
+  reject(p && Object.keys(p).filter(name => !['attestation', 'reviewer_semantics', 'review_reuse'].includes(name)).sort().join(',') === fields &&
+    p.type === DOMAIN && (!Object.hasOwn(p, 'reviewer_semantics') || /^[a-f0-9]{64}$/.test(p.reviewer_semantics)) &&
+    (!Object.hasOwn(p, 'review_reuse') || reuseClaim(p.review_reuse)),
   'unknown receipt type or fields', 'malformed');
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
   reject(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
