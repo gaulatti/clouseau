@@ -544,8 +544,26 @@ one apart from the revision it names.
 | lines added above a hunk on the base | `receipt_source` | covered |
 | any change to an added, removed or context line, or to whitespace | `receipt_source` | `receipt_source`, naming the file |
 | a file added, removed or re-statused, another rename | refused | refused, unchanged |
+| a compatibility declaration (`compat/declarations/<sha256>.json`) declared again after a merge | refused (its bytes changed) | covered while every declaration keeps its verdict over the same files (path, mode, deleted or not); only the content digests it pins may differ |
 | a file without a GitHub patch | refused, unless the live sources prove it shows no text | refused, even an empty file or an identical rename: the live sources are not read |
 | signature, enrolled key, author, expiry, repository, protected configuration and policy digests, engine and review semantics, passing decision | bound | bound, unchanged |
+
+A compatibility declaration ([receipt compatibility](receipt-compatibility.md)) pins the full content of the semantic files
+it covers. When the base gains a merged pull request that changed one of those files, merging the base makes the
+declaration stale, and declaring again replaces it with a new file under a new name. Under the binding that replacement does
+not void the receipt: a file added under exactly `compat/declarations/<64 hex>.json` whose whole content is a well-formed
+declaration is compared by what it declares, its verdict (`compatible` or `incompatible`) and the files it covers with their
+mode and whether each is deleted, and it is left out of the normalized diff. A changed verdict, a file added to or removed
+from a declaration, or a declaration gained or lost voids the receipt (`receipt_source`). Any other file under that directory
+(another name, another status, a body that is not one whole declaration) is an ordinary changed file. The required `verify`
+job still checks every declaration against the merged tree, so a declaration whose digests do not match the code fails
+there. The pull request's changed-file count still includes the declarations.
+
+**What still voids a diff-bound receipt after a base move.** A change on the base branch to the repository's contracts
+(`readme` and `repository_policy`, compared at the live base) or to the declared recipe (`.clouseau-local.json`, which the
+test waiver compares at the live base) voids every open diff-bound receipt, by design: the change was judged against them. A
+summarized lockfile's summary is recomputed from the live base and head lockfile bytes, so a base move that changed a
+lockfile the pull request also changes voids it when the recomputed summary differs.
 
 The test waiver follows the same binding: `operation: attested` answers `'true'` for a receipt whose diff matches and whose
 signed `.clouseau-local.json` equals the live base's, so the tests are **not** rerun after a base move or an update-branch

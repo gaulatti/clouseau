@@ -5,7 +5,7 @@
     {
       "path": "src/local-receipt.cjs",
       "mode": 0,
-      "sha256": "64e577b5df66d89614779040f9425a9dbd5484ed1aca776b52010af02371bbcd"
+      "sha256": "3ec8c8b8e933a0923eb4f1890e78586716886484a3aeb32eef46252e144ae20e"
     },
     {
       "path": "src/policy.cjs",
