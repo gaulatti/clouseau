@@ -20,7 +20,7 @@
     {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "9ec27b9b3077871beb06df7c45206674982f4e4a5f6e453f2b40edeb910d3eb5"
+      "sha256": "5519f894e1e3039e742b78c6ecac2f5348752c166de51ce708a5984b48b2db10"
     },
     {
       "path": "src/stale-assessment.cjs",
