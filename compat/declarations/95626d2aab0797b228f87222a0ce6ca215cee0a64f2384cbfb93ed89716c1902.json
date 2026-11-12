@@ -15,7 +15,7 @@
     {
       "path": "src/local-receipt.cjs",
       "mode": 0,
-      "sha256": "abdaab0ea0f69d65397943037148fcf09f57e89ca28672659a3f13bab387a063"
+      "sha256": "af36478779343ab477a59fe5b019aa55ea031e52c9d551f1b8c897021af58df7"
     },
     {
       "path": "src/pr-refresh.cjs",

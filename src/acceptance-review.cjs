@@ -270,7 +270,17 @@ function validateInspection(report, snapshot, drafts = []) {
     const retained = report.findings.find(item => item.id === finding.id);
     if (retained && sameConcern(retained, finding)) continue;
     const resolution = report.resolutions.find(item => item.id === finding.id);
-    if (!resolution) throw new Error('A prior investigation concern requires explicit current-source counterevidence');
+    if (!resolution) {
+      // Name the concern and, for a restatement under its id, the first field that differs with the earlier draft's text, so a
+      // fresh session can retain it verbatim (or resolve it) instead of guessing. The text is the engine's own earlier draft.
+      const field = retained && ['path', 'cause', 'obligation'].find(key => retained[key] !== finding[key]);
+      const quoted = value => JSON.stringify(String(value).slice(0, 400));
+      throw new Error('A prior investigation concern requires explicit current-source counterevidence: ' + (field ?
+        `finding ${quoted(finding.id)} is restated with a different ${field} than the earlier draft; retain it with that ${field} verbatim ` +
+          `(${quoted(finding[field])}) or add a resolutions entry for it` :
+        `finding ${quoted(finding.id)} from the earlier draft is neither retained under that identifier nor resolved; retain its identifier, ` +
+          'cause, path and obligation verbatim or add a resolutions entry for it'));
+    }
   }
   return view;
 }

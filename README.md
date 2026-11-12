@@ -328,7 +328,9 @@ is skipped, so confirming intent does not rebuild the container. The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
 
 Run `finalize` in a separate job after the native gate succeeds, with actions
-write and contents/pull-requests read access and no provider key. Auto-merge must
+write and contents/pull-requests read access and no provider key. Guard that job
+on the gate's explicit result (`!cancelled() && needs.approve-and-merge.result == 'success'`),
+not on GitHub's implicit success: a receipt skips the hosted review job it also needs. Auto-merge must
 wait for the required gate job to finish, so deployment handoff cannot run inside
 that gate. A provider diagnostic remains read-only and never approves a PR.
 

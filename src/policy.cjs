@@ -7,6 +7,17 @@ const {requestReview} = require('./provider.cjs');
 const {retryTransient} = require('./transient-retry.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
+// Whether the protected `local_review` lets an owner confirmation follow the diff: only `confirmation: "diff"` together with
+// `binding: "diff"` (validateTrust refuses any other combination).
+const confirmationFollowsDiff = localReview => localReview?.binding === 'diff' && localReview?.confirmation === 'diff';
+
+// The commit an `/approve-intent <sha>` comment names, with the text it confirms; null for anything else.
+function intentAny(body) {
+  if (typeof body !== 'string') return null;
+  const match = /^\/approve-intent ([a-f0-9]{40})(?:\n\nAccepted purpose:\n([\s\S]*\S))?$/.exec(body.trim());
+  return match ? {sha: match[1], text: intentText(body, match[1])} : null;
+}
+
 function intentText(body, sha) {
   if (typeof body !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return null;
   const match = new RegExp(`^/approve-intent ${sha}(?:\\n\\nAccepted purpose:\\n([\\s\\S]*\\S))?$`).exec(body.trim());
@@ -30,13 +41,16 @@ function protectedChanges(config, files) {
     .filter((name, index, all) => name && matchesPath(name, sensitive) && all.indexOf(name) === index);
 }
 
-function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false, attested = null} = {}) {
+function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false, attested = null, intentDiff = false} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
   const {local_review, merge_mode, exact_revert, hosted_review, ...legacyConfig} = config;
   // Required verification steps a workflow skipped count only when a fully valid receipt attests the verification (verification-attestation.cjs).
   const attested = (github, repo, pr) => require('./verification-attestation.cjs').receiptAttests({github, repo, pr, config, engine, explain: true});
-  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested});
+  // Under the protected `local_review.confirmation: "diff"` (with `binding: "diff"`) an owner confirmation follows the diff as
+  // a receipt does (confirms()). Absent, a confirmation names the exact head, as before.
+  const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested,
+    intentDiff: confirmationFollowsDiff(local_review)});
   return require('./acceptance-controller.cjs').createAcceptancePolicy(config, legacy, engine);
 }
 const COVERAGE = require('./coverage-changed.cjs').requirement(config);
@@ -287,9 +301,10 @@ async function reassess({github, context, core, wait, api}) {
     pull_number = numberFor(context);
     pr = (await api(() => readPull(github, repo, pull_number))).data;
     const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-    // An exact-head `/approve-intent`, or an exact-head `/hosted-review` (the manual hosted review request), may ask for it.
-    if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha) &&
-        String(context.payload.comment.body).trim() !== `/hosted-review ${pr.head.sha}`) {
+    // An `/approve-intent` that confirms this head (commentConfirms), or an exact-head `/hosted-review` (the manual hosted
+    // review request), may ask for it.
+    if (context.eventName === 'issue_comment' && String(context.payload.comment.body).trim() !== `/hosted-review ${pr.head.sha}` &&
+        !await api(() => commentConfirms(github, repo, pr, context.payload.comment.body))) {
       throw new Error('Stale or malformed intent confirmation');
     }
     const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
@@ -344,16 +359,70 @@ async function requestReassessment({github, context, core, wait = sleep}) {
   }
 }
 
+// Whether a confirmation of commit `sha` (an `/approve-intent` comment or an approving review) covers the pull request's head.
+// It always does for the exact head. Only with the protected `local_review.confirmation: "diff"` (`intentDiff`) does it also cover a
+// later head of the same pull request whose normalized diff (receipt-patch.cjs) equals the diff `sha` had from its merge base
+// with the live base: a branch update that leaves the change unchanged keeps the owner's confirmation, any other push voids
+// it. `sha` must be an ancestor of the head; a patchless or truncated file list, or an unknown commit, never matches. The
+// base `sha` was confirmed against must carry the same protected configuration and purpose contract as the live base: a
+// confirmation never carries across a base change to either.
+const confirmations = new Map();
+async function confirms(github, repo, pr, sha) {
+  if (sha === pr.head.sha) return true;
+  if (!intentDiff || typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return false;
+  const key = `${repo.owner}/${repo.repo}#${pr.number}:${pr.base.sha}:${pr.head.sha}:${sha}`;
+  // A failed comparison is not kept: the next call (a rate-limit retry) compares again.
+  if (!confirmations.has(key)) confirmations.set(key, (async () => {
+    const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
+    const normalized = files => files.length === 0 || files.length >= 300 || files.some(file => typeof file.patch !== 'string' || !file.patch) ? null :
+      diffDigest(files.map(file => ({path: file.filename, status: file.status, previous: file.status === 'renamed' ? file.previous_filename : null, patch: canonicalHunks(file.patch)})));
+    const compare = async (base, head) => {
+      try {return (await github.rest.repos.compareCommits({...repo, base, head})).data;}
+      catch (error) {if (error.status === 404 || error.status === 422) return null; throw error;}
+    };
+    const lineage = await compare(sha, pr.head.sha);
+    if (!lineage || !['ahead', 'identical'].includes(lineage.status)) return false;
+    const earlier = await compare(pr.base.sha, sha);
+    const confirmedBase = earlier?.merge_base_commit?.sha;
+    if (typeof confirmedBase !== 'string') return false;
+    if (confirmedBase !== pr.base.sha) {
+      const read = async ref => Promise.all(['.github/clouseau.json', config.repository_policy].map(async path => {
+        try {return (await github.rest.repos.getContent({...repo, path, ref})).data.content;}
+        catch (error) {if (error.status === 404) return null; throw error;}
+      }));
+      const [then, now] = await Promise.all([read(confirmedBase), read(pr.base.sha)]);
+      if (then.some((content, index) => content !== now[index])) return false;
+    }
+    const live = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number: pr.number, per_page: 100});
+    // `earlier` exists here: its merge base was read above.
+    const confirmed = normalized(earlier.files || []);
+    return confirmed !== null && live.length === pr.changed_files && confirmed === normalized(live);
+  })());
+  return confirmations.get(key).catch(error => {confirmations.delete(key); throw error;});
+}
+
+// Whether an issue comment confirms this head: `/approve-intent <sha>` (with an `Accepted purpose:` block, unless `exact`, as
+// the gate requires) whose `sha` confirms() accepts. The gate and the reassessment it starts both decide by this.
+async function commentConfirms(github, repo, pr, body, {exact = false} = {}) {
+  const named = intentAny(body);
+  if (!named || (exact && body.trim() !== `/approve-intent ${named.sha}`)) return false;
+  return confirms(github, repo, pr, named.sha);
+}
+
 async function purposeConfirmation(github, repo, pr, comments) {
-  const comment = [...comments].reverse().find(item =>
-    item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER &&
-    Number.isSafeInteger(item.id) && item.id > 0 &&
-    intentText(item.body, pr.head.sha));
+  let comment = null;
+  let intent = null;
+  for (const item of [...comments].reverse()) {
+    if (!(item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER && Number.isSafeInteger(item.id) && item.id > 0)) continue;
+    const named = intentAny(item.body);
+    if (named && await confirms(github, repo, pr, named.sha)) {comment = item; intent = named; break;}
+  }
   if (!comment) return null;
   const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
   if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
   return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
-    actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intentText(comment.body, pr.head.sha)};
+    ...(intent.sha === pr.head.sha ? {} : {confirmed_sha: intent.sha}),
+    actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intent.text};
 }
 
 // A maintainer's request for the CI AI review of this exact head: a comment `/hosted-review <head sha>` by a real user with
@@ -374,18 +443,23 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
     const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
     return ['admin', 'maintain', 'write'].includes(data.permission);
   };
+  // With the setting, the author's permission is read before any diff comparison, so a comment from anyone else starts none.
+  // Without it, confirms() answers without a request, and the order is unchanged.
+  const confirmedBy = async (user, sha) => intentDiff ? await canConfirm(user) && await confirms(github, repo, pr, sha) :
+    await confirms(github, repo, pr, sha) && await canConfirm(user);
   const reviews = await github.paginate(github.rest.pulls.listReviews, {...repo, pull_number: pr.number, per_page: 100});
   const latest = new Map();
   for (const review of reviews) {
     if (review.state !== 'COMMENTED' && review.state !== 'PENDING') latest.set(review.user?.login, review);
   }
   for (const review of latest.values()) {
-    if (review.state === 'APPROVED' && review.commit_id === pr.head.sha && await canConfirm(review.user)) return true;
+    if (review.state === 'APPROVED' && await confirmedBy(review.user, review.commit_id)) return true;
   }
   if (reviewOnly) return false;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pr.number, per_page: 100});
   for (const comment of comments) {
-    if (intentText(comment.body, pr.head.sha) && await canConfirm(comment.user)) return true;
+    const named = intentAny(comment.body);
+    if (named && await confirmedBy(comment.user, named.sha)) return true;
   }
   return false;
 }
@@ -524,7 +598,10 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     throw new Error('Stale intent assessment: reassess the current PR revision');
   }
   if (context.eventName === 'issue_comment') {
-    if (context.payload.comment.body.trim() !== `/approve-intent ${pr.head.sha}`) throw new Error('Stale or malformed intent confirmation');
+    // The comment is exactly `/approve-intent <sha>`, as before; only which `sha` counts follows `local_review.confirmation`.
+    if (!await commentConfirms(github, repo, pr, context.payload.comment.body, {exact: true})) {
+      throw new Error('Stale or malformed intent confirmation');
+    }
     const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: context.payload.comment.user.login});
     if (context.payload.comment.user.type !== 'User' || !['admin', 'maintain', 'write'].includes(data.permission)) {
       throw new Error('Only a maintainer can confirm repository intent');
@@ -713,7 +790,11 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
       baseBranch: config.base_branch, manual: false, privateOwnerAutomatic,
       assertProtection: () => assertProtection(github, repo, 'approve-and-merge')});
     if (checked.insufficient) return;
-    if (checked.controllerManaged) throw new Error('Private owner merge must complete through the validated acceptance gate before finalization');
+    // Only the validated acceptance gate merges here, so an unmerged PR is one that gate left for a human: nothing to finalize.
+    if (checked.controllerManaged) {
+      core.info('Nothing to finalize: the PR is not merged, and a controller-enforced owner merge completes only through the validated acceptance gate.');
+      return;
+    }
   }
   if (codeownersRequired && !pr.merged) {
     if (!files) files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
@@ -749,8 +830,8 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, hostedReviewRequested, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, commentConfirms, hostedReviewRequested, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 
-module.exports = {createPolicy, intentText, protectedChanges};
+module.exports = {createPolicy, intentText, protectedChanges, confirmationFollowsDiff};

@@ -308,3 +308,21 @@ test('diff binding: a summarized lockfile binds its path and status, and a file 
   assert.equal(verifyPatches({snapshot, files}), null);
   assert.throws(() => verifyPatches({snapshot, files, ...DIFF}), /Changed-file evidence is incomplete/);
 });
+
+// The five branch-update cases, for the receipt. Under the binding the receipt names no lineage: only the live diff decides.
+test('diff binding, the five branch-update cases: merge, rebase and shifted hunks keep the receipt; a new commit or altered resolution voids it', () => {
+  const signed = snapshotOf(['src/a.js', 'modified', `${GIT_HEADER}${at(10, 10)}\n`]);
+  const check = files => verifyPatches({snapshot: signed, files, ...DIFF});
+  // (a) main merged in, unrelated files, and (b) a rebase onto the new main: both leave GitHub's diff for the pull request
+  // (merge base to head) exactly as reviewed, and a receipt under the binding names no commit, so neither can void it.
+  check([live('src/a.js', 'modified', at(10, 10))]);
+  // (c) main changed the same file elsewhere and merged cleanly: only the offsets move, which the normalized diff ignores.
+  check([live('src/a.js', 'modified', at(52, 55))]);
+  // ... but a main change inside the hunk's context lines is a different diff.
+  mismatch(() => check([live('src/a.js', 'modified', at(52, 55).replace(' a', ' a edited on main'))]), 'src/a.js');
+  // (d) a real new commit on the branch: another file, or another line in the reviewed one.
+  mismatch(() => check([live('src/a.js', 'modified', at(10, 10)), live('src/b.js', 'added', at(1, 1))]), 'src/b.js');
+  mismatch(() => check([live('src/a.js', 'modified', `${at(10, 10)}\n+D`)]), 'src/a.js');
+  // (e) a conflict resolution that alters the branch's own added line.
+  mismatch(() => check([live('src/a.js', 'modified', at(10, 10).replace('+B', '+B resolved'))]), 'src/a.js');
+});

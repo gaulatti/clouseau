@@ -53,6 +53,9 @@ function validateTrust(trust) {
   // Opt-in, protected: what a receipt is bound to. Absent binds the exact head and base commits, as always; "diff" binds the
   // normalized diff instead (receipt-patch.cjs), which verifySources then requires to equal the pull request's.
   requireReceipt(trust.binding === undefined || trust.binding === 'diff', 'binding must be "diff" when set');
+  // Opt-in, protected: the owner's confirmation follows the diff too (policy.cjs confirms()); only together with the binding.
+  requireReceipt(trust.confirmation === undefined || (trust.confirmation === 'diff' && trust.binding === 'diff'),
+    'confirmation must be "diff" when set, and only together with binding "diff"');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -327,11 +330,13 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
   // against, so each must still equal its file at the live base, as the declared recipe must (verification-attestation.cjs).
   const diff = !installation && config.local_review?.binding === 'diff';
   const revisions = diff ? {base: snapshot.base_sha, head: snapshot.head_sha} : {base: pr.base.sha, head: pr.head.sha};
-  reject(files.length === pr.changed_files && files.length > 0 &&
-    digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs', 'source');
-  reject(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
+  reject(files.length === pr.changed_files && files.length > 0, 'changed-file inventory differs', 'source');
+  // Under the binding a compatibility declaration is compared by what it declares, not by its bytes (receipt-patch.cjs).
+  const covered = diff ? require('./receipt-patch.cjs').withoutDeclarations({snapshot, files}) : {snapshot, files};
+  reject(digest(covered.files.map(file => file.filename).sort()) === digest(covered.snapshot.paths), 'changed-file inventory differs', 'source');
+  reject(covered.snapshot.files.length === covered.files.length && covered.files.every(file => covered.snapshot.files.some(item =>
     item.path === file.filename && item.status === file.status)), 'changed-file status differs', 'source');
-  require('./receipt-patch.cjs').verifyPatches({snapshot, files, binding: diff ? 'diff' : null});
+  require('./receipt-patch.cjs').verifyPatches({snapshot: covered.snapshot, files: covered.files, binding: diff ? 'diff' : null});
   reject(snapshot.tickets.length === 0 &&
     snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements', 'record');
   for (const filename of [config.readme, config.repository_policy]) {

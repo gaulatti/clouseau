@@ -237,7 +237,10 @@ proof-ID enumeration every citation site shares) once under `$defs` and points a
 `"$ref": "#/$defs/NAME"`; it is the same constraint as the full inline schema, a few KB
 instead of hundreds. `respond` validates the answer against the request schema (the
 supported subset, with only those `$defs` references, fails closed on unknown keywords), refuses a session identifier already used for
-another request in the exchange, and allows three attempts per request. Repeating
+another request in the exchange, and allows three attempts per request. A rejected answer's reason is passed to the next
+attempt. When an examiner or challenger drops or rewords a concern from its own earlier draft, the reason names that finding.
+For a restatement under the same identifier, it also names the first field that differs (cause or obligation) and quotes the
+earlier text, so the next fresh session can retain it verbatim or resolve it with current-source counterevidence. Repeating
 the identical `review` command then resumes: it reuses the one recorded
 verification, requires the same frozen evidence digest, replays accepted answers
 and stops at the next pending session. A request whose stored digest no longer
@@ -544,8 +547,26 @@ one apart from the revision it names.
 | lines added above a hunk on the base | `receipt_source` | covered |
 | any change to an added, removed or context line, or to whitespace | `receipt_source` | `receipt_source`, naming the file |
 | a file added, removed or re-statused, another rename | refused | refused, unchanged |
+| a compatibility declaration (`compat/declarations/<sha256>.json`) declared again after a merge | refused (its bytes changed) | covered while every declaration keeps its verdict over the same files (path, mode, deleted or not); only the content digests it pins may differ |
 | a file without a GitHub patch | refused, unless the live sources prove it shows no text | refused, even an empty file or an identical rename: the live sources are not read |
 | signature, enrolled key, author, expiry, repository, protected configuration and policy digests, engine and review semantics, passing decision | bound | bound, unchanged |
+
+A compatibility declaration ([receipt compatibility](receipt-compatibility.md)) pins the full content of the semantic files
+it covers. When the base gains a merged pull request that changed one of those files, merging the base makes the
+declaration stale, and declaring again replaces it with a new file under a new name. Under the binding that replacement does
+not void the receipt: a file added under exactly `compat/declarations/<64 hex>.json` whose whole content is a well-formed
+declaration is compared by what it declares, its verdict (`compatible` or `incompatible`) and the files it covers with their
+mode and whether each is deleted, and it is left out of the normalized diff. A changed verdict, a file added to or removed
+from a declaration, or a declaration gained or lost voids the receipt (`receipt_source`). Any other file under that directory
+(another name, another status, a body that is not one whole declaration) is an ordinary changed file. The required `verify`
+job still checks every declaration against the merged tree, so a declaration whose digests do not match the code fails
+there. The pull request's changed-file count still includes the declarations.
+
+**What still voids a diff-bound receipt after a base move.** A change on the base branch to the repository's contracts
+(`readme` and `repository_policy`, compared at the live base) or to the declared recipe (`.clouseau-local.json`, which the
+test waiver compares at the live base) voids every open diff-bound receipt, by design: the change was judged against them. A
+summarized lockfile's summary is recomputed from the live base and head lockfile bytes, so a base move that changed a
+lockfile the pull request also changes voids it when the recomputed summary differs.
 
 The test waiver follows the same binding: `operation: attested` answers `'true'` for a receipt whose diff matches and whose
 signed `.clouseau-local.json` equals the live base's, so the tests are **not** rerun after a base move or an update-branch
@@ -567,8 +588,16 @@ diff unchanged keeps the receipt valid end to end, at the assessment and at the 
 the gate's write boundary), which `src/acceptance-controller-binding.test.cjs` proves through an assessment and gate approval
 of the merged head with zero AI calls. A receipt that no longer covers the diff is refreshed or renewed as usual.
 
-The owner's `/approve-intent` (and an approving review) still names one exact head under the binding: a branch update
-creates a new head, so a change that needs the owner's confirmation needs it again for the updated head. Where the binding applies: `verifySignedRecord` (the head and base comparison),
+The owner's `/approve-intent` (and an approving review) names one exact head, under the binding too, unless the protected
+`local_review.confirmation: "diff"` is set as well (it is valid only together with `binding: "diff"`). With it, a
+confirmation of an earlier head (comment or approving review) also counts for the current head when that earlier commit is
+an ancestor of the head, its normalized diff (taken from its merge base with the live base) equals the pull request's
+current diff, and its merge base carries the same `.github/clouseau.json` and purpose contract (`repository_policy`) as the
+live base. A branch update that leaves the change unchanged therefore keeps the confirmation; any push that changes the
+diff, and any base change to the protected configuration or the contract, voids it. A patchless or truncated file list, an
+unknown commit or another lineage never matches, and any other API failure surfaces. The comment itself stays exactly
+`/approve-intent <sha>`. The recorded authorization names the head it was applied to and, when that differs, the
+`confirmed_sha` it was given for. Without the setting, a confirmation names the exact head, as before. Where the binding applies: `verifySignedRecord` (the head and base comparison),
 `verifySources` (revisions, sources, contract and verification refs, the lockfile summary, and the diff through `verifyPatches`),
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
@@ -906,9 +935,11 @@ the next run assesses afresh.
 
 A change to any protected control path (the CI workflow, `.github/ci/`,
 `.github/clouseau.json`, CODEOWNERS, `.clouseau-local.json`, the repository
-policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs exact-head
-owner confirmation (`/approve-intent <head sha>` from the configured maintainer).
-A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
+policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs the owner's
+confirmation (`/approve-intent <head sha>` from the configured maintainer). It names the
+exact head, unless the protected `local_review.confirmation: "diff"` lets a confirmation of an
+earlier head of the same normalized diff, against an unchanged base configuration and contract,
+stand for it (see above). A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
 cause `receipt_protected_controls` and a reason naming the protected controls
 (under the protected `local_review.human_review: "signed"` the same PR is instead
 held as `owner_decision` until that confirmation, see
@@ -930,7 +961,8 @@ against its accepted engine; engine source cannot become a repository contract.
 
 
 The local reuse assessment does not grant protected-control owner confirmation.
-That exact-head confirmation remains mandatory in CI before approval. Its pending
+That exact-head confirmation remains mandatory in CI before approval (under the protected `local_review.confirmation: "diff"`,
+a confirmation of an earlier head of the same unchanged diff also counts; see the binding section). Its pending
 execution alone cannot block the pre-PR reuse assessment when the implementation
 preserves the gate. Actual unsupported scope or authority still blocks.
 
