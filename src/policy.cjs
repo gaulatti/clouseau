@@ -361,15 +361,15 @@ const UNREQUESTED = 'clouseau-reassessment-unrequested';
 // requested. A notice that cannot be written is logged and never hides the original failure.
 async function reportUnrequested({github, context, core, transient, why}) {
   if (!['issue_comment', 'workflow_dispatch'].includes(context.eventName)) return;
-  let number;
-  try {number = numberFor(context);} catch {return;}
-  const asked = context.eventName === 'issue_comment' ? String(context.payload.comment?.body ?? '').trim().split('\n')[0].slice(0, 120) : 'the dispatched reassessment';
+  // Both events read the number before any API call, so a transient failure here always has a valid one.
+  const number = numberFor(context);
+  const asked = context.eventName === 'issue_comment' ? String(context.payload.comment.body).trim().split('\n')[0].slice(0, 120) : 'the dispatched reassessment';
   const body = `<!-- ${UNREQUESTED} -->\n## Clouseau: reassessment not requested\n\n` +
     `Your request (\`${asked.replaceAll('`', '')}\`) was received, but Clouseau could not request the reassessment: ${why}\n\n` +
     '**Nothing was lost.** To recover, open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** ' +
     '(not "Re-run failed jobs": that reuses the assessment made before your comment), or post the same comment again.';
   try {await transient(() => github.rest.issues.createComment({...context.repo, issue_number: number, body}));} catch (error) {
-    core.info(`The reassessment notice could not be posted on PR ${number} (HTTP ${Number.isInteger(error?.status) ? error.status : 'unknown'}); ` +
+    core.info(`The reassessment notice could not be posted on PR ${number} (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}); ` +
       'commenting needs the job permissions issues: write and pull-requests: write.');
   }
 }

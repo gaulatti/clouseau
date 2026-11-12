@@ -77,6 +77,9 @@ test('a notice that cannot be posted is logged and never hides the failure; noth
   const w = world({pull: () => {throw unavailable();}, comment: () => {throw Object.assign(new Error('Resource not accessible by integration'), {status: 403});}});
   await assert.rejects(w.run(), /could not be requested/);
   assert.ok(w.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP 403\).*issues: write and pull-requests: write/.test(line)));
+  const offline = world({pull: () => {throw unavailable();}, comment: () => {throw new Error('socket hang up');}});
+  await assert.rejects(offline.run(), /could not be requested/);
+  assert.ok(offline.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP unknown\)/.test(line)));
   const verification = world({pull: () => {throw unavailable();}});
   await assert.rejects(verification.run({repo, eventName: 'workflow_run', payload: {workflow_run: {event: 'pull_request',
     path: `.github/workflows/${config.workflow}`, head_sha: SHA, pull_requests: [{number: 3}]}}}), /could not be requested/);

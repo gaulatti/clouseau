@@ -26,7 +26,7 @@ async function newerConfirmation({github, context, assessment, legacy, number}) 
   if (!comments.some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`))) {
     await github.rest.issues.createComment({...repo, issue_number: number, body: `${marker}\n## Clouseau: assessment predates your confirmation\n\n` +
       `**Cause:** \`${CAUSE}\`: this run's assessment of \`${pr.head.sha.slice(0, 12)}\` was made before your confirmation ` +
-      `(${comment.html_url ?? `comment ${comment.id}`}), so it does not contain it and this gate cannot use it.\n\n` +
+      `(${comment.html_url}), so it does not contain it and this gate cannot use it.\n\n` +
       '**Next step:** open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** (not "Re-run failed jobs"), ' +
       'or post the same `/approve-intent` comment again. Your confirmation is kept; nothing else is needed.'});
   }
