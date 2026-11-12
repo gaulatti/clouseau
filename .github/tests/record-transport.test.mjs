@@ -181,11 +181,15 @@ test('packaged repair transports its bound bundle before the existing verifier a
   const assessment = {...f.assessment, repair_digest: digest(bundle)};
   const produced = await execute(assess, {assessment, bundle});
   const values = {assessment: produced.outputs.assessment, 'review-record': produced.outputs['review-record']};
-  await assert.rejects(execute(repair, {inputs: values, assessment}), error => {
+  // The packaged assess step stamps when it assessed; the repair receives exactly what it produced.
+  const stamped = JSON.parse(produced.outputs.assessment);
+  assert.deepEqual({...stamped, assessed_at: undefined}, {...assessment, assessed_at: undefined});
+  assert.ok(!Number.isNaN(Date.parse(stamped.assessed_at)));
+  await assert.rejects(execute(repair, {inputs: values, assessment: stamped}), error => {
     assert.equal(error.transportState.verify, 1); assert.equal(error.transportState.repair, 0);
     return /independent GitHub author credential/.test(error.message);
   });
-  const passed = await execute(repair, {inputs: {...values, 'repair-token': 'fictional-author-token'}, assessment});
+  const passed = await execute(repair, {inputs: {...values, 'repair-token': 'fictional-author-token'}, assessment: stamped});
   assert.equal(passed.verify, 1); assert.equal(passed.repair, 1);
   const artifact = await execute(repair, {assessment, inputs: {'record-transport': 'artifact', assessment: JSON.stringify(assessment),
     'repair-token': 'fictional-author-token'}, before: () => {

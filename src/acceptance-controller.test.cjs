@@ -1792,3 +1792,49 @@ test('a merge conflict with the base is named by one idempotent notice, immediat
     assert.equal((await f.assess()).cause, undefined);
   }
 }));
+
+test('a gate re-run on an assessment made before the owner confirmation fails with a named cause and one recovery notice', () => fixture(async f => {
+  const head = f.state.pr.head.sha;
+  const assessment = {version: 2, number: 3, head_sha: head, base_sha: f.state.pr.base.sha, engine: null, decision: 'review_incomplete',
+    cause: 'receipt_protected_controls', reason: 'The exact-head owner confirmation is missing.', assessed_at: '2026-11-12T14:21:10.000Z'};
+  const confirmation = at => ({id: 88, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${head}`, created_at: at,
+    html_url: 'https://github.com/example/gateway/pull/3#issuecomment-88'});
+  const gate = value => f.policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+    assessment: value, recordPath: f.recordPath, nativeGate: true});
+  const notices = () => f.state.writes.filter(w => w.name === 'create-ledger' && w.args.body.startsWith(`<!-- clouseau-stale-assessment:${head}:88 -->\n`));
+  f.github.rest.issues.createComment = async args => {
+    f.state.writes.push({name: 'create-ledger', args}); f.state.comments.push({id: 900 + f.state.comments.length, user: {login: 'github-actions[bot]'}, body: args.body});
+    return {data: {id: 900}};
+  };
+  f.state.comments.push(confirmation('2026-11-12T14:36:19Z'));
+  await assert.rejects(gate(assessment), /Cause: `assessment_predates_confirmation`.*re-run all jobs/s);
+  assert.equal(notices().length, 1);
+  assert.match(notices()[0].args.body, /Re-run all jobs\*\* \(not "Re-run failed jobs"\)/);
+  // The same head and confirmation again: still held, no second notice.
+  await assert.rejects(gate(assessment), /assessment_predates_confirmation/);
+  assert.equal(notices().length, 1, 'one notice per head and confirmation, not one per re-run');
+  assert.deepEqual(f.state.writes.filter(w => ['approve', 'enable-auto'].includes(w.name)), [], 'nothing is approved or armed');
+}));
+
+test('a confirmation the assessment could have read, an approvable assessment or one without the stamp take today\'s path', () => fixture(async f => {
+  const head = f.state.pr.head.sha;
+  const base = {version: 2, number: 3, head_sha: head, base_sha: f.state.pr.base.sha, engine: null, decision: 'review_incomplete',
+    cause: 'receipt_protected_controls', reason: 'The exact-head owner confirmation is missing.'};
+  f.state.comments.push({id: 88, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${head}`, created_at: '2026-11-12T14:36:19Z'});
+  const gate = value => f.policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
+    assessment: value, recordPath: f.recordPath, nativeGate: true});
+  for (const assessment of [{...base, assessed_at: '2026-11-12T14:40:00.000Z'}, base, {...base, assessed_at: 'not a time'},
+    {...base, assessed_at: '2026-11-12T14:21:10.000Z', head_sha: 'f'.repeat(40)}]) {
+    await assert.rejects(gate(assessment), error => !/assessment_predates_confirmation/.test(error.message), JSON.stringify(assessment.assessed_at));
+  }
+  const {newerConfirmation} = require('./stale-assessment.cjs');
+  for (const decision of ['auto_approve', 'owner_decision']) {
+    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
+      assessment: {...base, decision, assessed_at: '2026-11-12T14:21:10.000Z'}}), null, decision);
+  }
+  // Another user's comment, or one that names another head, is not a confirmation of this head.
+  f.state.comments.splice(0, 1, {id: 89, user: {login: 'someone-else', type: 'User'}, body: `/approve-intent ${head}`, created_at: '2026-11-12T14:36:19Z'},
+    {id: 90, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${'e'.repeat(40)}`, created_at: '2026-11-12T14:36:19Z'});
+  assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
+    assessment: {...base, assessed_at: '2026-11-12T14:21:10.000Z'}}), null);
+}));

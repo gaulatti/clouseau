@@ -295,6 +295,29 @@ A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-
 scoped record artifacts are never reused across reruns.
 
+## A requested reassessment is never lost silently
+
+The comment-triggered `request-reassessment` job retries GitHub 5xx and short rate-limit failures. When a request still
+cannot be made, it posts a `clouseau-reassessment-unrequested` notice on the pull request. A consumer workflow upgrades by
+changing that job's `permissions` to:
+
+```yaml
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: write
+```
+
+The job still checks out only trusted `main` and the frozen engine, never pull request code. Without the two write
+permissions the retry still works; the notice itself then fails visibly, and the log names the missing permissions.
+A separate `workflow_run` reassessment file needs no change: no person asked for that request, so it posts nothing.
+
+The packaged `assess` step now stamps `assessed_at` into the assessment before it reads any comment. With it, a gate
+re-run on its own after an owner confirmation fails with cause `assessment_predates_confirmation` and one
+"Re-run all jobs" notice, instead of failing as if no confirmation existed. An assessment from an older engine carries
+no stamp and keeps the old behaviour.
+
 ## Approved PRs after a sibling merge moves the base
 
 Approval, the assessment and any local receipt are bound to the head **and** the
