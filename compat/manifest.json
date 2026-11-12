@@ -56,7 +56,7 @@
     ["src/managed-agents.cjs",0,"ce8ebfad6d8d7500418c9584c9d1ab790fd0dd9d3ff4ba41490a2a6930760183"],
     ["src/merge-protection.cjs",0,"cab8eb947b41342f962bf43f209192524f79429d3425843cfea4a1f9356700b7"],
     ["src/policy.cjs",0,"4021c22d4b6f99950884191a1a8856ebbfbedeaec0e0609b9128fb6c8f33cffb"],
-    ["src/pr-refresh.cjs",0,"8f47c0f38d9a0342eef4326b5c4543373a76265e90784e90aa54fdf80cd78ae0"],
+    ["src/pr-refresh.cjs",0,"3643eccedb5130ec349023a8c691925f83601cfa39a60d125c7cbda494aeadb1"],
     ["src/private-owner-merge.cjs",0,"df716445425b9752569ed787c68ea35eec41b62eb0657c7e8aa625bf4dcba637"],
     ["src/provider-key.cjs",0,"6552dfed8407f3d5d35a8fa81aa6597d1bb7520f730e5690fd9ffd1310b18a8f"],
     ["src/provider.cjs",0,"2445165bb2f001b33ae4d98167c604e54318eba625899d778a81ee8d6cfe47b8"],
