@@ -130,21 +130,23 @@ jobs:
     timeout-minutes: 20
     steps:
       # `attested` is 'true' only for a pull request whose receipt attests this exact verification; then the receipt-covered steps
-      # (`verification.steps` in .github/clouseau.json) are skipped, and the gate accepts the skipped steps only because it verifies
-      # the same receipt itself. The engine's own self-tests run in `self-tests` whatever a receipt says.
+      # (`verification.steps` in .github/clouseau.json, under `verify-code`) are skipped, and the gate accepts the skipped steps
+      # only because it verifies the same receipt itself. The steps under `self-test-code` run whatever a receipt says.
       - uses: actions/checkout@v4
+        if: &self-test-code >-
+          (github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: *self-test-code
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
         if: &verify-code >-
           ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
           (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) &&
           needs.attested.outputs.attested != 'true'
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        if: *verify-code
-        with:
-          node-version: '22'
-      - uses: actions/setup-python@v5
-        if: *verify-code
         with:
           python-version: '3.13'
       - name: Install coverage.py for the real-report integration test
@@ -167,35 +169,8 @@ jobs:
         run: |
           npm ci --prefix .github/tests --ignore-scripts --no-audit --no-fund
           npm test --prefix .github/tests
-      - name: Retain native verification traces
-        if: >-
-          always() && ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && inputs.pull_request == ''))
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .clouseau-work/verification-runs
-          include-hidden-files: true
-          if-no-files-found: warn
-
-  # The engine's own contract self-tests and the review-semantics declarations. No receipt attests these: they run for every
-  # verified revision. This job is not `verification.job`, but the gate requires the whole verification run to succeed
-  # (technicalRun), so a failure here blocks approval like a failure in `verify`.
-  self-tests:
-    name: ${{ ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'self-tests' || 'metadata-only-self-tests' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-        if: &self-test-code >-
-          (github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        if: *self-test-code
-        with:
-          node-version: '22'
+      # The engine's own self-tests and the review-semantics declarations run whatever a receipt says: no receipt attests them.
+      # The checkout, Node and coverage.py setup above run for them too (`self-test-code` never reads `attested`).
       # The declarations are checked against the tree this run verifies (the pull request's merge with its base), so a
       # declaration left stale by a merge fails here even when a receipt attests every other check (docs/receipt-compatibility.md).
       - name: Check review-semantics declarations against the verified tree
@@ -272,6 +247,16 @@ jobs:
         env:
           MULTI_GAP_OUTCOME: ${{ steps.multi-gap.outcome }}
         run: test "$MULTI_GAP_OUTCOME" = failure
+      - name: Retain native verification traces
+        if: >-
+          always() && ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == ''))
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .clouseau-work/verification-runs
+          include-hidden-files: true
+          if-no-files-found: warn
 
   prepare-installation:
     if: &install-event >-
