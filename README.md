@@ -322,7 +322,8 @@ suite and is insufficient as the required approval result for this flow. Comment
 write access; they rerun the current revision's existing `pull_request_target` run. Its test job
 is skipped, so confirming intent does not rebuild the container. The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
-GitHub 5xx and short rate-limit failures are retried with the shared transient backoff.
+GitHub 5xx and short rate-limit failures are retried with the shared transient backoff (every packaged
+step retries its reads; see the upgrade notes).
 A request that still cannot be made is never silent: the pull request gets a
 `clouseau-reassessment-unrequested` notice saying the comment was received and how
 to recover (that notice is the only reason for the write access). When the gate is

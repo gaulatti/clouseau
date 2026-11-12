@@ -131,6 +131,7 @@ runs:
         CLOUSEAU_ROOT: ${{ github.action_path }}
       with:
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const fs = require('node:fs');
           const path = require('node:path');
           const engine = require(path.join(process.env.CLOUSEAU_ROOT, 'src/central-version.cjs')).environmentEngine();
@@ -203,13 +204,12 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const engine = require(path.join(root, 'src/central-version.cjs')).environmentEngine();
-          const attested = await require(path.join(root, 'src/verification-attestation.cjs')).decide({github, context, config, engine});
-          core.setOutput('attested', String(attested));
-          core.info(attested ? 'A valid local receipt attests the verification; its checks may be skipped.' : 'No valid receipt attests the verification; run the checks.');
+          await require(path.join(root, 'src/verification-attestation.cjs')).decideVisibly({github, context, config, engine, core});
     - name: Verify local review or assess repository intent
       id: assess
       if: inputs.operation == 'assess' || inputs.operation == 'verify-local'
@@ -227,6 +227,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
@@ -257,6 +258,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
@@ -285,6 +287,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
@@ -320,6 +323,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const fs = require('node:fs');
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
@@ -352,6 +356,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           await require(path.join(process.env.CLOUSEAU_ROOT, 'src/provider.cjs')).checkProvider();
           core.info('DeepSeek authentication and structured output verified. No PR was approved or merged.');
@@ -381,6 +386,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
@@ -395,6 +401,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
@@ -411,6 +418,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const path = require('node:path');
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
@@ -431,6 +439,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const fs = require('node:fs');
           const path = require('node:path');
           if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
@@ -460,6 +469,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           const fs = require('node:fs');
           const path = require('node:path');
           const config = JSON.parse(fs.readFileSync(process.env.WIKI_CONFIG, 'utf8'));
@@ -481,6 +491,7 @@ runs:
       with:
         github-token: ${{ inputs.github-token }}
         script: |
+          require(require('node:path').join(process.env.CLOUSEAU_ROOT, 'src/github-retry.cjs')).install(github, {report: core.info});
           if (!process.env.DEEPSEEK_API_KEY) throw new Error('DEEPSEEK_API_KEY is not configured');
           const fs = require('node:fs');
           const path = require('node:path');

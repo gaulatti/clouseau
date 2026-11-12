@@ -5,12 +5,17 @@
     {
       "path": "action.yml",
       "mode": 0,
-      "sha256": "be825e36897336bcc1c9e0d39504b6fdc2bf511d22511cb77247088c228529b9"
+      "sha256": "fe9d0c2d888addbbd8047cf977c0b1b930ea56aefa8b74e2d077ff88f0a7d504"
     },
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
       "sha256": "c5020b548cbede353bf1fd9f67466d8183e6ce23046195ef305982840e8c7cca"
+    },
+    {
+      "path": "src/github-retry.cjs",
+      "mode": 0,
+      "sha256": "13078de69b98e448036a01ef0cb12b13e96d66e1aca75e752efdd8a13d5b1a65"
     },
     {
       "path": "src/policy.cjs",
@@ -21,6 +26,11 @@
       "path": "src/stale-assessment.cjs",
       "mode": 0,
       "sha256": "78979ebeab7ecd6b3da72a9cff63412106abba7b7f6096283b6a27130ce47478"
+    },
+    {
+      "path": "src/verification-attestation.cjs",
+      "mode": 0,
+      "sha256": "91b3a3b728a8789d02630c0abe320db44228a9885b16c067c860ebb3c2060b81"
     }
   ]
 }

@@ -299,6 +299,19 @@ A review run that produced no acceptance record (pending or failed
 verification, incomplete review, not ready) cannot approve or merge. Attempt-
 scoped record artifacts are never reused across reruns.
 
+## One transient GitHub failure no longer ends a step
+
+The `actions/github-script` client defaults to `retries: 0`, so a single HTTP 5xx ended any step that called the API. A
+`GET /pulls/{n}` within about a minute of a pull request being opened was observed returning 503 to several runs at once.
+Every packaged step of the Clouseau action now installs a read retry first (`src/github-retry.cjs`): GET and HEAD are
+retried on 5xx or a short rate limit with the shared 2 s / 6 s / 15 s backoff, while writes keep their own handling, which
+checks that an earlier attempt did not land, so a review, comment or merge is never sent twice. A consumer workflow
+upgrades by adding `retries: 3` under `with:` of each of its own inline `actions/github-script` steps, which only read.
+For the reference template these are the five steps of `assess-intent` and `check-author`.
+
+When the `attested` decision still fails, the checks run in full as before, but the job summary and a warning now say
+`Receipt not consulted: GitHub API unavailable; verification ran in full.`, so a full run is never mistaken for a normal one.
+
 ## A requested reassessment is never lost silently
 
 The comment-triggered `request-reassessment` job retries GitHub 5xx and short rate-limit failures. When a request still

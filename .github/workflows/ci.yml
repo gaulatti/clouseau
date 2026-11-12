@@ -220,6 +220,7 @@ jobs:
       - uses: actions/github-script@v7
         id: install
         with:
+          retries: 3
           script: |
             if (context.actor !== context.repo.owner) throw new Error('Only the repository owner may install review controls');
             const match = context.ref.match(/^refs\/heads\/policy-install\/pr-([1-9][0-9]*)$/);
@@ -372,6 +373,7 @@ jobs:
         env:
           ENGINE_ROOT: ${{ github.event_name == 'push' && '.' || '.clouseau-ci' }}
         with:
+          retries: 3
           script: |
             const resolver = require(require('node:path').join(process.env.GITHUB_WORKSPACE, process.env.ENGINE_ROOT, 'src/acceptance-artifact.cjs'));
             core.setOutput('name', await resolver.resolveArtifactName({github, context, attempt: process.env.GITHUB_RUN_ATTEMPT}));
@@ -434,6 +436,7 @@ jobs:
         id: acceptance-artifact
         uses: actions/github-script@v7
         with:
+          retries: 3
           script: |
             const resolver = require(require('node:path').join(process.env.GITHUB_WORKSPACE, '.clouseau-ci/src/acceptance-artifact.cjs'));
             core.setOutput('name', await resolver.resolveArtifactName({github, context, attempt: process.env.GITHUB_RUN_ATTEMPT}));
