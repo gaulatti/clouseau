@@ -356,6 +356,11 @@ test('source investigation cannot run indefinitely or discard a causal concern w
       error.message.includes(`finding ${id} is restated with a different ${field} than the earlier draft`) &&
       error.message.includes(JSON.stringify(draft.findings[0][field])), field);
   }
+  // The quoted earlier text is bounded: a long field is cut at 400 characters.
+  const long = structuredClone(draft); long.findings[0].obligation = `${'x'.repeat(500)}`;
+  const longer = structuredClone(long); longer.findings[0].obligation = `${'y'.repeat(500)}`;
+  assert.throws(() => validateInspection(longer, f.snapshot, [long]), error =>
+    error.message.includes(JSON.stringify('x'.repeat(400))) && !error.message.includes('x'.repeat(401)));
   retained.findings[0].cause = 'A different root cannot silently reuse the identifier.';
   assert.throws(() => validateInspection(retained, f.snapshot, [draft]), /prior investigation concern/);
   const closed = structuredClone(f.report);
