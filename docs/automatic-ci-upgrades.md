@@ -418,7 +418,8 @@ base into the branch server-side instead of posting the notice, and lets `reconc
 PR in one run instead of one at a time. Upgrade steps:
 
 1. Pass `update-token` to the gate step of `approve-and-merge`. The reference template passes
-   `update-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}`, the same secret as `repair-token`: one token serves both.
+   `update-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}`, the same secret as `repair-token`: one token serves both. Use
+   whatever secret your workflow already passes as `repair-token` (this repository's own workflow calls it `DEPLOYMENT_TOKEN`).
 2. That token must start workflows (a `GITHUB_TOKEN` push starts none) and needs contents: write on the repository.
 3. Set `"base_moved": "update"` under `local_review` in `.github/clouseau.json` (a protected change, confirmed by the owner).
 
@@ -428,6 +429,11 @@ reviewer is asked, and under `confirmation: "diff"` the owner's confirmation car
 `base_update_requested`. Loop bound: an update is requested only for the assessed head with only the base moved, with
 `expected_head_sha`; a rerun sees the new head and requests nothing, the new head carries the new base, and updating a
 branch never moves the base. Without the setting the token is never used.
+
+On a controller-managed private-owner repository (the merge the acceptance controller performs itself), the update happens at
+the gate's first check, before the controller's merge, and the updated head then merges by the same atomic fast-forward. The
+base can still move in the seconds between that check and the controller's own re-read of the pull request; that rare case,
+and an exact-revert record, keep holding with the notice (fail closed) and are updated by the next reconcile or base move.
 
 ## Operations and boundaries
 

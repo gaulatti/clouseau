@@ -1804,3 +1804,29 @@ test('a merge conflict with the base is named by one idempotent notice, immediat
     assert.equal((await f.assess()).cause, undefined);
   }
 }));
+
+test('private owner automation under base_moved "update": a moved base is updated, not held, and the updated head merges by fast-forward', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const local_review = {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800, binding: 'diff',
+    base_moved: 'update', keys: [{id: 'update-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]};
+  const p = await privateOwnerFixture(f, false, {local_review});
+  f.state.pr.head.repo.full_name = `${f.context.repo.owner}/${f.context.repo.repo}`; // as GitHub serves it: a same-repository head
+  const updates = [];
+  const updateGithub = {rest: {pulls: {updateBranch: async args => {updates.push(args); return {data: {}};}}}};
+  const gate = assessment => p.policy.gate({github: f.github, context: f.context, core: p.core, recordPath: f.recordPath, assessment,
+    nativeGate: true, wait: async () => {}, updateGithub});
+  // Main moved after the assessment: the controller-managed path updates the branch server-side once and writes nothing else.
+  const assessedBase = f.state.pr.base.sha;
+  f.state.pr.base.sha = 'f'.repeat(40);
+  await assert.rejects(gate(p.assessment), error => error.code === 'BASE_UPDATE_REQUESTED');
+  assert.deepEqual(updates.map(item => [item.pull_number, item.expected_head_sha]), [[3, p.assessment.head_sha]]);
+  assert.deepEqual(f.state.writes.filter(w => ['atomic', 'approve', 'enable-auto'].includes(w.name)), [], 'nothing approved or merged on the old head');
+  assert.equal(f.state.comments.some(item => String(item.body).includes('clouseau-needs-branch-update')), false, 'no hold notice');
+  // The updated head is assessed against the base it now contains and merges through the atomic fast-forward, as without the flag.
+  f.state.pr.base.sha = assessedBase;
+  await p.run(true);
+  assert.deepEqual(f.state.writes.filter(w => ['approve', 'atomic', 'enable-auto'].includes(w.name)).map(w => w.name), ['approve', 'atomic']);
+  assert.equal(f.state.pr.merge_commit_sha, p.assessment.head_sha);
+  assert.equal(updates.length, 1, 'no further update once the head carries the base');
+}));
