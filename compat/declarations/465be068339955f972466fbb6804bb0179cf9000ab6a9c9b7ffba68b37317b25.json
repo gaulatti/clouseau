@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/local-receipt.cjs",
+      "mode": 0,
+      "sha256": "64e577b5df66d89614779040f9425a9dbd5484ed1aca776b52010af02371bbcd"
+    },
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "407bdcbf09064ef5931031dd46b778bc5d0906cd3a8fd400f27b1c3a08f02dbc"
+    }
+  ]
+}
