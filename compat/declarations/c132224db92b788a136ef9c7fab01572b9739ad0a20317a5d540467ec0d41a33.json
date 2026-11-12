@@ -10,7 +10,7 @@
     {
       "path": "src/local-cli.cjs",
       "mode": 0,
-      "sha256": "473b8ea14fb06f5249aea9d0e8dfb4875ee22f04c2d5e1511e4d893ed34f721b"
+      "sha256": "b663c2a4d7945f633306fbebf7f147f90ff41ff7dea8acf82da1ca5c30b5d6ef"
     },
     {
       "path": "src/local-receipt.cjs",
@@ -20,7 +20,7 @@
     {
       "path": "src/pr-refresh.cjs",
       "mode": 0,
-      "sha256": "2a1ab5b8e1e494a88fa994213dd03e3be5fd8b09da9c71605ed0c7f07c77e4ec"
+      "sha256": "c10b7707b6a8fb9b7b8becd62607622be069780d6c5f29baef3a1f92a4f90f9a"
     },
     {
       "path": "src/receipt-standing.cjs",
