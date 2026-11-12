@@ -50,6 +50,9 @@ function validateTrust(trust) {
   // Opt-in, protected: what a receipt is bound to. Absent binds the exact head and base commits, as always; "diff" binds the
   // normalized diff instead (receipt-patch.cjs), which verifySources then requires to equal the pull request's.
   requireReceipt(trust.binding === undefined || trust.binding === 'diff', 'binding must be "diff" when set');
+  // Opt-in, protected: the owner's confirmation follows the diff too (policy.cjs confirms()); only together with the binding.
+  requireReceipt(trust.confirmation === undefined || (trust.confirmation === 'diff' && trust.binding === 'diff'),
+    'confirmation must be "diff" when set, and only together with binding "diff"');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
