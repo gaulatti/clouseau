@@ -344,9 +344,11 @@ async function reassess({github, context, core, wait, api}) {
     core.info('The trusted review already succeeded; no reassessment is needed.');
     return;
   }
-  // A retried rerun first checks whether the attempt that seemed to fail had landed: GitHub refuses a second rerun of a running run.
-  await api(async attempt => {
-    if (attempt > 0 && (await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id})).data.status !== 'completed') return;
+  // Every attempt after the first, whichever retry layer starts it, first checks whether an earlier one had landed: GitHub
+  // refuses a second rerun of a running run.
+  let tries = 0;
+  await api(async () => {
+    if (tries++ > 0 && (await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id})).data.status !== 'completed') return;
     await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
   });
   core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
@@ -379,11 +381,21 @@ async function reportUnrequested({github, context, core, transient, why}) {
   // Both events read the number before any API call, so a transient failure here always has a valid one.
   const number = numberFor(context);
   const asked = context.eventName === 'issue_comment' ? String(context.payload.comment.body).trim().split('\n')[0].slice(0, 120) : 'the dispatched reassessment';
-  const body = `<!-- ${UNREQUESTED} -->\n## Clouseau: reassessment not requested\n\n` +
+  // One notice per request (the comment, or the dispatched run), so a retry can tell whether an earlier attempt had posted it.
+  const marker = `<!-- ${UNREQUESTED}:${context.eventName === 'issue_comment' ? `comment-${context.payload.comment.id}` : `run-${context.runId}`} -->`;
+  const body = `${marker}\n## Clouseau: reassessment not requested\n\n` +
     `Your request (\`${asked.replaceAll('`', '')}\`) was received, but Clouseau could not request the reassessment: ${why}\n\n` +
     '**Nothing was lost.** To recover, open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** ' +
     '(not "Re-run failed jobs": that reuses the assessment made before your comment), or post the same comment again.';
-  try {await transient(() => github.rest.issues.createComment({...context.repo, issue_number: number, body}));} catch (error) {
+  let tries = 0;
+  const posted = async () => (await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: number, per_page: 100}))
+    .some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`));
+  try {
+    await transient(async () => {
+      if (tries++ > 0 && await posted()) return;
+      await github.rest.issues.createComment({...context.repo, issue_number: number, body});
+    });
+  } catch (error) {
     core.info(`The reassessment notice could not be posted on PR ${number} (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}); ` +
       'commenting on a pull request needs the job permissions issues: write and pull-requests: write.');
   }
