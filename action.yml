@@ -236,14 +236,14 @@ runs:
           const transport = require(path.join(root, 'src/record-transport.cjs'));
           const mode = process.env.CLOUSEAU_RECORD_TRANSPORT;
           let assessment;
-          // Before the assessment reads any comment: a gate re-run later can tell a confirmation posted after it (stale-assessment.cjs).
-          const assessedAt = new Date().toISOString();
+          // When the assessment last listed the comments: a later gate can tell a confirmation it did not see (stale-assessment.cjs).
+          const assessedAt = require(path.join(root, 'src/stale-assessment.cjs')).watchCommentReads(github);
           try {
             assessment = await assess({github, context, report: core.info,
               receiptOnly: process.env.CLOUSEAU_RECEIPT_ONLY === 'true',
               ignoreReceipt: process.env.CLOUSEAU_IGNORE_RECEIPT === 'true'});
           } finally {transport.preserveDiagnostic({mode, core, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});}
-          assessment = {...assessment, assessed_at: assessedAt};
+          if (assessedAt()) assessment = {...assessment, assessed_at: assessedAt()};
           core.setOutput('assessment', JSON.stringify(assessment));
           require(path.join(root, 'src/incomplete.cjs')).annotate({core, assessment});
           transport.publish({mode, assessment, context, runAttempt: process.env.GITHUB_RUN_ATTEMPT, core});

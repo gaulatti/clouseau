@@ -73,7 +73,7 @@ async function execute(step, options = {}) {
   const controller = {RECORD, verifyRecord: (actual, actualAssessment) => {
     state.verify++; assert.deepEqual(JSON.parse(JSON.stringify(actual)), record); assert.deepEqual(JSON.parse(JSON.stringify(actualAssessment)), assessment);
   }};
-  const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}, hook: {wrap() {}}};
+  const github = {paginate: async () => [], rest: {issues: {listComments() {}}}, constructor: class {}, hook: {wrap() {}, before() {}}};
   const core = {setOutput: (key, value) => {state.outputs[key] = value;}, info: line => state.logs.push(line), warning: line => (state.warnings ??= []).push(line)};
   try {
     process.chdir(dir);
@@ -181,10 +181,9 @@ test('packaged repair transports its bound bundle before the existing verifier a
   const assessment = {...f.assessment, repair_digest: digest(bundle)};
   const produced = await execute(assess, {assessment, bundle});
   const values = {assessment: produced.outputs.assessment, 'review-record': produced.outputs['review-record']};
-  // The packaged assess step stamps when it assessed; the repair receives exactly what it produced.
+  // The packaged assess step stamps when it last read comments (none here: no stamp); the repair receives what it produced.
   const stamped = JSON.parse(produced.outputs.assessment);
-  assert.deepEqual({...stamped, assessed_at: undefined}, {...assessment, assessed_at: undefined});
-  assert.ok(!Number.isNaN(Date.parse(stamped.assessed_at)));
+  assert.deepEqual(stamped, assessment);
   await assert.rejects(execute(repair, {inputs: values, assessment: stamped}), error => {
     assert.equal(error.transportState.verify, 1); assert.equal(error.transportState.repair, 0);
     return /independent GitHub author credential/.test(error.message);

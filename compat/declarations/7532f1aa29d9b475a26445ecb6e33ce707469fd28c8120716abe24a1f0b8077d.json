@@ -5,7 +5,7 @@
     {
       "path": "action.yml",
       "mode": 0,
-      "sha256": "fe9d0c2d888addbbd8047cf977c0b1b930ea56aefa8b74e2d077ff88f0a7d504"
+      "sha256": "1206b93dff6392ab5e2172356eb1584676e51ecd6ce2644fca3b7e28f9fa62c5"
     },
     {
       "path": "src/acceptance-controller.cjs",
@@ -25,7 +25,7 @@
     {
       "path": "src/stale-assessment.cjs",
       "mode": 0,
-      "sha256": "78979ebeab7ecd6b3da72a9cff63412106abba7b7f6096283b6a27130ce47478"
+      "sha256": "fd708434bb4e2f0cb5b8588fd11a73d5e672e96f368273998ae3424b25fbeb42"
     },
     {
       "path": "src/verification-attestation.cjs",

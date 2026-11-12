@@ -19,12 +19,13 @@ test('request-reassessment may comment on the pull request, and nothing more tha
   }
 });
 
-test('the packaged assess step stamps assessed_at before the assessment reads anything, and emits it', () => {
+test('the packaged assess step watches the comment reads before the assessment runs, and emits when it last read them', () => {
   const step = read('action.yml').runs.steps.find(item => item.id === 'assess');
   const script = step.with.script;
-  const stamp = script.indexOf('const assessedAt = new Date().toISOString();');
-  assert.ok(stamp > 0 && stamp < script.indexOf('await assess('), 'stamped before the assessment runs');
-  assert.ok(script.indexOf('assessment = {...assessment, assessed_at: assessedAt};') < script.indexOf("core.setOutput('assessment'"));
+  const watch = script.indexOf("const assessedAt = require(path.join(root, 'src/stale-assessment.cjs')).watchCommentReads(github);");
+  assert.ok(watch > 0 && watch < script.indexOf('await assess('), 'watching before the assessment runs');
+  const emit = script.indexOf('if (assessedAt()) assessment = {...assessment, assessed_at: assessedAt()};');
+  assert.ok(emit > 0 && emit < script.indexOf("core.setOutput('assessment'"));
 });
 
 // One HTTP 5xx used to end a step: the actions/github-script client defaults to `retries: 0`. Every github-script step either

@@ -9,8 +9,9 @@ const MARKER = 'clouseau-stale-assessment';
 // could not approve and an owner confirmation of this exact head was posted after it was made, the confirmation is not in
 // it: the gate must not decide on it, and only a new assessment may read the confirmation (the gate never reads one into a
 // decision itself). The gate then names the cause and tells the owner, once per head and confirmation, how to recover.
-// `assessed_at` is stamped by the action before the assessment reads any comment, so a confirmation posted after it may
-// have been seen; an approvable assessment is never stale, and one without the stamp (an older engine) is never checked.
+// `assessed_at` is when the assessment last listed the comments (watchCommentReads), so a confirmation created after it was
+// not in that listing. An approvable assessment is never stale, and one without the stamp (an older engine, or an assessment
+// that read no comment) is never checked.
 async function newerConfirmation({github, context, assessment, legacy, number}) {
   if (typeof assessment.assessed_at !== 'string' || ['auto_approve', 'owner_decision'].includes(assessment.decision)) return null;
   const assessedAt = Date.parse(assessment.assessed_at);
@@ -34,4 +35,18 @@ async function newerConfirmation({github, context, assessment, legacy, number}) 
     'assessment reads it. "Re-run failed jobs" reuses the earlier assessment.';
 }
 
-module.exports = {CAUSE, MARKER, newerConfirmation};
+// When the assessment last listed the pull request's comments: the first request of the last listing, so a confirmation
+// created after it cannot be in what the assessment decided on. The assessment reads comments once per attempt, before any
+// investigation; `assessWhenReady` may attempt several times, and the result is the last attempt's. Null when it read none.
+function watchCommentReads(github, now = () => new Date()) {
+  let last = null;
+  github.hook.before('request', options => {
+    const url = String(options.url);
+    if (String(options.method).toUpperCase() !== 'GET' || !/\/issues\/(\{issue_number\}|[0-9]+)\/comments(\?|$)/.test(url)) return;
+    const page = Number(options.page ?? new URL(url, 'https://api.github.com').searchParams.get('page') ?? 1);
+    if (page <= 1) last = now().toISOString();
+  });
+  return () => last;
+}
+
+module.exports = {CAUSE, MARKER, newerConfirmation, watchCommentReads};

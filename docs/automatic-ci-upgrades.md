@@ -330,7 +330,8 @@ The job still checks out only trusted `main` and the frozen engine, never pull r
 permissions the retry still works; the notice itself then fails visibly, and the log names the missing permissions.
 A separate `workflow_run` reassessment file needs no change: no person asked for that request, so it posts nothing.
 
-The packaged `assess` step now stamps `assessed_at` into the assessment before it reads any comment. With it, a gate
+The packaged `assess` step now stamps `assessed_at` into the assessment: the moment its last listing of the pull request's
+comments began, so a confirmation created after it was not seen. With it, a gate
 re-run on its own after an owner confirmation fails with cause `assessment_predates_confirmation` and one
 "Re-run all jobs" notice, instead of failing as if no confirmation existed. An assessment from an older engine carries
 no stamp and keeps the old behaviour.
