@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/chunked-record.cjs",
+      "mode": 0,
+      "sha256": "a0e6ba776558f707c54c29126d6228ac1eb798ad7f5d32555fa0a31a38a7a0df"
+    },
+    {
+      "path": "src/chunked-review.cjs",
+      "mode": 0,
+      "sha256": "1b8ccbf712f818305482595f004d699f7d1856dfecfb04372ceb111988c41bdd"
+    },
+    {
+      "path": "src/chunked-wiring.cjs",
+      "mode": 0,
+      "sha256": "e9fd6f96e74f79d0467d04c540252c6fbcd05c8bd9e2f3758f75145af85b7142"
+    },
+    {
+      "path": "src/hosted-chunked.cjs",
+      "mode": 0,
+      "sha256": "0f5ab4860aa6b0afe15109bc348e55532cfc9731d12f9bba85ffc01c30f5f503"
+    },
+    {
+      "path": "src/integration-plan.cjs",
+      "mode": 0,
+      "sha256": "73b0f1212a5bb1c5a58e258d841fe4f3aaa6834f57cf85ff6977174dcb572699"
+    },
+    {
+      "path": "src/local-cli.cjs",
+      "mode": 0,
+      "sha256": "ff6c952877b759f9fc479d9b3a16e43b26c56a5d712570ef456d68ddea10eaa8"
+    },
+    {
+      "path": "src/review-partition.cjs",
+      "mode": 0,
+      "sha256": "e5dfd3c78ee023870b69da6e0f15a28070b16374ac2dbfef8af374b2200f73c8"
+    },
+    {
+      "path": "src/seam-context.cjs",
+      "mode": 0,
+      "sha256": "06f3eeece3c179fdca8629514bc8434f86c4d33a4cceb6a518f0e927bbd4bf94"
+    }
+  ]
+}
