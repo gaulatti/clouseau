@@ -9,8 +9,8 @@ const MARKER = 'clouseau-stale-assessment';
 // could not approve and an owner confirmation of this exact head was posted after it was made, the confirmation is not in
 // it: the gate must not decide on it, and only a new assessment may read the confirmation (the gate never reads one into a
 // decision itself). The gate then names the cause and tells the owner, once per head and confirmation, how to recover.
-// `assessed_at` is when the assessment last listed the comments (watchCommentReads), so a confirmation created after it was
-// not in that listing. An approvable assessment is never stale, and one without the stamp (an older engine, or an assessment
+// `assessed_at` is when the assessment last listed the comments, on GitHub's clock (watchCommentReads), so a confirmation
+// created after it was not in that listing. An approvable assessment is never stale, and one without the stamp (an older engine, or an assessment
 // that read no comment) is never checked.
 async function newerConfirmation({github, context, assessment, legacy, number}) {
   if (typeof assessment.assessed_at !== 'string' || ['auto_approve', 'owner_decision'].includes(assessment.decision)) return null;
@@ -22,7 +22,7 @@ async function newerConfirmation({github, context, assessment, legacy, number}) 
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
   const confirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
   const comment = confirmation && comments.find(item => item.id === confirmation.comment_id);
-  if (!comment || !(Date.parse(comment.created_at) > assessedAt)) return null;
+  if (!comment || !(Date.parse(comment.created_at) > assessedAt)) return null; // the same second counts as seen
   const marker = `<!-- ${MARKER}:${pr.head.sha}:${comment.id} -->`;
   if (!comments.some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`))) {
     await github.rest.issues.createComment({...repo, issue_number: number, body: `${marker}\n## Clouseau: assessment predates your confirmation\n\n` +
@@ -35,16 +35,20 @@ async function newerConfirmation({github, context, assessment, legacy, number}) 
     'assessment reads it. "Re-run failed jobs" reuses the earlier assessment.';
 }
 
-// When the assessment last listed the pull request's comments: the first request of the last listing, so a confirmation
-// created after it cannot be in what the assessment decided on. The assessment reads comments once per attempt, before any
-// investigation; `assessWhenReady` may attempt several times, and the result is the last attempt's. Null when it read none.
-function watchCommentReads(github, now = () => new Date()) {
+// When the assessment last listed the pull request's comments, on GitHub's own clock: the `date` header of the response to the
+// first request of the last listing. Comment creation times come from the same clock, so no runner clock is compared. A
+// comment created in that same second counts as seen (the header has whole seconds), so an unclear case keeps today's
+// behaviour. The assessment reads comments once per attempt, before any investigation; `assessWhenReady` may attempt
+// several times, and the result is the last attempt's. Null when it read none, or GitHub sent no usable date.
+function watchCommentReads(github) {
   let last = null;
-  github.hook.before('request', options => {
+  github.hook.after('request', (response, options) => {
     const url = String(options.url);
     if (String(options.method).toUpperCase() !== 'GET' || !/\/issues\/(\{issue_number\}|[0-9]+)\/comments(\?|$)/.test(url)) return;
     const page = Number(options.page ?? new URL(url, 'https://api.github.com').searchParams.get('page') ?? 1);
-    if (page <= 1) last = now().toISOString();
+    if (page > 1) return;
+    const date = Date.parse(response?.headers?.date);
+    last = Number.isFinite(date) ? new Date(date).toISOString() : null;
   });
   return () => last;
 }

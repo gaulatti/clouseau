@@ -25,7 +25,7 @@
     {
       "path": "src/stale-assessment.cjs",
       "mode": 0,
-      "sha256": "fd708434bb4e2f0cb5b8588fd11a73d5e672e96f368273998ae3424b25fbeb42"
+      "sha256": "39d09cb00be7bf612ac233716ceade6676b70517dbec38c8013ae49a004367f3"
     },
     {
       "path": "src/verification-attestation.cjs",

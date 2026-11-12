@@ -1835,7 +1835,8 @@ test('a confirmation the assessment could have read, an approvable assessment or
   f.state.comments.push({id: 88, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${head}`, created_at: '2026-11-12T14:36:19Z'});
   const gate = value => f.policy.gate({github: f.github, context: f.context, core: {info() {}, summary: {addRaw() {return this;}, async write() {}}},
     assessment: value, recordPath: f.recordPath, nativeGate: true});
-  for (const assessment of [{...base, assessed_at: '2026-11-12T14:40:00.000Z'}, base, {...base, assessed_at: 'not a time'},
+  // A comment GitHub created in the same second as the listing's date counts as seen.
+  for (const assessment of [{...base, assessed_at: '2026-11-12T14:40:00.000Z'}, {...base, assessed_at: '2026-11-12T14:36:19.000Z'}, base, {...base, assessed_at: 'not a time'},
     {...base, assessed_at: '2026-11-12T14:21:10.000Z', head_sha: 'f'.repeat(40)}]) {
     await assert.rejects(gate(assessment), error => !/assessment_predates_confirmation/.test(error.message), JSON.stringify(assessment.assessed_at));
   }
