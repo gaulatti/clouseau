@@ -4,14 +4,21 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-// Every temporary directory the engine creates under the system temp directory, and a run's own
-// directories are removed on every exit path: the creator's `finally`, normal exit, and SIGINT,
-// SIGTERM and SIGHUP. State that must survive a run lives under the repository's state directory.
+// Every temporary directory the engine creates, under the system temp directory or under the work
+// directory, and a run's own directories are removed on every exit path: the creator's `finally`,
+// normal exit, and SIGINT, SIGTERM and SIGHUP. State that must survive a run lives under the state directory.
 const MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // The exact names the engine (and earlier releases of its coverage fixtures) gave these directories:
 // a fixed prefix plus the six random characters mkdtemp appends.
 const OWNED = /^clouseau-(?:v8|v8-empty|base|harness)-[A-Za-z0-9]{6}$/;
 const SIGNALS = ['SIGINT', 'SIGTERM', 'SIGHUP'];
+
+// The CLI's own per-user state directory, and the work directory inside it for run-scoped trees that a
+// container must reach (a base checkout whose recipe bind-mounts it with Docker Compose). It sits under the
+// home directory because that is what Docker VMs such as Colima share by default; the system temp
+// directory (`/var/folders/...` on macOS) is not.
+const stateDirectory = () => path.join(os.homedir(), '.local/share/clouseau');
+const workDirectory = (state = stateDirectory()) => path.join(state, 'work');
 
 const live = new Set();
 let installed = false;
@@ -37,10 +44,11 @@ function install() {
   }
 }
 
-// A new private directory under the system temp directory, removed by `dispose` or when the process ends.
-function create(prefix) {
+// A new private directory under `root` (the system temp directory unless stated), removed by `dispose` or when the process ends.
+function create(prefix, root = os.tmpdir()) {
   install();
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  fs.mkdirSync(root, {recursive: true, mode: 0o700});
+  const directory = fs.mkdtempSync(path.join(root, prefix));
   live.add(directory);
   return directory;
 }
@@ -64,4 +72,4 @@ function sweepStale({root = os.tmpdir(), now = Date.now(), maxAgeMs = MAX_AGE_MS
   return removed;
 }
 
-module.exports = {MAX_AGE_MS, OWNED, create, dispose, sweepStale};
+module.exports = {MAX_AGE_MS, OWNED, stateDirectory, workDirectory, create, dispose, sweepStale};

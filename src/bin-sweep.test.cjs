@@ -14,7 +14,7 @@ const CHILD = `
 require('../bin/clouseau.cjs');
 `;
 
-test('the entry point removes stale engine temp directories and nothing else at startup', () => {
+test('the entry point removes stale engine directories from the temp and work directories and nothing else at startup', () => {
   const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bin-sweep-')));
   try {
     const stale = path.join(tmp, 'clouseau-v8-abc123');
@@ -30,8 +30,18 @@ test('the entry point removes stale engine temp directories and nothing else at 
     fs.utimesSync(stale, old, old);
     fs.utimesSync(target, old, old);
 
+    // The work directory under the home directory holds base checkouts and is swept the same way.
+    const work = path.join(tmp, 'home', '.local/share/clouseau/work');
+    const staleBase = path.join(work, 'clouseau-base-jkl012');
+    const freshBase = path.join(work, 'clouseau-base-mno345');
+    const keptWork = path.join(work, 'not-ours');
+    for (const directory of [staleBase, freshBase, keptWork]) fs.mkdirSync(directory, {recursive: true});
+    fs.writeFileSync(path.join(staleBase, 'docker-compose.yml'), 'x');
+    fs.utimesSync(staleBase, old, old);
+    fs.utimesSync(keptWork, old, old);
+
     const run = cp.spawnSync(process.execPath, ['-e', CHILD, 'entry', '--help'], {
-      cwd: __dirname, encoding: 'utf8', env: {...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp}, timeout: 20000,
+      cwd: __dirname, encoding: 'utf8', env: {...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp, HOME: path.join(tmp, 'home')}, timeout: 20000,
     });
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stdout, /clouseau/i);
@@ -41,6 +51,9 @@ test('the entry point removes stale engine temp directories and nothing else at 
     assert.equal(fs.existsSync(unrelated), true, 'an unrelated directory stays');
     assert.equal(fs.lstatSync(link).isSymbolicLink(), true, 'the symlink stays');
     assert.equal(fs.existsSync(path.join(target, 'keep')), true, 'the symlink target is untouched');
+    assert.equal(fs.existsSync(staleBase), false, 'a stale base checkout in the work directory is removed');
+    assert.equal(fs.existsSync(freshBase), true, 'a fresh base checkout in the work directory stays');
+    assert.equal(fs.existsSync(keptWork), true, 'an unrelated directory in the work directory stays');
   } finally {
     fs.rmSync(tmp, {recursive: true, force: true});
   }

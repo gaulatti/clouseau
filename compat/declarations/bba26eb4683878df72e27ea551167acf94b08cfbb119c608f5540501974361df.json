@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "bin/clouseau.cjs",
+      "mode": 73,
+      "sha256": "8f41ee91c866a51d9e6700293cb433c5c5828c591e489e5897c01b262d24f9a0"
+    },
+    {
+      "path": "src/local-cli.cjs",
+      "mode": 0,
+      "sha256": "718a7cb908b0e891444738bf6c962acf7e1e4e3055fba17f877e49f2481dbec8"
+    },
+    {
+      "path": "src/temp-dirs.cjs",
+      "mode": 0,
+      "sha256": "5566b405d7d12e980d6ed0120405afe1023e19f9b2801945fc90d631ed22ed64"
+    },
+    {
+      "path": "src/verification-attestation.cjs",
+      "mode": 0,
+      "sha256": "c2bfa6827e71ae6e8fd9f5358297d7b43cacb539edc80a9005e6c7891b1fba5c"
+    }
+  ]
+}
