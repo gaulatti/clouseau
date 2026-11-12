@@ -180,6 +180,7 @@ jobs:
         id: install
         uses: actions/github-script@v7
         with:
+          retries: 3
           script: |
             const match = context.ref.match(/^refs\/heads\/policy-install\/pr-([1-9][0-9]*)$/);
             if (context.actor !== context.repo.owner || !/^[a-f0-9]{40}$/.test(context.sha) || !match) {
@@ -217,6 +218,7 @@ jobs:
         env:
           REQUESTED_PR: ${{ steps.install.outputs.number }}
         with:
+          retries: 3
           script: |
             const path = require('node:path');
             const root = path.resolve('.clouseau-ci');
@@ -240,6 +242,7 @@ jobs:
         id: review-route
         uses: actions/github-script@v7
         with:
+          retries: 3
           script: |
             core.setOutput('local', String((context.payload.pull_request?.body || '').includes('clouseau-local-review:v1')));
       - name: Verify authenticated local review without AI credentials
@@ -258,6 +261,7 @@ jobs:
         env:
           ASSESSMENT: ${{ steps.local-review.outputs.assessment }}
         with:
+          retries: 3
           script: |
             const assessment = JSON.parse(process.env.ASSESSMENT);
             core.setOutput('hosted', String(assessment.decision === 'review_incomplete' && assessment.cause === 'local_receipt_unusable'));
@@ -410,7 +414,11 @@ jobs:
 
   finalize-merge:
     needs: [assess-intent, assess-hosted, approve-and-merge, resolve-clouseau]
-    if: *review-event
+    # assess-hosted is skipped whenever a receipt is used; without a status function GitHub would skip this job too.
+    if: >-
+      !cancelled() && needs.approve-and-merge.result == 'success' &&
+      ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+      (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -478,6 +486,7 @@ jobs:
       - name: Verify independent repair author without writing
         uses: actions/github-script@v7
         with:
+          retries: 3
           github-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}
           script: |
             const {data: user} = await github.rest.users.getAuthenticated();

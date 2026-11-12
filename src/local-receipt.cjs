@@ -50,6 +50,9 @@ function validateTrust(trust) {
   // Opt-in, protected: what a receipt is bound to. Absent binds the exact head and base commits, as always; "diff" binds the
   // normalized diff instead (receipt-patch.cjs), which verifySources then requires to equal the pull request's.
   requireReceipt(trust.binding === undefined || trust.binding === 'diff', 'binding must be "diff" when set');
+  // Opt-in, protected: the owner's confirmation follows the diff too (policy.cjs confirms()); only together with the binding.
+  requireReceipt(trust.confirmation === undefined || (trust.confirmation === 'diff' && trust.binding === 'diff'),
+    'confirmation must be "diff" when set, and only together with binding "diff"');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -97,8 +100,12 @@ function reviewDecision(record, {chunked = null} = {}) {
   return {decision, reviews};
 }
 
+// The only shape of the review reuse claim: the keying and two counts of reviewer calls.
+const reuseClaim = claim => claim !== null && typeof claim === 'object' && Object.keys(claim).sort().join(',') === 'fresh,mode,reused' &&
+  claim.mode === 'outcome' && [claim.reused, claim.fresh].every(count => Number.isSafeInteger(count) && count >= 0);
+
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
-  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation}) {
+  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation, reviewReuse}) {
   requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
@@ -106,6 +113,7 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
   requireReceipt(attestation === undefined || attestation && Object.keys(attestation).sort().join(',') === 'author,number,signer' &&
     AUTHOR.test(attestation.author) && ACTOR.test(attestation.signer) && Number.isSafeInteger(attestation.number) && attestation.number > 0,
   'invalid maintainer attestation');
+  requireReceipt(reviewReuse === undefined || reuseClaim(reviewReuse), 'invalid review reuse claim');
   const key = crypto.createPrivateKey(privateKey);
   requireReceipt(key.asymmetricKeyType === 'ed25519', 'Ed25519 signing key required');
   // A partitioned record too large for one receipt is signed as a root over consecutive parts (receipt-parts.cjs); the
@@ -118,6 +126,9 @@ function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerD
     // Optional signed claim that a maintainer reviewed someone else's pull request: it names the signer, the exact
     // pull request author and the pull request number. Receipts without it are bound to the signer's own login, as before.
     ...(attestation === undefined ? {} : {attestation}),
+    // Optional signed claim that the review took stored answers under outcome keying (review-reuse.cjs): how many of its
+    // reviewer calls were reused and how many were asked. Receipts without it reused none, or used the exact keying of a refresh.
+    ...(reviewReuse === undefined ? {} : {review_reuse: reviewReuse}),
     issued_at: Math.floor(now / 1000), expires_at: Math.floor(now / 1000) + lifetime,
     nonce, record_digest: digest(record), record: split ? split.root : record};
   const signature = crypto.sign(null, Buffer.from(`${DOMAIN}\0${digest(payload)}`), key).toString('base64url');
@@ -134,8 +145,9 @@ function signingKey(bundle, trust) {
     Buffer.byteLength(JSON.stringify({payload: bundle.payload, signature: bundle.signature})) <= MAX_RECEIPT_BYTES, 'malformed signature envelope', 'malformed');
   const p = bundle.payload;
   const fields = 'expires_at,issued_at,issuer,key_id,nonce,record,record_digest,reviewer_digest,reviewer_sha,type';
-  reject(p && Object.keys(p).filter(name => !['attestation', 'reviewer_semantics'].includes(name)).sort().join(',') === fields &&
-    p.type === DOMAIN && (!Object.hasOwn(p, 'reviewer_semantics') || /^[a-f0-9]{64}$/.test(p.reviewer_semantics)),
+  reject(p && Object.keys(p).filter(name => !['attestation', 'reviewer_semantics', 'review_reuse'].includes(name)).sort().join(',') === fields &&
+    p.type === DOMAIN && (!Object.hasOwn(p, 'reviewer_semantics') || /^[a-f0-9]{64}$/.test(p.reviewer_semantics)) &&
+    (!Object.hasOwn(p, 'review_reuse') || reuseClaim(p.review_reuse)),
   'unknown receipt type or fields', 'malformed');
   const key = trust.keys.find(item => item.id === p.key_id && item.issuer === p.issuer && !item.revoked);
   reject(key && crypto.verify(null, Buffer.from(`${DOMAIN}\0${digest(p)}`), key.public_key,
@@ -307,11 +319,13 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
   // against, so each must still equal its file at the live base, as the declared recipe must (verification-attestation.cjs).
   const diff = !installation && config.local_review?.binding === 'diff';
   const revisions = diff ? {base: snapshot.base_sha, head: snapshot.head_sha} : {base: pr.base.sha, head: pr.head.sha};
-  reject(files.length === pr.changed_files && files.length > 0 &&
-    digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs', 'source');
-  reject(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
+  reject(files.length === pr.changed_files && files.length > 0, 'changed-file inventory differs', 'source');
+  // Under the binding a compatibility declaration is compared by what it declares, not by its bytes (receipt-patch.cjs).
+  const covered = diff ? require('./receipt-patch.cjs').withoutDeclarations({snapshot, files}) : {snapshot, files};
+  reject(digest(covered.files.map(file => file.filename).sort()) === digest(covered.snapshot.paths), 'changed-file inventory differs', 'source');
+  reject(covered.snapshot.files.length === covered.files.length && covered.files.every(file => covered.snapshot.files.some(item =>
     item.path === file.filename && item.status === file.status)), 'changed-file status differs', 'source');
-  require('./receipt-patch.cjs').verifyPatches({snapshot, files, binding: diff ? 'diff' : null});
+  require('./receipt-patch.cjs').verifyPatches({snapshot: covered.snapshot, files: covered.files, binding: diff ? 'diff' : null});
   reject(snapshot.tickets.length === 0 &&
     snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements', 'record');
   for (const filename of [config.readme, config.repository_policy]) {

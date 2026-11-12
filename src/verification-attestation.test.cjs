@@ -205,6 +205,31 @@ test('the attested operation decides for the pull request in context', async t =
   assert.equal(await decide({...pr, base: {ref: 'other', sha: BASE}}), false);
 });
 
+test('the packaged decision says so when the receipt could not be consulted, and still lets the checks run', async t => {
+  screen(t, verified());
+  const context = {repo: {owner: 'o', repo: 'r'}, payload: {pull_request: {number: 8}}};
+  const core = () => {
+    const seen = {outputs: {}, warnings: [], summary: [], info: []};
+    return {seen, setOutput: (key, value) => {seen.outputs[key] = value;}, warning: line => seen.warnings.push(line), info: line => seen.info.push(line),
+      summary: {addRaw(text) {seen.summary.push(text); return this;}, async write() {}}};
+  };
+  const ok = core();
+  assert.equal(await attestation.decideVisibly({github: github(pr), context, config, engine: null, core: ok}), true);
+  assert.deepEqual(ok.seen.outputs, {attested: 'true'}); assert.deepEqual(ok.seen.warnings, []); assert.deepEqual(ok.seen.summary, []);
+  const none = core();
+  assert.equal(await attestation.decideVisibly({github: github({...pr, draft: true}), context, config, engine: null, core: none}), false);
+  assert.match(none.seen.info[0], /^No valid receipt attests/);
+  const failing = error => ({rest: {pulls: {get: async () => {throw error;}}}});
+  for (const [error, why] of [[Object.assign(new Error('Service Unavailable'), {status: 503}), 'GitHub API unavailable'],
+    [Object.assign(new Error('Not Found'), {status: 404}), 'the decision failed (HTTP 404)'], [new Error('boom'), 'the decision failed (no HTTP status)']]) {
+    const c = core();
+    await assert.rejects(attestation.decideVisibly({github: failing(error), context, config, engine: null, core: c}), error);
+    const line = `Receipt not consulted: ${why}; verification ran in full.`;
+    assert.deepEqual(c.seen.outputs, {attested: 'false'}); assert.deepEqual(c.seen.warnings, [line]);
+    assert.deepEqual(c.seen.summary, [`## Clouseau: receipt not consulted\n\n${line}\n`]);
+  }
+});
+
 // Policy side: skipped required steps are accepted only on an attestation. The policy suite stays untouched to keep its evidence small.
 const {createPolicy} = require('./policy.cjs');
 const policyConfig = require('../test/fixtures/config.json');

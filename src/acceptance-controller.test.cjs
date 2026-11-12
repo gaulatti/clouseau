@@ -1115,10 +1115,22 @@ test('failed complete verification, coverage, altered acceptance, missing owners
   });
 });
 
-test('private automatic finalization cannot authorize an unmerged candidate outside the validated acceptance gate', () => fixture(async f => {
+test('private automatic finalization of an unmerged candidate is a quiet no-op: it never merges, dispatches or fails', () => fixture(async f => {
   const p = await privateOwnerFixture(f);
-  await assert.rejects(p.policy.finalize({github: f.github, context: f.context, core: p.core, assessment: p.assessment}), /validated acceptance gate/);
-  assert.equal(f.state.writes.filter(w => w.name === 'atomic').length, 0);
+  const info = [];
+  await p.policy.finalize({github: f.github, context: f.context, core: {...p.core, info: message => info.push(message)}, assessment: p.assessment,
+    files: [{filename: 'src/upload.js'}]});
+  assert.deepEqual(f.state.writes.filter(w => ['atomic', 'enable-auto', 'dispatch'].includes(w.name)), []);
+  assert.equal(f.state.pr.merged, undefined);
+  assert.deepEqual(info, ['Nothing to finalize: the PR is not merged, and a controller-enforced owner merge completes only through the validated acceptance gate.']);
+}));
+
+test('private automatic finalization of a merged candidate that is not the current main still fails before any dispatch', () => fixture(async f => {
+  const p = await privateOwnerFixture(f);
+  f.state.pr.merged = true; f.state.pr.merge_commit_sha = 'f'.repeat(40);
+  await assert.rejects(p.policy.finalize({github: f.github, context: f.context, core: p.core, assessment: p.assessment,
+    files: [{filename: 'src/upload.js'}]}), /Main advanced before CD dispatch/);
+  assert.deepEqual(f.state.writes.filter(w => ['atomic', 'dispatch'].includes(w.name)), []);
 }));
 
 test('explicit automatic mode requires configured ownership on the normal protected native path too', () => fixture(async f => {

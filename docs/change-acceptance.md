@@ -528,7 +528,9 @@ keep the supported separate `finalize` deployment handoff where configured.
 An ancestry merge is not deployment, live health or documentation publication
 proof, and a deployment contract remains separately authorized. Standalone
 `finalize` cannot authorize an unmerged private candidate: only the validated
-acceptance gate can perform this transaction.
+acceptance gate can perform this transaction. When the gate succeeded without
+merging (a code owner must merge, or settings are insufficient), `finalize`
+finds nothing to finalize and returns without merging, dispatching or failing.
 
 ### The base moved after approval
 

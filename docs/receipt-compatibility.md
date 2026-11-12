@@ -88,7 +88,10 @@ changes could add up to a different review, declare the last one incompatible. A
 
 Two pull requests that edit the **same** semantic file are the one case that still needs a second declaration: Git may merge
 the text, but the merged content then matches neither declaration, so `verify` fails until one author deletes their
-declaration and declares again. That is the safe direction.
+declaration and declares again. That is the safe direction. Where the protected `local_review.binding: "diff"` applies, the
+second declaration does not void the pull request's diff-bound receipt as long as it keeps the same verdict over the same
+files: CI compares declarations by what they declare, not by the digests they pin (see
+[binding a receipt to its diff](local-review.md#binding-a-receipt-to-its-diff-opt-in)).
 
 ## Why the list cannot go stale silently (the enforcement argument)
 

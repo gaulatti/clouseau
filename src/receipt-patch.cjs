@@ -176,4 +176,43 @@ function verifyPatches({snapshot, files, binding = null}) {
   return {signed: signedDigest, live: liveDigest};
 }
 
-module.exports = {ReceiptPatchMismatch, hostedForm, verifyPatches, canonicalHunks, diffDigest};
+// Under the protected `local_review.binding: "diff"` a compatibility declaration (`compat/declarations/<sha256>.json`, see
+// docs/receipt-compatibility.md) is not part of the diff a receipt covers. Declarations pin the full content of the semantic
+// files they cover, so a merge of the base into a pull request that shares a semantic file with an earlier merged one forces a
+// re-declaration that changes nothing the review judged. What a declaration means to a review is its verdict and the files it
+// covers; those must stay equal. The signed declarations and the pull request's must carry the same verdicts over the same
+// files (path, mode, and whether the file is deleted); only the content digests they pin may differ, and the required
+// `verify` job still checks every declaration against the merged tree (docs/receipt-compatibility.md). Only a file added under
+// exactly that name with a well-formed declaration as its whole content counts; anything else under the directory is an
+// ordinary changed file and is compared byte for byte like every other.
+const DECLARATION = /^compat\/declarations\/[a-f0-9]{64}\.json$/;
+function declarationMeaning(path, status, patch) {
+  if (!DECLARATION.test(path) || status !== 'added' || typeof patch !== 'string') return null;
+  const [header, ...body] = patch.split('\n');
+  if (!/^@@ -0,0 \+1(?:,\d+)? @@$/.test(header) || !body.length || !body.every(line => line.startsWith('+'))) return null;
+  let value;
+  try {value = JSON.parse(body.map(line => line.slice(1)).join('\n'));} catch {return null;}
+  const hash = text => typeof text === 'string' && /^[a-f0-9]{64}$/.test(text);
+  if (!value || value.version !== 1 || !['compatible', 'incompatible'].includes(value.decision) || !Array.isArray(value.changes) ||
+    !value.changes.length || !value.changes.every(change => change && typeof change.path === 'string' && Number.isInteger(change.mode) &&
+      (hash(change.sha256) || change.sha256 === null))) return null;
+  return JSON.stringify([value.decision, value.changes.map(change => [change.path, change.mode, change.sha256 === null])]);
+}
+
+function withoutDeclarations({snapshot, files}) {
+  const signed = snapshot.files.filter(item => declarationMeaning(item.path, item.status,
+    hostedForm(signedPatch(snapshot, item), {filename: item.path, status: item.status})) !== null);
+  const live = files.filter(file => declarationMeaning(file.filename, file.status, file.patch) !== null);
+  const meanings = list => list.map(([path, status, patch]) => declarationMeaning(path, status, patch)).sort();
+  const signedMeanings = meanings(signed.map(item => [item.path, item.status,
+    hostedForm(signedPatch(snapshot, item), {filename: item.path, status: item.status})]));
+  const liveMeanings = meanings(live.map(file => [file.filename, file.status, file.patch]));
+  if (JSON.stringify(signedMeanings) !== JSON.stringify(liveMeanings)) {
+    throw new ReceiptPatchMismatch((signed[0] ?? live[0]).path ?? (signed[0] ?? live[0]).filename);
+  }
+  const dropped = new Set(signed.map(item => item.path));
+  return {snapshot: {...snapshot, files: snapshot.files.filter(item => !dropped.has(item.path)), paths: snapshot.paths.filter(path => !dropped.has(path))},
+    files: files.filter(file => !live.includes(file))};
+}
+
+module.exports = {ReceiptPatchMismatch, hostedForm, verifyPatches, canonicalHunks, diffDigest, withoutDeclarations};
