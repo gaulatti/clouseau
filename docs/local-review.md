@@ -643,7 +643,7 @@ never overwritten.
 
 A review asks the harness one question at a time (each unit investigation, each integration pass, each grading round). A review
 that ends `auto_approve` remembers every answer in `~/.local/share/clouseau/unit-reuse/`, under the digest of the question's
-complete input. `refresh` (and only `refresh`) lets a question take a remembered answer instead of asking again, when its input
+complete input. `refresh` (and `clouseau review` under the opt-in outcome keying below) lets a question take a remembered answer instead of asking again, when its input
 is **byte-identical** to the remembered one except for the values that name the revision rather than describe it. The input
 covers the policy and stage text, the schema, role and phase, every changed patch, every base and head source, every
 source that was requested or linked, the change manifest and seams, the requirement, the prior findings, the verification
@@ -662,6 +662,33 @@ changes any changed file asks every unit again, while one that touches none of t
 Limits to expect: a changed requirement text, policy, contract, verification command or engine semantics reuses nothing; a
 verification that fails reuses nothing about its output; the store is not pruned and may be deleted at any time. See
 [binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in) for letting CI keep a receipt when the base moved.
+
+### Reusing answers in `clouseau review` (opt-in)
+
+By default only `refresh` reads the store, and the coverage counters of the verification record are part of every key. A
+base that added code anywhere changes those counters, so a later review after merging it asks every question again even
+when nothing the reviewers judge has changed.
+
+Two equivalent switches opt a review in to **outcome keying**:
+- `clouseau review --reuse outcome`, for one run;
+- `"review_reuse": "outcome"` in `.clouseau-local.json`, read from the base like the rest of that file, for every review
+  and refresh. It is a protected control.
+`--reuse` and the field accept only `"outcome"`; anything else is refused. With either switch:
+
+- `clouseau review` reads the store as `refresh` does.
+- Exact coverage that is complete (every line and branch counter covered) is keyed as `complete`, not by its counts.
+  Coverage that is not complete keeps its counters in the key, as does every byte of a failed command.
+- Everything else in the key is unchanged. A base move that touches a changed file (its base text or its recent history),
+  a new commit on the branch, a changed requirement, policy, contract, configuration or engine semantics, still asks
+  again. Outcome keys name their keying, so an answer stored under one keying is never read under the other.
+- Verification always runs again on the reviewed tree; only the reviewers' answers are reused, and each still passes the
+  same check against the new snapshot.
+- The signed receipt carries the claim `"review_reuse": {"mode": "outcome", "reused": N, "fresh": M}`: how many reviewer
+  calls were taken from the store and how many were asked. A receipt without the claim was made without outcome keying.
+  CI accepts only that exact shape.
+
+What it gives up: the reviewers no longer see a change in the coverage counts as evidence while coverage stays complete.
+The verdict they judge (all commands passed, coverage exact) is the same either way.
 
 ## Maintainer attestation of another author's pull request (opt-in)
 

@@ -31,7 +31,7 @@ function options(argv) {
   const [command, ...args] = argv;
   const parsed = {command};
   const allowed = ['directory', 'base', 'harness', 'agent', 'request-file', 'output', 'identity', 'receipt', 'additional-checks',
-    'agent-request', 'answer', 'session', 'engine', 'pr'];
+    'agent-request', 'answer', 'session', 'engine', 'pr', 'reuse'];
   for (let i = 0; i < args.length; i += 2) {
     const name = args[i].slice(2);
     if (!args[i].startsWith('--') || !allowed.includes(name) || !args[i + 1] || parsed[name]) {
@@ -177,6 +177,9 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   if (args.harness) assertHarness(args.harness);
   const base =args.base || `origin/${readLocalConfig(JSON.parse(git(directory, ['show', 'HEAD:.clouseau-local.json']))).base_branch}`;
   const config = readLocalConfig(JSON.parse(git(directory, ['show', `${base}:.clouseau-local.json`])));
+  // Outcome-keyed reuse of reviewer answers, opted into by the base's configuration or for this run (review-reuse.cjs).
+  if (args.reuse !== undefined && args.reuse !== 'outcome') throw new Error('--reuse accepts only "outcome"');
+  const outcomeReuse = args.reuse === 'outcome' || config.review_reuse === 'outcome';
   const head = git(directory, ['rev-parse', 'HEAD']).trim();
   const repo = githubRepository(directory);
   const repository = `${repo.owner}/${repo.repo}`;
@@ -360,7 +363,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   // Every call of this review is remembered by its evidence once the review is accepted; `reuse.read` (the refresh command)
   // lets a call whose evidence is byte-identical to a remembered one take that answer instead of asking again.
   let unitDigests = null;
-  const reusing = createReuse({directory: path.join(state, 'unit-reuse'), read: reuse.read === true,
+  const reusing = createReuse({directory: path.join(state, 'unit-reuse'), read: reuse.read === true || outcomeReuse, outcome: outcomeReuse,
     semantics: require('./review-semantics.cjs').semanticsDigest(), literals: () => {
       if (chunking && !unitDigests) {
         unitDigests = chunkedWiring.hooksFor(active.params).partition({snapshot: collected.snapshot}).units.map(unit => unit.view_digest);
@@ -419,7 +422,8 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
       reviewerSemantics: require('./review-semantics.cjs').semanticsDigest(),
-      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null, humanReview});
+      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null, humanReview,
+      ...(outcomeReuse ? {reviewReuse: {mode: 'outcome', reused: reusing.stats.reused, fresh: result.usage.length - reusing.stats.reused}} : {})});
     verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: pull ? pull.author : identity.github_actor, pullNumber: pull?.number,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
       configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest, humanReview});
