@@ -7,11 +7,11 @@ const {requestReview} = require('./provider.cjs');
 const {retryTransient} = require('./transient-retry.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
-// The commit an `/approve-intent <sha>` comment names, with the text it confirms; null for anything else.
 // Whether the protected `local_review` lets an owner confirmation follow the diff: only `confirmation: "diff"` together with
 // `binding: "diff"` (validateTrust refuses any other combination).
 const confirmationFollowsDiff = localReview => localReview?.binding === 'diff' && localReview?.confirmation === 'diff';
 
+// The commit an `/approve-intent <sha>` comment names, with the text it confirms; null for anything else.
 function intentAny(body) {
   if (typeof body !== 'string') return null;
   const match = /^\/approve-intent ([a-f0-9]{40})(?:\n\nAccepted purpose:\n([\s\S]*\S))?$/.exec(body.trim());

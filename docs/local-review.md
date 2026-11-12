@@ -875,9 +875,11 @@ the next run assesses afresh.
 
 A change to any protected control path (the CI workflow, `.github/ci/`,
 `.github/clouseau.json`, CODEOWNERS, `.clouseau-local.json`, the repository
-policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs exact-head
-owner confirmation (`/approve-intent <head sha>` from the configured maintainer).
-A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
+policy file, `AGENTS.md`, and the configured `sensitive_paths`) needs the owner's
+confirmation (`/approve-intent <head sha>` from the configured maintainer). It names the
+exact head, unless the protected `local_review.confirmation: "diff"` lets a confirmation of an
+earlier head of the same normalized diff, against an unchanged base configuration and contract,
+stand for it (see above). A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
 cause `receipt_protected_controls` and a reason naming the protected controls.
 `clouseau review` and `clouseau publish` print the same condition as a
 `warning:` on stderr and a `warnings` entry in their JSON result, naming only

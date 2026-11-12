@@ -194,3 +194,102 @@ test('a version 2 configuration wires local_review.confirmation into the policy 
   assert.equal(await decide(v2({})), false, 'neither: the exact head only');
   assert.throws(() => v2({confirmation: 'diff'}), /only together with binding "diff"/);
 });
+
+// The gate and the reassessment it starts, driven end to end for a protected-control change (the hold a local receipt cannot
+// clear) whose head `HEAD` updated the confirmed head `OLD`. `OLD` was confirmed against an older base `OTHER`; the live base is
+// `BASE`. The comments, reviews, runs and rules are the shapes the human-review gate tests use.
+function gated({setting = true, live = [file({filename: '.github/clouseau.json'})], contents = {}, reviews = []} = {}) {
+  const f = world({live, earlier: [file({filename: '.github/clouseau.json'})], mergeBase: OTHER, contents, reviews});
+  const writes = [];
+  const owner = {login: 'gaulatti', type: 'User'};
+  const policy = setting ? f.policy : createPolicy(config);
+  const pr = {...f.pr, node_id: 'PR_7', state: 'open', draft: false, user: {login: 'contributor', type: 'User'},
+    head: {sha: HEAD, ref: 'feat/controls', repo: {id: 42}}, base: {sha: BASE, ref: 'main'}, auto_merge: {enabled_by: {login: 'github-actions[bot]'}}};
+  const write = name => async args => {writes.push({name, args}); return {data: {id: 1}};};
+  const run = {id: 22, head_sha: HEAD, head_branch: pr.head.ref, head_repository: {id: 42}, pull_requests: [{number: 7}],
+    event: 'pull_request', status: 'completed', conclusion: 'success', html_url: 'https://github.com/example/local-fixture/actions/runs/22'};
+  Object.assign(f.github.rest.pulls, {get: async () => ({data: structuredClone(pr)}), createReview: write('review'), requestReviewers: write('request-review')});
+  Object.assign(f.github.rest.issues, {createComment: write('comment'), addAssignees: write('assign')});
+  Object.assign(f.github.rest.repos, {get: async () => ({data: {allow_auto_merge: true}}), getBranch: async () => ({data: {protected: true, commit: {sha: BASE}}}),
+    getCollaboratorPermissionLevel: async () => ({data: {permission: 'write'}})});
+  f.github.rest.actions = {
+    listWorkflowRuns: async ({event}) => ({data: {workflow_runs: [{...run, event}]}}),
+    getWorkflowRun: async () => ({data: {...run, event: 'pull_request_target'}}),
+    listJobsForWorkflowRun: async () => ({data: [{name: 'verify', conclusion: 'success', steps: policy.VERIFY_STEPS.map(name => ({name, conclusion: 'success'}))}]}),
+  };
+  f.github.request = async route => {
+    if (route.startsWith('POST')) {writes.push({name: 'rerun'}); return {};}
+    return {data: [
+      {type: 'required_status_checks', parameters: {strict_required_status_checks_policy: true,
+        required_status_checks: ['verify', 'approve-and-merge'].map(context => ({context, integration_id: 15368}))}},
+      {type: 'pull_request', parameters: {required_approving_review_count: 1, dismiss_stale_reviews_on_push: true, require_last_push_approval: true}},
+      {type: 'deletion'}, {type: 'non_fast_forward'}]};
+  };
+  f.github.graphql = async query => {
+    if (query.startsWith('mutation')) {pr.auto_merge = query.includes('disablePullRequestAutoMerge') ? null : {}; return {};}
+    return {repository: {pullRequest: {closingIssuesReferences: {nodes: [], pageInfo: {hasNextPage: false}}}}};
+  };
+  const core = {info() {}, summary: {addRaw(text) {writes.push({name: 'summary', text}); return this;}, async write() {}}};
+  const context = (eventName, body) => ({repo, runId: 123, eventName, payload: eventName === 'issue_comment' ?
+    {issue: {number: 7, pull_request: {}}, comment: {id: 31, user: owner, body}} : {pull_request: {number: 7}}});
+  const assessment = {number: 7, head_sha: HEAD, base_sha: BASE, decision: 'auto_approve', reason: 'Changes a protected review control.'};
+  const gate = (eventName = 'pull_request_target', body = `/approve-intent ${OLD}`) =>
+    policy.gate({github: f.github, context: context(eventName, body), core, assessment, nativeGate: true, wait: async () => {}, maxPolls: 1, mergePolls: 1});
+  const reassess = (body = `/approve-intent ${OLD}`) =>
+    policy.requestReassessment({github: f.github, context: context('issue_comment', body), core: {info() {}}, wait: async () => {}});
+  const confirm = () => {f.github.rest.issues.listComments = async () => ({data: [comment(OLD)]});};
+  const approved = () => writes.some(item => item.name === 'review' && item.args.event === 'APPROVE' && item.args.commit_id === HEAD);
+  return {gate, reassess, confirm, approved, writes};
+}
+
+test('under confirmation "diff" the gate clears the protected-control hold for an earlier head of the same diff, and only then', async () => {
+  // The same diff on the updated head: the earlier confirmation clears the hold, from the comment event and from a rerun.
+  const same = gated(); same.confirm();
+  await same.gate('issue_comment');
+  assert.ok(same.approved(), 'the earlier confirmation approves the updated head');
+  const rerun = gated(); rerun.confirm();
+  await rerun.gate();
+  assert.ok(rerun.approved());
+  // An approving review of the earlier head clears it the same way.
+  const reviewed = gated({reviews: [{user: {login: 'gaulatti', type: 'User'}, state: 'APPROVED', commit_id: OLD}]});
+  await reviewed.gate();
+  assert.ok(reviewed.approved());
+  // Without a confirmation the hold stands and the owner is asked to confirm this exact head.
+  const missing = gated();
+  await assert.rejects(missing.gate(), /maintainer intent confirmation is required/);
+  assert.ok(!missing.approved());
+  assert.ok(missing.writes.some(item => item.name === 'summary' && item.text.includes(`/approve-intent ${HEAD}`)));
+  // A changed diff, a changed base configuration, or the setting off: the earlier confirmation never counts.
+  const voided = [
+    ['the diff changed', gated({live: [file({filename: '.github/clouseau.json', patch: patch('two')})]})],
+    ['the base configuration changed', gated({contents: {[`${OTHER}:.github/clouseau.json`]: 'an older configuration'}})],
+    ['the setting is off', gated({setting: false})],
+  ];
+  for (const [why, f] of voided) {
+    await assert.rejects(f.gate('issue_comment'), /Stale or malformed intent confirmation/, why);
+    f.confirm();
+    await assert.rejects(f.gate(), /maintainer intent confirmation is required/, why);
+    assert.ok(!f.approved(), why);
+  }
+});
+
+test('under confirmation "diff" the reassessment an earlier-head confirmation starts follows the same check', async () => {
+  const same = gated();
+  await same.reassess();
+  assert.deepEqual(same.writes.map(item => item.name), ['rerun']);
+  const purpose = gated();
+  await purpose.reassess(`/approve-intent ${OLD}\n\nAccepted purpose:\nShip the protected control.`);
+  assert.deepEqual(purpose.writes.map(item => item.name), ['rerun']);
+  for (const [why, f] of [
+    ['the diff changed', gated({live: [file({filename: '.github/clouseau.json', patch: patch('two')})]})],
+    ['the base configuration changed', gated({contents: {[`${OTHER}:.github/clouseau.json`]: 'an older configuration'}})],
+    ['the setting is off', gated({setting: false})],
+  ]) {
+    await assert.rejects(f.reassess(), /Stale or malformed intent confirmation/, why);
+    assert.deepEqual(f.writes, [], why);
+  }
+  // With the setting off the exact head still starts it, as before.
+  const exact = gated({setting: false});
+  await exact.reassess(`/approve-intent ${HEAD}`);
+  assert.deepEqual(exact.writes.map(item => item.name), ['rerun']);
+});
