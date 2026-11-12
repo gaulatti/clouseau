@@ -634,7 +634,11 @@ test('a signature is refused unless every declared command passed, and a signed 
       await assert.rejects(runReview(args, {...deps, verify: () => failing}),
         /no receipt is signed: cargo llvm-cov could not run \(ENOENT\); install the tool it needs/);
       assert.deepEqual(fs.existsSync(path.join(state, 'reviews')) ? fs.readdirSync(path.join(state, 'reviews')).filter(id => fs.existsSync(path.join(state, 'reviews', id, 'receipt.json'))) : [], []);
-      const signed = await runReview(args, {...deps, verify: () => passing});
+      // The base checkout's root is the work directory under this run's state directory, never the system temp directory.
+      const roots = [];
+      const attest = options => {roots.push(options.work); return require('./verification-attestation.cjs').evaluate(options);};
+      const signed = await runReview(args, {...deps, attest, verify: () => passing});
+      assert.deepEqual(roots, [path.join(state, 'work')]);
       const record = JSON.parse(fs.readFileSync(signed.receipt)).payload.record;
       const attested = JSON.parse(record.snapshot.sources.verification.content);
       assert.deepEqual(attested.attestation, {version: 1, recipe: 'c'.repeat(64), commands: 1, coverage_mode: 'exact', gate: 'passed'});

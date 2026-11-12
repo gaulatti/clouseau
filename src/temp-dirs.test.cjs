@@ -21,15 +21,18 @@ function scratch(t) {
   return root;
 }
 
-// Runs `body` with the system temp directory pointed at an empty private one and returns what was left in it.
+// Runs `body` with the system temp directory and the home directory pointed at empty private ones and returns
+// what was left in the temp directory and in the work directory under that home.
 async function leftBehind(t, body) {
   const root = scratch(t);
-  const previous = process.env.TMPDIR;
-  process.env.TMPDIR = root;
+  const home = scratch(t);
+  const previous = {TMPDIR: process.env.TMPDIR, HOME: process.env.HOME};
+  process.env.TMPDIR = root; process.env.HOME = home;
   try {await body();} finally {
-    if (previous === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = previous;
+    for (const [name, value] of Object.entries(previous)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
-  return fs.readdirSync(root);
+  const work = path.join(home, '.local/share/clouseau/work');
+  return [...fs.readdirSync(root), ...(fs.existsSync(work) ? fs.readdirSync(work).map(name => `work/${name}`) : [])];
 }
 
 function old(directory, ageMs = 2 * DAY) {
@@ -49,6 +52,24 @@ test('create returns a private directory under the temp directory and dispose re
   assert.equal(fs.existsSync(directory), false);
   temp.dispose(directory);
   temp.dispose('not\0valid');
+});
+
+test('the state and work directories live under the home directory, never under the system temp directory', () => {
+  assert.equal(temp.stateDirectory(), path.join(os.homedir(), '.local/share/clouseau'));
+  assert.equal(temp.workDirectory(), path.join(os.homedir(), '.local/share/clouseau/work'));
+  assert.equal(temp.workDirectory('/state'), path.join('/state', 'work'));
+  for (const tmp of new Set([os.tmpdir(), fs.realpathSync(os.tmpdir())])) assert.ok(!temp.workDirectory().startsWith(tmp + path.sep));
+});
+
+test('create under a stated root makes a missing root private and the directory inside it', t => {
+  const root = path.join(scratch(t), 'state', 'work');
+  const directory = temp.create('clouseau-base-', root);
+  assert.equal(path.dirname(directory), root);
+  assert.match(path.basename(directory), temp.OWNED);
+  assert.equal(fs.statSync(root).mode & 0o777, 0o700);
+  assert.equal(temp.create('clouseau-base-', root).startsWith(root + path.sep), true);
+  temp.dispose(directory);
+  assert.equal(fs.existsSync(directory), false);
 });
 
 test('sweepStale removes only owned directories older than a day and never follows a link', t => {
@@ -87,13 +108,16 @@ test('sweepStale ignores an unreadable temp directory and entries it cannot remo
   assert.equal(fs.existsSync(stuck), true);
 });
 
-// A real process creates two directories, then ends the stated way.
+// A real process creates a directory in the temp directory and a base checkout directory in the work directory, then ends the stated way.
 function lifecycle(t, ending) {
   const root = scratch(t);
+  const home = scratch(t);
+  const work = path.join(home, '.local/share/clouseau/work');
   const script = `const temp = require(${JSON.stringify(path.join(__dirname, 'temp-dirs.cjs'))});
-    require('node:fs').writeFileSync(temp.create('clouseau-harness-') + '/f', 'x'); temp.create('clouseau-base-'); ${ending}`;
-  const child = spawn(process.execPath, ['-e', script], {env: {...process.env, TMPDIR: root}, stdio: 'ignore'});
-  return new Promise(resolve => child.on('close', () => resolve({left: fs.readdirSync(root)})));
+    require('node:fs').writeFileSync(temp.create('clouseau-harness-') + '/f', 'x');
+    require('node:fs').writeFileSync(temp.create('clouseau-base-', temp.workDirectory()) + '/f', 'x'); ${ending}`;
+  const child = spawn(process.execPath, ['-e', script], {env: {...process.env, TMPDIR: root, HOME: home}, stdio: 'ignore'});
+  return new Promise(resolve => child.on('close', () => resolve({left: [...fs.readdirSync(root), ...fs.readdirSync(work)]})));
 }
 
 test('a process that returns, exits or throws leaves no directory behind', async t => {
@@ -106,19 +130,23 @@ test('a process that returns, exits or throws leaves no directory behind', async
 test('SIGINT, SIGTERM and SIGHUP remove the directories and end the process with the conventional status', async t => {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
     const root = scratch(t);
+    const home = scratch(t);
+    const work = path.join(home, '.local/share/clouseau/work');
     const script = `const temp = require(${JSON.stringify(path.join(__dirname, 'temp-dirs.cjs'))});
-      temp.create('clouseau-harness-'); temp.create('clouseau-base-'); console.log('ready'); setInterval(() => {}, 1000);`;
-    const child = spawn(process.execPath, ['-e', script], {env: {...process.env, TMPDIR: root}, stdio: ['ignore', 'pipe', 'ignore']});
+      temp.create('clouseau-harness-'); temp.create('clouseau-base-', temp.workDirectory()); console.log('ready'); setInterval(() => {}, 1000);`;
+    const child = spawn(process.execPath, ['-e', script], {env: {...process.env, TMPDIR: root, HOME: home}, stdio: ['ignore', 'pipe', 'ignore']});
     const ended = new Promise(resolve => child.on('close', (code, by) => resolve({code, by})));
     await new Promise(resolve => child.stdout.once('data', resolve));
-    assert.equal(fs.readdirSync(root).length, 2);
+    assert.equal(fs.readdirSync(root).length, 1);
+    assert.equal(fs.readdirSync(work).length, 1);
     child.kill(signal);
     assert.deepEqual(await ended, {code: 128 + os.constants.signals[signal], by: null}, signal);
     assert.deepEqual(fs.readdirSync(root), [], signal);
+    assert.deepEqual(fs.readdirSync(work), [], signal);
   }
 });
 
-test('a base revision that cannot be checked out leaves no temporary directory', async t => {
+test('a base revision that cannot be checked out leaves nothing in the temp or work directory', async t => {
   const left = await leftBehind(t, () => {
     const technical = {commands: [{argv: ['run', 'tests'], exit_code: 0}], verification_status: 'passed', local_config_digest: digest(recipe),
       coverage: {status: 'exact', passed: true, artifact_freshness: 'observed_current_run'}};
