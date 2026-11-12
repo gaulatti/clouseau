@@ -1,6 +1,8 @@
-# Base-drift tolerant receipts (design, not implemented)
+# Base-drift tolerant receipts (design, superseded)
 
-Status: design only. Nothing in this document is implemented, and nothing here changes what CI accepts today.
+Status: superseded, not implemented. The owner chose to bind a receipt to its diff instead of proving a base move harmless:
+see [binding a receipt to its diff](local-review.md#binding-a-receipt-to-its-diff-opt-in) (protected `local_review.binding: "diff"`).
+This document is kept as the record of the alternative that was considered.
 `clouseau refresh` ([local review](local-review.md#refreshing-a-pull-request-after-its-base-moved)) already removes most of the
 author's cost without touching trust; this document asks whether CI could also keep accepting a receipt after the base moved,
 and recommends **go for a shadow stage and a narrow first stage, no-go for unconditional acceptance** (section 8).
