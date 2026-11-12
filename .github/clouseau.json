@@ -46,6 +46,7 @@
     },
     "max_age_seconds": 172800,
     "binding": "diff",
+    "confirmation": "diff",
     "keys": [
       {
         "id": "8a6d6c24abe59c9fbafd31cc",
