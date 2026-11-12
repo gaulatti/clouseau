@@ -322,6 +322,10 @@ suite and is insufficient as the required approval result for this flow. Comment
 write access; they rerun the current revision's existing `pull_request_target` run. Its test job
 is skipped, so confirming intent does not rebuild the container. The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
+A request that does not validate is refused, not ignored. That covers an `/approve-intent` or `/hosted-review` naming
+another head, malformed text, or a commenter without write permission. The `request-reassessment` job fails red with
+`Stale or malformed intent confirmation` or `Only a maintainer can request reassessment`. Nothing is rerun and no notice
+is posted. Comment again with the current head.
 GitHub 5xx and short rate-limit failures are retried with the shared transient backoff (every packaged
 step retries its reads; see the upgrade notes).
 A request that still cannot be made is never silent: once the engine validated it (an exact-head request by a maintainer), the pull request gets a

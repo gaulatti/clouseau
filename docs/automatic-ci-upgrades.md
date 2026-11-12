@@ -360,6 +360,9 @@ The job still checks out only trusted `main` and the frozen engine, never pull r
 needs both write permissions (see the reconcile notes below). Without them the retry still works; the notice itself then
 fails visibly, and the log names the missing permissions.
 A separate `workflow_run` reassessment file needs no change: no person asked for that request, so it posts nothing.
+A request that does not validate is refused rather than ignored: a stale or malformed `/approve-intent` (another head,
+extra text) or a non-maintainer's comment fails the `request-reassessment` job red with its reason. Nothing is rerun and no
+notice is posted, because the notice is only for a validated request. Describe it the same way in your own README.
 
 The packaged `assess` step now stamps `assessed_at` into the assessment: GitHub's own `date` for its last listing of the pull
 request's comments, the same clock that dates the comments, so a confirmation created after it was not seen (one created in
