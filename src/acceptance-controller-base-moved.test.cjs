@@ -56,7 +56,7 @@ async function fixture(config, run, {legacyGate = null, gateState = 'satisfied'}
       }});
     }
     const context = {repo, runId: 7, eventName: 'pull_request_target', payload: {pull_request: {number: 3}}};
-    const state = {comments: [], writes: [], updates: [], updateError: null, merged: false,
+    const state = {comments: [], reviews: [], writes: [], updates: [], updateError: null, merged: false,
       pr: {number: 3, node_id: 'PR_3', state: 'open', draft: false, changed_files: 1, user: {login: 'contributor', type: 'User'},
         head: {sha: snapshot.head_sha, ref: 'fix/upload', repo: {id: 7, full_name: `${repo.owner}/${repo.repo}`, owner: {login: repo.owner}, name: repo.repo}},
         base: {sha: snapshot.base_sha, ref: 'main'}, auto_merge: {enabled_by: {login: 'github-actions[bot]'}}}};
@@ -74,7 +74,7 @@ async function fixture(config, run, {legacyGate = null, gateState = 'satisfied'}
     github.rest.pulls = {
       get: async () => ({data: structuredClone(state.pr)}),
       listFiles: endpoint('files', async () => ({data: hostedFiles(snapshot)})),
-      listReviews: endpoint('reviews', async () => ({data: []})),
+      listReviews: endpoint('reviews', async () => ({data: state.reviews})),
       createReview: write('approve'), requestReviewers: write('request-review'),
     };
     github.rest.issues = {
@@ -278,3 +278,19 @@ test('base_moved "update" never updates a branch whose decision does not approve
     assert.deepEqual(f.notices().map(item => item.args.body), [todayNotice({head: assessment.head_sha, from, to: MOVED, number: 3})]);
     assert.equal(f.state.pr.head.sha, assessment.head_sha);
   }, {gateState: 'violated'}));
+
+test('base_moved "update" never updates a revision still awaiting a required maintainer confirmation; once confirmed it does', () =>
+  fixture(configured({binding: 'diff', base_moved: 'update'}), async f => {
+    const assessment = await f.assess();
+    assert.equal(assessment.decision, 'auto_approve', assessment.reason);
+    // A bot-authored pull request always needs a maintainer's approving review of this exact head (the gate's same rule).
+    f.state.pr.user = {login: 'github-actions[bot]', type: 'Bot'};
+    const from = f.state.pr.base.sha; f.state.pr.base.sha = MOVED;
+    await assert.rejects(f.gate(assessment), error => error.message === TODAY_ERROR && error.code === undefined);
+    assert.equal(f.state.updates.length, 0, 'nothing is merged into a branch whose acceptance still waits on a maintainer');
+    assert.deepEqual(f.notices().map(item => item.args.body), [todayNotice({head: assessment.head_sha, from, to: MOVED, number: 3})]);
+    // The maintainer approves this exact head: the same base-only move is now updated.
+    f.state.reviews.push({user: {login: 'gaulatti', type: 'User'}, state: 'APPROVED', commit_id: assessment.head_sha});
+    await assert.rejects(f.gate(assessment), {code: 'BASE_UPDATE_REQUESTED'});
+    assert.deepEqual(f.state.updates.map(item => item.expected_head_sha), [assessment.head_sha]);
+  }));

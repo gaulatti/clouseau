@@ -10,7 +10,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "21c16d54cf28c0eb92d347b7936716994c692343f9252e49e11e3e3532020985"
+      "sha256": "42c8f7c629724a6ff16dd8f1b33ef51f67ab63113a7f88ab1ee6fcd2f46c735f"
     },
     {
       "path": "src/base-reconcile.cjs",
@@ -31,6 +31,11 @@
       "path": "src/local-receipt.cjs",
       "mode": 0,
       "sha256": "fc890012d3d6ad7b2b63c3c67a483c894d499553485915255144360c02efa9ee"
+    },
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "616afb8e3fcab32aedefc2e796945dac2120a43482ba2d9b24e86da3aca0dac8"
     }
   ]
 }
