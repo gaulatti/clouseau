@@ -414,7 +414,7 @@ cancelled) runs. A condition that also admits `schedule` is accepted because it 
 
 A consumer that sets the protected `local_review.base_moved: "update"` (valid only with `binding: "diff"`; the default
 `"hold"` is today's behavior; see [local review](local-review.md#base-moved-hold-or-update-opt-in)) lets the gate merge a moved
-base into the branch server-side instead of posting the notice, and lets `reconcile-base` update every stale same-repository
+base into the branch server-side instead of posting the notice when the decision approves the pull request, and lets `reconcile-base` update every stale same-repository
 PR in one run instead of one at a time. Upgrade steps:
 
 1. Pass `update-token` to the gate step of `approve-and-merge`. The reference template passes

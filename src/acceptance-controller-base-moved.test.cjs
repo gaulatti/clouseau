@@ -40,7 +40,7 @@ const TODAY_ERROR = 'Needs branch update: main moved after approval; update this
 
 // The hosted-review fixture of acceptance-controller-binding.test.cjs, with the protected configuration as a parameter and a
 // stub update credential whose updateBranch is recorded and, like GitHub, moves the head of the pull request.
-async function fixture(config, run, {legacyGate = null} = {}) {
+async function fixture(config, run, {legacyGate = null, gateState = 'satisfied'} = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-base-moved-'));
   const old = process.env.DEEPSEEK_API_KEY; process.env.DEEPSEEK_API_KEY = 'fictional';
   try {
@@ -122,6 +122,7 @@ async function fixture(config, run, {legacyGate = null} = {}) {
       for (const source of Object.values(view.sources)) source.content = source.numbered_lines.replace(/^L[0-9]+: /gm, '');
       const report = modelTemplate(view);
       report.gates.forEach(gate => {gate.state = 'satisfied';});
+      if (gateState !== 'satisfied') report.gates[0].state = gateState;
       return {ok: true, json: async () => ({choices: [{finish_reason: 'tool_calls', message: {tool_calls:
         [{function: {name: 'acceptance_report', arguments: JSON.stringify(report)}}]}}]})};
     };
@@ -251,6 +252,13 @@ test('the private-merge boundary applies the same rule: opted in it updates once
         assert.equal(error.code, 'BASE_UPDATE_REQUESTED');
         assert.deepEqual(f.state.updates.map(item => item.expected_head_sha), [assessment.head_sha]);
         assert.equal(f.notices().length, 0);
+        // The updated head, assessed against the moved base, merges by the atomic fast-forward with no further update.
+        const next = await f.assess();
+        assert.deepEqual([next.decision, next.head_sha, next.base_sha], ['auto_approve', UPDATED, MOVED], next.reason);
+        await f.gate(next);
+        assert.equal(f.state.merged, true, 'the updated head merges at the private-merge boundary');
+        assert.equal(f.state.updates.length, 1, 'the updated head requests no update');
+        assert.equal(f.notices().length, 0);
       } else {
         assert.equal(error.message, TODAY_ERROR);
         assert.equal(f.state.updates.length, 0);
@@ -259,3 +267,14 @@ test('the private-merge boundary applies the same rule: opted in it updates once
     }, {legacyGate: async () => {state.pr.base.sha = MOVED;}});
   }
 });
+
+test('base_moved "update" never updates a branch whose decision does not approve it: it posts today\'s notice instead', () =>
+  fixture(configured({binding: 'diff', base_moved: 'update'}), async f => {
+    const assessment = await f.assess();
+    assert.ok(!['auto_approve', 'owner_decision'].includes(assessment.decision), assessment.decision);
+    const from = f.state.pr.base.sha; f.state.pr.base.sha = MOVED;
+    await assert.rejects(f.gate(assessment), error => error.message === TODAY_ERROR && error.code === undefined);
+    assert.equal(f.state.updates.length, 0, 'a blocked pull request is never merged with its base by Clouseau');
+    assert.deepEqual(f.notices().map(item => item.args.body), [todayNotice({head: assessment.head_sha, from, to: MOVED, number: 3})]);
+    assert.equal(f.state.pr.head.sha, assessment.head_sha);
+  }, {gateState: 'violated'}));

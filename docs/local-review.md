@@ -618,7 +618,7 @@ validation, like `confirmation`):
 | `base_moved` | The gate, after a base-only move |
 | --- | --- |
 | absent or `"hold"` (the default) | posts the `base_moved` needs-branch-update notice and fails, exactly as before; the owner updates the branch |
-| `"update"` | merges the base into the branch server-side (`updateBranch` with `expected_head_sha`), posts no notice, and ends the job with cause `base_update_requested` (`Branch updated server-side ...`): this revision is neither approved nor merged, and the new head's own run continues |
+| `"update"` | for a decision that approves (`auto_approve` or `owner_decision`), merges the base into the branch server-side (`updateBranch` with `expected_head_sha`), posts no notice, and ends the job with cause `base_update_requested` (`Branch updated server-side ...`): this revision is neither approved nor merged, and the new head's own run continues. Any other decision posts the notice and fails, as under `"hold"`: Clouseau never merges the base into a branch it did not approve |
 
 The update needs the gate step's `update-token` input: a token whose push **starts workflows**, with contents: write on the
 repository (a fine-grained PAT or an App token, like `repair-token`; the reference template passes the same

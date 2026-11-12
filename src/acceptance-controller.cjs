@@ -414,9 +414,11 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const {data: pr} = await readPull(github, context.repo, numberFor(context));
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
     const branchUpdate = require('./branch-update.cjs');
-    // Only the base moved under the assessed head: hold with the notice, or, opted in, update the branch server-side.
+    // Only the base moved under the assessed head: hold with the notice, or, opted in, update the branch server-side. Only a
+    // decision that approves may update it; any other keeps today's notice, as if the setting were absent.
+    const approving = ['auto_approve', 'owner_decision'].includes(assessment.decision);
     const baseMoved = async current => branchUpdate.settle({github, updateGithub, repo: context.repo, pr: current, assessment,
-      baseBranch: config.base_branch, mode: config.local_review?.base_moved});
+      baseBranch: config.base_branch, mode: approving ? config.local_review?.base_moved : undefined});
     if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) throw await baseMoved(pr);
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
