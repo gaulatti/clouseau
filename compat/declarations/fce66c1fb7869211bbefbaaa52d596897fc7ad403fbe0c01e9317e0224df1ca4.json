@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "766a5b48b82887b1efb7b4c3ccc986e6d52dc56c6cf65f20d831cf2ac636185b"
+    },
+    {
+      "path": "src/branch-update.cjs",
+      "mode": 0,
+      "sha256": "6d5b99a5b2413683d290724517ccf99b53bb7649f8274e70615d020e6b31157f"
+    },
+    {
+      "path": "src/local-receipt.cjs",
+      "mode": 0,
+      "sha256": "a36f93bfaea67ad3788e1d63c22398171814e543f67776c92a03031e4269d25d"
+    },
+    {
+      "path": "src/pr-refresh.cjs",
+      "mode": 0,
+      "sha256": "8f47c0f38d9a0342eef4326b5c4543373a76265e90784e90aa54fdf80cd78ae0"
+    },
+    {
+      "path": "src/receipt-patch.cjs",
+      "mode": 0,
+      "sha256": "81c78ae55ed1b3a8ab057a101c8dc156048edabb861328c0975b3c94c1fd276c"
+    },
+    {
+      "path": "src/receipt-standing.cjs",
+      "mode": 0,
+      "sha256": "b216b161402f8b7fa2e6a8fc1caeec84e7ec24ff0f53925481b0b18ec1298d49"
+    },
+    {
+      "path": "src/verification-attestation.cjs",
+      "mode": 0,
+      "sha256": "133bf1aff1af97e5a551d5eafb19d70d95f3acc9c2ae8288c4dc3596af8a6441"
+    }
+  ]
+}
