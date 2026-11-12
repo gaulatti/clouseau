@@ -14,7 +14,8 @@ const patch = (line = 'one') => `@@ -1,2 +1,2 @@\n context\n-old\n+${line}`;
 const file = (extra = {}) => ({filename: 'src/handler.js', status: 'modified', patch: patch(), ...extra});
 
 // A pull request whose head `HEAD` updated an earlier head `OLD` by merging a new base `BASE`.
-function world({live = [file()], earlier = [file()], lineage = 'ahead', comments = [], reviews = [], failure = null, mergeBase = BASE, contents = {}} = {}) {
+function world({live = [file()], earlier = [file()], lineage = 'ahead', comments = [], reviews = [], failure = null, mergeBase = BASE, contents = {},
+  forcePushes = [], tips = {}, timeline = null} = {}) {
   const calls = [];
   const github = {
     paginate: async (fn, args) => (await fn(args)).data,
@@ -33,10 +34,18 @@ function world({live = [file()], earlier = [file()], lineage = 'ahead', comments
           calls.push(`${base.slice(0, 1)}..${head.slice(0, 1)}`);
           if (failure && failure.on === `${base}..${head}`) throw failure.error;
           if (base === BASE) return {data: {status: 'ahead', files: earlier, ...(mergeBase ? {merge_base_commit: {sha: mergeBase}} : {})}};
+          if (Object.hasOwn(tips, head)) return {data: {status: tips[head], files: []}};
           return {data: {status: head === HEAD && base !== OTHER ? lineage : 'diverged', files: []}};
         },
       },
     },
+  };
+  // The pull request's force pushes, as its timeline reports them (`timeline` replaces the whole answer).
+  github.graphql = async (query, args) => {
+    calls.push(`timeline#${args.number}`);
+    if (timeline instanceof Error) throw timeline;
+    return timeline ?? {repository: {pullRequest: {timelineItems: {totalCount: forcePushes.length,
+      nodes: forcePushes.map(([before, after]) => ({beforeCommit: {oid: before}, afterCommit: {oid: after}}))}}}};
   };
   const pr = {number: 7, head: {sha: HEAD}, base: {sha: BASE}, changed_files: live.length};
   // A policy of its own: confirmations are cached per policy, one per run.
@@ -302,9 +311,10 @@ test('under confirmation "diff" the five branch-update cases: merge and shifted 
   };
   // (a) main merged into the branch, unrelated files: the branch's own diff is unchanged.
   assert.equal(await confirmed({}), true, '(a) merge of main');
-  // (b) the branch rebased onto the new main: the confirmed commit is no longer an ancestor of the head, so it voids today
-  // even though the diff is the same. Lineage is how a confirmation proves the commit it names was this branch's.
-  assert.equal(await confirmed({lineage: 'diverged'}), false, '(b) rebase');
+  // (b) the branch rebased onto the new main: the confirmed commit is no longer an ancestor of the head, but the pull request's
+  // own timeline shows the force push that replaced it, so it was this branch's and the unchanged diff keeps it.
+  assert.equal(await confirmed({lineage: 'diverged', forcePushes: [[OLD, HEAD]]}), true, '(b) rebase');
+  assert.equal(await confirmed({lineage: 'diverged', forcePushes: [[OLD, HEAD]], live: [file({patch: patch('two')})]}), false, '(b) rebase and a changed hunk');
   // (c) main changed the same file in other hunks and merged cleanly: only the hunk offsets move, which the normalized diff
   // ignores; a main change inside the branch hunk's context lines changes the diff and voids it.
   assert.equal(await confirmed({live: [file({patch: patch().replace('@@ -1,2 +1,2 @@', '@@ -40,2 +40,2 @@')})]}), true, '(c) offsets only');
@@ -313,4 +323,35 @@ test('under confirmation "diff" the five branch-update cases: merge and shifted 
   assert.equal(await confirmed({live: [file(), file({filename: 'src/new.js', status: 'added'})]}), false, '(d) new commit');
   // (e) a conflict resolution that alters the branch's own added line.
   assert.equal(await confirmed({live: [file({patch: patch('one, resolved')})]}), false, '(e) altered resolution');
+});
+
+test('under confirmation "diff" a rebased confirmation carries only when this pull request\'s timeline proves the commit was its head', async () => {
+  const PRIOR = 'e'.repeat(40);
+  const confirmed = async options => {
+    const f = world({comments: [comment(OLD)], lineage: 'diverged', ...options});
+    return {result: await f.policy.maintainerConfirmed(f.github, repo, f.pr), calls: f.calls};
+  };
+  // A head that a later normal push extended, then a rebase replaced: the confirmed commit is an ancestor of that replaced head.
+  assert.equal((await confirmed({forcePushes: [[PRIOR, HEAD]], tips: {[PRIOR]: 'ahead'}})).result, true, 'an ancestor of a replaced head');
+  // The commit a force push produced counts as a head as well.
+  assert.equal((await confirmed({forcePushes: [[PRIOR, OLD], [OLD, HEAD]], tips: {[PRIOR]: 'behind'}})).result, true, 'a produced head');
+  // Never this pull request's head: a commit of another branch or fork with an identical diff does not carry.
+  assert.equal((await confirmed({})).result, false, 'no force push at all');
+  assert.equal((await confirmed({forcePushes: [[PRIOR, HEAD]], tips: {[PRIOR]: 'diverged'}})).result, false, 'unrelated to every head');
+  // Evidence the engine could not read never carries: more force pushes than one page, a missing pull request, an unknown commit.
+  // More force pushes than one page: even a page that would prove the commit was this pull request's head does not carry.
+  const proving = [{beforeCommit: {oid: OLD}, afterCommit: {oid: HEAD}}];
+  assert.equal((await confirmed({timeline: {repository: {pullRequest: {timelineItems: {totalCount: 1, nodes: proving}}}}})).result, true, 'one complete page');
+  assert.equal((await confirmed({timeline: {repository: {pullRequest: {timelineItems: {totalCount: 101, nodes: proving}}}}})).result, false, 'unread pages');
+  assert.equal((await confirmed({timeline: {repository: {pullRequest: null}}})).result, false, 'no pull request');
+  assert.equal((await confirmed({forcePushes: [[PRIOR, HEAD]], failure: {on: `${OLD}..${PRIOR}`, error: Object.assign(new Error('Not Found'), {status: 404})}})).result,
+    false, 'a garbage-collected commit');
+  assert.equal((await confirmed({timeline: {repository: {pullRequest: {timelineItems: {totalCount: 1, nodes: [{beforeCommit: null, afterCommit: {oid: 'x'}}]}}}}})).result,
+    false, 'malformed commits are ignored');
+  // Any other failure is never read as a match: it surfaces.
+  const f = world({comments: [comment(OLD)], lineage: 'diverged', timeline: Object.assign(new Error('Server Error'), {status: 502})});
+  await assert.rejects(f.policy.maintainerConfirmed(f.github, repo, f.pr), /Server Error/);
+  // An ancestor of the head needs no timeline read.
+  const direct = await confirmed({lineage: 'ahead'});
+  assert.equal(direct.result, true); assert.ok(!direct.calls.some(call => call.startsWith('timeline')));
 });
