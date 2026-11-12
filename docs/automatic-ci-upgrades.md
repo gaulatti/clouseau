@@ -92,6 +92,10 @@ exact-head `/approve-intent`). The copy keeps working unchanged without them.
    per head. Extend the "Require a completed assessment" guard with
    `contains(fromJSON('["failure","cancelled"]'), needs.assess-hosted.result)` and let `apply-repair` accept a
    skipped hosted job (`contains(fromJSON('["success","skipped"]'), needs.assess-hosted.result)`).
+   Give `finalize-merge` an explicit guard,
+   `!cancelled() && needs.approve-and-merge.result == 'success' && (<the review-event condition>)`: a valid
+   receipt skips `assess-hosted`, and a job whose `if` calls no status function is skipped with any skipped
+   need, so `if: *review-event` alone never finalizes or dispatches deployment for a receipt-merged PR.
 4. Pin the engine to a revision that includes the `ignore-receipt` input before adding the job. GitHub only
    warns about an unknown input, so an older engine would silently read the receipt in the secret-bearing job.
    Rollback is reverting the workflow PR.
