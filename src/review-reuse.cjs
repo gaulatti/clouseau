@@ -30,24 +30,33 @@ const token = name => `${PREFIX}${name}>>`;
 const isCommand = value => value !== null && typeof value === 'object' && Array.isArray(value.argv);
 const passed = command => command.exit_code === 0 && !command.error && !command.signal;
 
+// Under the opt-in outcome keying (`clouseau review --reuse outcome`, or `"review_reuse": "outcome"` in the base's
+// .clouseau-local.json), exact coverage is keyed by the outcome the reviewers judge, complete or not: a base that added code
+// elsewhere changes the counters but not the verdict. Coverage that is not complete keeps its counters, which are evidence.
+const outcomeOf = exact => exact !== null && typeof exact === 'object' && ['lines', 'branches'].every(name => Array.isArray(exact[name]) &&
+  exact[name].length === 2 && Number.isSafeInteger(exact[name][0]) && exact[name][0] === exact[name][1]) &&
+  Object.keys(exact).sort().join(',') === 'branches,lines' ? {lines: 'complete', branches: 'complete'} : exact;
+
 // The recorded verification, without the parts of a passing command that only describe how long it took to say so.
-function neutralVerification(content) {
+function neutralVerification(content, outcome = false) {
   const record = JSON.parse(content);
   const commands = record.commands?.map(command => {
     if (!isCommand(command) || !passed(command)) return command;
     const {stdout, stderr, stdout_bytes, stderr_bytes, stdout_digest, stderr_digest, ...rest} = command;
     return rest;
   });
-  const reports = record.coverage_reports?.map(({report_digest, ...rest}) => rest);
+  const reports = record.coverage_reports?.map(({report_digest, ...rest}) =>
+    outcome && 'exact_coverage' in rest ? {...rest, exact_coverage: outcomeOf(rest.exact_coverage)} : rest);
   const {report_digest, ...rest} = record;
+  if (outcome && 'exact_coverage' in rest) rest.exact_coverage = outcomeOf(rest.exact_coverage);
   return JSON.stringify({...rest, commands, ...(reports ? {coverage_reports: reports} : {})});
 }
 
-function neutral(value) {
-  if (Array.isArray(value)) return value.map(neutral);
+function neutral(value, outcome = false) {
+  if (Array.isArray(value)) return value.map(item => neutral(item, outcome));
   if (value === null || typeof value !== 'object') return value;
-  const copy = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, neutral(item)]));
-  if (copy.kind === 'verification' && typeof copy.content === 'string') copy.content = neutralVerification(copy.content);
+  const copy = Object.fromEntries(Object.entries(value).map(([key, item]) => [key, neutral(item, outcome)]));
+  if (copy.kind === 'verification' && typeof copy.content === 'string') copy.content = neutralVerification(copy.content, outcome);
   // Commit ids in a file's recent history are not the base or the head, even when one of them is the commit the base now
   // points at: they stay as they are, and are compared as a whole, instead of being replaced by a revision placeholder.
   if (Array.isArray(copy.history)) copy.history = copy.history.map(entry => ({...entry, commits: digest(entry.commits)}));
@@ -60,22 +69,23 @@ const replace = (text, subs, from, to) => subs.reduce((out, sub) => out.split(su
 
 // The key of a task, or null when the task cannot be keyed safely (its prompt is not the documented shape, or the
 // text already contains a placeholder, which would let two different prompts collide).
-function keyOf(task, {subs, semantics}) {
+// Outcome keys name their mode, so an answer stored under one keying is never read under the other.
+function keyOf(task, {subs, semantics, outcome = false}) {
   const cut = task.prompt.lastIndexOf('\n');
   let packet;
   try {
-    packet = neutral(JSON.parse(task.prompt.slice(cut + 1)));
+    packet = neutral(JSON.parse(task.prompt.slice(cut + 1)), outcome);
   } catch {
     return null;
   }
   const raw = JSON.stringify({role: task.role, phase: task.phase, schema: task.schema, text: task.prompt.slice(0, cut), packet});
   if (raw.includes(PREFIX)) return null;
-  return digest({version: VERSION, semantics, body: replace(raw, subs, 0, 1)});
+  return digest({version: VERSION, semantics, ...(outcome ? {keying: 'outcome'} : {}), body: replace(raw, subs, 0, 1)});
 }
 
 // `literals()` gives the values of this run when a call is made: the digest of a snapshot changes when a source request
 // adds evidence, so it is read per call. `read` turns reuse on; recording happens either way.
-function createReuse({directory, read = false, semantics, literals}) {
+function createReuse({directory, read = false, semantics, literals, outcome = false}) {
   const pending = new Map();
   const stats = {reused: 0};
   const subsOf = () => {
@@ -96,7 +106,7 @@ function createReuse({directory, read = false, semantics, literals}) {
 
   const wrap = ask => async task => {
     const subs = subsOf();
-    const key = keyOf(task, {subs, semantics});
+    const key = keyOf(task, {subs, semantics, outcome});
     if (key !== null && read) {
       const hit = load(key, subs);
       if (hit !== null) {
