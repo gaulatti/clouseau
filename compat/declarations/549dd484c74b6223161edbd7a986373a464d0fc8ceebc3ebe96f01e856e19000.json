@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "action.yml",
+      "mode": 0,
+      "sha256": "75bf9488c4f741e16470e0b23ea8f68c021ee16f998c09d485c6d80fc27da724"
+    },
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "d1e7e2ef427e886b398db1111c8e99a5f0b40d646454e16be3dda61ad65ca505"
+    },
+    {
+      "path": "src/base-reconcile.cjs",
+      "mode": 0,
+      "sha256": "37f9d96108286158d9e058784c5a185bb511ca428bcea07f44150316a848d3b4"
+    },
+    {
+      "path": "src/branch-update.cjs",
+      "mode": 0,
+      "sha256": "3c868ebfdce53bfddbd205e735e1e8f00e86a98e9c48983250d64695a8c87b1f"
+    },
+    {
+      "path": "src/gate-notice.cjs",
+      "mode": 0,
+      "sha256": "1394bc18c206f30e58f2ff0bd6c5dc4a96d797eb9b76b83e17a12ff5981f521d"
+    },
+    {
+      "path": "src/local-receipt.cjs",
+      "mode": 0,
+      "sha256": "44e8cca95fa3aa4d480b1e76b22172356b01c08543aabc00fca5192b85def501"
+    }
+  ]
+}
