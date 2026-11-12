@@ -76,7 +76,7 @@ test('a persistent transient failure is never silent: the pull request is told t
 test('a notice that cannot be posted is logged and never hides the failure; nothing is posted without a requesting pull request', async () => {
   const w = world({pull: () => {throw unavailable();}, comment: () => {throw Object.assign(new Error('Resource not accessible by integration'), {status: 403});}});
   await assert.rejects(w.run(), /could not be requested/);
-  assert.ok(w.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP 403\).*issues: write and pull-requests: write/.test(line)));
+  assert.ok(w.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP 403\).*issues: write\./.test(line)));
   const offline = world({pull: () => {throw unavailable();}, comment: () => {throw new Error('socket hang up');}});
   await assert.rejects(offline.run(), /could not be requested/);
   assert.ok(offline.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP unknown\)/.test(line)));

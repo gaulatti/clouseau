@@ -10,7 +10,7 @@ const read = path => parse(readFileSync(new URL(`../../${path}`, import.meta.url
 test('request-reassessment may comment on the pull request, and nothing more than that is added', () => {
   for (const path of ['examples/consumer-ci.yml', '.github/workflows/ci.yml']) {
     const job = read(path).jobs['request-reassessment'];
-    assert.deepEqual(job.permissions, {contents: 'read', 'pull-requests': 'write', issues: 'write', actions: 'write'}, path);
+    assert.deepEqual(job.permissions, {contents: 'read', 'pull-requests': 'read', issues: 'write', actions: 'write'}, path);
     // It still runs only trusted main and the frozen engine, never pull request code.
     const checkouts = job.steps.filter(step => String(step.uses).startsWith('actions/checkout@'));
     assert.equal(checkouts[0].with.ref, 'main', path);

@@ -452,11 +452,11 @@ jobs:
       (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.check_author)
     runs-on: ubuntu-latest
     timeout-minutes: 3
-    # issues/pull-requests write only for the notice that a requested reassessment could not be requested; the job runs
-    # trusted main and the frozen engine, never pull request code.
+    # issues: write only for the notice that a requested reassessment could not be requested (an issue comment on the pull
+    # request); the job runs trusted main and the frozen engine, never pull request code.
     permissions:
       contents: read
-      pull-requests: write
+      pull-requests: read
       issues: write
       actions: write
     needs: resolve-clouseau
