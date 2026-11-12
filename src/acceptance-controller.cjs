@@ -125,12 +125,16 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
   // Under the setting, a held receipt (or one a maintainer has since confirmed) may find its own published ledger on the pull request.
   const ownLedger = humanReviewSigned(config) && Boolean(record.local_receipt) && (humanHold || Boolean(record.local_authorization));
-  return {state, ownLedger, ...publication({...result, decision: assessment.decision},
+  return {state, ownLedger, confirmation: findingsHold(signed), ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
 // Opt-in, protected: a signed review that requires a human is a receipt CI holds for the maintainer (local-receipt.cjs).
 const humanReviewSigned = config => config.local_review?.human_review === 'signed';
+// A held signed review that carries findings a human must see: a confirmation of an earlier commit counts for it only when
+// this receipt was signed at or before that commit (policy.cjs confirms()), so the owner saw these findings. Any other hold
+// (protected controls or sensitive paths with a passing review) confirms as before.
+const findingsHold = verified => verified?.human_review === true ? {reviewedHead: verified.record.snapshot?.head_sha} : {};
 
 function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle, discovery, controls = false}) {
   return {...verified, discovery, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}),
@@ -247,7 +251,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const managed = await legacy.managedExemptions(github, repo, pr, files);
         if (report) managed.notices.forEach(report);
         const controls = legacy.scopeReason(files, pr, managed.exempt, managed.protect);
-        const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
+        const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments, findingsHold(verified)) : null;
         // A verified receipt still never grants owner confirmation. Name which rule holds the review.
         const held = (cause, message) => Object.assign(new Error(message), {code: 'RECEIPT_AUTHORITY', cause_code: cause});
         // Opt-in (protected `human_review: "signed"`): a change the fixed rules send to a human is held for the maintainer on the
@@ -449,7 +453,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Accepted purpose confirmation changed; reassess the current evidence');
     }
     if (record.local_authorization && digest(record.local_authorization) !==
-        digest(await legacy.purposeConfirmation(github, context.repo, pr, comments))) {
+        digest(await legacy.purposeConfirmation(github, context.repo, pr, comments, verifiedRecord.confirmation))) {
       throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
@@ -502,8 +506,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         if (digest(currentTechnical) !== digest(currentRecord.technical)) throw new Error('Verification changed before private merge');
         const currentComments = await github.paginate(github.rest.issues.listComments,
           {...context.repo, issue_number: pr.number, per_page: 100});
-        for (const authorization of [currentRecord.snapshot.intent_confirmation, currentRecord.local_authorization].filter(Boolean)) {
-          if (digest(authorization) !== digest(await legacy.purposeConfirmation(github, context.repo, currentPr, currentComments))) {
+        // The accepted purpose the review read confirms as it did; the owner authorization of a findings hold follows its rule.
+        for (const [authorization, hold] of [[currentRecord.snapshot.intent_confirmation, {}], [currentRecord.local_authorization, latest.confirmation]]) {
+          if (authorization && digest(authorization) !== digest(await legacy.purposeConfirmation(github, context.repo, currentPr, currentComments, hold))) {
             throw new Error('Exact recorded purpose authorization changed before private merge');
           }
         }
@@ -511,6 +516,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           throw new Error('Acceptance findings changed before private merge');
         }
       },
+      // The gate's own confirmation checks (maintainerConfirmed, an `/approve-intent` comment) follow the same hold rule.
+      confirmation: verifiedRecord.confirmation,
       assessment: {...assessment, decision: assessment.decision === 'owner_decision' ? 'second_opinion' : 'auto_approve'}});
   }
 

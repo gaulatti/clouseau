@@ -603,7 +603,9 @@ changes the diff's context lines, so it voids the confirmation too; a change els
 hunk offsets, which the normalized diff ignores. A patchless or truncated file list, an
 unknown commit or another lineage never matches, and any other API failure surfaces. The comment itself stays exactly
 `/approve-intent <sha>`. The recorded authorization names the head it was applied to and, when that differs, the
-`confirmed_sha` it was given for. Without the setting, a confirmation names the exact head, as before. Where the binding applies: `verifySignedRecord` (the head and base comparison),
+`confirmed_sha` it was given for. Without the setting, a confirmation names the exact head, as before. A held signed review
+with findings adds one condition, its receipt signed at or before the confirmed commit (see
+[signing a review that requires a human](#signing-a-review-that-requires-a-human-opt-in)). Where the binding applies: `verifySignedRecord` (the head and base comparison),
 `verifySources` (revisions, sources, contract and verification refs, the lockfile summary, and the diff through `verifyPatches`),
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
@@ -808,7 +810,7 @@ outcome is signed and CI enforces it instead of repeating it:
 | test integrity violated (`blocked_integrity`) | nothing | nothing to reuse; the author fixes |
 | another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing | nothing to reuse; CI reviews the change itself |
 | an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) | nothing to reuse; CI reviews the change itself |
-| findings at or above the threshold, every gate satisfied (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer confirms the head (`/approve-intent <head sha>` or an approving review; see the confirmation rule below) |
+| findings at or above the threshold, every gate satisfied (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer confirms the head (`/approve-intent <head sha>` or an approving review; see the confirmation rule below). A confirmation of an earlier commit counts only when this receipt was signed at or before that commit |
 | a change the fixed rules send to a human (protected review controls, sensitive paths) | the passing review | the same `owner_decision` hold, instead of today's `receipt_protected_controls` |
 | clean | the passing review | approve and merge as today |
 
@@ -832,9 +834,14 @@ in two modes:
 - Without the protected `local_review.confirmation: "diff"`, a confirmation names one exact head, so the owner confirms the
   new head again.
 - With it, a confirmation of an earlier head of this pull request carries to the new head when the normalized diff is the
-  same and the base's configuration and purpose contract are unchanged. That holds after a merge of the base or a rebase.
-  The empty commit that requests a new review changes no diff, so the earlier confirmation then clears the new review's
-  findings too. Any change to the diff voids it.
+  same and the base's configuration and purpose contract are unchanged. That holds after a merge of the base or a rebase;
+  any change to the diff voids it. For a hold whose signed review carries findings, the confirmed commit must also be the
+  receipt's own reviewed head (its signed `snapshot.head_sha`) or a descendant of it: a receipt signed at or before the
+  confirmed commit is the one whose findings the owner saw. So the same receipt carries after a merge of the base, but a new review never inherits an earlier
+  confirmation: the empty commit that requests one changes no diff, yet its receipt is signed after the confirmed commit,
+  and the owner confirms the new head. A rebase that rewrote the reviewed head, or an ancestry GitHub cannot report, also
+  requires the exact head. A hold without findings (protected controls or sensitive paths with a passing review) follows
+  the diff rule alone.
 
 While the hold waits, the gate publishes the signed findings in the pull request's acceptance ledger. The run that a
 maintainer's approval starts finds that ledger on the pull request; under this setting a ledger whose findings equal exactly

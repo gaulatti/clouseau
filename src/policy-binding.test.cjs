@@ -355,3 +355,47 @@ test('under confirmation "diff" a rebased confirmation carries only when this pu
   const direct = await confirmed({lineage: 'ahead'});
   assert.equal(direct.result, true); assert.ok(!direct.calls.some(call => call.startsWith('timeline')));
 });
+
+// A signed review that carries findings passes its own reviewed head `R` (receipt `snapshot.head_sha`): an earlier confirmation
+// then also needs `R` to be an ancestor of, or equal to, the confirmed commit. `OLD` was confirmed; `HEAD` is the live head.
+test('under confirmation "diff" a findings hold carries an earlier confirmation only for a receipt signed at or before it', async () => {
+  const SIGNED = 'e'.repeat(40);
+  const decide = async (hold, options = {}) => {
+    const f = world({comments: [comment(OLD)], ...options});
+    const results = [await f.policy.maintainerConfirmed(f.github, repo, f.pr, hold),
+      Boolean(await f.policy.purposeConfirmation(f.github, repo, f.pr, [comment(OLD)], hold)),
+      await f.policy.commentConfirms(f.github, repo, f.pr, `/approve-intent ${OLD}`, {exact: true, ...hold})];
+    assert.equal(new Set(results).size, 1, 'every confirmation check decides alike');
+    return {result: results[0], calls: f.calls};
+  };
+  // The receipt the owner saw: signed at the confirmed commit, or at one of its ancestors.
+  assert.equal((await decide({reviewedHead: OLD}, {tips: {[OLD]: 'identical'}})).result, true, 'signed at the confirmed commit');
+  const before = await decide({reviewedHead: SIGNED}, {tips: {[OLD]: 'ahead'}});
+  assert.equal(before.result, true, 'signed at an ancestor of the confirmed commit');
+  assert.equal(before.calls.filter(call => call === 'e..a').length, 1, 'one reviewed-head comparison serves every check');
+  // A re-review after the confirmed commit, a rebase that rewrote the signed head, or an ancestry that cannot be read.
+  assert.equal((await decide({reviewedHead: SIGNED}, {tips: {[OLD]: 'behind'}})).result, false, 'signed after the confirmed commit');
+  assert.equal((await decide({reviewedHead: SIGNED}, {tips: {[OLD]: 'diverged'}})).result, false, 'a rebased signed head');
+  for (const status of [404, 422]) {
+    assert.equal((await decide({reviewedHead: SIGNED}, {tips: {[OLD]: 'ahead'}, failure: {on: `${SIGNED}..${OLD}`,
+      error: Object.assign(new Error('Not Found'), {status})}})).result, false, `compare ${status}`);
+  }
+  // A missing or malformed reviewed head requires the exact head, and starts no comparison.
+  for (const reviewedHead of [undefined, null, '', 'e'.repeat(39), 'E'.repeat(40), 7]) {
+    const missing = await decide({reviewedHead}, {tips: {[OLD]: 'ahead'}});
+    assert.equal(missing.result, false, String(reviewedHead)); assert.deepEqual(missing.calls, [], String(reviewedHead));
+  }
+  // Without findings the hold confirms exactly as before.
+  assert.equal((await decide({}, {tips: {[OLD]: 'behind'}})).result, true, 'no findings: the diff rule alone');
+  // Any other failure is never read as a match: it surfaces.
+  const broken = world({comments: [comment(OLD)], tips: {[OLD]: 'ahead'}, failure: {on: `${SIGNED}..${OLD}`, error: Object.assign(new Error('Server Error'), {status: 500})}});
+  await assert.rejects(broken.policy.maintainerConfirmed(broken.github, repo, broken.pr, {reviewedHead: SIGNED}), /Server Error/);
+  // The exact head always counts; with the setting off nothing else does.
+  const exact = world({comments: [comment(HEAD)]});
+  assert.equal(await exact.policy.maintainerConfirmed(exact.github, repo, exact.pr, {reviewedHead: SIGNED}), true);
+  assert.deepEqual(exact.calls, []);
+  const off = world({comments: [comment(OLD)], tips: {[OLD]: 'ahead'}});
+  assert.equal(await policies.plain.maintainerConfirmed(off.github, repo, off.pr, {reviewedHead: SIGNED}), false);
+  assert.equal(await policies.plain.maintainerConfirmed(off.github, repo, {...off.pr, head: {sha: OLD}}, {reviewedHead: SIGNED}), true);
+  assert.deepEqual(off.calls, []);
+});
