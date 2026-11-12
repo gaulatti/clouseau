@@ -410,7 +410,11 @@ jobs:
 
   finalize-merge:
     needs: [assess-intent, assess-hosted, approve-and-merge, resolve-clouseau]
-    if: *review-event
+    # assess-hosted is skipped whenever a receipt is used; without a status function GitHub would skip this job too.
+    if: >-
+      !cancelled() && needs.approve-and-merge.result == 'success' &&
+      ((github.event_name == 'pull_request_target' && !github.event.pull_request.draft) ||
+      (github.event_name == 'push' && !github.event.deleted && startsWith(github.ref, 'refs/heads/policy-install/')))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

@@ -743,7 +743,11 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
       baseBranch: config.base_branch, manual: false, privateOwnerAutomatic,
       assertProtection: () => assertProtection(github, repo, 'approve-and-merge')});
     if (checked.insufficient) return;
-    if (checked.controllerManaged) throw new Error('Private owner merge must complete through the validated acceptance gate before finalization');
+    // Only the validated acceptance gate merges here, so an unmerged PR is one that gate left for a human: nothing to finalize.
+    if (checked.controllerManaged) {
+      core.info('Nothing to finalize: the PR is not merged, and a controller-enforced owner merge completes only through the validated acceptance gate.');
+      return;
+    }
   }
   if (codeownersRequired && !pr.merged) {
     if (!files) files = await github.paginate(github.rest.pulls.listFiles, {...repo, pull_number, per_page: 100});
