@@ -5,7 +5,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "6578cffd96885094ad7c7af13002625a66c5659cd1b78b9ffa4d539d98ba69fc"
+      "sha256": "a2a810a3b4a40931d48f03873f7fae97b3c022735841fecdbe35c5422f84a70f"
     },
     {
       "path": "src/local-cli.cjs",
@@ -20,7 +20,7 @@
     {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "d66ddc09c693d13cce8449ee8601cb162de2e242cbce849804cca7b1edba59f1"
+      "sha256": "8deff42efa01528390a76c8f49d4918a875b6669ce6dabaef98cc91066b75743"
     },
     {
       "path": "src/pr-refresh.cjs",

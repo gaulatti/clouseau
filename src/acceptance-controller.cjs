@@ -131,10 +131,10 @@ function verifyRecord(record, assessment, config, engine = null) {
 
 // Opt-in, protected: a signed review that requires a human is a receipt CI holds for the maintainer (local-receipt.cjs).
 const humanReviewSigned = config => config.local_review?.human_review === 'signed';
-// A held signed review that carries findings a human must see: a confirmation of an earlier commit counts for it only when
-// this receipt was signed at or before that commit (policy.cjs confirms()), so the owner saw these findings. Any other hold
-// (protected controls or sensitive paths with a passing review) confirms as before.
-const findingsHold = verified => verified?.human_review === true ? {reviewedHead: verified.record.snapshot?.head_sha} : {};
+// A held signed review that carries findings a human must see: only a confirmation of the exact head counts for it (policy.cjs
+// confirms()), so the owner confirms the findings of the review that holds. Any other hold (protected controls or sensitive
+// paths with a passing review) confirms as before.
+const findingsHold = verified => verified?.human_review === true ? {findings: true} : {};
 
 function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle, discovery, controls = false}) {
   return {...verified, discovery, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}),

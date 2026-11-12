@@ -1,7 +1,7 @@
 'use strict';
 // Owner confirmation of a signed review that carries findings (protected `human_review: "signed"`) under the protected
-// `confirmation: "diff"`: an earlier confirmation counts only for a receipt signed at or before the confirmed commit. Kept apart
-// from acceptance-controller-human-review.test.cjs so a change here does not resend that file as review evidence.
+// `confirmation: "diff"`: while the signed review carries findings, only a confirmation of the exact head counts; nothing
+// carries. A hold without findings keeps the diff rule. Kept apart from acceptance-controller-human-review.test.cjs so a change here does not resend that file as review evidence.
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
@@ -102,12 +102,9 @@ async function fixture(run) {
 }
 
 
-// Commits around the signed reviewed head R (the receipt's `snapshot.head_sha`): S is what the owner confirmed, H the live head.
+// Commits around the signed reviewed head R (the receipt's `snapshot.head_sha`): EARLIER precedes it, MERGED merged main into it.
 const EARLIER = '1'.repeat(40);
-const LATER = '2'.repeat(40);
 const MERGED = '3'.repeat(40);
-const REBASED = '4'.repeat(40);
-const OLD_BASE = '5'.repeat(40);
 
 // One signed receipt world: `sign` issues a receipt for the hosted record (with findings unless `passing`), `run` drives the
 // held assessment and gate for an owner confirmation of `confirmed` while the live head is `head`, and reports what happened.
@@ -122,9 +119,9 @@ async function signedWorld(f, local) {
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false, public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}],
     human_review: 'signed', ...local};
   const signedHead = record.snapshot.head_sha;
-  const sign = (trusted, {passing = false, reviewedHead = signedHead, mutate = () => {}} = {}) => {
+  const sign = (trusted, {passing = false, mutate = () => {}} = {}) => {
     let copy = structuredClone(record);
-    copy.snapshot.number = 0; copy.snapshot.config_digest = digest(trusted); copy.snapshot.head_sha = reviewedHead; refresh(copy.snapshot);
+    copy.snapshot.number = 0; copy.snapshot.config_digest = digest(trusted); refresh(copy.snapshot);
     copy.result.snapshot = copy.snapshot.digest; copy.result.config_digest = copy.snapshot.config_digest;
     copy.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
       ({role, phase, harness: 'codex', session: `fictional-${role}-${phase}`, request_digest: digest(role), response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
@@ -193,79 +190,69 @@ const carried = result => {
 };
 const diffConfirmation = {binding: 'diff', confirmation: 'diff'};
 
-test('findings: the receipt the owner saw carries over a merge of main to a head with the same diff', () => fixture(async f => {
+// A findings hold reads no lineage or diff for an earlier confirmation: none of its comparisons is made.
+const noComparisonOf = (result, sha) => assert.deepEqual(result.compared.filter(item => item.startsWith(`${sha}..`)), [],
+  'an earlier confirmation of a findings hold starts no comparison');
+
+test('findings: a confirmation of an earlier commit does not carry over a merge of main to a head with the same diff', () => fixture(async f => {
   const w = await signedWorld(f, diffConfirmation);
   const trusted = {...config, local_review: w.trust};
-  const bundle = w.sign(trusted);
   const R = w.signedHead;
-  // R is the confirmed commit itself (identical), and the live head merged main into it.
-  carried(await w.run({trusted, bundle, confirmed: R, head: MERGED, lineage: {[`${R}..${MERGED}`]: 'ahead'}}));
-  // R is an ancestor of the confirmed commit S, and S an ancestor of the merged head.
-  const result = await w.run({trusted, bundle, confirmed: LATER, head: MERGED,
-    lineage: {[`${R}..${LATER}`]: 'ahead', [`${LATER}..${MERGED}`]: 'ahead'}});
-  carried(result);
-  assert.ok(result.compared.includes(`${R}..${LATER}`), 'the ancestry of the signed reviewed head is compared');
+  // The owner confirmed R, the commit the receipt was signed at; the live head merged main into it and its diff is the same.
+  const result = await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: MERGED, lineage: {[`${R}..${MERGED}`]: 'ahead'}});
+  holds(result);
+  noComparisonOf(result, R);
 }));
 
-test('findings: a re-review after the confirmed commit (an empty commit) never carries the earlier confirmation, with the same or different findings', () => fixture(async f => {
+test('findings: a confirmation of the exact head carries', () => fixture(async f => {
+  const w = await signedWorld(f, diffConfirmation);
+  const trusted = {...config, local_review: w.trust};
+  const R = w.signedHead;
+  carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage: {}}));
+  // After a merge of main, the owner confirms the merged head itself.
+  carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: MERGED, head: MERGED, lineage: {[`${R}..${MERGED}`]: 'ahead'}}));
+}));
+
+test('findings: a re-review after the confirmed commit (an empty commit) does not carry the earlier confirmation, with the same or different findings', () => fixture(async f => {
   const w = await signedWorld(f, diffConfirmation);
   const trusted = {...config, local_review: w.trust};
   const R = w.signedHead;
   // The owner confirmed EARLIER; the author added an empty commit R (the live head) and reviewed again. The diff is unchanged.
-  const lineage = {[`${R}..${EARLIER}`]: 'behind', [`${EARLIER}..${R}`]: 'ahead'};
-  holds(await w.run({trusted, bundle: w.sign(trusted), confirmed: EARLIER, head: R, lineage}));
+  const lineage = {[`${EARLIER}..${R}`]: 'ahead'};
+  const same = await w.run({trusted, bundle: w.sign(trusted), confirmed: EARLIER, head: R, lineage});
+  holds(same);
+  noComparisonOf(same, EARLIER);
   const different = w.sign(trusted, {mutate: copy => {copy.result.reviews[0].report.findings.at(-1).title = 'Another fictional defect';}});
   holds(await w.run({trusted, bundle: different, confirmed: EARLIER, head: R, lineage}));
-  // Re-reviewed at R, then main merged into it: still a receipt the owner never confirmed.
-  holds(await w.run({trusted, bundle: w.sign(trusted), confirmed: EARLIER, head: MERGED,
-    lineage: {[`${R}..${EARLIER}`]: 'behind', [`${EARLIER}..${MERGED}`]: 'ahead'}}));
-  // The exact head always counts.
-  carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage: {}}));
 }));
 
-test('findings: a rebase that rewrote the signed reviewed head never carries the confirmation', () => fixture(async f => {
-  const w = await signedWorld(f, diffConfirmation);
-  const trusted = {...config, local_review: w.trust};
-  const R = w.signedHead;
-  // The owner confirmed the rebased commit; the receipt was signed at the original R, which is not its ancestor.
-  holds(await w.run({trusted, bundle: w.sign(trusted), confirmed: REBASED, head: MERGED,
-    lineage: {[`${R}..${REBASED}`]: 'diverged', [`${REBASED}..${MERGED}`]: 'ahead'}}));
-}));
-
-test('findings: an ancestry the engine cannot establish never carries; any other failure surfaces', () => fixture(async f => {
-  const w = await signedWorld(f, diffConfirmation);
-  const trusted = {...config, local_review: w.trust};
-  const R = w.signedHead;
-  for (const status of [404, 422]) {
-    holds(await w.run({trusted, bundle: w.sign(trusted), confirmed: LATER, head: MERGED,
-      lineage: {[`${R}..${LATER}`]: Object.assign(new Error('Not Found'), {status}), [`${LATER}..${MERGED}`]: 'ahead'}}));
-  }
-  const broken = await w.run({trusted, bundle: w.sign(trusted), confirmed: LATER, head: MERGED,
-    lineage: {[`${R}..${LATER}`]: Object.assign(new Error('Server Error'), {status: 500}), [`${LATER}..${MERGED}`]: 'ahead'}}).catch(error => ({error}));
-  assert.match(String(broken.error?.message ?? broken.failure?.message), /Server Error/);
-  assert.notEqual(broken.approved, true);
-}));
-
-test('no findings: a protected-control hold with a passing receipt confirms exactly as before', () => fixture(async f => {
+test('no findings: a protected-control hold with a passing receipt carries on the diff rule as before', () => fixture(async f => {
   const w = await signedWorld(f, diffConfirmation);
   const guarded = {...config, sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js', 'src/upload.js'], local_review: w.trust};
   const R = w.signedHead;
-  // R was signed after the confirmed commit: with findings this would not carry; without them only the diff rule applies.
+  // An earlier confirmation with the same diff: without findings the diff rule applies, as on main.
   const result = await w.run({trusted: guarded, bundle: w.sign(guarded, {passing: true}), confirmed: EARLIER, head: R,
-    lineage: {[`${R}..${EARLIER}`]: 'behind', [`${EARLIER}..${R}`]: 'ahead'}});
+    lineage: {[`${EARLIER}..${R}`]: 'ahead'}});
   carried(result);
   assert.match(result.held.reason, /it changes protected review controls/);
-  assert.ok(!result.compared.includes(`${R}..${EARLIER}`), 'no reviewed-head comparison is made for a hold without findings');
+  assert.ok(result.compared.includes(`${EARLIER}..${R}`), 'the diff rule compares the confirmed commit with the head');
+  // So does a merge of main after the confirmed commit.
+  carried(await w.run({trusted: guarded, bundle: w.sign(guarded, {passing: true}), confirmed: R, head: MERGED,
+    lineage: {[`${R}..${MERGED}`]: 'ahead'}}));
 }));
 
-test('findings with confirmation "diff" off: a confirmation names the exact head only', () => fixture(async f => {
+test('confirmation "diff" off: a confirmation names the exact head only, with or without findings', () => fixture(async f => {
   const w = await signedWorld(f, {binding: 'diff'});
   const trusted = {...config, local_review: w.trust};
+  const guarded = {...trusted, sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js', 'src/upload.js']};
   const R = w.signedHead;
-  const lineage = {[`${R}..${LATER}`]: 'ahead', [`${LATER}..${MERGED}`]: 'ahead'};
-  const earlier = await w.run({trusted, bundle: w.sign(trusted), confirmed: LATER, head: MERGED, lineage});
+  const lineage = {[`${R}..${MERGED}`]: 'ahead'};
+  const earlier = await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: MERGED, lineage});
   holds(earlier);
-  assert.deepEqual(earlier.compared.filter(item => item.includes(LATER)), [], 'nothing is compared without the setting');
+  noComparisonOf(earlier, R);
+  const passing = await w.run({trusted: guarded, bundle: w.sign(guarded, {passing: true}), confirmed: R, head: MERGED, lineage});
+  holds(passing);
+  noComparisonOf(passing, R);
   carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: MERGED, head: MERGED, lineage}));
 }));
 
@@ -297,28 +284,28 @@ function privateOwner(f) {
   return between;
 }
 
-test('findings on the private-owner path: the write boundary revalidates the owner authorization by the signed reviewed head', () => fixture(async f => {
+test('findings on the private-owner path: an exact-head confirmation merges, an earlier-commit confirmation does not', () => fixture(async f => {
   const w = await signedWorld(f, diffConfirmation);
   // Protected review controls, so the receipt records the owner authorization the private-merge revalidation re-reads.
   const trusted = {...config, merge_mode: 'automatic', sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js', 'src/upload.js'], local_review: w.trust};
   const R = w.signedHead;
   const between = privateOwner(f);
   const atomic = () => f.state.writes.filter(item => item.name === 'atomic').length;
-  // The owner confirmed EARLIER; the author re-reviewed at R after it (an empty commit, the live head). Diff and lineage match.
-  const lineage = {[`${R}..${EARLIER}`]: 'behind', [`${EARLIER}..${R}`]: 'ahead'};
+  // The owner confirmed EARLIER; the live head R has the same diff and EARLIER is its ancestor. It still does not carry.
+  const lineage = {[`${EARLIER}..${R}`]: 'ahead'};
   holds(await w.run({trusted, bundle: w.sign(trusted), confirmed: EARLIER, head: R, lineage}));
   assert.equal(atomic(), 0);
   assert.equal(f.state.pr.merged, undefined);
   // The exact head reaches the private-owner merge.
   carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage}));
   assert.equal(atomic(), 1, 'the exact-head confirmation completes the controller-managed merge');
-  // At the write boundary a later stale `/approve-intent EARLIER` by the same maintainer is on the pull request. Read under the
-  // signed reviewed head it confirms nothing, so the recorded exact-head authorization still stands; read without it, it would
-  // replace that authorization and void the merge.
+  // At the write boundary a later `/approve-intent EARLIER` by the same maintainer is on the pull request. The revalidation
+  // re-reads the authorization with the same findings hold, so it confirms nothing and the recorded exact-head authorization
+  // still stands; read without the hold, it would carry on the diff rule, replace that authorization and void the merge.
   delete f.state.pr.merged; f.state.pr.state = 'open'; delete f.state.pr.merge_commit_sha;
   between.run = () => {between.run = () => {};
     f.state.comments.push({id: 951, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${EARLIER}`});};
   carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage}));
-  assert.equal(atomic(), 1, 'the stale confirmation does not disturb the exact-head authorization at the atomic write');
-  assert.ok(f.state.comments.some(item => item.id === 951), 'the stale confirmation was present at the write boundary');
+  assert.equal(atomic(), 1, 'the exact-head authorization still merges at the atomic write');
+  assert.ok(f.state.comments.some(item => item.id === 951), 'the earlier confirmation was present at the write boundary');
 }));

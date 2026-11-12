@@ -378,34 +378,23 @@ async function forcePushedHeads(github, repo, number) {
 // base `sha` was confirmed against must carry the same protected configuration and purpose contract as the live base: a
 // confirmation never carries across a base change to either.
 // When the hold is a signed review that carries findings a human must see (protected `human_review: "signed"`), the caller
-// passes that receipt's own reviewed head (`reviewedHead`, its signed `snapshot.head_sha`). An earlier `sha` then also requires
-// that head to be an ancestor of, or equal to, `sha`: a receipt signed at or before the confirmed commit is the one whose
-// findings the owner saw, and a re-review after it (even of an empty commit) carries findings the owner never confirmed. A
-// missing or malformed reviewed head, or a comparison that cannot prove the ancestry, requires the exact head.
+// passes `{findings: true}`: only a confirmation of the exact head counts, so nothing carries, whatever the setting says. A
+// re-review (even of an empty commit) carries findings the owner never confirmed.
 const confirmations = new Map();
-const compareOrNull = async (github, repo, base, head) => {
-  try {return (await github.rest.repos.compareCommits({...repo, base, head})).data;}
-  catch (error) {if (error.status === 404 || error.status === 422) return null; throw error;}
-};
 async function confirms(github, repo, pr, sha, hold = {}) {
   if (sha === pr.head.sha) return true;
+  if (hold.findings === true) return false;
   if (!intentDiff || typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return false;
-  if (Object.hasOwn(hold, 'reviewedHead')) {
-    const reviewed = hold.reviewedHead;
-    if (typeof reviewed !== 'string' || !/^[a-f0-9]{40}$/.test(reviewed)) return false;
-    const seen = `${repo.owner}/${repo.repo}#${pr.number}:reviewed:${reviewed}:${sha}`;
-    if (!confirmations.has(seen)) confirmations.set(seen, (async () =>
-      ['ahead', 'identical'].includes((await compareOrNull(github, repo, reviewed, sha))?.status))());
-    const signedBefore = await confirmations.get(seen).catch(error => {confirmations.delete(seen); throw error;});
-    if (!signedBefore) return false;
-  }
   const key = `${repo.owner}/${repo.repo}#${pr.number}:${pr.base.sha}:${pr.head.sha}:${sha}`;
   // A failed comparison is not kept: the next call (a rate-limit retry) compares again.
   if (!confirmations.has(key)) confirmations.set(key, (async () => {
     const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
     const normalized = files => files.length === 0 || files.length >= 300 || files.some(file => typeof file.patch !== 'string' || !file.patch) ? null :
       diffDigest(files.map(file => ({path: file.filename, status: file.status, previous: file.status === 'renamed' ? file.previous_filename : null, patch: canonicalHunks(file.patch)})));
-    const compare = (base, head) => compareOrNull(github, repo, base, head);
+    const compare = async (base, head) => {
+      try {return (await github.rest.repos.compareCommits({...repo, base, head})).data;}
+      catch (error) {if (error.status === 404 || error.status === 422) return null; throw error;}
+    };
     // `sha` must have been this pull request's: an ancestor of its head, or of a head a force push (a rebase) replaced or made.
     const within = async tip => ['ahead', 'identical'].includes((await compare(sha, tip))?.status);
     if (!await within(pr.head.sha)) {
@@ -436,7 +425,7 @@ async function confirms(github, repo, pr, sha, hold = {}) {
 
 // Whether an issue comment confirms this head: `/approve-intent <sha>` (with an `Accepted purpose:` block, unless `exact`, as
 // the gate requires) whose `sha` confirms() accepts. The gate and the reassessment it starts both decide by this; only the
-// gate knows the hold, so only it passes the signed review's `reviewedHead` (confirms()).
+// gate knows the hold, so only it passes a signed findings hold (`findings`, confirms()).
 async function commentConfirms(github, repo, pr, body, {exact = false, ...hold} = {}) {
   const named = intentAny(body);
   if (!named || (exact && body.trim() !== `/approve-intent ${named.sha}`)) return false;
@@ -614,7 +603,7 @@ function needsDeployment(files) {
 // The values a gate notice may mention; `pr` is the last pull request read, which always exists once the gate runs.
 const gateNoticeContext = (context, pr, repo) => ({repo: `${repo.owner}/${repo.repo}`, run: String(context.runId), head: pr.head.sha, number: String(pr.number)});
 
-// `confirmation` is what the caller that verified the record knows about the hold: `{reviewedHead}` for a signed review that
+// `confirmation` is what the caller that verified the record knows about the hold: `{findings: true}` for a signed review that
 // carries findings (confirms()), else nothing. Every confirmation check of this gate decides by it.
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
   wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null, confirmation = {}}) {
