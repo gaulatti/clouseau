@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/local-cli.cjs",
+      "mode": 0,
+      "sha256": "d2505782efa78bfcf7e4e2b90fa3fb0d26c22079eb76a588ee8251fce0026f12"
+    },
+    {
+      "path": "src/local-receipt.cjs",
+      "mode": 0,
+      "sha256": "e21524c67d3d7255c3cecd692cd6348d8f7e9a0133a28327d08eec34fdbe9391"
+    }
+  ]
+}

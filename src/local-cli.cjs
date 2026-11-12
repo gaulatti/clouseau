@@ -246,8 +246,8 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   if (sameRevision && previous.decision !== 'auto_approve') {
     // A signed review that requires a human is never sampled again on the same revision, even once its receipt expires.
     if (previous.decision === 'repair_required' && previous.has_receipt === true) {
-      throw new Error('This revision already has a signed review that requires a human; it is never reviewed again. Ask a maintainer for /approve-intent ' +
-        'of this head, or commit (an empty commit is enough) and review the new head, which must retain or resolve its findings');
+      throw new Error('This revision already has a signed review that requires a human; it is never reviewed again. CI does not accept this ' +
+        'receipt until the owner-decision hold lands; commit (an empty commit is enough) and review the new head, which must retain or resolve its findings');
     }
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
@@ -455,10 +455,8 @@ function controlWarnings(config, paths, {directory, baseSha, headSha}) {
     hits.push(...paths.filter(file => declared.isPackageFile(file) && declaredChanged(directory, baseSha, headSha, file)));
   }
   if (!hits.length) return [];
-  // Under the protected `human_review: "signed"` CI holds such a receipt as an owner decision rather than reporting it incomplete.
-  const outcome = config?.local_review?.human_review === 'signed' ? 'will hold it as owner_decision until then' : 'will report review_incomplete';
   const warning = `Protected review controls changed (${hits.slice(0, 5).join(', ')}): CI cannot accept a local receipt for this change ` +
-    `without the exact-head owner confirmation (/approve-intent) and ${outcome}. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.`;
+    'without the exact-head owner confirmation (/approve-intent) and will report review_incomplete. Keep such files (for example the AGENTS.md managed-rules update) out of this pull request, or ask a maintainer to confirm the exact head.';
   process.stderr.write(`warning: ${warning}\n`);
   return [warning];
 }
