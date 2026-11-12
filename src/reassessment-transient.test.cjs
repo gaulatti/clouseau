@@ -15,7 +15,8 @@ const unavailable = () => Object.assign(new Error('Service Unavailable'), {statu
 const comment = {...{repo}, eventName: 'issue_comment', payload: {issue: {number: 3, pull_request: {}},
   comment: {id: 501, user: {login: 'gaulatti', type: 'User'}, body: `/approve-intent ${SHA}`}}};
 
-function world({pull = () => ({data: {number: 3, state: 'open', draft: false, head: {sha: SHA, ref: 'f', repo: {id: 1}}, base: {sha: 'b'.repeat(40), ref: 'main'}}}),
+function world({runsList = () => ({data: {workflow_runs: [{id: 40, event: 'pull_request_target', head_sha: SHA, pull_requests: [{number: 3}]}]}}),
+  pull = () => ({data: {number: 3, state: 'open', draft: false, head: {sha: SHA, ref: 'f', repo: {id: 1}}, base: {sha: 'b'.repeat(40), ref: 'main'}}}),
   rerun = () => ({}), runStatus = () => 'completed', comment: post = () => ({data: {id: 1}})} = {}) {
   const calls = {pulls: 0, reruns: [], comments: [], waits: [], info: [], landed: []};
   const github = {
@@ -24,7 +25,7 @@ function world({pull = () => ({data: {number: 3, state: 'open', draft: false, he
       pulls: {get: async () => {calls.pulls++; return pull(calls.pulls);}},
       repos: {getCollaboratorPermissionLevel: async () => ({data: {permission: 'admin'}})},
       actions: {
-        listWorkflowRuns: async () => ({data: {workflow_runs: [{id: 40, event: 'pull_request_target', head_sha: SHA, pull_requests: [{number: 3}]}]}}),
+        listWorkflowRuns: async () => runsList(),
         getWorkflowRun: async () => ({data: {status: runStatus(calls.reruns.length), conclusion: 'failure'}}),
       },
       // A notice lands unless `post` throws; `post` may land it and still throw (GitHub answering 5xx after the write).
@@ -39,12 +40,16 @@ function world({pull = () => ({data: {number: 3, state: 'open', draft: false, he
   return {calls, run, pull};
 }
 
-test('a transient 503 is retried with backoff and the reassessment is requested', async () => {
-  const ready = world();
-  const w = world({pull: count => {if (count <= 2) throw unavailable(); return ready.pull();}});
+test('a read is left to the packaged read hook, the rerun write is retried with backoff, and a request is made', async () => {
+  // Reads: one attempt here, because every packaged step installs github-retry, which retries them on 5xx.
+  const read = world({pull: () => {throw unavailable();}});
+  await assert.rejects(read.run(), /could not be requested: GitHub kept failing transiently \(HTTP 503\)/);
+  assert.equal(read.calls.pulls, 1); assert.deepEqual(read.calls.comments, [], 'an unvalidated request posts nothing');
+  assert.ok(read.calls.info.some(line => /could not be validated before GitHub failed/.test(line)));
+  // The rerun write: retried with the shared backoff until it is requested.
+  const w = world({rerun: count => {if (count <= 2) throw unavailable(); return {};}});
   await w.run();
-  assert.equal(w.calls.pulls, 3);
-  assert.deepEqual(w.calls.reruns, [40]);
+  assert.deepEqual(w.calls.reruns, [40, 40, 40]);
   assert.ok(w.calls.waits.includes(2000) && w.calls.waits.includes(6000), 'the shared transient backoff');
   assert.deepEqual(w.calls.comments, [], 'a request that succeeded posts nothing');
 });
@@ -59,8 +64,8 @@ test('a rerun that GitHub reported as failed but that landed is not requested tw
 });
 
 test('a persistent transient failure is never silent: the pull request is told the request was received and how to recover', async () => {
-  const w = world({pull: () => {throw unavailable();}});
-  await assert.rejects(w.run(), /^Error: Reassessment could not be requested: GitHub kept failing transiently \(4 attempts\)\./);
+  const w = world({runsList: () => {throw unavailable();}});
+  await assert.rejects(w.run(), /^Error: Reassessment could not be requested: GitHub kept failing transiently \(HTTP 503\)\./);
   assert.deepEqual(w.calls.reruns, []);
   assert.equal(w.calls.comments.length, 1);
   const [notice] = w.calls.comments;
@@ -69,7 +74,7 @@ test('a persistent transient failure is never silent: the pull request is told t
   assert.match(notice.body, new RegExp(`\\(\`/approve-intent ${SHA}\`\\) was received`));
   assert.match(notice.body, /\*\*Re-run all jobs\*\* \(not "Re-run failed jobs"/);
   // A dispatch that names the pull request is told the same way.
-  const dispatched = world({pull: () => {throw unavailable();}});
+  const dispatched = world({runsList: () => {throw unavailable();}});
   process.env.PR_NUMBER = '3';
   try {await assert.rejects(dispatched.run({repo, eventName: 'workflow_dispatch', payload: {inputs: {pull_request: '3'}}, actor: 'gaulatti'}));}
   finally {delete process.env.PR_NUMBER;}
@@ -78,10 +83,10 @@ test('a persistent transient failure is never silent: the pull request is told t
 });
 
 test('a notice that cannot be posted is logged and never hides the failure; nothing is posted without a requesting pull request', async () => {
-  const w = world({pull: () => {throw unavailable();}, comment: () => {throw Object.assign(new Error('Resource not accessible by integration'), {status: 403});}});
+  const w = world({runsList: () => {throw unavailable();}, comment: () => {throw Object.assign(new Error('Resource not accessible by integration'), {status: 403});}});
   await assert.rejects(w.run(), /could not be requested/);
   assert.ok(w.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP 403\).*issues: write and pull-requests: write/.test(line)));
-  const offline = world({pull: () => {throw unavailable();}, comment: () => {throw new Error('socket hang up');}});
+  const offline = world({runsList: () => {throw unavailable();}, comment: () => {throw new Error('socket hang up');}});
   await assert.rejects(offline.run(), /could not be requested/);
   assert.ok(offline.calls.info.some(line => /notice could not be posted on PR 3 \(HTTP unknown\)/.test(line)));
   const verification = world({pull: () => {throw unavailable();}});
@@ -102,15 +107,15 @@ test('a deterministic failure still fails at once, without retry or notice', asy
 });
 
 test('a notice that GitHub reported as failed but that landed is not posted twice; one that did not land is retried', async () => {
-  const landed = world({pull: () => {throw unavailable();}, comment: (count, land) => {if (count === 1) {land(); throw unavailable();} return {data: {id: 2}};}});
+  const landed = world({runsList: () => {throw unavailable();}, comment: (count, land) => {if (count === 1) {land(); throw unavailable();} return {data: {id: 2}};}});
   await assert.rejects(landed.run(), /could not be requested/);
   assert.equal(landed.calls.comments.length, 1, 'the retry found the notice and did not post again');
   assert.equal(landed.calls.landed.length, 1);
-  const lost = world({pull: () => {throw unavailable();}, comment: count => {if (count === 1) throw unavailable(); return {data: {id: 2}};}});
+  const lost = world({runsList: () => {throw unavailable();}, comment: count => {if (count === 1) throw unavailable(); return {data: {id: 2}};}});
   await assert.rejects(lost.run(), /could not be requested/);
   assert.equal(lost.calls.comments.length, 2); assert.equal(lost.calls.landed.length, 1);
   // A dispatch's notice is keyed by its run.
-  const dispatched = world({pull: () => {throw unavailable();}});
+  const dispatched = world({runsList: () => {throw unavailable();}});
   process.env.PR_NUMBER = '3';
   try {await assert.rejects(dispatched.run({repo, runId: 77, eventName: 'workflow_dispatch', payload: {inputs: {pull_request: '3'}}, actor: 'gaulatti'}));}
   finally {delete process.env.PR_NUMBER;}

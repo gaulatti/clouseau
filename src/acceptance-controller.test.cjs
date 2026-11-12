@@ -1841,6 +1841,12 @@ test('a confirmation the assessment could have read, an approvable assessment or
     await assert.rejects(gate(assessment), error => !/assessment_predates_confirmation/.test(error.message), JSON.stringify(assessment.assessed_at));
   }
   const {newerConfirmation} = require('./stale-assessment.cjs');
+  // Only the hold an owner confirmation resolves is checked; any other hold keeps its own reason.
+  for (const other of [{decision: 'blocked_technical', cause: undefined}, {decision: 'pending_technical', cause: 'verification_pending'},
+    {decision: 'review_incomplete', cause: 'local_receipt_required'}, {decision: 'blocked_integrity', cause: undefined}]) {
+    assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
+      assessment: {...base, ...other, assessed_at: '2026-11-12T14:21:10.000Z'}}), null, JSON.stringify(other));
+  }
   for (const decision of ['auto_approve', 'owner_decision']) {
     assert.equal(await newerConfirmation({github: f.github, context: f.context, number: 3, legacy: f.policy,
       assessment: {...base, decision, assessed_at: '2026-11-12T14:21:10.000Z'}}), null, decision);

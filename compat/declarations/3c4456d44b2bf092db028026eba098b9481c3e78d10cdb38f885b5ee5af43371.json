@@ -15,12 +15,12 @@
     {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "79929684bb6b4699803f95892a3aff58da1898a0864fd4212e5a37401fce0be8"
+      "sha256": "a2e57d211cc112e40062331d45e3f85879d062f6de7ef736bd7c9d2a8b93a732"
     },
     {
       "path": "src/stale-assessment.cjs",
       "mode": 0,
-      "sha256": "39d09cb00be7bf612ac233716ceade6676b70517dbec38c8013ae49a004367f3"
+      "sha256": "d3833a4b49401c9833a20d447ff668a01306616378787669019222a630d844d0"
     }
   ]
 }

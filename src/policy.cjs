@@ -272,7 +272,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
   return {pending: true, state: 'deadline'};
 }
 
-async function reassess({github, context, core, wait, api}) {
+async function reassess({github, context, core, wait, api, write, state = {}}) {
   const repo = context.repo;
   // A completed PR verification run reassesses a review that ended pending
   // without holding a runner. The event is a trusted run of this workflow.
@@ -310,6 +310,8 @@ async function reassess({github, context, core, wait, api}) {
     const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
     if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
+    // From here a failure answers a request the engine validated: an exact-head confirmation or request by a maintainer.
+    state.validated = true;
   }
   const {data} = await api(() => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
     event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100}));
@@ -347,7 +349,7 @@ async function reassess({github, context, core, wait, api}) {
   // Every attempt after the first, whichever retry layer starts it, first checks whether an earlier one had landed: GitHub
   // refuses a second rerun of a running run.
   let tries = 0;
-  await api(async () => {
+  await write(async () => {
     if (tries++ > 0 && (await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id})).data.status !== 'completed') return;
     await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
   });
@@ -357,18 +359,23 @@ async function reassess({github, context, core, wait, api}) {
 // Reassessment is itself an API consumer and runs exactly when many PRs finish together, so it retries
 // rate-limited calls with the shared bounded backoff. If the budget stays exhausted it fails with an explicit
 // message naming when to re-run, instead of an unhandled HttpError.
-// HTTP 5xx (which includes a network failure) and short rate limits are retried with the shared transient backoff inside it.
-// A request that still cannot be made never fails silently: when it was asked for on a pull request, that pull request is
-// told the request was received and how to recover.
+// Reads are retried on 5xx by the read hook every packaged step installs (github-retry.cjs), so they are not retried again
+// here; the rerun is a write, retried with the shared transient backoff and its landed check. A request that still cannot
+// be made never fails silently: once the engine validated it (an exact-head request by a maintainer), the pull request is
+// told the request was received and how to recover. A failure before that is only logged.
 async function requestReassessment({github, context, core, wait = sleep}) {
   const report = message => core.info(message);
   const transient = call => retryTransient(call, {operation: 'requesting the reassessment', head: 'unknown', wait, report});
-  const api = call => withRateLimit(() => transient(call), {wait, report});
-  try {return await reassess({github, context, core, wait, api});} catch (error) {
-    const {TransientExhausted} = require('./transient-retry.cjs');
-    if (!(error instanceof RateLimitHold) && !(error instanceof TransientExhausted)) throw error;
-    const why = error instanceof RateLimitHold ? heldReason(error) : `GitHub kept failing transiently (${error.attempts} attempts).`;
-    await reportUnrequested({github, context, core, transient, why});
+  const api = call => withRateLimit(call, {wait, report});
+  const write = call => withRateLimit(() => transient(call), {wait, report});
+  const state = {validated: false};
+  try {return await reassess({github, context, core, wait, api, write, state});} catch (error) {
+    const {TransientExhausted, isTransient} = require('./transient-retry.cjs');
+    if (!(error instanceof RateLimitHold) && !(error instanceof TransientExhausted) && !isTransient(error)) throw error;
+    const why = error instanceof RateLimitHold ? heldReason(error) : error instanceof TransientExhausted ?
+      `GitHub kept failing transiently (${error.attempts} attempts).` : `GitHub kept failing transiently (HTTP ${Number.isInteger(error.status) ? error.status : 'error'}).`;
+    if (state.validated) await reportUnrequested({github, context, core, transient, why});
+    else core.info('The reassessment request could not be validated before GitHub failed; no notice is posted for an unvalidated request.');
     throw new Error(`Reassessment ${error instanceof RateLimitHold ? 'held' : 'could not be requested'}: ${why} Re-run this job after that time; contributor tests are not rerun.`);
   }
 }

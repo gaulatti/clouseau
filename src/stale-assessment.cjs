@@ -6,14 +6,16 @@ const CAUSE = 'assessment_predates_confirmation';
 const MARKER = 'clouseau-stale-assessment';
 
 // A gate that re-runs on its own ("Re-run failed jobs") consumes the assessment its run made earlier. When that assessment
-// could not approve and an owner confirmation of this exact head was posted after it was made, the confirmation is not in
+// held for the missing owner confirmation (receipt_protected_controls) and an owner confirmation of this exact head was posted after it was made, the confirmation is not in
 // it: the gate must not decide on it, and only a new assessment may read the confirmation (the gate never reads one into a
 // decision itself). The gate then names the cause and tells the owner, once per head and confirmation, how to recover.
 // `assessed_at` is when the assessment last listed the comments, on GitHub's clock (watchCommentReads), so a confirmation
-// created after it was not in that listing. An approvable assessment is never stale, and one without the stamp (an older engine, or an assessment
+// created after it was not in that listing. Any other decision is never stale, and an assessment without the stamp (an older engine, or one
 // that read no comment) is never checked.
 async function newerConfirmation({github, context, assessment, legacy, number}) {
-  if (typeof assessment.assessed_at !== 'string' || ['auto_approve', 'owner_decision'].includes(assessment.decision)) return null;
+  // Only the hold an owner confirmation resolves: a receipt that changed protected controls without one. Any other hold keeps
+  // its own reason.
+  if (typeof assessment.assessed_at !== 'string' || assessment.decision !== 'review_incomplete' || assessment.cause !== 'receipt_protected_controls') return null;
   const assessedAt = Date.parse(assessment.assessed_at);
   if (!Number.isFinite(assessedAt)) return null;
   const repo = context.repo;

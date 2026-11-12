@@ -324,11 +324,12 @@ is skipped, so confirming intent does not rebuild the container. The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
 GitHub 5xx and short rate-limit failures are retried with the shared transient backoff (every packaged
 step retries its reads; see the upgrade notes).
-A request that still cannot be made is never silent: the pull request gets a
+A request that still cannot be made is never silent: once the engine validated it (an exact-head request by a maintainer), the pull request gets a
 `clouseau-reassessment-unrequested` notice saying the comment was received and how
 to recover (that notice is the only reason for the write access; commenting on a pull request needs both). When the gate is
-re-run on its own ("Re-run failed jobs") with an assessment made before an owner
-confirmation of the same head, it fails with cause `assessment_predates_confirmation`.
+re-run on its own ("Re-run failed jobs") with an assessment that held for that missing confirmation
+(`receipt_protected_controls`) and was made before an owner confirmation of the same head, it fails with cause
+`assessment_predates_confirmation`.
 It posts one notice per head and confirmation asking for **Re-run all jobs**, and it
 never reads the confirmation into a decision itself: only a new assessment does.
 
