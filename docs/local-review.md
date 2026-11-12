@@ -590,11 +590,17 @@ of the merged head with zero AI calls. A receipt that no longer covers the diff 
 
 The owner's `/approve-intent` (and an approving review) names one exact head, under the binding too, unless the protected
 `local_review.confirmation: "diff"` is set as well (it is valid only together with `binding: "diff"`). With it, a
-confirmation of an earlier head (comment or approving review) also counts for the current head when that earlier commit is
-an ancestor of the head, its normalized diff (taken from its merge base with the live base) equals the pull request's
+confirmation of an earlier head (comment or approving review) also counts for the current head when that earlier commit was
+this pull request's: an ancestor of the head, or, after a rebase, a commit that one of the pull request's force pushes
+replaced or produced or an ancestor of one. The engine reads those force pushes itself from the pull request's timeline
+(`HeadRefForcePushedEvent`), never from comment text; more than 100 force pushes, or a commit GitHub no longer has, does
+not carry. In addition, its normalized diff (taken from its merge base with the live base) equals the pull request's
 current diff, and its merge base carries the same `.github/clouseau.json` and purpose contract (`repository_policy`) as the
-live base. A branch update that leaves the change unchanged therefore keeps the confirmation; any push that changes the
-diff, and any base change to the protected configuration or the contract, voids it. A patchless or truncated file list, an
+live base. A merge of the base or a rebase onto it that leaves the change unchanged therefore keeps the confirmation; any push
+that changes the diff (a new commit, or a conflict resolution that alters the branch's own lines), and any base change to
+the protected configuration or the contract, voids it. A base change that edits the lines around the branch's own change
+changes the diff's context lines, so it voids the confirmation too; a change elsewhere in the same file only moves the
+hunk offsets, which the normalized diff ignores. A patchless or truncated file list, an
 unknown commit or another lineage never matches, and any other API failure surfaces. The comment itself stays exactly
 `/approve-intent <sha>`. The recorded authorization names the head it was applied to and, when that differs, the
 `confirmed_sha` it was given for. Without the setting, a confirmation names the exact head, as before. Where the binding applies: `verifySignedRecord` (the head and base comparison),
