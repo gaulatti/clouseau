@@ -33,7 +33,7 @@ function protectedChanges(config, files) {
 function createPolicy(input, {engine = null, codeownersRequired = false, manualMerge = false, privateOwnerAutomatic = false, attested = null} = {}) {
 const config = require('./config.cjs').validateConfig(input);
 if (config.version === 2) {
-  const {local_review, merge_mode, exact_revert, ...legacyConfig} = config;
+  const {local_review, merge_mode, exact_revert, hosted_review, ...legacyConfig} = config;
   // Required verification steps a workflow skipped count only when a fully valid receipt attests the verification (verification-attestation.cjs).
   const attested = (github, repo, pr) => require('./verification-attestation.cjs').receiptAttests({github, repo, pr, config, engine, explain: true});
   const legacy = createPolicy({...legacyConfig, version: 1}, {codeownersRequired: true, manualMerge: merge_mode === 'manual', privateOwnerAutomatic: merge_mode === 'automatic', attested});
@@ -287,7 +287,9 @@ async function reassess({github, context, core, wait, api}) {
     pull_number = numberFor(context);
     pr = (await api(() => readPull(github, repo, pull_number))).data;
     const user = context.eventName === 'issue_comment' ? context.payload.comment.user : {login: context.actor, type: 'User'};
-    if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha)) {
+    // An exact-head `/approve-intent`, or an exact-head `/hosted-review` (the manual hosted review request), may ask for it.
+    if (context.eventName === 'issue_comment' && !intentText(context.payload.comment.body, pr.head.sha) &&
+        String(context.payload.comment.body).trim() !== `/hosted-review ${pr.head.sha}`) {
       throw new Error('Stale or malformed intent confirmation');
     }
     const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
@@ -352,6 +354,18 @@ async function purposeConfirmation(github, repo, pr, comments) {
   if (!['admin', 'maintain', 'write'].includes(data.permission)) return null;
   return {repository: `${repo.owner}/${repo.repo}`, number: pr.number, head_sha: pr.head.sha,
     actor: comment.user.login, permission: data.permission, comment_id: comment.id, ...intentText(comment.body, pr.head.sha)};
+}
+
+// A maintainer's request for the CI AI review of this exact head: a comment `/hosted-review <head sha>` by a real user with
+// write permission or higher, read by the engine itself from the pull request's comments, as `/approve-intent` is. How the
+// run was started never matters; only such a comment does.
+async function hostedReviewRequested(github, repo, pr, comments) {
+  for (const comment of [...comments].reverse()) {
+    if (comment.user?.type !== 'User' || typeof comment.body !== 'string' || comment.body.trim() !== `/hosted-review ${pr.head.sha}`) continue;
+    const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
+    if (['admin', 'maintain', 'write'].includes(data.permission)) return {actor: comment.user.login, comment_id: comment.id, head_sha: pr.head.sha};
+  }
+  return null;
 }
 
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
@@ -735,7 +749,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, hostedReviewRequested, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 
