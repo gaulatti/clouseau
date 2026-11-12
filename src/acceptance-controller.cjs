@@ -188,7 +188,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         configDigest: digest(config), policyDigest: policyDigest()});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;
-      const mode = receiptOnly || config.local_review?.mode === 'required' ? 'required' : 'optional';
+      const mode = receiptOnly || config.local_review?.mode === 'required' ? 'required' : config.hosted_review === 'manual' ? 'manual' : 'optional';
       const ignore = (reason, detail) => {
         receiptRef = null;
         identity.receipt_notice = reason;
@@ -274,6 +274,18 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const exact = config.exact_revert ? await require('./exact-revert.cjs').assess({github, repo, pr, files, comments, technical, legacy,
         config, engine, identity, recordPath, report}) : null;
       if (exact) return exact;
+      // Opt-in (protected top-level `hosted_review: "manual"`): with no usable receipt the CI AI review runs only on a
+      // maintainer's `/hosted-review <head sha>` for this exact head. Without one the pull request is held and no provider is
+      // called; with one the run continues exactly as "automatic" would (on the receipt-only route, with the existing
+      // `local_receipt_unusable`, so the reference workflow's hosted fallback starts). A repository that requires receipts
+      // keeps its own outcome below.
+      if (config.hosted_review === 'manual' && !(receiptOnly || config.local_review?.mode === 'required') &&
+          !await legacy.hostedReviewRequested(github, repo, pr, comments)) {
+        const why = noReceipt();
+        return {...identity, ...why.fields, decision: 'review_incomplete', cause: 'hosted_review_manual',
+          reason: `No local review receipt can be used (${why.sentence}), and this repository runs the CI AI review only on request. ` +
+            `A maintainer requests it for this exact head by commenting \`/hosted-review ${pr.head.sha}\`.`};
+      }
       if (receiptRoute && !receiptOnly) {
         // The receipt-only route is chosen by the workflow when the PR description carries a receipt marker, and it holds no
         // provider credential. Local review is optional here, so the repository does not require a receipt; this run simply

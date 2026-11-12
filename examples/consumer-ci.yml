@@ -440,7 +440,7 @@ jobs:
 
   request-reassessment:
     if: >-
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve-intent ')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/approve-intent ') || startsWith(github.event.comment.body, '/hosted-review '))) ||
       (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.check_author)
     runs-on: ubuntu-latest
     timeout-minutes: 3
