@@ -315,7 +315,9 @@ AI review, and attest no verification.
 
 In CI, `operation: attested` (inputs `config`, `github-token`; output `attested`) answers `'true'` only when the pull request's receipt passes
 every check the assessment applies (signature, enrolled key and author, expiry, exact head and base, engine, signed sources against live
-GitHub) AND attests the accepted base recipe. Anything else (no marker, expired, wrong head, old receipt, an error) is `'false'`. Gate any
+GitHub; under the protected `binding: "diff"` the normalized diff and the live base's recipe instead of the head, base and sources, see
+[binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)) AND attests the accepted base recipe. Anything else (no marker,
+expired, wrong head without that binding, old receipt, an error) is `'false'`. Gate any
 workflow on it in a small job, as `examples/consumer-ci.yml` does:
 
 ```yaml
@@ -392,8 +394,9 @@ receipts until raised separately. A receipt that expires after CI skipped the
 tests on its strength fails the skipped step, naming `receipt_expired` (see above). The first
 [initial-installation](initial-installation.md) authorization deliberately stays
 at one hour, and installation receipts are capped by it. A receipt remains bound
-to the exact head SHA, signed review history and reviewer digest, so a changed
-head invalidates it regardless of age.
+to the exact head SHA (or, under the protected `binding: "diff"`, to its
+normalized diff), signed review history and reviewer digest, so a changed head
+(or diff) invalidates it regardless of age.
 
 Only existing protected configuration can enroll or revoke a key. A contributor
 cannot authorize their own key through the proposed PR. Keys are restricted to
@@ -453,7 +456,8 @@ the requirement text; those inputs must be appropriate for publication there.
 ## Refreshing a pull request after its base moved
 
 Every merge to the base leaves the other open pull requests behind it: GitHub reports `branch update needed`, and each
-receipt, assessment and approval is bound to the old base. `clouseau refresh` does the author's manual routine for one
+assessment and approval is bound to the old base, as is each receipt unless the protected `binding: "diff"` binds it to its
+diff instead ([binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)). `clouseau refresh` does the author's manual routine for one
 pull request, in the pull request's own checkout:
 
 ```bash
@@ -474,7 +478,11 @@ Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`.
 
 1. refuse (see below), then `git fetch origin <base>`; if the pull request already contains the base tip, the receipt in the
    pull request body decides: one that still verifies for this head ends the command with `up_to_date`, any other is
-   [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch);
+   [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch). Under the
+   protected `binding: "diff"`, when the pull request does not contain the base tip and its receipt still covers its diff, the
+   base is merged and the normalized diff recomputed; if it is unchanged the merge is pushed with no review and the command
+   ends with `updated` (see [Binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)); otherwise the steps
+   continue on that merge;
 2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
    `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
 3. run the ordinary local review of the head (`clouseau review`, including its verification) with the answers reused as
@@ -500,9 +508,62 @@ that started the exchange ([pinning](#agent-driven-review-inside-an-ai-harness))
 receives your own `refresh` command, resumes it and finishes it (review, publication, marker, push), and its result is what you
 see. If the pinned engine fails, its error message is shown.
 
+### Binding a receipt to its diff (opt-in)
+
+By default a receipt is bound to the exact head and base commits it reviewed, so every merge to the base voids the receipt of
+every other open pull request. With the protected `local_review.binding: "diff"` in `.github/clouseau.json` on the base branch,
+a receipt is bound to the **change** instead: it covers a pull request when the SHA-256 of the pull request's normalized diff
+equals the SHA-256 of the normalized diff in the signed record (`src/receipt-patch.cjs`). The receipt format does not change:
+the signed record already carries every patch.
+
+The normalized diff is, per changed file in path order, its path, its status and (for a rename) its previous path, and its
+hunks with every hunk header reduced to `@@`, so line numbers and git's trailing section text do not count. Every other byte
+of a hunk counts, context lines and whitespace included. GitHub joins two git hunks that are one unchanged line apart; that
+run of exactly seven context lines between two changes is split back into its two hunks on both sides. A summarized lockfile
+contributes its path and status, and its derived summary is recomputed from the live lockfile bytes and must equal the signed
+one apart from the revision it names.
+
+| | Binding absent | `binding: "diff"` |
+| --- | --- | --- |
+| a different head commit (GitHub's branch update, a merge of the base) | `receipt_revision_head` | covered while the diff is unchanged |
+| a different base commit | `receipt_revision_base` | covered while the diff is unchanged |
+| signed full-file sources compared with the live repository | compared | not compared: the signed record is what was reviewed; each source must still name a signed revision |
+| the repository's contracts (`readme`, `repository_policy`, for example `.github/clouseau.md` and `README.md`) | compared at the signed base, which must be the live base | compared at the **live** base: a base move that changed either voids the receipt (`receipt_source`, naming the file) |
+| lines added above a hunk on the base | `receipt_source` | covered |
+| any change to an added, removed or context line, or to whitespace | `receipt_source` | `receipt_source`, naming the file |
+| a file added, removed or re-statused, another rename | refused | refused, unchanged |
+| a file without a GitHub patch | refused, unless the live sources prove it shows no text | refused, even an empty file or an identical rename: the live sources are not read |
+| signature, enrolled key, author, expiry, repository, protected configuration and policy digests, engine and review semantics, passing decision | bound | bound, unchanged |
+
+The test waiver follows the same binding: `operation: attested` answers `'true'` for a receipt whose diff matches and whose
+signed `.clouseau-local.json` equals the live base's, so the tests are **not** rerun after a base move or an update-branch
+merge. This is deliberate and has a cost: a break caused only by the base move (a semantic conflict between the reviewed change
+and the new base) is found after merge, by the next run on the base. **Accepted limit:** no CI step reruns the attested tests
+of a diff-bound receipt for any base move, including one that changed a file the pull request imports or calls but does not
+edit; only a change to the declared recipe (`.clouseau-local.json`) or to the pull request's own diff makes CI run them. The run-consistency checks that compare the live pull
+request between the assessment and the gate are unchanged; they protect one CI run from a push that lands mid-run.
+
+`clouseau refresh` uses the same decision: under the binding it judges the receipt (including the diff, from the files GitHub
+lists) before merging anything. When it stands, refresh merges the base locally and recomputes the normalized diff: if it
+equals the diff before the merge (the base moved elsewhere, or on lines of a changed file outside every hunk), refresh pushes
+the merge (a plain push, never forced) with no review and no new receipt, and answers `updated`. That keeps the branch strictly
+ahead of the base, which the controller-managed merge requires. Only when the merge changed the diff (the base moved a line
+inside a hunk's context) does refresh review the merged head, as it does without the binding. On an up-to-date branch it answers `up_to_date` whenever CI would accept the receipt. Who
+updates the branch is therefore the author: by `clouseau refresh`, by GitHub's "Update branch" (`gh pr update-branch`), or by a
+plain merge and push; the workflow token cannot, because its push starts no verification. A merge commit that leaves the
+diff unchanged keeps the receipt valid end to end, at the assessment and at the gate (`verifyRecord`, and `verifySources` at
+the gate's write boundary), which `src/acceptance-controller-binding.test.cjs` proves through an assessment and gate approval
+of the merged head with zero AI calls. A receipt that no longer covers the diff is refreshed or renewed as usual.
+
+The owner's `/approve-intent` (and an approving review) still names one exact head under the binding: a branch update
+creates a new head, so a change that needs the owner's confirmation needs it again for the updated head. Where the binding applies: `verifySignedRecord` (the head and base comparison),
+`verifySources` (revisions, sources, contract and verification refs, the lockfile summary, and the diff through `verifyPatches`),
+and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
+`receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
+
 ### Renewing a receipt that no longer verifies
 
-When the base has not moved, `refresh` does not answer `up_to_date` merely because nothing needs merging. It judges the
+When the base has not moved (or, under the diff binding, at any time), `refresh` does not answer `up_to_date` merely because nothing needs merging. It judges the
 `clouseau-local-review:` marker in the pull request body for the unchanged head exactly as CI does: the same screening code
 (`screenReceipt`, with the same signature, author, expiry, repository, head, base, protected configuration and policy, engine
 and review-semantics checks) on the pull request as GitHub reports it now, the protected `.github/clouseau.json` of the fetched
@@ -511,7 +572,7 @@ in the marker or the receipt is trusted before it verifies. A repository whose p
 section has no receipts to judge and keeps the plain `up_to_date`.
 
 - **The receipt verifies**: `up_to_date`, `pushed: false`; nothing is reviewed, published or edited.
-- **It does not** (expired, issued against another base or head, for another repository or author, signed by a key that is not
+- **It does not** (expired, issued against another base or head (without the diff binding) or for another diff, for another repository or author, signed by a key that is not
   enrolled, an engine that is not accepted, a malformed, unreadable or forged marker, more than one marker, or no marker): the
   command prints the cause on stderr (`Renewing the local review receipt of pull request N (cause: receipt_expired): it is expired
   or not yet valid (it expires <instant>)`; the classes are those of [receipt notices](notices.md)) and performs steps 3 to 5 for
@@ -551,8 +612,7 @@ changes any changed file asks every unit again, while one that touches none of t
 
 Limits to expect: a changed requirement text, policy, contract, verification command or engine semantics reuses nothing; a
 verification that fails reuses nothing about its output; the store is not pruned and may be deleted at any time. See
-[base-drift receipts](base-drift-receipts.md) for the separate, unimplemented question of letting CI keep a receipt when
-the base moved.
+[binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in) for letting CI keep a receipt when the base moved.
 
 ## Maintainer attestation of another author's pull request (opt-in)
 
@@ -646,7 +706,8 @@ GitHub also supplies no `patch` for a change that shows no text: an empty file a
 sources prove it (the head source of an added file is empty, the base source of a removed file is empty, or the
 two sides of a rename are equal). A signed `git diff` of such a file is a header without a hunk and equals the absent
 hosted patch. An empty source has no line to cite, so the review accounts for it without a citation, a finding is
-anchored in the next changed file that has a line, and any other missing patch still fails closed.
+anchored in the next changed file that has a line, and any other missing patch still fails closed. A receipt bound
+by `binding: "diff"` never covers a file without a patch, because the live sources that would prove it empty are not read.
 
 Only after actual CI tests and exact coverage pass may the controller emit an
 approval assessment. It revalidates the receipt at the write gate and uses the

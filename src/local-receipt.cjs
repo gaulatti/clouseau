@@ -50,6 +50,9 @@ function validateTrust(trust) {
   // Opt-in, protected: whether a local review whose findings send it to a human is signed ("signed"), so CI holds it for the
   // maintainer instead of reviewing it again. Absent: only a passing review is ever signed.
   requireReceipt(trust.human_review === undefined || trust.human_review === 'signed', 'human_review must be "signed" when set');
+  // Opt-in, protected: what a receipt is bound to. Absent binds the exact head and base commits, as always; "diff" binds the
+  // normalized diff instead (receipt-patch.cjs), which verifySources then requires to equal the pull request's.
+  requireReceipt(trust.binding === undefined || trust.binding === 'diff', 'binding must be "diff" when set');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -193,8 +196,11 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   const changed = 'repository, revisions, policy, configuration or record changed';
   reject(p.record_digest === digest(record) && sha(p.reviewer_sha) && Boolean(snapshot && record.result), changed, 'record');
   reject(snapshot.repository === repository, changed, 'revision_repository');
-  reject(sha(headSha) && snapshot.head_sha === headSha, changed, 'revision_head', {receipt_head: snapshot.head_sha, current_head: headSha});
-  reject(sha(baseSha) && snapshot.base_sha === baseSha, changed, 'revision_base', {receipt_base: snapshot.base_sha, current_base: baseSha});
+  // Under `binding: "diff"` the commits are not the binding: the signed revisions need only be commit ids, and every caller
+  // checks the signed diff against the pull request's (verifySources) before the receipt counts for anything.
+  const commits = trust.binding !== 'diff';
+  reject(commits ? sha(headSha) && snapshot.head_sha === headSha : sha(snapshot.head_sha), changed, 'revision_head', {receipt_head: snapshot.head_sha, current_head: headSha});
+  reject(commits ? sha(baseSha) && snapshot.base_sha === baseSha : sha(snapshot.base_sha), changed, 'revision_base', {receipt_base: snapshot.base_sha, current_base: baseSha});
   reject(snapshot.config_digest === configDigest, changed, 'changed', {changed: 'configuration'});
   reject(snapshot.policy_digest === policyDigest, changed, 'changed', {changed: 'policy'});
   // The engine comparison happens after every identity, trust, challenge and binding check. A different engine is
@@ -293,7 +299,7 @@ async function loadReceipt({github, repo, ref, trust}) {
 
 // A derived dependency summary is never trusted as signed: it is recomputed from the exact base and head
 // lockfile bytes at the live revisions, and must equal the signed source byte for byte.
-async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, files}) {
+async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, files, diff = false}) {
   const live = files.find(item => item.filename === source.path);
   const item = snapshot.files.find(candidate => candidate.path === source.path);
   reject(live && item && item.lockfile === true && isLockfile(source.path) && source.authority === 'derived', 'derived lockfile evidence is not bound to a changed lockfile', 'source');
@@ -308,20 +314,29 @@ async function verifyLockfileSummary({github, repo, pr, snapshot, id, source, fi
     if (error instanceof LockfileError || error.unavailable) reject(false, 'derived lockfile evidence cannot be recomputed', 'source');
     throw error;
   }
-  reject(expected.id === id && digest(expected.source) === digest(source), 'derived lockfile evidence differs from the repository lockfiles', 'source');
+  // Under the diff binding the summary of the live change must equal the signed one; only the revision it names may differ.
+  const same = diff ? digest({...expected.source, ref: null}) === digest({...source, ref: null}) : digest(expected.source) === digest(source);
+  reject(expected.id === id && same, 'derived lockfile evidence differs from the repository lockfiles', 'source');
 }
 
 async function verifySources({github, repo, pr, snapshot, config, files, reviewerSha, installation = null}) {
+  // Under the protected `binding: "diff"` (never for an installation) the receipt is bound to the change: the signed diff must
+  // equal the pull request's, and the signed revisions take the place of the live ones for every revision check below. The
+  // signed full-file sources are then not compared with the live repository; they are the record of what was reviewed. The
+  // repository's own contracts (`readme`, `repository_policy`) are the exception: they are what the change was judged
+  // against, so each must still equal its file at the live base, as the declared recipe must (verification-attestation.cjs).
+  const diff = !installation && config.local_review?.binding === 'diff';
+  const revisions = diff ? {base: snapshot.base_sha, head: snapshot.head_sha} : {base: pr.base.sha, head: pr.head.sha};
   reject(files.length === pr.changed_files && files.length > 0 &&
     digest(files.map(file => file.filename).sort()) === digest(snapshot.paths), 'changed-file inventory differs', 'source');
   reject(snapshot.files.length === files.length && files.every(file => snapshot.files.some(item =>
     item.path === file.filename && item.status === file.status)), 'changed-file status differs', 'source');
-  require('./receipt-patch.cjs').verifyPatches({snapshot, files});
+  require('./receipt-patch.cjs').verifyPatches({snapshot, files, binding: diff ? 'diff' : null});
   reject(snapshot.tickets.length === 0 &&
     snapshot.intent_confirmation === null, 'unsupported mutable prior history or requirements', 'record');
   for (const filename of [config.readme, config.repository_policy]) {
     reject(Object.values(snapshot.sources).some(source => source.path === filename &&
-      source.ref === (installation ? pr.head.sha : pr.base.sha) && source.authority === 'trusted' && source.kind === 'contract'),
+      source.ref === (installation ? pr.head.sha : revisions.base) && source.authority === 'trusted' && source.kind === 'contract'),
     'protected purpose evidence omitted', 'source');
   }
   for (const [id, source] of Object.entries(snapshot.sources)) {
@@ -332,7 +347,7 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       continue;
     }
     if (id === 'verification') {
-      reject(source.authority === 'trusted' && source.kind === 'verification' && source.ref === pr.head.sha,
+      reject(source.authority === 'trusted' && source.kind === 'verification' && source.ref === revisions.head,
         'invalid local execution receipt', 'source');
       continue;
     }
@@ -342,7 +357,7 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       continue;
     }
     if (source.kind === 'lockfile-summary') {
-      await verifyLockfileSummary({github, repo, pr, snapshot, id, source, files});
+      await verifyLockfileSummary({github, repo, pr, snapshot, id, source, files, diff});
       continue;
     }
     if (source.path.startsWith('.clouseau-ci/')) {
@@ -366,11 +381,20 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
       reject(content === source.content, 'signed engine evidence differs from the accepted engine', 'source');
       continue;
     }
-    reject(safePath(source.path) && [pr.base.sha, pr.head.sha].includes(source.ref) &&
+    reject(safePath(source.path) && [revisions.base, revisions.head].includes(source.ref) &&
       ['source', 'contract'].includes(source.kind), 'source outside exact repository revisions', 'source');
-    const contract = (source.ref === pr.base.sha || (installation && source.ref === pr.head.sha)) && [config.readme, config.repository_policy].includes(source.path);
+    const contract = (source.ref === revisions.base || (installation && source.ref === pr.head.sha)) && [config.readme, config.repository_policy].includes(source.path);
     reject(source.authority === (contract ? 'trusted' : 'untrusted') &&
       source.kind === (contract ? 'contract' : 'source'), 'source authority was promoted', 'source');
+    if (diff) {
+      if (contract) {
+        const {data} = await github.rest.repos.getContent({...repo, path: source.path, ref: pr.base.sha});
+        reject(data.type === 'symlink' ? data.target === source.content :
+          data.encoding === 'base64' && Buffer.from(data.content, 'base64').toString('utf8') === source.content,
+        'repository contract changed on the live base', 'source', {file: source.path});
+      }
+      continue;
+    }
     const sourceRepo = source.ref === pr.head.sha ? {owner: pr.head.repo.owner.login, repo: pr.head.repo.name} : repo;
     const {data} = await github.rest.repos.getContent({...sourceRepo, path: source.path, ref: source.ref});
     // The Contents API describes a symlink by its target; `git show` yields the same bytes locally.
@@ -390,7 +414,7 @@ async function verifySources({github, repo, pr, snapshot, config, files, reviewe
     for (const side of ['base', 'head']) {
       if ((side === 'base' && file.status === 'added') || (side === 'head' && file.status === 'removed')) continue;
       const source = snapshot.sources[file[`${side}_source`]];
-      reject(source && source.ref === pr[side].sha &&
+      reject(source && source.ref === revisions[side] &&
         source.path === (side === 'base' ? live.previous_filename || file.path : file.path),
       'changed-file evidence omitted or substituted', 'source');
     }
