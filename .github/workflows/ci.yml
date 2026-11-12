@@ -81,16 +81,59 @@ jobs:
           name: acceptance-evaluation-${{ github.run_id }}-${{ github.run_attempt }}
           path: work/acceptance-evaluation.json
           if-no-files-found: error
+  # Skip the checks a valid local receipt already attests (docs/local-review.md, "Receipt-attested verification"). The decision
+  # runs the frozen engine against the base revision's configuration, never contributor code. Any other outcome, including an
+  # error here, leaves `attested` unset and `verify` runs every check.
+  attested:
+    needs: resolve-clouseau
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      attested: ${{ steps.decide.outputs.attested }}
+    env:
+      CLOUSEAU_ENGINE_SHA: ${{ needs.resolve-clouseau.outputs.sha }}
+      CLOUSEAU_ENGINE_DIGEST: ${{ needs.resolve-clouseau.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+      - name: Check out this run frozen Clouseau engine
+        uses: actions/checkout@v4
+        with:
+          repository: gaulatti/clouseau
+          ref: ${{ needs.resolve-clouseau.outputs.sha || '0000000000000000000000000000000000000000' }}
+          path: .clouseau-ci
+          persist-credentials: false
+      - name: Decide whether a local receipt attests the verification
+        id: decide
+        continue-on-error: true
+        uses: ./.clouseau-ci
+        with:
+          operation: attested
+          config: .github/clouseau.json
+
   verify:
     name: ${{ ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'verify' || 'metadata-only' }}
+    needs: attested
+    # `attested` is skipped outside pull requests (and for an installation push, whose engine is not resolved); verify still runs.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     # The three independent test gates take about 576-590 s on the shared runner; 20 minutes leaves margin.
     timeout-minutes: 20
     steps:
+      # `attested` is 'true' only for a pull request whose receipt attests this exact verification; then the receipt-covered steps
+      # (`verification.steps` in .github/clouseau.json) are skipped, and the gate accepts the skipped steps only because it verifies
+      # the same receipt itself. The engine's own self-tests run in `self-tests` whatever a receipt says.
       - uses: actions/checkout@v4
         if: &verify-code >-
-          (github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')
+          ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) &&
+          needs.attested.outputs.attested != 'true'
         with:
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -121,8 +164,42 @@ jobs:
         run: |
           npm ci --prefix .github/tests --ignore-scripts --no-audit --no-fund
           npm test --prefix .github/tests
+      - name: Retain native verification traces
+        if: >-
+          always() && ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == ''))
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-verification-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .clouseau-work/verification-runs
+          include-hidden-files: true
+          if-no-files-found: warn
+
+  # The engine's own contract self-tests and the review-semantics declarations. No receipt attests these: they run for every
+  # verified revision. This job is not `verification.job`, but the gate requires the whole verification run to succeed
+  # (technicalRun), so a failure here blocks approval like a failure in `verify`.
+  self-tests:
+    name: ${{ ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')) && 'self-tests' || 'metadata-only-self-tests' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        if: &self-test-code >-
+          (github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
+          (github.event_name == 'workflow_dispatch' && inputs.pull_request == '')
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        if: *self-test-code
+        with:
+          node-version: '22'
+      # The declarations are checked against the tree this run verifies (the pull request's merge with its base), so a
+      # declaration left stale by a merge fails here even when a receipt attests every other check (docs/receipt-compatibility.md).
+      - name: Check review-semantics declarations against the verified tree
+        if: *self-test-code
+        run: node scripts/review-compatibility verify
       - name: Build coverage contract fixtures
-        if: *verify-code
+        if: *self-test-code
         shell: bash
         run: |
           node <<'FIXTURES'
@@ -153,14 +230,14 @@ jobs:
           write('multi-gap.json', {version: 2, coverage: parts});
           FIXTURES
       - name: Accept complete application coverage
-        if: *verify-code
+        if: *self-test-code
         uses: ./
         with:
           operation: coverage
           coverage-report: work/full.json
           source-directory: work/application
       - name: Reject a missing branch
-        if: *verify-code
+        if: *self-test-code
         id: gap
         continue-on-error: true
         uses: ./
@@ -169,18 +246,18 @@ jobs:
           coverage-report: work/gap.json
           source-directory: work/application
       - name: Verify rejection is enforced
-        if: *verify-code
+        if: *self-test-code
         env:
           GAP_OUTCOME: ${{ steps.gap.outcome }}
         run: test "$GAP_OUTCOME" = failure
       - name: Accept complete multi-artifact application coverage
-        if: *verify-code
+        if: *self-test-code
         uses: ./
         with:
           operation: coverage
           coverage-config: work/multi-full.json
       - name: Reject an uncovered multi-artifact component
-        if: *verify-code
+        if: *self-test-code
         id: multi-gap
         continue-on-error: true
         uses: ./
@@ -188,20 +265,10 @@ jobs:
           operation: coverage
           coverage-config: work/multi-gap.json
       - name: Verify multi-artifact rejection is enforced
-        if: *verify-code
+        if: *self-test-code
         env:
           MULTI_GAP_OUTCOME: ${{ steps.multi-gap.outcome }}
         run: test "$MULTI_GAP_OUTCOME" = failure
-      - name: Retain native verification traces
-        if: >-
-          always() && ((github.event_name == 'push' && !github.event.deleted) || github.event_name == 'pull_request' ||
-          (github.event_name == 'workflow_dispatch' && inputs.pull_request == ''))
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-verification-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .clouseau-work/verification-runs
-          include-hidden-files: true
-          if-no-files-found: warn
 
   prepare-installation:
     if: &install-event >-
@@ -512,7 +579,7 @@ jobs:
 
   request-reassessment:
     if: >-
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/approve-intent ')) ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/approve-intent ') || startsWith(github.event.comment.body, '/hosted-review '))) ||
       (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.evaluate_acceptance)
     runs-on: ubuntu-latest
     timeout-minutes: 3
