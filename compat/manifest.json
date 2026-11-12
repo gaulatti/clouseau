@@ -55,7 +55,7 @@
     ["src/lockfile-summary.cjs",0,"3fbcfb659cad57fa76dfd3bb5c01a835090046f01d861c86576d222fe1291e9f"],
     ["src/managed-agents.cjs",0,"ce8ebfad6d8d7500418c9584c9d1ab790fd0dd9d3ff4ba41490a2a6930760183"],
     ["src/merge-protection.cjs",0,"cab8eb947b41342f962bf43f209192524f79429d3425843cfea4a1f9356700b7"],
-    ["src/policy.cjs",0,"47a038b86633b9a9bc14e4128cd35a9eb7b2e32385ec8cb810c65975e44b3160"],
+    ["src/policy.cjs",0,"f5eb31d4bfb65d6785708ec02cca41e74759addd5ec74b26cf49c88e1edbe2a4"],
     ["src/pr-refresh.cjs",0,"3643eccedb5130ec349023a8c691925f83601cfa39a60d125c7cbda494aeadb1"],
     ["src/private-owner-merge.cjs",0,"df716445425b9752569ed787c68ea35eec41b62eb0657c7e8aa625bf4dcba637"],
     ["src/provider-key.cjs",0,"6552dfed8407f3d5d35a8fa81aa6597d1bb7520f730e5690fd9ffd1310b18a8f"],
