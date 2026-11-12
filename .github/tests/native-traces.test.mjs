@@ -88,6 +88,7 @@ test('a receipt skips exactly the receipt-covered steps; the self-tests and the 
   const attested = workflow.jobs.attested;
   assert.equal(attested.needs, 'resolve-clouseau');
   assert.equal(attested.if, "${{ !cancelled() && github.event_name == 'pull_request' }}");
+  assert.equal(attested['continue-on-error'], true, 'an error in the decision never fails the run the gate requires');
   assert.equal(attested.steps[0].with.ref, '${{ github.event.pull_request.base.sha }}');
   assert.equal(attested.steps[1].with.repository, 'gaulatti/clouseau');
   const decide = attested.steps.find(step => step.id === 'decide');

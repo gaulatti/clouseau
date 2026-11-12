@@ -87,6 +87,9 @@ jobs:
   attested:
     needs: resolve-clouseau
     if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    # A failure anywhere in this job (a checkout included) must not fail the verification run, which the gate requires to
+    # succeed: it only leaves `attested` unset, and verify then runs every check.
+    continue-on-error: true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
