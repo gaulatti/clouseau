@@ -787,7 +787,9 @@ date and names the approval it waits for. The same revision is never reviewed ag
 resampled. When its receipt expires (`max_age_seconds`, at most 48 hours) before a maintainer approves, CI ignores it and
 reviews the change itself. To sign again, the author commits (an empty commit is enough:
 `git commit --allow-empty -m "chore: request a new review"`) and runs `clouseau review` and `clouseau publish` on the new
-head, or `clouseau refresh --pr N`. The earlier findings carry over: the local finding history passes them to the new
+head, then puts the new marker in the pull request body and pushes. `clouseau refresh --pr N` does not do this for a held
+review: it publishes and pushes only a review that ends in `auto_approve`, and for any other decision it pushes nothing and
+says so. The earlier findings carry over: the local finding history passes them to the new
 review as prior findings, which it must retain with their identity or resolve with current-source evidence. A new review
 that drops one is incomplete and signs nothing. The new review itself is a fresh investigation, so it may also report new
 findings. An approval of the earlier head never carries over: `/approve-intent` names one exact head.
