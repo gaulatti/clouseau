@@ -5,12 +5,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "a051fa9fa1c1c8ffaf2748fd5ca72dcb3f1afcdacfac610fb89c64da232e6452"
-    },
-    {
-      "path": "src/branch-update.cjs",
-      "mode": 0,
-      "sha256": "8eab9240a39fb08e7528fcf2004ccc482845d637b167e6df9af29b0f83c89a14"
+      "sha256": "c04c475bd84ae9f772ec191ca2976476af495ccedcd48562766612ec1f9fad91"
     },
     {
       "path": "src/local-cli.cjs",
