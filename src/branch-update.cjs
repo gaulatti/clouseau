@@ -60,7 +60,9 @@ function baseOnlyMoved(pr, assessment, baseBranch) {
 // `base_update_requested` outcome after an update, else the needs-branch-update notice. Under "hold" or absent this is exactly
 // surface(). A refusal other than HTTP 422 is thrown as it is.
 const UPDATE_CAUSE = 'base_update_requested';
-async function settle({github, updateGithub, repo, pr, assessment, baseBranch, mode}) {
+// `approved`: the gate already submitted its approval of this revision (the private-owner merge boundary, where the base can
+// move after the approval and before the atomic write), so the outcome says so instead of claiming it was never approved.
+async function settle({github, updateGithub, repo, pr, assessment, baseBranch, mode, approved = false}) {
   if (mode !== 'update') return surface({github, repo, pr, assessment, baseBranch});
   if (!updateGithub) return surface({github, repo, pr, assessment, baseBranch, automatic: 'missing'});
   if (pr.head.repo?.full_name !== `${repo.owner}/${repo.repo}`) return surface({github, repo, pr, assessment, baseBranch, automatic: 'fork'});
@@ -72,8 +74,11 @@ async function settle({github, updateGithub, repo, pr, assessment, baseBranch, m
   }
   return Object.assign(new Error(`Branch updated server-side (cause: \`${UPDATE_CAUSE}\`): \`${baseBranch}\` moved after revision ` +
     `\`${assessment.head_sha.slice(0, 12)}\` was assessed, and the protected \`local_review.base_moved\` is \`"update"\`, so Clouseau ` +
-    `merged \`${baseBranch}\` into this pull request branch with the \`update-token\` credential. This revision was neither approved ` +
-    'nor merged; the new head\'s own run continues with verification and then this gate. Nothing needs to be done.'),
+    `merged \`${baseBranch}\` into this pull request branch with the \`update-token\` credential. ` + (approved ?
+    'This revision was approved before the base moved but was not merged; that approval does not carry to the new head, whose own ' +
+    'run continues with verification and then this gate. Nothing needs to be done.' :
+    'This revision was neither approved nor merged; the new head\'s own run continues with verification and then this gate. ' +
+    'Nothing needs to be done.')),
   {code: 'BASE_UPDATE_REQUESTED', cause_code: UPDATE_CAUSE});
 }
 

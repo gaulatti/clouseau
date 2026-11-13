@@ -250,6 +250,9 @@ test('the private-merge boundary applies the same rule: opted in it updates once
       assert.equal(f.state.merged, false, 'nothing merges after the base moved');
       if (updated) {
         assert.equal(error.code, 'BASE_UPDATE_REQUESTED');
+        // At this boundary the gate's approval was already submitted: the outcome says so, never "neither approved nor merged".
+        assert.match(error.message, /This revision was approved before the base moved but was not merged; that approval does not carry to the new head/);
+        assert.doesNotMatch(error.message, /neither approved/);
         assert.deepEqual(f.state.updates.map(item => item.expected_head_sha), [assessment.head_sha]);
         assert.equal(f.notices().length, 0);
         // The updated head, assessed against the moved base, merges by the atomic fast-forward with no further update.
