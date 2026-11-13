@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "d9277e5327e37a1791d9a5978634f34c1421fc753db4cf5421a98e254d930d81"
+    }
+  ]
+}
