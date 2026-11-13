@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const {git, gitContents} = require('./local-git.cjs');
-const {digest, approvalHold} = require('./acceptance.cjs');
+const {digest, approvalHold, FACTORS} = require('./acceptance.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
 const {initializeIdentity, runReview} = require('./local-cli.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
@@ -22,7 +22,7 @@ const installed = () => ({sha: REVIEWER, digest: 'e'.repeat(64), clean: true});
 
 // One harness for single-snapshot and chunked reviews. `gates` edits the gates of every report; `missing(paths)` names the
 // dependencies a report records as missing, given the paths it owns; `seam` is the state every integration answer gives.
-function harness({gates = () => {}, missing = () => [], seam = 'checked'} = {}) {
+function harness({gates = () => {}, missing = () => [], seam = 'checked', finding = false} = {}) {
   let calls = 0;
   return async task => {
     const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
@@ -34,6 +34,16 @@ function harness({gates = () => {}, missing = () => [], seam = 'checked'} = {}) 
       report.coverage.dependencies = absent.map(file => ({path: file, state: 'missing', reason: 'Owned by another unit; not supplied here.'}));
       if (absent.length) report.gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';
       gates(report.gates);
+      // A blocking defect with every gate satisfied: the review is repair_required, which human_review "signed" signs.
+      if (finding && task.role === 'examiner') {
+        const [anchor] = report.accounting[0].evidence;
+        report.findings.push({id: 'fictional-defect', title: 'Fictional defect', anchor,
+          cause: 'The changed path no longer preserves the accepted contract.', trigger: 'A fictional input.', consequence: 'A fictional regression.',
+          obligation: 'Restore the accepted contract.', evidence: [anchor],
+          factors: Object.fromEntries(FACTORS.defect.map(factor => [factor, {evidence: [anchor], reason: 'Established by the cited source.'}])),
+          blast_radius: 1, opportunity: {mechanical: false, beneficial: false, within_scope: false, verified: false},
+          repair_paths: [report.accounting[0].path]});
+      }
       value = {kind: 'report', report, request_sources: []};
     } else if (task.phase === 'integration') {
       value = {dispositions: packet.seams.map(item => ({seam: item.id, state: seam, reason: 'Recorded by the fixture harness.'}))};
@@ -46,13 +56,13 @@ function harness({gates = () => {}, missing = () => [], seam = 'checked'} = {}) 
 
 // A signing setup: an enrolled identity and the protected configuration, optionally chunked. `prepare(directory)` runs on the
 // base before it is committed; `change(directory)` adds to the change after the fixture's own head commit.
-async function signing({chunked, prepare = () => {}, change} = {}, run) {
+async function signing({chunked, humanReview = false, prepare = () => {}, change} = {}, run) {
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-hold-state-'));
   try {
     const identity = initializeIdentity(state, 'fixture-author');
     const config = {...require('../test/fixtures/config.json'), version: 2, repository_policy: 'AGENTS.md', readme: 'README.md',
       acceptance: {examiner: 'deepseek-flash', challenger: 'deepseek-v4-pro', grader: 'routed', grading_model: 'deepseek-flash', repair_attempts: 2},
-      local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity], ...(chunked ? {chunked} : {})}};
+      local_review: {mode: 'required', reviewer_digest: 'e'.repeat(64), max_age_seconds: 3600, keys: [identity.public_identity], ...(chunked ? {chunked} : {}), ...(humanReview ? {binding: 'diff', human_review: 'signed'} : {})}};
     await repository(async f => {
       if (change) {change(f.directory); git(f.directory, ['add', '.']); git(f.directory, ['commit', '-qm', 'feat: add a caller']);}
       const request = path.join(state, 'requirement.txt'); fs.writeFileSync(request, 'Reject missing input.');
@@ -129,6 +139,21 @@ test('a changed production file that no supplied or discovered test imports is n
       files: ['src/handler.js', 'src/new.js']});
     assert.match(stderr, /Local review held \(untested\): CI would refuse this receipt because no supplied or discovered test imports src\/handler\.js, src\/new\.js\./);
   }));
+
+test('under human_review "signed" a review that requires a human is held like a pass: untested, it is never signed', async () => {
+  await signing({humanReview: true, prepare: untested}, async ({state, review}) => {
+    const {value: result} = await quietly(() => review(harness({finding: true})));
+    assert.equal(JSON.parse(fs.readFileSync(result.record)).result.decision, 'repair_required');
+    assert.equal(result.decision, 'review_incomplete'); assert.equal(result.receipt, null); assert.deepEqual(receipts(state), []);
+    assert.equal(result.receipt_hold.rule, 'untested'); assert.deepEqual(result.receipt_hold.files, ['src/handler.js', 'src/new.js']);
+  });
+  // The same review with the base's test in place is signed as a review that requires a human.
+  await signing({humanReview: true}, async ({state, review}) => {
+    const result = await review(harness({finding: true}));
+    assert.equal(result.decision, 'repair_required'); assert.ok(result.receipt); assert.equal(receipts(state).length, 1);
+    assert.equal(result.receipt_hold, undefined);
+  });
+});
 
 test('an unresolved test integrity gate on changed production code is never signed', () =>
   signing({}, async ({state, review}) => {
