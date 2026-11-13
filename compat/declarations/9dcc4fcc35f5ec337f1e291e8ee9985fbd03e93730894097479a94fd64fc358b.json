@@ -30,7 +30,7 @@
     {
       "path": "src/local-receipt.cjs",
       "mode": 0,
-      "sha256": "fc890012d3d6ad7b2b63c3c67a483c894d499553485915255144360c02efa9ee"
+      "sha256": "6ff6c029b213764644ab4e6644e922fae8970c05ecc45626013af35b33855d57"
     },
     {
       "path": "src/policy.cjs",
