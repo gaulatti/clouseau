@@ -56,6 +56,11 @@ function validateTrust(trust) {
   // Opt-in, protected: the owner's confirmation follows the diff too (policy.cjs confirms()); only together with the binding.
   requireReceipt(trust.confirmation === undefined || (trust.confirmation === 'diff' && trust.binding === 'diff'),
     'confirmation must be "diff" when set, and only together with binding "diff"');
+  // Opt-in, protected: what the gate does when only the base moved under the assessed head (branch-update.cjs settle). "hold"
+  // (the meaning when absent) posts the needs-branch-update notice; "update" merges the base server-side with `update-token`.
+  // Only together with the binding, under which a base-only update leaves a receipt standing.
+  requireReceipt(trust.base_moved === undefined || (['hold', 'update'].includes(trust.base_moved) && trust.binding === 'diff'),
+    'base_moved must be "hold" or "update" when set, and only together with binding "diff"');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&

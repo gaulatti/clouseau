@@ -460,6 +460,17 @@ async function hostedReviewRequested(github, repo, pr, comments) {
   return null;
 }
 
+// Whether this revision needs a maintainer's confirmation before it may be approved: a bot-authored pull request, a decision other
+// than auto_approve (once technical verification has finished), or a protected path. The gate and an opted-in base_moved update
+// decide on this one rule.
+async function humanRequirement(github, repo, pr, files, assessment) {
+  const selfAuthored = pr.user?.login === 'github-actions[bot]';
+  const intentPending = assessment.decision === 'pending_technical';
+  const managed = await managedExemptions(github, repo, pr, files);
+  return {selfAuthored, managed,
+    required: selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt, managed.protect))};
+}
+
 async function maintainerConfirmed(github, repo, pr, {reviewOnly = false, ...hold} = {}) {
   const canConfirm = async user => {
     if (!user || user.type !== 'User') return false;
@@ -683,9 +694,8 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     if (assessment.decision === 'blocked_technical' || assessment.decision === 'blocked_integrity') throw new Error(assessment.reason);
     const intentPending = assessment.decision === 'pending_technical';
     if (nativeGate && intentPending) throw new Error('AI assessment must finish after successful verification before the native policy job can pass');
-    const managed = await managedExemptions(github, repo, pr, files);
+    const {managed, required: humanRequired} = await humanRequirement(github, repo, pr, files, assessment);
     for (const notice of managed.notices) core.info(notice);
-    const humanRequired = selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt, managed.protect));
     if (humanRequired && !await maintainerConfirmed(github, repo, pr, {...confirmation, reviewOnly: selfAuthored})) {
       if (!pr.assignees?.some(user => user.login === MANUAL_REVIEWER)) {
         await github.rest.issues.addAssignees({...repo, issue_number: pull_number, assignees: [MANUAL_REVIEWER]});
@@ -855,7 +865,7 @@ async function finalize({github, context, core, assessment = JSON.parse(process.
   }
 }
 
-return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, assessmentResult, purposeConfirmation, maintainerConfirmed, commentConfirms, hostedReviewRequested, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
+return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, finalize, scopeReason, managedExemptions, humanRequirement, assessmentResult, purposeConfirmation, maintainerConfirmed, commentConfirms, hostedReviewRequested, technicalRun, assertProtection, needsDeployment, VERIFY_STEPS, REVIEW_CONTROL_REASON};
 
 }
 
