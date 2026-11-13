@@ -827,9 +827,13 @@ the run summary and engine artifact.
 
 ### Signing a review that requires a human (opt-in)
 
-By default only a passing local review is signed, so CI reviews every other change again to rediscover a verdict that already
-existed. With the protected `local_review.human_review: "signed"` in `.github/clouseau.json` on the base branch, a second
-outcome is signed and CI enforces it instead of repeating it:
+By default only a passing local review is signed. The protected `local_review.human_review` in `.github/clouseau.json` on
+the base branch accepts exactly one value, `"signed"`; any other value (an empty string, `true`, `null`, another word) makes
+the configuration invalid (`human_review must be "signed" when set`). Absent, nothing changes: only a passing review is
+ever signed.
+
+With `"signed"`, `clouseau review` also signs a review whose only blocker is graded findings, and CI enforces it instead of
+repeating it:
 
 | Local result | Signed outcome | CI |
 | --- | --- | --- |
@@ -837,29 +841,32 @@ outcome is signed and CI enforces it instead of repeating it:
 | test integrity violated (`blocked_integrity`) | nothing | nothing to reuse; the author fixes |
 | another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing | nothing to reuse; CI reviews the change itself |
 | an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) | nothing to reuse; CI reviews the change itself |
-| findings at or above the threshold, every gate satisfied (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer confirms the head (`/approve-intent <head sha>` or an approving review). While the signed review has these findings, the confirmation must name the exact head; no earlier confirmation carries |
+| findings at or above the threshold, every gate of both reviews satisfied or inapplicable (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer confirms the exact head (`/approve-intent <head sha>` or an approving review) |
 | a change the fixed rules send to a human (protected review controls, sensitive paths) | the passing review | the same `owner_decision` hold, instead of today's `receipt_protected_controls` |
-| clean | the passing review | approve and merge as today |
+| clean | the passing review, as today | approve and merge as today |
 
-The hold is the existing owner-decision path; there is no second approval mechanism. A maintainer's confirmation of the head
-may clear findings at or above the threshold; it never clears a failed test run, a failed coverage gate, a test-integrity
-violation or any other violated or unresolved gate, which sign nothing and must be fixed. The pull request shows the verdict and its findings from the signed record,
-and CI makes no AI call. A signed non-pass is never acceptable as a pass: every verifier refuses it as `not_passing` unless it
-is the assessment or the gate of a repository with this setting, which turn it into the hold; `operation: attested` never
-accepts it, so CI runs the tests; a claimed `auto_approve` for it is a decision mismatch. `clouseau refresh` treats it as up to
-date and names the approval it waits for. The same revision is never reviewed again, so an unchanged verdict cannot be
-resampled. When its receipt expires (`max_age_seconds`, at most 48 hours) before a maintainer approves, CI ignores it and
-reviews the change itself. To sign again, the author commits (an empty commit is enough:
+`issueReceipt` enforces the same rule as `clouseau review`, so no other caller can sign more. A signed non-pass is never
+acceptable as a pass: every verifier (`verifySignedRecord`, and through it `verifyReceipt` and `screenReceipt`) refuses it as
+`not_passing` unless its caller explicitly asks for it. Four callers ask: `clouseau review`, checking the receipt it has just
+signed, and, only under `"signed"`, `receipt-standing.cjs` for `clouseau refresh` and CI's assessment and gate, which turn it
+into the hold. `operation: attested` never asks, so CI runs the tests; a claimed `auto_approve` for it is a decision
+mismatch. `clouseau refresh` treats it as up to date and names the approval it waits for. `clouseau review` never reviews
+the same revision again once it has a signed review that requires a human; it stops and says so, so an unchanged verdict
+cannot be resampled. To sign again, the author commits (an empty commit is enough:
 `git commit --allow-empty -m "chore: request a new review"`) and runs `clouseau review` and `clouseau publish` on the new
 head, then puts the new marker in the pull request body and pushes. `clouseau refresh --pr N` does not do this for a held
 review: it publishes and pushes only a review that ends in `auto_approve`, and for any other decision it pushes nothing and
-says so. The earlier findings carry over: the local finding history passes them to the new
-review as prior findings, which it must retain with their identity or resolve with current-source evidence. A new review
-that drops one is incomplete and signs nothing. The new review itself is a fresh investigation, so it may also report new
-findings. While the signed review has findings that require a human, a confirmation counts only when it names the exact
+says so. The new review must retain the earlier findings with their identity or resolve them with current-source evidence;
+one that drops a finding is incomplete and signs nothing. It is a fresh investigation, so it may also report new findings.
+
+**CI holds such a receipt for a maintainer.** The hold is the existing owner-decision path; there is no second approval
+mechanism. The pull request shows the verdict and its findings from the signed record, and CI makes no AI call. A
+maintainer's confirmation of the head may clear findings at or above the threshold; it never clears a failed test run, a
+failed coverage gate, a test-integrity violation or any other violated or unresolved gate, which sign nothing and must be
+fixed. While the signed review has findings that require a human, a confirmation counts only when it names the exact
 current head, and nothing carries, whatever `local_review.confirmation` says: not after a merge of the base with the same
-diff, and not after the empty commit that requests a new review. The owner confirms the head whose findings hold the pull
-request. A hold without findings (protected controls or sensitive paths with a passing review) follows the one rule of
+diff, and not after the empty commit that requests a new review. A hold without findings (protected controls or sensitive
+paths with a passing review) follows the one rule of
 [binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in), in two modes:
 - Without the protected `local_review.confirmation: "diff"`, a confirmation names one exact head, so the owner confirms the
   new head again.
@@ -867,11 +874,12 @@ request. A hold without findings (protected controls or sensitive paths with a p
   same and the base's configuration and purpose contract are unchanged. That holds after a merge of the base or a rebase;
   any change to the diff voids it.
 
-While the hold waits, the gate publishes the signed findings in the pull request's acceptance ledger. The run that a
-maintainer's approval starts finds that ledger on the pull request; under this setting a ledger whose findings equal exactly
-what the signed record publishes is that record's own output, so the assessment and the gate accept it and keep the signed
-history in the record. A ledger with any other findings is still a change in history (`receipt_history_changed` at the
-assessment, "Acceptance history changed" at the gate). Without the setting nothing changes: such a review signs nothing.
+When the receipt expires (`max_age_seconds`, at most 48 hours) before a maintainer approves, CI ignores it and reviews the
+change itself. While the hold waits, the gate publishes the signed findings in the pull request's acceptance ledger. The run
+that a maintainer's approval starts finds that ledger on the pull request; under this setting a ledger whose findings equal
+exactly what the signed record publishes is that record's own output, so the assessment and the gate accept it and keep the
+signed history in the record. A ledger with any other findings is still a change in history (`receipt_history_changed` at
+the assessment, "Acceptance history changed" at the gate).
 
 ### A receipt that does not verify is ignored
 

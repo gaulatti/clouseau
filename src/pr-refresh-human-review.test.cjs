@@ -162,7 +162,7 @@ test('under human_review "signed" a review with findings is signed, stands for r
       assert.equal(calls.length, before, 'nothing is reviewed again');
       // The same revision is never reviewed again; the refusal names the two ways forward.
       await assert.rejects(main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked),
-        /signed review that requires a human; it is never reviewed again\. Ask a maintainer for \/approve-intent of this head, or commit \(an empty commit is enough\)/);
+        /signed review that requires a human; it is never reviewed again\. Until its receipt expires, CI holds it for a maintainer's \/approve-intent of this exact head; or commit \(an empty commit is enough\)/);
     }, {ciConfig: config});
   }
 });
