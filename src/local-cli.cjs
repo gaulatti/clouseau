@@ -470,12 +470,13 @@ async function signingHold({directory, record, chunked}) {
 }
 
 // What the reviews recorded as missing (coverage sources and dependencies in state `missing`) and what the controller
-// omitted. A chunked record names the review unit whose report recorded it; a single snapshot names only the role.
+// omitted. A local report always carries both coverage lists (review_manifest_version; acceptance.cjs validates them), and a
+// completeness hold always has at least one row: approvalHold holds it only on something recorded missing or omitted. A chunked record names the review unit whose report recorded it; a single snapshot names only the role.
 function recordedMissing(record, reviews) {
   const {snapshot} = record;
-  const missingOf = report => [...(report.coverage?.sources || []).filter(item => item.state === 'missing')
+  const missingOf = report => [...report.coverage.sources.filter(item => item.state === 'missing')
     .map(item => snapshot.sources[item.source]?.path ?? item.source),
-  ...(report.coverage?.dependencies || []).filter(item => item.state === 'missing').map(item => item.path)];
+  ...report.coverage.dependencies.filter(item => item.state === 'missing').map(item => item.path)];
   const rows = Object.hasOwn(record, 'partition') ?
     record.result.reviews.flatMap(review => review.unit_reports.flatMap(({unit, report}) => missingOf(report).map(file => ({role: review.role, unit, path: file})))) :
     reviews.flatMap(review => missingOf(review.report).map(file => ({role: review.role, path: file})));
@@ -488,7 +489,7 @@ function heldNotice(held) {
     integrity: () => 'test integrity is unresolved',
     untested: () => `no supplied or discovered test imports ${held.files.join(', ')}`,
     completeness: () => `review completeness is unresolved; recorded missing: ${held.missing.map(row =>
-      `${row.path}${row.unit ? ` (unit ${row.unit}, ${row.role})` : row.role ? ` (${row.role})` : ' (omitted)'}`).join(', ') || 'none named'}`,
+      `${row.path}${row.unit ? ` (unit ${row.unit}, ${row.role})` : row.role ? ` (${row.role})` : ' (omitted)'}`).join(', ')}`,
     open_seams: () => `integration left seams open: ${held.seams.map(row => `${row.seam} ${row.state} between units ${row.units.join(' and ')} (${row.role})`).join(', ')}`,
   }[held.rule]();
   return `Local review held (${held.rule}): CI would refuse this receipt because ${named}. No receipt issued; decision review_incomplete.`;
@@ -581,4 +582,4 @@ async function main(argv, runtime = {}) {
   throw new Error(require('./cli-usage.cjs').usage());
 }
 
-module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main};
+module.exports = {recordedMissing, heldNotice, options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main};

@@ -11,7 +11,7 @@ const crypto = require('node:crypto');
 const {git, gitContents} = require('./local-git.cjs');
 const {digest, approvalHold, FACTORS} = require('./acceptance.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
-const {initializeIdentity, runReview} = require('./local-cli.cjs');
+const {initializeIdentity, runReview, recordedMissing, heldNotice} = require('./local-cli.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {supplyTests} = require('./acceptance-sources.cjs');
 const controller = require('./acceptance-controller.cjs');
@@ -248,6 +248,12 @@ test('the git-backed client answers the GitHub shapes supplyTests reads: blob tr
     await assert.rejects(github.rest.repos.getContent({path: 'src/new.js', ref: f.base}), error => error.status === 404, 'absent at that ref');
     await assert.rejects(github.rest.repos.getContent({path: 'src/handler.js', ref: 'f'.repeat(40)}), error => error.status === 404, 'unknown ref');
     await assert.rejects(github.rest.git.getTree({tree_sha: 'f'.repeat(40), recursive: 'true'}), error => error.status === 404);
+    // Any other git failure is not GitHub's 404: a directory that is no repository fails with git's own error.
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-not-a-repository-'));
+    try {
+      await assert.rejects(gitContents(outside).rest.git.getTree({tree_sha: 'HEAD', recursive: 'true'}),
+        error => error.status !== 404 && /not a git repository/i.test(String(error.stderr)));
+    } finally {fs.rmSync(outside, {recursive: true, force: true});}
     assert.deepEqual((await github.rest.repos.getContent({path: 'src', ref: head})).data, [], 'a directory is a listing, as GitHub answers');
     // Above GitHub's 1 MB contents limit the API returns no content; the evidence reader then omits the file by its size.
     fs.writeFileSync(path.join(f.directory, 'large.txt'), 'x'.repeat(1024 * 1024 + 1));
@@ -293,4 +299,17 @@ test('CI receipt hold: the shared rule names and open-seams predicate give exact
   assert.equal(controller.receiptHold, require('./receipt-hold.cjs').receiptHold);
   assert.equal(controller.withDiscovery, require('./receipt-hold.cjs').withDiscovery);
   assert.equal(controller.discoverImporters, require('./receipt-hold.cjs').discoverImporters);
+});
+
+test('a completeness hold on a source the controller omitted names it as omitted, beside what a review recorded missing', () => {
+  const report = missing => ({coverage: {sources: [], dependencies: missing.map(file => ({path: file, state: 'missing'}))}});
+  const record = {snapshot: {sources: {}, omitted_sources: [{path: 'src/large.js', reason: 'would exceed the evidence budget'}]},
+    result: {reviews: []}};
+  const omittedOnly = recordedMissing(record, [{role: 'examiner', report: report([])}]);
+  assert.deepEqual(omittedOnly, [{omitted: true, path: 'src/large.js', reason: 'would exceed the evidence budget'}]);
+  assert.equal(heldNotice({rule: 'completeness', missing: omittedOnly}),
+    'Local review held (completeness): CI would refuse this receipt because review completeness is unresolved; recorded missing: ' +
+    'src/large.js (omitted). No receipt issued; decision review_incomplete.');
+  const both = recordedMissing(record, [{role: 'challenger', report: report(['src/other.js'])}]);
+  assert.match(heldNotice({rule: 'completeness', missing: both}), /recorded missing: src\/other\.js \(challenger\), src\/large\.js \(omitted\)\./);
 });
