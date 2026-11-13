@@ -432,9 +432,17 @@ async function confirms(github, repo, pr, sha) {
   const key = `${repo.owner}/${repo.repo}#${pr.number}:${pr.base.sha}:${pr.head.sha}:${sha}`;
   // A failed comparison is not kept: the next call (a rate-limit retry) compares again.
   if (!confirmations.has(key)) confirmations.set(key, (async () => {
-    const {canonicalHunks, diffDigest} = require('./receipt-patch.cjs');
-    const normalized = files => files.length === 0 || files.length >= 300 || files.some(file => typeof file.patch !== 'string' || !file.patch) ? null :
-      diffDigest(files.map(file => ({path: file.filename, status: file.status, previous: file.status === 'renamed' ? file.previous_filename : null, patch: canonicalHunks(file.patch)})));
+    const {canonicalHunks, diffDigest, splitDeclarations} = require('./receipt-patch.cjs');
+    // Compatibility declarations compare by their meaning (verdict and covered files), exactly as the receipt binding compares
+    // them (receipt-patch.cjs splitDeclarations): a re-declaration after a base merge that keeps every verdict carries the
+    // confirmation as it carries the receipt; a changed verdict or a newly declared file does not. Every other file compares
+    // byte for byte, as before.
+    const normalized = files => {
+      if (files.length === 0 || files.length >= 300 || files.some(file => typeof file.patch !== 'string' || !file.patch)) return null;
+      const {meanings, others} = splitDeclarations(files.map(file => ({file, path: file.filename, status: file.status, patch: file.patch})));
+      return JSON.stringify([meanings, diffDigest(others.map(({file}) => ({path: file.filename, status: file.status,
+        previous: file.status === 'renamed' ? file.previous_filename : null, patch: canonicalHunks(file.patch)})))]);
+    };
     const compare = async (base, head) => {
       try {return (await github.rest.repos.compareCommits({...repo, base, head})).data;}
       catch (error) {if (error.status === 404 || error.status === 422) return null; throw error;}

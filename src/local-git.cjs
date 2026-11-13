@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
 const {digest, patchOf} = require('./acceptance.cjs');
-const {safePath, refresh, evidenceSize, BUDGET, UNBOUNDED} = require('./acceptance-sources.cjs');
+const {safePath, refresh, evidenceSize, omitSource, admitWithinBudget, BUDGET, UNBOUNDED} = require('./acceptance-sources.cjs');
 
 // Room kept free of the optional engine seed for sources a reviewer asks for later.
 const SEED_RESERVE = 150000;
@@ -169,11 +169,16 @@ function collectLocal({directory, base, request, technical, ciConfig = null, rev
     for (const filename of paths) {
       // Absence is evidence: a requested path missing at the head is recorded as an omitted source, exactly as the
       // hosted review records a 404, so the signed snapshot states it and the check of a receipt recomputes it.
-      try { source(filename, head); } catch (error) {
+      const present = new Set(Object.keys(snapshot.sources));
+      let id;
+      try { id = source(filename, head); } catch (error) {
         if (!(error instanceof SourceNotFound)) throw error;
-        snapshot.omitted_sources = [...(snapshot.omitted_sources || []).filter(item => item.path !== filename),
-          {path: filename, reason: 'not found at the head revision'}];
+        omitSource(snapshot, filename, 'not found at the head revision');
+        continue;
       }
+      // A requested source that would take the evidence past its budget is omitted with the hosted review's reason, by the
+      // same rule (acceptance-sources.cjs admitWithinBudget), never a failed review: the reviewer records it as missing.
+      if (!present.has(id)) admitWithinBudget(snapshot, id, filename, cap);
     }
     refresh(snapshot, cap);
   };

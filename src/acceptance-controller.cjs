@@ -119,7 +119,9 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
   const derived = decided(result, record.controls || Boolean(record.local_authorization));
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
-  return {state, ...publication({...result, decision: assessment.decision},
+  // A record carried by a local receipt may find on the pull request the ledger the gate published from it on an earlier run
+  // (a hold for owner confirmation, a base move): the write boundary accepts exactly that ledger and no other.
+  return {state, ownLedger: Boolean(record.local_receipt), ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
@@ -244,7 +246,14 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             '(AGENTS.md, CI workflow or configuration, the repository policy or another configured sensitive path); ' +
             'the exact-head owner confirmation is missing.');
         }
-        if (digest(previous.findings) !== digest(verified.record.previous.findings)) {
+        // The gate publishes this receipt's findings on its first run, before an owner confirmation or a base update lets a
+        // later run finish. A ledger whose findings equal exactly what this signed record reconciles to is that publication,
+        // not a change; any other history still voids the receipt. The record keeps the signed history either way, so the gate
+        // re-derives exactly the ledger it already published.
+        const own = digest(previous.findings) === digest(reconcile({...verified.record.result, reviews: verified.reviews},
+          verified.record.snapshot, verified.record.previous.findings).findings);
+        const recorded = own ? {...previous, findings: verified.record.previous.findings} : previous;
+        if (digest(previous.findings) !== digest(verified.record.previous.findings) && !own) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
         }
         // A maintainer-attested receipt (an enrolled maintainer reviewed another author's pull request) is named as such.
@@ -256,13 +265,13 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           return {...identity, ...technicalBlock, review_source: attested ? 'maintainer_attested' : 'authenticated_local', provider_api_calls: 0,
             reason: `${kind} local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
-        const record = localRecord(verified.record, {engine, authorization, previous, technical, author: pr.user.login,
+        const record = localRecord(verified.record, {engine, authorization, previous: recorded, technical, author: pr.user.login,
           artifact: receiptRef, bundle, discovery});
         // The signed bundle already lives at an immutable reference. Transport
         // only the run-specific facts; the write boundary rehydrates and
         // independently re-verifies the complete record from that reference.
         const compact = {version: 2, local_receipt_reference: true, local_artifact: receiptRef,
-          local_author: pr.user.login, previous, technical, discovery, ...(engine ? {engine} : {}),
+          local_author: pr.user.login, previous: recorded, technical, discovery, ...(engine ? {engine} : {}),
           ...(authorization ? {local_authorization: authorization} : {})};
         fs.writeFileSync(recordPath, JSON.stringify(compact, null, 2) + '\n');
         if (report) report(`${kind} local Clouseau review verified.${signedBy} CI AI calls: 0.`);
@@ -443,7 +452,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
-    if (digest(current) !== digest(record.previous)) throw new Error('Acceptance history changed; reassess the current record');
+    // The ledger this record's own receipt published on an earlier run is not a change in history (verifyRecord, ownLedger).
+    const ownLedger = verifiedRecord.ownLedger && digest(current.findings) === digest(verifiedRecord.state.findings);
+    if (digest(current) !== digest(record.previous) && !ownLedger) throw new Error('Acceptance history changed; reassess the current record');
     const links = [];
     for (const [index, page] of pages.entries()) {
       const marker = page.split('\n')[0];
