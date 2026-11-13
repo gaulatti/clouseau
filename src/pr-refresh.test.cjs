@@ -1,4 +1,5 @@
 'use strict';
+const {everyOptional} = require('../test/local-optional-keys.cjs');
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -631,4 +632,90 @@ test('through the command, a receipt is renewed unless it verifies for this head
     await assert.rejects(main(['publish', '--directory', f.work, '--receipt', resignedFile], runtime(f)), /already exists with other content; nothing was published/);
     assert.ok(fs.existsSync(path.join(cacheDirectory, 'request.txt')), 'the stored requirement stayed with the retired evidence');
   }, {ciConfig: config});
+});
+
+// `clouseau review --reuse outcome`: reviewer answers keyed by the verification outcome, read by a plain review.
+test('under --reuse outcome a re-review after main added code elsewhere asks no reviewer; a touched path, a new commit or no flag asks again', async t => {
+  const {config, calls, runtime} = signedFixture(t);
+  await pullRepository(async f => {
+    // Coverage counters that grow with the code, as a real report's do, while coverage stays complete.
+    const lines = () => fs.readdirSync(path.join(f.work, 'src')).reduce((n, name) => n + fs.readFileSync(path.join(f.work, 'src', name), 'utf8').split('\n').length, 0);
+    const run = {...runtime(f), attest: ({technical}) => technical,
+      verify: () => ({fixture_execution_only: true, exact_coverage: {lines: [lines(), lines()], branches: [2, 2]}})};
+    const review = (...extra) => main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', request(f.root), '--harness', 'claude', ...extra], run);
+    const sync = () => {git(f.work, ['fetch', '-q', 'origin']); git(f.work, ['merge', '-q', '--no-edit', 'origin/main']); f.pull.head = f.head();};
+    const claim = result => JSON.parse(fs.readFileSync(result.receipt, 'utf8')).payload.review_reuse;
+    const first = await review('--reuse', 'outcome');
+    assert.equal(first.decision, 'auto_approve');
+    const firstCalls = calls.length; assert.ok(firstCalls >= 2);
+    assert.deepEqual(claim(first), {mode: 'outcome', reused: 0, fresh: firstCalls});
+    // Main added code in a file the pull request does not touch: the counters moved, the outcome did not. Nothing is asked.
+    f.advance('src/added.js', 'module.exports = 3;\nmodule.exports.b = 4;\n'); sync();
+    const second = await review('--reuse', 'outcome');
+    assert.equal(second.decision, 'auto_approve'); assert.equal(calls.length, firstCalls, 'no reviewer was asked');
+    assert.equal(second.reused_calls, firstCalls); assert.equal(second.harness_invocations, 0);
+    assert.deepEqual(claim(second), {mode: 'outcome', reused: firstCalls, fresh: 0});
+    // Without the flag a review never reads stored answers, as before, and its receipt carries no claim.
+    f.advance('src/added2.js', 'module.exports = 5;\n'); sync();
+    let asked = calls.length;
+    const off = await review();
+    assert.equal(off.reused_calls, 0); assert.ok(calls.length > asked); assert.equal(claim(off), undefined);
+    // Main changed a path the pull request changes: its base text and history moved, so the reviewers are asked again.
+    f.advance('src/handler.js', handler('Boolean(input)', 'moved on main')); sync();
+    asked = calls.length;
+    const touched = await review('--reuse', 'outcome');
+    assert.ok(calls.length > asked, 'a touched path is reviewed again'); assert.ok(claim(touched).fresh > 0);
+    // A new commit on the branch changes the diff: asked again.
+    f.write(f.work, 'src/new.js', 'module.exports = 2;\n'); f.commit(f.work, 'fix: change the pull request itself'); f.pull.head = f.head();
+    asked = calls.length;
+    const changed = await review('--reuse', 'outcome');
+    assert.ok(calls.length > asked, 'a changed diff is reviewed again'); assert.ok(claim(changed).fresh > 0);
+    // Only "outcome" is accepted.
+    await assert.rejects(review('--reuse', 'exact'), /--reuse accepts only "outcome"/);
+  }, {ciConfig: config});
+});
+
+test('the base\'s .clouseau-local.json "review_reuse": "outcome" opts every review in without the flag', async t => {
+  const {config, calls, runtime} = signedFixture(t);
+  const local = {version: 1, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['node', '--version']],
+    coverage: {format: 'istanbul', report: 'coverage.json', source_directory: 'src'}, review_reuse: 'outcome'};
+  await pullRepository(async f => {
+    const lines = () => fs.readdirSync(path.join(f.work, 'src')).reduce((n, name) => n + fs.readFileSync(path.join(f.work, 'src', name), 'utf8').split('\n').length, 0);
+    const run = {...runtime(f), attest: ({technical}) => technical,
+      verify: () => ({fixture_execution_only: true, exact_coverage: {lines: [lines(), lines()], branches: [2, 2]}})};
+    const review = () => main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', request(f.root), '--harness', 'claude'], run);
+    const first = await review();
+    assert.equal(first.decision, 'auto_approve');
+    const firstCalls = calls.length;
+    f.advance('src/added.js', 'module.exports = 3;\n');
+    git(f.work, ['fetch', '-q', 'origin']); git(f.work, ['merge', '-q', '--no-edit', 'origin/main']); f.pull.head = f.head();
+    const second = await review();
+    assert.equal(calls.length, firstCalls); assert.equal(second.reused_calls, firstCalls);
+    assert.deepEqual(JSON.parse(fs.readFileSync(second.receipt, 'utf8')).payload.review_reuse, {mode: 'outcome', reused: firstCalls, fresh: 0});
+  }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
+});
+
+test('a version 2 base .clouseau-local.json with every documented optional field is read by review and refresh, and review_reuse opts every review in', async t => {
+  const {config, calls, runtime} = signedFixture(t);
+  // The strict version 2 top-level allowlist must admit the documented optional field, or every review refuses the recipe.
+  const local = {version: 2, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['node', '--version']],
+    coverage: [{format: 'istanbul', report: 'coverage.json', source_directory: 'src'}], ...everyOptional()};
+  await pullRepository(async f => {
+    const lines = () => fs.readdirSync(path.join(f.work, 'src')).reduce((n, name) => n + fs.readFileSync(path.join(f.work, 'src', name), 'utf8').split('\n').length, 0);
+    const run = {...runtime(f), attest: ({technical}) => technical,
+      verify: () => ({fixture_execution_only: true, exact_coverage: {lines: [lines(), lines()], branches: [2, 2]}})};
+    const review = () => main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', request(f.root), '--harness', 'claude'], run);
+    const first = await review();
+    assert.equal(first.decision, 'auto_approve');
+    const firstCalls = calls.length;
+    f.advance('src/added.js', 'module.exports = 3;\n');
+    git(f.work, ['fetch', '-q', 'origin']); git(f.work, ['merge', '-q', '--no-edit', 'origin/main']); f.pull.head = f.head();
+    const second = await review();
+    assert.equal(calls.length, firstCalls); assert.equal(second.reused_calls, firstCalls);
+    assert.deepEqual(JSON.parse(fs.readFileSync(second.receipt, 'utf8')).payload.review_reuse, {mode: 'outcome', reused: firstCalls, fresh: 0});
+    // `clouseau refresh` reads the same base recipe: a base move is merged, reviewed from the stored answers and published.
+    f.advance('docs.md', 'moved\n');
+    const refreshed = await main(['refresh', '--pr', '7', '--directory', f.work, '--request-file', request(f.root), '--harness', 'claude'], run);
+    assert.equal(refreshed.status, 'refreshed'); assert.equal(refreshed.harness_invocations, 0); assert.equal(f.remoteHead(), f.head());
+  }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
 });

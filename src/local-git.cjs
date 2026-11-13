@@ -38,6 +38,8 @@ function readLocalConfig(value) {
     throw new Error('Invalid local-only Clouseau configuration');
   }
   coverageParts(value, {allowUnsupported: true});
+  // Opt-in: `clouseau review` reads stored reviewer answers, keyed by the verification outcome (review-reuse.cjs).
+  if (Object.hasOwn(value, 'review_reuse') && value.review_reuse !== 'outcome') throw new Error('Invalid local-only Clouseau configuration: review_reuse must be "outcome" when set');
   return value;
 }
 

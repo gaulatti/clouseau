@@ -53,7 +53,7 @@ inputs:
     description: TypeSafe API key; supply only to the read-only assessment or acceptance qualification that uses Jev grading
     default: ''
   update-token:
-    description: Independent GitHub credential whose push starts normal workflows; supply only to reconcile-base (optional, otherwise PRs receive a notice)
+    description: Independent GitHub credential whose push starts normal workflows (contents write); supply only to reconcile-base and gate (optional, otherwise PRs receive a notice; the gate uses it only under the protected local_review.base_moved "update")
     default: ''
   repair-token:
     description: Independent GitHub author token for bounded repairs; supply only to the separate repair job
@@ -273,6 +273,7 @@ runs:
         PR_NUMBER: ${{ inputs.pull-request }}
         ASSESSMENT: ${{ inputs.assessment }}
         CLOUSEAU_NATIVE_GATE: ${{ inputs.native-gate }}
+        CLOUSEAU_UPDATE_TOKEN: ${{ inputs.update-token }}
         CLOUSEAU_RECORD_TRANSPORT: ${{ inputs.record-transport }}
         CLOUSEAU_RECORD_PART_0: ${{ fromJSON(inputs.review-record || '["","","",""]')[0] || '' }}
         CLOUSEAU_RECORD_PART_1: ${{ fromJSON(inputs.review-record || '["","","",""]')[1] || '' }}
@@ -300,7 +301,8 @@ runs:
           transport.receive({mode, payload, assessment: JSON.parse(process.env.ASSESSMENT),
             context, runAttempt: process.env.GITHUB_RUN_ATTEMPT});
 
-          await policy.gate({github, context, core, nativeGate: process.env.CLOUSEAU_NATIVE_GATE === 'true'});
+          const updateGithub = process.env.CLOUSEAU_UPDATE_TOKEN ? new github.constructor({auth: process.env.CLOUSEAU_UPDATE_TOKEN}) : null;
+          await policy.gate({github, context, core, nativeGate: process.env.CLOUSEAU_NATIVE_GATE === 'true', updateGithub});
     - name: Apply bounded repair with an independent author
       if: inputs.operation == 'repair'
       uses: actions/github-script@v7
@@ -406,7 +408,8 @@ runs:
           const root = process.env.CLOUSEAU_ROOT;
           const config = require(path.join(root, 'src/config.cjs')).loadConfig(process.env.CLOUSEAU_CONFIG);
           const updateGithub = process.env.CLOUSEAU_UPDATE_TOKEN ? new github.constructor({auth: process.env.CLOUSEAU_UPDATE_TOKEN}) : null;
-          await require(path.join(root, 'src/base-reconcile.cjs')).reconcileBase({github, updateGithub, context, core, baseBranch: config.base_branch});
+          await require(path.join(root, 'src/base-reconcile.cjs')).reconcileBase({github, updateGithub, context, core, baseBranch: config.base_branch,
+            baseMoved: config.local_review?.base_moved});
     - name: Finalize merged revision and preserve deployment handoff
       if: inputs.operation == 'finalize'
       uses: actions/github-script@v7

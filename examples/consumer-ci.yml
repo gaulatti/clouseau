@@ -6,7 +6,7 @@
 # replace @main with a tag, another branch or a fork. The job named "verify" and its
 # step names must match "verification" in .github/clouseau.json; adapt the install and
 # test steps to your stack. Secrets (all optional, see docs/quickstart.md):
-# DEEPSEEK_API_KEY, TYPESAFE_API_KEY, CLOUSEAU_REPAIR_TOKEN.
+# DEEPSEEK_API_KEY, TYPESAFE_API_KEY, CLOUSEAU_REPAIR_TOKEN (the repair author; the gate's update-token too).
 name: CI
 run-name: >-
   ${{ github.event_name == 'pull_request' && format('Verify PR #{0}', github.event.pull_request.number) ||
@@ -370,6 +370,9 @@ jobs:
           pull-request: ${{ needs.assess-intent.outputs.number }}
           native-gate: 'true'
           assessment: ${{ needs.assess-hosted.outputs.assessment || needs.assess-intent.outputs.assessment }}
+          # The same secret as repair-token. Used only under the protected local_review.base_moved "update" (docs/local-review.md),
+          # to merge a moved base into the branch server-side; without that setting the gate never reads it.
+          update-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}
 
   apply-repair:
     needs: [assess-intent, assess-hosted, approve-and-merge, resolve-clouseau]

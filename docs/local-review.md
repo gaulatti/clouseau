@@ -101,9 +101,13 @@ roots. Its `coverage` field is a nonempty array with at most 32 explicit parts:
 ```
 
 Only the six documented top-level fields are accepted in version 2: `version`,
-`base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
-Misspelled or additional policy fields fail before local command execution and
-at the CI data entrypoint. Each coverage part likewise accepts only its three
+`base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`, plus the documented optional fields
+(`OPTIONAL_LOCAL_KEYS` in `src/coverage-plan.cjs`): today only [`review_reuse`](#reusing-answers-in-clouseau-review-opt-in),
+which both versions accept. Every reader of the file checks against that one list: `readLocalConfig` (local review,
+refresh and installation), `coverageParts` (strict in CI's attestation, lenient locally) and the coverage gate's own recipe
+reader, which `plan`, `totals-plan`, `changed-plan` and `declared-plan` use on the base branch's file in consumer CI.
+Misspelled or additional policy fields fail before local command execution and at the CI data entrypoint (the gate says
+`Unknown version 2 coverage recipe field`). Each coverage part likewise accepts only its three
 documented fields, plus the optional `package_directory` that only [declared coverage](declared-coverage.md#monorepos-one-declaration-per-part) reads and, for `lcov` parts only, the optional `source_suffixes` list. Version 1 keeps its existing compatibility behavior.
 
 Adapt commands to the repository's real test suite. The runner passes argument
@@ -608,6 +612,47 @@ unknown commit or another lineage never matches, and any other API failure surfa
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
 
+### Base moved: hold or update (opt-in)
+
+When the base moves after a pull request was assessed and only the base differs (the live head is still the assessed head), the
+gate stops. The protected `local_review.base_moved` in `.github/clouseau.json` on the base branch says what it does then. It is
+valid only together with `binding: "diff"` (any other combination, or a value other than these two, fails configuration
+validation, like `confirmation`):
+
+| `base_moved` | The gate, after a base-only move |
+| --- | --- |
+| absent or `"hold"` (the default) | posts the `base_moved` needs-branch-update notice and fails, exactly as before; the owner updates the branch |
+| `"update"` | for an approved revision (a decision of `auto_approve` or `owner_decision` and, where the gate requires a maintainer's confirmation: the owner decision itself, a protected path or a bot-authored pull request, that confirmation of this head), merges the base into the branch server-side (`updateBranch` with `expected_head_sha`), posts no notice, and ends the job with cause `base_update_requested` (`Branch updated server-side ...`): this revision is neither approved nor merged, and the new head's own run continues. Anything else (another decision, or a confirmation still outstanding) posts the notice and fails, as under `"hold"`: Clouseau never merges the base into a branch that is not yet approved |
+
+The update needs the gate step's `update-token` input: a token whose push **starts workflows**, with contents: write on the
+repository (a fine-grained PAT or an App token, like `repair-token`; the reference template passes the same
+`CLOUSEAU_REPAIR_TOKEN` secret to both). When the base brings changes to `.github/workflows/`, GitHub also requires workflows
+permission (workflows: write for a fine-grained token or App, the `workflow` scope for a classic token). Without it GitHub
+refuses the update and the gate fails with that refusal, updating nothing. The workflow `GITHUB_TOKEN` cannot be used: a push made with it starts no workflow, so
+the new head would have no verification. Without `update-token` the gate holds as under `"hold"`, and the notice says to set
+the `update-token` input of the gate step. A head in a fork is never updated (the notice says so). When GitHub refuses with
+HTTP 422 (a merge conflict with the base, or a head that moved) the gate falls back to the notice, which says so and asks the
+owner to update by hand; any other refusal fails the job with GitHub's error. Under `"update"`, `reconcile-base` also updates
+**every** stale same-repository pull request in one run instead of one at a time, because under the diff binding a base-only
+update needs no fresh review; under `"hold"` it is unchanged. A repository that does not set `base_moved` is unaffected even
+when the token is supplied.
+
+**What runs on the updated head.** The new head's own `pull_request` run. Its `attested` job answers `'true'` while the
+diff-bound receipt still attests (the diff is unchanged and the base's `.clouseau-local.json` is the signed one), so `verify`
+skips every receipt-covered step; only steps outside the receipt's recipe still run (none in the reference template; this
+repository's own engine self-tests, for example). Then the assessment reuses the receipt with zero CI AI calls: no reviewer is
+asked, and under `confirmation: "diff"` the owner's confirmation carries. The receipt-covered commands are **not** re-run on
+the base merged with the branch. This is the same outcome as `clouseau refresh` answering `updated` today, with the same
+accepted limit (see the test waiver above): a break caused only by the base move is found after merge. When the merge changed
+the diff, the receipt no longer covers it and the new head is verified and reviewed as any new head.
+
+**Loop bound.** The update is requested only when the live head equals the assessed head and only the base moved, and
+`expected_head_sha` makes GitHub refuse if the head moved meanwhile. A rerun of the old head's gate sees the new head, so it
+is not a base-only move and requests nothing: the same (head, base) is updated at most once. The new head's assessment carries
+the new base, so it requests another update only if the base moves again. Updating a branch never moves the base, so two pull
+requests cannot update each other. `src/acceptance-controller-base-moved.test.cjs` and `src/base-reconcile-base-moved.test.cjs`
+prove these at the gate (both base-move checks, including the private-merge boundary) and at reconciliation.
+
 ### Renewing a receipt that no longer verifies
 
 When the base has not moved (or, under the diff binding, at any time), `refresh` does not answer `up_to_date` merely because nothing needs merging. It judges the
@@ -641,7 +686,7 @@ never overwritten.
 
 A review asks the harness one question at a time (each unit investigation, each integration pass, each grading round). A review
 that ends `auto_approve` remembers every answer in `~/.local/share/clouseau/unit-reuse/`, under the digest of the question's
-complete input. `refresh` (and only `refresh`) lets a question take a remembered answer instead of asking again, when its input
+complete input. `refresh` (and `clouseau review` under the opt-in outcome keying below) lets a question take a remembered answer instead of asking again, when its input
 is **byte-identical** to the remembered one except for the values that name the revision rather than describe it. The input
 covers the policy and stage text, the schema, role and phase, every changed patch, every base and head source, every
 source that was requested or linked, the change manifest and seams, the requirement, the prior findings, the verification
@@ -660,6 +705,33 @@ changes any changed file asks every unit again, while one that touches none of t
 Limits to expect: a changed requirement text, policy, contract, verification command or engine semantics reuses nothing; a
 verification that fails reuses nothing about its output; the store is not pruned and may be deleted at any time. See
 [binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in) for letting CI keep a receipt when the base moved.
+
+### Reusing answers in `clouseau review` (opt-in)
+
+By default only `refresh` reads the store, and the coverage counters of the verification record are part of every key. A
+base that added code anywhere changes those counters, so a later review after merging it asks every question again even
+when nothing the reviewers judge has changed.
+
+Two equivalent switches opt a review in to **outcome keying**:
+- `clouseau review --reuse outcome`, for one run;
+- `"review_reuse": "outcome"` in `.clouseau-local.json`, read from the base like the rest of that file, for every review
+  and refresh. It is a protected control.
+`--reuse` and the field accept only `"outcome"`; anything else is refused. With either switch:
+
+- `clouseau review` reads the store as `refresh` does.
+- Exact coverage that is complete (every line and branch counter covered) is keyed as `complete`, not by its counts.
+  Coverage that is not complete keeps its counters in the key, as does every byte of a failed command.
+- Everything else in the key is unchanged. A base move that touches a changed file (its base text or its recent history),
+  a new commit on the branch, a changed requirement, policy, contract, configuration or engine semantics, still asks
+  again. Outcome keys name their keying, so an answer stored under one keying is never read under the other.
+- Verification always runs again on the reviewed tree; only the reviewers' answers are reused, and each still passes the
+  same check against the new snapshot.
+- The signed receipt carries the claim `"review_reuse": {"mode": "outcome", "reused": N, "fresh": M}`: how many reviewer
+  calls were taken from the store and how many were asked. A receipt without the claim was made without outcome keying.
+  CI accepts only that exact shape.
+
+What it gives up: the reviewers no longer see a change in the coverage counts as evidence while coverage stays complete.
+The verdict they judge (all commands passed, coverage exact) is the same either way.
 
 ## Maintainer attestation of another author's pull request (opt-in)
 
@@ -795,6 +867,37 @@ reviewer digest. A receipt produced by an older engine revision than the protect
 main CI resolved is one more receipt that does not verify (class `engine`, below).
 Refresh and review again to reuse the local review. The selected commit and digest are in
 the run summary and engine artifact.
+
+### Signing a review that requires a human (opt-in)
+
+By default only a passing local review is signed. The protected `local_review.human_review` in `.github/clouseau.json` on
+the base branch accepts exactly one value, `"signed"`; any other value (an empty string, `true`, `null`, another word) makes
+the configuration invalid (`human_review must be "signed" when set`). Absent, nothing changes: only a passing review is
+ever signed.
+
+With `"signed"`, `clouseau review` also signs a review whose only blocker is graded findings:
+
+| Local result | Signed outcome |
+| --- | --- |
+| tests or the coverage gate fail | nothing (no review is run) |
+| test integrity violated (`blocked_integrity`) | nothing |
+| another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing |
+| an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) |
+| findings at or above the threshold, every gate of both reviews satisfied or inapplicable (`repair_required`) | the review, signed with its findings |
+| clean | the passing review, as today |
+
+`issueReceipt` enforces the same rule as `clouseau review`, so no other caller can sign more. A signed non-pass is never
+acceptable as a pass: every verifier (`verifySignedRecord`, and through it `verifyReceipt` and `screenReceipt`) refuses it as
+`not_passing` unless its caller explicitly asks for it, and today only `clouseau review`, checking the receipt it has just
+signed, asks. `clouseau review` never reviews the same revision again once it has a signed review that requires a human;
+it stops and says so. To sign again, the author commits (an empty commit is enough) and reviews the new head, which must
+retain or resolve the earlier findings.
+
+**Until CI holds such a receipt for a maintainer, the setting is dark and fails closed.** CI does not ask for the signed
+non-pass: the assessment, the gate and `operation: attested` refuse the receipt as `not_passing`, exactly as they refuse any
+failing review. An optional-mode repository ignores it and reviews the change itself; a repository that requires a receipt
+reports `review_incomplete` (`local_receipt_required`). Nothing is approved or merged on its strength, and a maintainer's
+`/approve-intent` does not clear its findings.
 
 ### A receipt that does not verify is ignored
 
