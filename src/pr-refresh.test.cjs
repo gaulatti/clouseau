@@ -693,3 +693,24 @@ test('the base\'s .clouseau-local.json "review_reuse": "outcome" opts every revi
     assert.deepEqual(JSON.parse(fs.readFileSync(second.receipt, 'utf8')).payload.review_reuse, {mode: 'outcome', reused: firstCalls, fresh: 0});
   }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
 });
+
+test('a version 2 base .clouseau-local.json with "review_reuse": "outcome" is read and opts every review in', async t => {
+  const {config, calls, runtime} = signedFixture(t);
+  // The strict version 2 top-level allowlist must admit the documented optional field, or every review refuses the recipe.
+  const local = {version: 2, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['node', '--version']],
+    coverage: [{format: 'istanbul', report: 'coverage.json', source_directory: 'src'}], review_reuse: 'outcome'};
+  await pullRepository(async f => {
+    const lines = () => fs.readdirSync(path.join(f.work, 'src')).reduce((n, name) => n + fs.readFileSync(path.join(f.work, 'src', name), 'utf8').split('\n').length, 0);
+    const run = {...runtime(f), attest: ({technical}) => technical,
+      verify: () => ({fixture_execution_only: true, exact_coverage: {lines: [lines(), lines()], branches: [2, 2]}})};
+    const review = () => main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', request(f.root), '--harness', 'claude'], run);
+    const first = await review();
+    assert.equal(first.decision, 'auto_approve');
+    const firstCalls = calls.length;
+    f.advance('src/added.js', 'module.exports = 3;\n');
+    git(f.work, ['fetch', '-q', 'origin']); git(f.work, ['merge', '-q', '--no-edit', 'origin/main']); f.pull.head = f.head();
+    const second = await review();
+    assert.equal(calls.length, firstCalls); assert.equal(second.reused_calls, firstCalls);
+    assert.deepEqual(JSON.parse(fs.readFileSync(second.receipt, 'utf8')).payload.review_reuse, {mode: 'outcome', reused: firstCalls, fresh: 0});
+  }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
+});

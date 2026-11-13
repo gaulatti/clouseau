@@ -101,8 +101,9 @@ roots. Its `coverage` field is a nonempty array with at most 32 explicit parts:
 ```
 
 Only the six documented top-level fields are accepted in version 2: `version`,
-`base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`.
-Misspelled or additional policy fields fail before local command execution and
+`base_branch`, `readme`, `repository_policy`, `verification`, and `coverage`, plus the documented optional fields
+(`OPTIONAL_LOCAL_KEYS` in `src/coverage-plan.cjs`): today only [`review_reuse`](#reusing-answers-in-clouseau-review-opt-in),
+which both versions accept. Misspelled or additional policy fields fail before local command execution and
 at the CI data entrypoint. Each coverage part likewise accepts only its three
 documented fields, plus the optional `package_directory` that only [declared coverage](declared-coverage.md#monorepos-one-declaration-per-part) reads and, for `lcov` parts only, the optional `source_suffixes` list. Version 1 keeps its existing compatibility behavior.
 
