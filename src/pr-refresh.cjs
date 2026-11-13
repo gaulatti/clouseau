@@ -116,19 +116,19 @@ function merge({directory, remoteBase, branch}) {
 // stale content; when that is the only problem, every stale declaration has one decision and together they declare exactly the
 // pull request's own semantic changes, they are replaced by one declaration with that decision over the same files, written
 // by the maintainer tool's own `declare`, and committed. Every other finding refuses, with the merge left in the local branch.
-const STALE = /^([a-f0-9]{64}\.json) declares .+ with different content than this tree has; delete it and declare again$/;
 function repinDeclarations({directory, remoteBase, head}) {
   if (!fs.existsSync(path.join(directory, compat.MANIFEST)) || !fs.existsSync(path.join(directory, compat.DECLARATIONS))) return null;
   const state = compat.inspect(directory);
   if (!state.problems.length && !state.undeclared.length) return null;
   const refuse = reason => new Error(`Merged ${remoteBase} locally, but the compatibility declarations of the merged tree do not verify: ${reason}. ` +
     `Nothing was pushed; the merge commit remains in the local branch for you to inspect (git reset --hard ${head} discards it)`);
-  const others = state.problems.filter(problem => !STALE.test(problem));
-  if (others.length) {
-    throw refuse(`it has problems besides stale content pins, so the base's change to a declared file is not folded yet or the tree needs a repair (${others.join('; ')})`);
+  // `inspect` names which of its problems are stale content pins (`stale`, `staleProblems`); any other problem refuses.
+  const others = state.problems.length - state.staleProblems;
+  if (others) {
+    throw refuse(`it has problems besides stale content pins, so the base's change to a declared file is not folded yet or the tree needs a repair (${state.problems.join('; ')})`);
   }
   if (state.undeclared.length) throw refuse(`an undeclared semantic change (${state.undeclared.join(', ')})`);
-  const names = new Set(state.problems.map(problem => STALE.exec(problem)[1]));
+  const names = new Set(state.stale);
   const stale = state.declarations.filter(declaration => names.has(declaration.name));
   const declared = [...new Set(stale.flatMap(declaration => declaration.changes.map(change => change.path)))].sort();
   const changed = [...state.changed.keys()].sort();

@@ -94,6 +94,8 @@ function inspect(root) {
   for (const file of before.keys()) if (!after.has(file)) changed.set(file, {mode: 0, sha256: null});
   const declarations = readDeclarations(root, problems);
   const claimed = new Map();
+  // Declarations that pin content this tree no longer has, by name: the one finding a refresh may repair by re-declaring.
+  const stale = new Set(); let staleProblems = 0;
   for (const declaration of declarations) {
     for (const change of declaration.changes) {
       if (claimed.has(change.path)) problems.push(`${change.path} is declared by both ${claimed.get(change.path)} and ${declaration.name}`);
@@ -102,12 +104,13 @@ function inspect(root) {
       if (!actual) problems.push(`${declaration.name} declares ${change.path}, which has not changed since the last fold`);
       else if (actual.mode !== change.mode || actual.sha256 !== change.sha256) {
         problems.push(`${declaration.name} declares ${change.path} with different content than this tree has; delete it and declare again`);
+        stale.add(declaration.name); staleProblems++;
       }
     }
   }
   const undeclared = [...changed.keys()].filter(file => !claimed.has(file));
   const decision = declarations.some(declaration => declaration.decision === 'incompatible') ? 'incompatible' : 'compatible';
-  return {problems, undeclared, changed, declarations, decision, statement, live};
+  return {problems, stale: [...stale], staleProblems, undeclared, changed, declarations, decision, statement, live};
 }
 
 // Write one declaration with `decision` over every changed semantic file that no declaration covers yet: the `declare`
