@@ -15,6 +15,11 @@ const {readPull} = require('./pull-read.cjs');
 // PR when no credential is supplied, the head is a fork, or the update is
 // refused) receives the visible needs-branch-update notice. A push made with
 // the workflow GITHUB_TOKEN would not start verification, so it is never used.
+//
+// Under the protected `local_review.base_moved: "update"` (`baseMoved`, valid only with `binding: "diff"`) every stale
+// same-repository PR is updated in this one run: the serialization exists only so a sibling merge does not waste fresh
+// re-reviews, and under the diff binding a base-only update leaves the receipt standing and needs none. Updating a branch
+// never moves the base, so these updates cannot trigger one another. Under "hold" or absent nothing here changes.
 async function approvedByBot(github, repo, pr) {
   const reviews = await github.paginate(github.rest.pulls.listReviews, {...repo, pull_number: pr.number, per_page: 100});
   const latest = new Map();
@@ -58,7 +63,8 @@ function explain(core, text) {
   if (core.summary) core.summary.addRaw(`${text}\n`, true).write();
 }
 
-async function reconcileBase({github, updateGithub = null, context, core, baseBranch}) {
+async function reconcileBase({github, updateGithub = null, context, core, baseBranch, baseMoved = 'hold'}) {
+  const every = baseMoved === 'update';
   const repo = context.repo;
   const outcome = {updated: [], noticed: []}; const failed = [];
   const asked = await trigger({github, context, baseBranch});
@@ -78,21 +84,26 @@ async function reconcileBase({github, updateGithub = null, context, core, baseBr
   }
   for (const {pr, mergeBase} of stale) {
     const sameRepository = pr.head.repo?.full_name === `${repo.owner}/${repo.repo}`;
-    if (updateGithub && sameRepository && !outcome.updated.length) {
+    let refused = null;
+    if (updateGithub && sameRepository && (every || !outcome.updated.length)) {
       try {
         await updateGithub.rest.pulls.updateBranch({...repo, pull_number: pr.number, expected_head_sha: pr.head.sha});
         outcome.updated.push(pr.number);
-        core.info(`Updated PR ${pr.number} with ${baseBranch}; normal verification and a fresh review start on the new head.`);
+        core.info(every ? `Updated PR ${pr.number} with ${baseBranch}; the new head's own run verifies it, and a diff-bound receipt that still attests needs no fresh review.` :
+          `Updated PR ${pr.number} with ${baseBranch}; normal verification and a fresh review start on the new head.`);
         continue;
       } catch (error) {
+        refused = error.status;
         core.info(`PR ${pr.number} could not be updated automatically (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}).`);
       }
     }
     // A notice that cannot be written must not hide the others, and must not look like success: the failure
     // names the permission (commenting on a pull request needs both issues: write and pull-requests: write).
     try {
+      // Opted in, nothing is queued behind a sibling: a 422 (a conflict or a moved head) or a fork head is named, anything else is not.
       await branchUpdate.surface({github, repo, pr, baseBranch, tip, assessment: {head_sha: pr.head.sha, base_sha: mergeBase},
-        note: updateGithub && sameRepository ? 'Another approved pull request is being updated first; this one is updated after it merges, or update it yourself.' : ''});
+        ...(every ? {automatic: refused === 422 ? 'refused' : updateGithub && !sameRepository ? 'fork' : null} :
+          {note: updateGithub && sameRepository ? 'Another approved pull request is being updated first; this one is updated after it merges, or update it yourself.' : ''})});
       outcome.noticed.push(pr.number);
     } catch (error) {
       core.info(`PR ${pr.number}: the branch-update notice could not be posted (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}).`);

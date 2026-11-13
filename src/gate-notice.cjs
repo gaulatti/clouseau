@@ -30,6 +30,8 @@ const FAILURES = Object.freeze([
   [/^A current-head code-owner approval is required/, 'code_owner_approval_required', ['A code owner approves the current head of this pull request: `gh pr review {number} --approve --repo {repo}`.',
     'A code owner merges it; automatic merge is disabled for this change.']],
   [/^Private-plan acceptance mode changed/, 'protection_mode_changed', ['The repository protection settings changed while the gate ran. ' + RERUN]],
+  // Opt-in `local_review.base_moved: "update"` (branch-update.cjs settle): not a failure of the pull request, the old head's end.
+  [/^Branch updated server-side/, 'base_update_requested', ['The base was merged into this branch server-side, so this run belongs to the old head. ' + LATER]],
 ]);
 const GENERIC = ['gate_failed', ['Open the failed job log of the workflow run for the full error.', RERUN, 'If it repeats, push a new revision.']];
 

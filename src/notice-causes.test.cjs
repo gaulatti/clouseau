@@ -152,6 +152,7 @@ test('every gate stop and every maintainer request names its cause class and a n
     ownership_changed: 'Code ownership changed before automatic approval',
     code_owner_approval_required: 'A current-head code-owner approval is required; automatic merge is disabled',
     protection_mode_changed: 'Private-plan acceptance mode changed before approval',
+    base_update_requested: 'Branch updated server-side (cause: `base_update_requested`): `main` moved after revision `a1b2c3d4e5f6` was assessed',
   };
   assert.deepEqual(Object.keys(samples).sort(), FAILURES.map(([, cause]) => cause).sort(), 'one sample per failure class');
   for (const [, cause, steps] of FAILURES) {

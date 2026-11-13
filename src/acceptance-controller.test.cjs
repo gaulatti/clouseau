@@ -1804,3 +1804,26 @@ test('a merge conflict with the base is named by one idempotent notice, immediat
     assert.equal((await f.assess()).cause, undefined);
   }
 }));
+
+test('private owner automation under base_moved "update": a base that moves at the merge boundary is updated once, not held, and nothing merges', () => fixture(async f => {
+  const keys = require('node:crypto').generateKeyPairSync('ed25519');
+  const local_review = {mode: 'optional', reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800, binding: 'diff',
+    base_moved: 'update', keys: [{id: 'update-fixture', issuer: 'ephemeral-fixture-runner', github_actor: 'contributor', revoked: false,
+      public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]};
+  const p = await privateOwnerFixture(f, false, {local_review});
+  f.state.pr.head.repo.full_name = `${f.context.repo.owner}/${f.context.repo.repo}`; // as GitHub serves it: a same-repository head
+  const updates = [];
+  const updateGithub = {rest: {pulls: {updateBranch: async args => {updates.push(args); return {data: {}};}}}};
+  // Main moves after the gate's first check passed, at the last read before the atomic write (the ancestry comparison), so only
+  // the second base-move site, verifyAcceptance at the private-owner merge boundary, can see it.
+  const compare = f.github.rest.repos.compareCommits;
+  f.github.rest.repos.compareCommits = async args => {f.state.pr.base.sha = 'f'.repeat(40); return compare(args);};
+  await assert.rejects(p.policy.gate({github: f.github, context: f.context, core: p.core, recordPath: f.recordPath, assessment: p.assessment,
+    nativeGate: true, wait: async () => {}, updateGithub}), error => error.code === 'BASE_UPDATE_REQUESTED');
+  assert.deepEqual(updates.map(item => [item.pull_number, item.expected_head_sha]), [[3, p.assessment.head_sha]]);
+  // The first site passed: the gate reached its approval before the boundary, and nothing was merged after the base moved.
+  assert.deepEqual(f.state.writes.filter(w => ['approve', 'atomic', 'enable-auto'].includes(w.name)).map(w => w.name), ['approve']);
+  assert.equal(f.state.pr.merged, undefined);
+  assert.equal(f.state.comments.some(item => String(item.body).includes('clouseau-needs-branch-update')), false, 'no hold notice');
+  // The updated head merging by fast-forward on its own run is covered in acceptance-controller-base-moved.test.cjs.
+}));
