@@ -195,3 +195,26 @@ test('the protected setting selects the scheme; hosted preflight counts /2 conte
   const flat = wiring.hooksFor(PARAMS).plan(snapshot);
   assert.equal(hosted.preflight(flat, {max_units: 32, max_input_tokens: 6000000}), Math.ceil(2 * cost / 4), '/1 is estimated as before');
 });
+
+test('an end whose measured view still exceeds the budget is skipped, smaller ends are still tried, and any other error surfaces', () => {
+  const {seamContext} = require('./seam-context.cjs');
+  const snapshot = {files: [{path: 'a.js', head_source: 'h:a'}, {path: 'b.js', head_source: 'h:b'}, {path: 'c.js', head_source: 'h:c'}],
+    sources: {'h:a': {content: 'a'}, 'h:b': {content: 'b'}, 'h:c': {content: 'c'}}};
+  const specs = [{id: 'u0', owned: ['a.js']}, {id: 'u1', owned: ['b.js']}, {id: 'u2', owned: ['c.js']}];
+  const seams = [{id: 's1', kind: 'import', a: {path: 'a.js'}, b: {path: 'b.js'}}, {id: 's2', kind: 'import', a: {path: 'a.js'}, b: {path: 'c.js'}}];
+  // The source's own size fits the cap, but the real view with it does not (`unit_exceeds_budget`): it is skipped, not cut.
+  const view = (spec, _units, refuse = id => id === 'h:b' && spec.id === 'u0') => {
+    if ((spec.context_ids || []).some(refuse)) throw Object.assign(new Error('too large'), {code: 'unit_exceeds_budget'});
+    return {sources: Object.fromEntries(spec.owned.map(name => [`h:${name[0]}`, {}]))};
+  };
+  const [u0] = seamContext({snapshot, specs, seams, view, cap: 1000});
+  assert.deepEqual(u0.context_ids, ['h:c'], 'b did not fit u0; the smaller end c is still added');
+  // Any other failure of the view is not a budget decision: it surfaces as itself.
+  const failing = spec => {if ((spec.context_ids || []).length) throw new Error('view failed'); return {sources: {}};};
+  assert.throws(() => seamContext({snapshot, specs, seams, view: failing, cap: 1000}), /view failed/);
+});
+
+test('an unknown partition scheme is refused by the planner itself', () => {
+  const {partition} = require('./review-partition.cjs');
+  assert.throws(() => partition([], {}, {scheme: 'clouseau-partition/3'}), TypeError);
+});
