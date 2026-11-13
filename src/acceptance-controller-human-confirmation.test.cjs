@@ -142,7 +142,7 @@ async function signedWorld(f, local) {
   const approvals = () => f.state.writes.filter(item => item.name === 'approve').length;
   // `lineage` answers compareCommits(base, head) by `${base}..${head}`: a status, or an Error to throw. The confirmed commit's
   // diff from its merge base (the live base) is the live diff.
-  const run = async ({trusted, bundle, confirmed, head, lineage}) => {
+  const run = async ({trusted, bundle, confirmed, head, lineage, beforeGate = () => {}, updateGithub = null}) => {
     served = bundle;
     const compared = [];
     f.github.rest.repos.compareCommits = async ({base, head: tip}) => {
@@ -156,7 +156,7 @@ async function signedWorld(f, local) {
     // A policy of its own: confirmations are cached per policy, one per run.
     const policy = createPolicy(trusted);
     const assess = async () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: () => {}});
-    const gate = assessment => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}});
+    const gate = assessment => policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}, updateGithub});
     const calls = f.state.calls;
     const held = await assess();
     assert.equal(held.decision, 'owner_decision', held.reason);
@@ -170,6 +170,7 @@ async function signedWorld(f, local) {
     const reassessed = await assess();
     assert.equal(reassessed.decision, 'owner_decision', reassessed.reason);
     assert.equal(f.state.calls, calls, 'the receipt stands without a CI AI call');
+    beforeGate();
     let failure = null;
     try {await gate(reassessed);} catch (error) {failure = error;}
     const asked = f.state.writes.some(item => item.name === 'create-ledger' && item.args.body.includes(`<!-- clouseau-intent:${head} -->`) &&
@@ -308,4 +309,30 @@ test('findings on the private-owner path: an exact-head confirmation merges, an 
   carried(await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage}));
   assert.equal(atomic(), 1, 'the exact-head authorization still merges at the atomic write');
   assert.ok(f.state.comments.some(item => item.id === 951), 'the earlier confirmation was present at the write boundary');
+}));
+
+test('findings under base_moved "update": a base move never updates on an earlier commit\'s confirmation; only the exact head\'s', () => fixture(async f => {
+  const w = await signedWorld(f, {...diffConfirmation, base_moved: 'update'});
+  const trusted = {...config, local_review: w.trust};
+  const R = w.signedHead;
+  const assessedBase = f.state.pr.base.sha; const getBranch = f.github.rest.repos.getBranch;
+  const restore = () => {f.state.pr.base.sha = assessedBase; f.github.rest.repos.getBranch = getBranch;};
+  const updates = [];
+  const updateGithub = {rest: {pulls: {updateBranch: async args => {updates.push(args); return {data: {}};}}}};
+  // Main moves after the reassessment, before the gate: only the base differs, so the gate's first base-move check decides.
+  const moveBase = () => {
+    f.state.pr.base.sha = 'e'.repeat(40); f.state.pr.head.repo.full_name = `${f.context.repo.owner}/${f.context.repo.repo}`;
+    f.github.rest.repos.getBranch = async () => ({data: {protected: true, commit: {sha: f.state.pr.base.sha}}});
+  };
+  // The owner confirmed an earlier commit of the same diff: a findings hold counts only the exact head, so nothing is updated
+  // and the gate posts today's needs-branch-update notice.
+  const earlier = await w.run({trusted, bundle: w.sign(trusted), confirmed: EARLIER, head: R, lineage: {[`${EARLIER}..${R}`]: 'ahead'},
+    beforeGate: moveBase, updateGithub});
+  assert.deepEqual(updates, [], 'no update on an earlier commit\'s confirmation of a findings hold');
+  assert.match(String(earlier.failure?.message), /^Needs branch update: main moved after approval/);
+  // The owner confirmed the exact head: the same base move is updated server-side once.
+  restore();
+  const exact = await w.run({trusted, bundle: w.sign(trusted), confirmed: R, head: R, lineage: {}, beforeGate: moveBase, updateGithub});
+  assert.equal(exact.failure?.code, 'BASE_UPDATE_REQUESTED', String(exact.failure?.message));
+  assert.deepEqual(updates.map(item => item.expected_head_sha), [R]);
 }));
