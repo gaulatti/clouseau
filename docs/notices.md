@@ -79,7 +79,7 @@ Values shown in a sentence are re-validated when rendered: commit ids must be 40
 | `verification_failed` | Open the failing job linked in the reason (when it names one) and fix the failing step. |
 | `github_api_error` | GitHub rejected an API request this review needs; the status and endpoint are in the reason. Re-run only the failed jobs: `gh run rerun {run} --failed --repo {repo}`. |
 | `github_rate_limit` | No change is needed: the repository installation token used its GitHub API budget. |
-| `receipt_protected_controls` | A local receipt cannot stand in for the owner. Ask a maintainer to comment exactly `/approve-intent {head}` on this pull request. (Under the protected `local_review.human_review: "signed"` this change is instead held as a [maintainer request](#maintainer-request) until that same confirmation.) |
+| `receipt_protected_controls` | A local receipt cannot stand in for the owner. Ask a maintainer to comment exactly `/approve-intent {head}` on this pull request. |
 | `receipt_history_changed` | The findings on the pull request changed after the receipt was issued. Run the local review again on this exact head so the receipt reflects them (`clouseau review ...`). |
 | `chunked_record_invalid` | The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head (`clouseau review ...`). |
 | `decision_mismatch` | The assessment and the stored record disagree (both decisions are in the reason). Re-run only the failed jobs: `gh run rerun {run} --failed --repo {repo}`. |
@@ -143,8 +143,6 @@ When a maintainer's second opinion is required, the comment and the check summar
 | `intent_protected_controls` | Review the protected-control change (the sentence above names the rule), then have a maintainer confirm it. |
 | `intent_incomplete_patch` | Reduce the change so GitHub returns a patch for every file, or review the withheld files by hand. |
 | `intent_owner_decision` | Read the review above; if it is correct, have a maintainer confirm the change belongs in this repository. |
-
-Under the protected `local_review.human_review: "signed"`, a receipt for a change to protected review controls (instead of `receipt_protected_controls`) reaches this request until a maintainer's `/approve-intent` of the exact head, and so does a signed local review whose findings require a human: the review above lists its signed findings, and a maintainer's `/approve-intent` (or approving review) of the exact head clears them, or the author repairs and reviews again. A failed test run, a failed coverage gate, a test-integrity violation or any other violated or unresolved review gate never reaches it ([local review](local-review.md#signing-a-review-that-requires-a-human-opt-in)).
 
 ## Gate stopped
 

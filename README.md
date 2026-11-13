@@ -30,10 +30,7 @@ product fit, need and proportionality; nine-factor technical findings; independe
 source investigations; a persistent evidence ledger; bounded repairs; and native
 protected auto-merge. Humans decide genuine purpose and authority questions.
 Technical uncertainty goes to automated investigation and cannot be waived by
-an intent comment. The one opt-in exception is the protected
-`local_review.human_review: "signed"`: there a maintainer's exact-head approval may
-clear graded findings of a signed local review, never a failed test, coverage or
-integrity result ([local review](docs/local-review.md#signing-a-review-that-requires-a-human-opt-in)). Version 1 remains explicit compatibility for existing pins.
+an intent comment. Version 1 remains explicit compatibility for existing pins.
 
 ## Ownership
 
@@ -231,8 +228,7 @@ existing native flow and optional CODEOWNERS behavior.
 
 Manual decisions assign the PR to `manual_reviewer` and request that person's
 review. Owner-authored PRs use assignment without an invalid self-review request.
-The owner can comment `/approve-intent FULL_HEAD_SHA`; this confirms intent only, except that under the
-protected `local_review.human_review: "signed"` it also clears the graded findings of a signed local review.
+The owner can comment `/approve-intent FULL_HEAD_SHA`; this confirms intent only.
 An owner confirmation can carry the actual accepted requirement, rather than
 leaving investigators to infer it from a revision alone:
 
