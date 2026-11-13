@@ -10,7 +10,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "79eee9b8269d8e2079490ae10f0bc085aba9c57c93685d9f00107cda4a720178"
+      "sha256": "b6b3a3830c6235c0c0e02a6576fbcd30958d1cdbbbe236183f1b10bd1eb2f1f4"
     },
     {
       "path": "src/incomplete.cjs",
@@ -20,7 +20,7 @@
     {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "59262603c59205c9efb3c19e401f2eb1b18e641f446d73f236c814f8b4f56909"
+      "sha256": "777aa0d44d37c3ab24e259ce935c935a1323c21b0f37d5acd3494b0e70107f54"
     },
     {
       "path": "src/stale-assessment.cjs",
