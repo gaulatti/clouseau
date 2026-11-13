@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/coverage-gate.cjs",
+      "mode": 0,
+      "sha256": "4ff0cefe4670f5ff9e2b5c84a704666f47efd8fe13eb9e716d2df42bf208c7ea"
+    },
+    {
+      "path": "src/coverage-plan.cjs",
+      "mode": 0,
+      "sha256": "7122cabee0c315e4cc4e9165d21aaedf3749be29242df64cbe122df822771eb3"
+    }
+  ]
+}
