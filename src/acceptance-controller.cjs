@@ -453,8 +453,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       const {required, selfAuthored} = await legacy.humanRequirement(github, context.repo, current, files, assessment);
       return !required || await legacy.maintainerConfirmed(github, context.repo, current, {...verifiedRecord.confirmation, reviewOnly: selfAuthored});
     };
-    const baseMoved = async (current, approvedHere = false) => branchUpdate.settle({github, updateGithub, repo: context.repo, pr: current, assessment,
-      baseBranch: config.base_branch, approved: approvedHere,
+    const baseMoved = async current => branchUpdate.settle({github, updateGithub, repo: context.repo, pr: current, assessment,
+      baseBranch: config.base_branch,
       mode: config.local_review?.base_moved === 'update' && await approved(current) ? 'update' : undefined});
     if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) throw await baseMoved(pr);
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
@@ -503,8 +503,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
         const {data: currentPr} = await readPull(github, context.repo, pr.number);
-        // The private-owner merge boundary: the gate submitted its approval before this re-read.
-        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) throw await baseMoved(currentPr, true);
+        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) throw await baseMoved(currentPr);
         if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
             currentRecord.local_receipt && currentRecord.local_author !== currentPr.user.login) throw new Error('Acceptance author or revision changed before private merge');
         if (currentRecord.local_receipt) {
