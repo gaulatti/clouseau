@@ -618,6 +618,23 @@ unknown commit or another lineage never matches, and any other API failure surfa
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
 
+When a confirmation of an earlier head carries under `confirmation: "diff"`:
+
+| Change since the confirmed head | Confirmation |
+| --- | --- |
+| a merge of the base, or a rebase onto it, that leaves the pull request's diff unchanged | carries |
+| a base change elsewhere in a changed file (only the hunk offsets move) | carries |
+| a re-declaration of compatibility (`compat/declarations/`) after a base merge that keeps every verdict over the same files and only re-pins content hashes | carries, exactly as the receipt binding treats it (`splitDeclarations` in `src/receipt-patch.cjs`, the one rule both use) |
+| a declaration whose verdict changed, a newly declared file, or a declaration added or removed | voids it |
+| a new commit, or a conflict resolution that alters the branch's own lines | voids it |
+| a base change to the lines around the branch's change, to `.github/clouseau.json` or to the purpose contract | voids it |
+| a patchless or truncated file list, an unknown commit or another lineage | voids it |
+
+Observed in this repository: gaulatti/clouseau#250 merged on its refreshed head b407c24 with the owner's only confirmation
+naming the earlier head a32c894 (gate run 43339412416, 2026-11-13), and gaulatti/clouseau#253 merged on d627c7c with the
+only confirmation naming fe6ca3a (gate run 43346604645). In both cases the refresh was a merge of the base that left the diff
+unchanged, and no new comment was needed.
+
 ### Base moved: hold or update (opt-in)
 
 When the base moves after a pull request was assessed and only the base differs (the live head is still the assessed head), the
@@ -1000,7 +1017,11 @@ Deliberately unchanged, because they are intent and infrastructure rather than
 receipt verification: a verified receipt still cannot replace changed review
 history or supply protected-control owner authorization (the controller holds,
 and the notice now names which rule: cause `receipt_protected_controls` or
-`receipt_history_changed`);
+`receipt_history_changed`). The acceptance ledger the gate itself published from
+the same receipt on an earlier run (one held for the owner's confirmation, or by a
+base move) is not a change of history: a ledger whose findings equal exactly what
+the signed record reconciles to is accepted by the assessment and by the gate's
+write boundary, and any other ledger still voids the receipt;
 a GitHub outage, rate limit or permission error while reading the receipt is
 reported with its ordinary cause, not ignored; and the post-assessment gate
 re-verifies the exact accepted record immediately before approval or merge and
