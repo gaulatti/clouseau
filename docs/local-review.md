@@ -592,6 +592,17 @@ diff unchanged keeps the receipt valid end to end, at the assessment and at the 
 the gate's write boundary), which `src/acceptance-controller-binding.test.cjs` proves through an assessment and gate approval
 of the merged head with zero AI calls. A receipt that no longer covers the diff is refreshed or renewed as usual.
 
+`updated` never pushes a head that fails a cheap deterministic invariant of the repository; it does not run the verification
+recipe. In a repository with compatibility declarations (a `compat/manifest.json` and a `compat/declarations/` directory,
+as in Clouseau's own; see [receipt compatibility](receipt-compatibility.md#declare-then-fold)), refresh checks the merged tree
+with the same `inspect` as `scripts/review-compatibility verify` before the push. When the merge only changed a file the pull
+request declared, so its declaration pins stale content, and the stale declarations cover exactly the pull request's own
+changed semantic files with one decision, refresh replaces them with one declaration of that decision over the same files,
+commits it as `chore(compat): re-pin the compatibility declaration after merging origin/<base>` and pushes both commits; the
+result then carries `declaration: "re-pinned"`. Any other finding (a different path set, an undeclared change, mixed
+decisions, or a base change to a declared file that is not folded yet) pushes nothing and names the cause; the merge commit
+stays in the local branch. A repository without that tooling is refreshed exactly as before.
+
 The owner's `/approve-intent` (and an approving review) names one exact head, under the binding too, unless the protected
 `local_review.confirmation: "diff"` is set as well (it is valid only together with `binding: "diff"`). With it, a
 confirmation of an earlier head (comment or approving review) also counts for the current head when that earlier commit was
