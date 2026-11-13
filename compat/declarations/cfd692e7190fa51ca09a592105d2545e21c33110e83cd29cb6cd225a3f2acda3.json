@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-sources.cjs",
+      "mode": 0,
+      "sha256": "c2f67e263513c6c6f44554985417e7bc54199eb2dca9c6f7122d37547897ef36"
+    },
+    {
+      "path": "src/local-git.cjs",
+      "mode": 0,
+      "sha256": "d97324c8c4ffb9281b5fd5342cb1f801f4b4137ae19253f2f3cebcbf65d535f6"
+    }
+  ]
+}

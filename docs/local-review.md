@@ -364,6 +364,12 @@ engine seed (roughly 380 KB) is collected only when a workflow change adds or ch
 `gaulatti/clouseau/scripts/resolve@main` (or an existing `@<sha>`) reference; an ordinary edit of a workflow that keeps its reference
 carries no engine source, and a reviewer can still request any of it. The seed is optional context: seed files that would use the last 150,000
 characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
+A source a reviewer requests that would take the evidence past the 900,000-character budget is omitted the same way, with
+the hosted review's reason `would exceed the total evidence budget` (one rule for both, `admitWithinBudget` in
+`src/acceptance-sources.cjs`); the rest of the request is still read and the review continues. A reviewer that then records
+the omitted source as missing evidence leaves review completeness unresolved, and CI refuses such a receipt
+(`receipt_completeness`). A change near the budget whose reviewers need large context is therefore signed only once it is
+split into smaller pull requests, or reviewed by a chunked scheme that supplies that context.
 Changed files, their base and head sources and contracts are never omitted; a change that exceeds
 the cap with only that evidence is reviewed in bounded units (see "Chunked local review") unless the protected configuration disabled chunked review, in which case it fails closed.
 
