@@ -17,8 +17,10 @@ const lockfiles = row => {
   return {base: lock.largePnpm(Math.round(row.base_size / entry)), head: lock.largePnpm(Math.round(row.head_size / entry), 150)};
 };
 
-// Files that exist before the change (for `setup` of test/local-git-fixture.cjs).
+// Files that exist before the change (for `setup` of test/local-git-fixture.cjs), and an existing test that imports every
+// changed path, so a signed review passes the receipt hold CI applies (receipt-hold.cjs).
 function writeBase(directory, table) {
+  write(directory, 'test/covers-change.test.js', table.files.map(row => `require('../${row.path}');\n`).join(''));
   for (const row of table.files) {
     if (row.base_size === 0) continue;
     write(directory, row.path, isLockfile(row) ? lockfiles(row).base : filler(`${row.path}@base`, row.base_size));

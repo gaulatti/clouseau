@@ -18,6 +18,10 @@ async function repository(run, setup = () => {}) {
       readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['node', '--version']],
       coverage: {format: 'istanbul', report: 'coverage.json', source_directory: 'src'}}));
     fs.writeFileSync(path.join(directory, 'src/handler.js'), 'module.exports = input => Boolean(input);\n');
+    // An existing test that imports both changed files, so a signed review passes the receipt hold CI applies (receipt-hold.cjs).
+    // A test that needs the change untested removes it in `setup`.
+    fs.mkdirSync(path.join(directory, 'test'));
+    fs.writeFileSync(path.join(directory, 'test/handler.test.js'), "require('../src/handler.js');\nrequire('../src/new.js');\n");
     setup(directory);
     git(directory, ['add', '.']); git(directory, ['commit', '-qm', 'feat: accept input']);
     const base = git(directory, ['rev-parse', 'HEAD']).trim();

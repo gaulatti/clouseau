@@ -468,6 +468,41 @@ it does not change the reviewed source commit or checkout. Include the returned
 artifact follows the repository's visibility and contains reviewed source and
 the requirement text; those inputs must be appropriate for publication there.
 
+### Local refuses to sign what CI's receipt hold would refuse
+
+Before it signs, `clouseau review` applies to the record the same receipt hold CI
+applies when it reads a receipt (`src/receipt-hold.cjs`, shared by both):
+
+1. `approvalHold` for every review, on the snapshot plus the importer discovery CI
+   runs. CI discovers through the GitHub API; local answers the same two calls
+   (`git.getTree` at the base, file reads at the head) from the checkout with
+   `git ls-tree -r -l` and `git show`, so an existing test at the base that imports a
+   changed file is found locally exactly as CI finds it.
+2. For a chunked review, the open-seams rule: an integration disposition whose state
+   is not `checked` holds the receipt.
+
+When either holds, no receipt is issued. The review record is still written, the
+outcome is `review_incomplete` (also in the local history, so the same revision is
+not reassessed before a repair), a `Local review held (<rule>): ...` line goes to
+stderr, and the result carries `receipt_hold`:
+
+| `rule` | CI notice it prevents | Also named |
+| --- | --- | --- |
+| `integrity` | `receipt_integrity` | `reason` only |
+| `completeness` | `receipt_completeness` | `missing`: `{role, unit, path}` for each coverage source or dependency a report recorded as `missing` (`unit` for a chunked review only), and `{omitted: true, path, reason}` for each omitted source |
+| `untested` | `receipt_untested` | `files`: the changed production files no supplied or discovered test imports |
+| `open_seams` | (chunked records) | `seams`: `{role, seam, state, units, reason}` for each open seam, `units` being its two ends |
+
+```json
+{"decision": "review_incomplete", "receipt_hold": {"rule": "untested",
+  "reason": "no supplied test imports changed production code: src/handler.js",
+  "files": ["src/handler.js"]}, "receipt": null, ...}
+```
+
+A review nothing holds signs exactly as before: the same record, receipt and output,
+with no `receipt_hold` field. A review without an enrolled identity signs nothing and
+is reported as before.
+
 ## Refreshing a pull request after its base moved
 
 Every merge to the base leaves the other open pull requests behind it: GitHub reports `branch update needed`, and each

@@ -5,8 +5,10 @@ const {readPull} = require('./pull-read.cjs');
 const branchConflict = require('./branch-conflict.cjs');
 const {noticeText, noticeLine, describe} = require('./receipt-rejection.cjs');
 const path = require('node:path');
-const {digest, validateApproval, approvalHold, importsOf, LINKABLE_PATH} = require('./acceptance.cjs');
-const {collectSnapshot, refresh, supplyTests, UNBOUNDED} = require('./acceptance-sources.cjs');
+const {digest, validateApproval} = require('./acceptance.cjs');
+const {collectSnapshot, refresh, UNBOUNDED} = require('./acceptance-sources.cjs');
+// The receipt hold, shared with `clouseau review` so a local review never signs what this check refuses (receipt-hold.cjs).
+const {discoverImporters, withDiscovery, receiptHold, holdRule, openSeams} = require('./receipt-hold.cjs');
 const hostedChunked = require('./hosted-chunked.cjs');
 const wiring = require('./chunked-wiring.cjs');
 const {chunkedVerifier, ChunkedRecordError} = require('./chunked-record.cjs');
@@ -25,30 +27,6 @@ function numberFor(context) {
 
 function decided(result, controls) {
   return controls && result.decision === 'auto_approve' ? 'owner_decision' : result.decision;
-}
-
-// The local snapshot holds only what the local reviewer fetched. Importers are found with the same discovery the
-// hosted review uses, and what it found is stored IN the record (`discovery`), so the assessment, the gate, the
-// finalizer and every other path derive the decision from the same inputs: the snapshot plus its discovery. The
-// signed receipt itself is not altered.
-async function discoverImporters({github, repo, snapshot}) {
-  const discovered = structuredClone(snapshot);
-  await supplyTests({github, repo, snapshot: discovered, files: discovered.files.map(file => ({filename: file.path, status: file.status})),
-    baseSha: discovered.base_sha, headSha: discovered.head_sha});
-  const added = Object.entries(discovered.sources).filter(([id]) => !Object.hasOwn(snapshot.sources, id));
-  // Files that are imported or import are carried as their specifiers; only a non-JS test, whose linkage reads its text, is carried whole.
-  const edges = added.filter(([, source]) => LINKABLE_PATH.test(source.path)).map(([, source]) => ({path: source.path, specifiers: importsOf(source.path, source.content)}));
-  return {test_imports: [...(discovered.test_imports ?? []), ...edges],
-    sources: Object.fromEntries(added.filter(([, source]) => !LINKABLE_PATH.test(source.path)))};
-}
-
-function withDiscovery(snapshot, discovery) {
-  return {...snapshot, test_imports: [...(snapshot.test_imports ?? []), ...discovery.test_imports], sources: {...snapshot.sources, ...discovery.sources}};
-}
-
-async function receiptHold({github, repo, snapshot, reviews}) {
-  const discovery = await discoverImporters({github, repo, snapshot});
-  return {discovery, hold: reviews.map(review => approvalHold(review.report, withDiscovery(snapshot, discovery))).find(Boolean)};
 }
 
 // The one place that turns a stored record into a decision, and what a disagreement looks like.
@@ -71,7 +49,7 @@ function chunkedReviews(record, config) {
   return verifier.reviews().map(review => {
     const view = validateInspection(review.report, record.snapshot, review.drafts);
     const scores = validateApproval(review.report, view);
-    const open = stored.get(review.role).integration.some(entry => entry.dispositions.some(row => row.state !== 'checked'));
+    const open = openSeams(stored.get(review.role)).length > 0;
     return {...review, scores: open && scores.decision === 'auto_approve' ? {...scores, decision: 'review_incomplete', hold: 'integration left seams open'} : scores};
   });
 }
@@ -221,10 +199,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           ({discovery} = held);
           if (held.hold) {
             // Name the rule that held and, for the per-file rule, the files, so the notice is actionable.
-            const [rule] = held.hold.split(': ');
-            rejected = {'test integrity is unresolved': 'integrity', 'review completeness is unresolved': 'completeness',
-              'no supplied test imports changed production code': 'untested'}[rule];
-            file = held.hold.slice(rule.length + 2);
+            ({rule: rejected, file} = holdRule(held.hold));
           }
         }
         if (rejected) {
