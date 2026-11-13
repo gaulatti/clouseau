@@ -13,7 +13,7 @@ const {digest, approvalHold, FACTORS} = require('./acceptance.cjs');
 const {repository} = require('../test/local-git-fixture.cjs');
 const {initializeIdentity, runReview, recordedMissing, heldNotice} = require('./local-cli.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
-const {supplyTests} = require('./acceptance-sources.cjs');
+const {supplyTests, OVER_BUDGET} = require('./acceptance-sources.cjs');
 const controller = require('./acceptance-controller.cjs');
 const {holdRule, openSeams, HOLD_RULES} = require('./receipt-hold.cjs');
 
@@ -312,4 +312,31 @@ test('a completeness hold on a source the controller omitted names it as omitted
     'src/large.js (omitted). No receipt issued; decision review_incomplete.');
   const both = recordedMissing(record, [{role: 'challenger', report: report(['src/other.js'])}]);
   assert.match(heldNotice({rule: 'completeness', missing: both}), /recorded missing: src\/other\.js \(challenger\), src\/large\.js \(omitted\)\./);
+});
+
+// #255 with item A: a reviewer's request beyond the evidence budget is omitted, and a review that then leaves completeness
+// unresolved is never signed. The hold names each omitted source as omitted, which is what CI would refuse (receipt_completeness).
+test('a requested source omitted for the budget, with completeness unresolved, is never signed and is named as omitted', () => {
+  const LARGE = ['docs/a.txt', 'docs/b.txt', 'docs/c.txt', 'docs/d.txt'];
+  const large = directory => {
+    fs.mkdirSync(path.join(directory, 'docs'));
+    for (const [index, name] of LARGE.entries()) fs.writeFileSync(path.join(directory, name), `${index}`.repeat(280000) + '\n');
+  };
+  return signing({prepare: large}, async ({state, review}) => {
+    const scored = harness({gates: gates => {gates.find(gate => gate.name === 'review_completeness').state = 'unresolved';}});
+    let asked = false;
+    const ask = async task => {
+      if (task.phase !== 'investigation' || task.role !== 'examiner' || asked) return scored(task);
+      asked = true;
+      const value = {kind: 'source_request', report: null, request_sources: LARGE};
+      return {value, provenance: {harness: 'codex', role: task.role, phase: task.phase, session: 'fictional-hold-session-request',
+        request_digest: digest(task.prompt), response_digest: digest(value), transport_digest: digest({fixture_only: value})}};
+    };
+    const {value: result, stderr} = await quietly(() => review(ask));
+    assert.equal(result.decision, 'review_incomplete'); assert.equal(result.receipt, null); assert.deepEqual(receipts(state), []);
+    assert.equal(result.receipt_hold.rule, 'completeness');
+    const omitted = result.receipt_hold.missing.filter(row => row.omitted && LARGE.includes(row.path));
+    assert.ok(omitted.length >= 1 && omitted.every(row => row.reason === OVER_BUDGET), JSON.stringify(result.receipt_hold.missing));
+    for (const row of omitted) assert.match(stderr, new RegExp(`${row.path.replace('.', '\\.')} \\(omitted\\)`));
+  });
 });

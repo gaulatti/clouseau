@@ -366,7 +366,10 @@ carries no engine source, and a reviewer can still request any of it. The seed i
 characters are listed in `omitted_sources` with a reason, and reviewers can still request them.
 A source a reviewer requests that would take the evidence past the 900,000-character budget is omitted the same way, with
 the hosted review's reason `would exceed the total evidence budget` (one rule for both, `admitWithinBudget` in
-`src/acceptance-sources.cjs`); the rest of the request is still read and the review continues. A reviewer that then records
+`src/acceptance-sources.cjs`); the rest of the request is still read and the review continues. The omission's own `omitted_sources`
+entry is counted after that check, so a review whose evidence is already within one such entry (about a hundred
+characters) of the budget fails closed with the budget error instead; a source already in the evidence is never removed to
+make room. A reviewer that then records
 the omitted source as missing evidence leaves review completeness unresolved, and CI refuses such a receipt
 (`receipt_completeness`). A change near the budget whose reviewers need large context is therefore signed only once it is
 split into smaller pull requests, or reviewed by a chunked scheme that supplies that context.
