@@ -10,6 +10,7 @@ const gooutcomes = require('./coverage-gooutcomes.cjs');
 const lcov = require('./coverage-lcov.cjs');
 const changed = require('./coverage-changed.cjs');
 const declared = require('./coverage-declared.cjs');
+const {V2_LOCAL_KEYS} = require('./coverage-plan.cjs');
 
 function llvmCounters(report, sourceDirectory, cwd) {
   if (get(report, 'type') !== 'llvm.coverage.json.export') fail('Expected an LLVM coverage export');
@@ -144,7 +145,7 @@ function checkPlan(parts, directory) {
 function loadRecipe(file, cwd) {
   const config = loadReport(path.resolve(cwd, file));
   if (!isObject(config) || config.version !== 2) fail('A multi-artifact coverage recipe requires version 2');
-  if (Object.keys(config).some(key => !['version', 'base_branch', 'readme', 'repository_policy', 'verification', 'coverage'].includes(key))) {
+  if (Object.keys(config).some(key => !V2_LOCAL_KEYS.includes(key))) {
     fail('Unknown version 2 coverage recipe field');
   }
   return config.coverage;
