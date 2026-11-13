@@ -119,7 +119,9 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
   const derived = decided(result, record.controls || Boolean(record.local_authorization));
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
-  return {state, ...publication({...result, decision: assessment.decision},
+  // A record carried by a local receipt may find on the pull request the ledger the gate published from it on an earlier run
+  // (a hold for owner confirmation, a base move): the write boundary accepts exactly that ledger and no other.
+  return {state, ownLedger: Boolean(record.local_receipt), ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
@@ -244,7 +246,14 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             '(AGENTS.md, CI workflow or configuration, the repository policy or another configured sensitive path); ' +
             'the exact-head owner confirmation is missing.');
         }
-        if (digest(previous.findings) !== digest(verified.record.previous.findings)) {
+        // The gate publishes this receipt's findings on its first run, before an owner confirmation or a base update lets a
+        // later run finish. A ledger whose findings equal exactly what this signed record reconciles to is that publication,
+        // not a change; any other history still voids the receipt. The record keeps the signed history either way, so the gate
+        // re-derives exactly the ledger it already published.
+        const own = digest(previous.findings) === digest(reconcile({...verified.record.result, reviews: verified.reviews},
+          verified.record.snapshot, verified.record.previous.findings).findings);
+        const recorded = own ? {...previous, findings: verified.record.previous.findings} : previous;
+        if (digest(previous.findings) !== digest(verified.record.previous.findings) && !own) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
         }
         // A maintainer-attested receipt (an enrolled maintainer reviewed another author's pull request) is named as such.
@@ -256,13 +265,13 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           return {...identity, ...technicalBlock, review_source: attested ? 'maintainer_attested' : 'authenticated_local', provider_api_calls: 0,
             reason: `${kind} local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
-        const record = localRecord(verified.record, {engine, authorization, previous, technical, author: pr.user.login,
+        const record = localRecord(verified.record, {engine, authorization, previous: recorded, technical, author: pr.user.login,
           artifact: receiptRef, bundle, discovery});
         // The signed bundle already lives at an immutable reference. Transport
         // only the run-specific facts; the write boundary rehydrates and
         // independently re-verifies the complete record from that reference.
         const compact = {version: 2, local_receipt_reference: true, local_artifact: receiptRef,
-          local_author: pr.user.login, previous, technical, discovery, ...(engine ? {engine} : {}),
+          local_author: pr.user.login, previous: recorded, technical, discovery, ...(engine ? {engine} : {}),
           ...(authorization ? {local_authorization: authorization} : {})};
         fs.writeFileSync(recordPath, JSON.stringify(compact, null, 2) + '\n');
         if (report) report(`${kind} local Clouseau review verified.${signedBy} CI AI calls: 0.`);
@@ -382,7 +391,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     throw new Error('Verification did not finish before the assessment deadline');
   }
 
-  async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT), recordPath = RECORD, ...options}) {
+  // `updateGithub` is the optional independent `update-token` client; only the protected `local_review.base_moved: "update"`
+  // uses it, at both base-move checks below (branch-update.cjs settle). It is never handed to the legacy gate.
+  async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT), recordPath = RECORD, updateGithub = null, ...options}) {
     const hold = reason => legacy.gate({github, context, core, ...options,
       assessment: {...assessment, decision: 'blocked_technical', reason}});
     if (!assessment.record_digest) {
@@ -412,9 +423,20 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const {data: pr} = await readPull(github, context.repo, numberFor(context));
     if (record.local_receipt && record.local_author !== pr.user.login) throw new Error('Local receipt author changed');
     const branchUpdate = require('./branch-update.cjs');
-    if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) {
-      throw await branchUpdate.surface({github, repo: context.repo, pr, assessment, baseBranch: config.base_branch});
-    }
+    // Only the base moved under the assessed head: hold with the notice, or, opted in, update the branch server-side. Only an
+    // approved revision may be updated: a decision that approves, and, where the gate requires a maintainer's confirmation (the
+    // owner_decision itself, a protected path, a bot-authored pull request), that confirmation of this head. Anything else keeps
+    // today's notice, as if the setting were absent. Without the setting nothing more is read.
+    const approved = async current => {
+      if (!['auto_approve', 'owner_decision'].includes(assessment.decision)) return false;
+      const files = await github.paginate(github.rest.pulls.listFiles, {...context.repo, pull_number: current.number, per_page: 100});
+      const {required, selfAuthored} = await legacy.humanRequirement(github, context.repo, current, files, assessment);
+      return !required || await legacy.maintainerConfirmed(github, context.repo, current, {reviewOnly: selfAuthored});
+    };
+    const baseMoved = async current => branchUpdate.settle({github, updateGithub, repo: context.repo, pr: current, assessment,
+      baseBranch: config.base_branch,
+      mode: config.local_review?.base_moved === 'update' && await approved(current) ? 'update' : undefined});
+    if (branchUpdate.baseOnlyMoved(pr, assessment, config.base_branch)) throw await baseMoved(pr);
     if (pr.head.sha !== assessment.head_sha || pr.base.sha !== assessment.base_sha) throw new Error('PR changed after acceptance investigation');
     const technical = await legacy.technicalRun(github, context.repo, pr, {receipt: true});
     if (digest(technical) !== digest(record.technical)) throw new Error('Verification changed after acceptance investigation');
@@ -428,7 +450,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
-    if (digest(current) !== digest(record.previous)) throw new Error('Acceptance history changed; reassess the current record');
+    // The ledger this record's own receipt published on an earlier run is not a change in history (verifyRecord, ownLedger).
+    const ownLedger = verifiedRecord.ownLedger && digest(current.findings) === digest(verifiedRecord.state.findings);
+    if (digest(current) !== digest(record.previous) && !ownLedger) throw new Error('Acceptance history changed; reassess the current record');
     const links = [];
     for (const [index, page] of pages.entries()) {
       const marker = page.split('\n')[0];
@@ -459,9 +483,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const currentRecord = await rehydrate(JSON.parse(fs.readFileSync(recordPath, 'utf8')), assessment, {github, repo: context.repo});
         const latest = verifyRecord(currentRecord, assessment, config, engine);
         const {data: currentPr} = await readPull(github, context.repo, pr.number);
-        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) {
-          throw await branchUpdate.surface({github, repo: context.repo, pr: currentPr, assessment, baseBranch: config.base_branch});
-        }
+        if (branchUpdate.baseOnlyMoved(currentPr, assessment, config.base_branch)) throw await baseMoved(currentPr);
         if (currentPr.head.sha !== assessment.head_sha || currentPr.base.sha !== assessment.base_sha ||
             currentRecord.local_receipt && currentRecord.local_author !== currentPr.user.login) throw new Error('Acceptance author or revision changed before private merge');
         if (currentRecord.local_receipt) {

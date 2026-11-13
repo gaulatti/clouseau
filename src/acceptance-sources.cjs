@@ -97,14 +97,28 @@ function contributorClaim(body) {
 // Optional evidence (an existing test, a source a reviewer asked for) that is missing, not
 // textual, too large or beyond the evidence budget is omitted with a stated reason that the
 // reviewers see. Files that actually changed never take this path: they fail closed.
+const OVER_BUDGET = 'would exceed the total evidence budget';
+function omitSource(snapshot, filename, reason) {
+  snapshot.omitted_sources = [...(snapshot.omitted_sources || []).filter(item => item.path !== filename), {path: filename, reason}];
+}
+// The one budget rule for optional evidence, in the hosted review (readOptional) and in `clouseau review` (local-git.cjs
+// addSources): a source that takes the evidence past its cap is removed and omitted with the stated reason. Returns whether
+// it was kept.
+function admitWithinBudget(snapshot, id, filename, cap) {
+  if (evidenceSize(snapshot) <= cap) return true;
+  delete snapshot.sources[id];
+  omitSource(snapshot, filename, OVER_BUDGET);
+  return false;
+}
+
 async function readOptional({github, repo, snapshot, filename, cap = BUDGET}) {
   try {
     const id = await readSource({github, repo, snapshot, filename, ref: snapshot.head_sha});
-    if (evidenceSize(snapshot) > cap) {delete snapshot.sources[id]; throw Object.assign(new Error('over budget'), {omitted: 'would exceed the total evidence budget'});}
+    admitWithinBudget(snapshot, id, filename, cap);
   } catch (error) {
-    const reason = error.omitted || (error.status === 404 ? 'not found at the head revision' : error.unavailable ? 'not available as complete text within the evidence budget' : null);
+    const reason = error.status === 404 ? 'not found at the head revision' : error.unavailable ? 'not available as complete text within the evidence budget' : null;
     if (!reason) throw error;
-    snapshot.omitted_sources = [...(snapshot.omitted_sources || []).filter(item => item.path !== filename), {path: filename, reason}];
+    omitSource(snapshot, filename, reason);
   }
 }
 
@@ -254,4 +268,4 @@ async function additionalSources({github, repo, snapshot, paths}) {
   return refresh(snapshot);
 }
 
-module.exports = {BUDGET, UNBOUNDED, evidenceSize, fetchText, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};
+module.exports = {BUDGET, UNBOUNDED, OVER_BUDGET, evidenceSize, omitSource, admitWithinBudget, fetchText, supplyTests, contributorClaim, proofCatalog, safePath, refresh, readSource, collectSnapshot, additionalSources};

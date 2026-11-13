@@ -1,4 +1,5 @@
 'use strict';
+const {everyOptional} = require('../test/local-optional-keys.cjs');
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const cp = require('node:child_process');
@@ -196,6 +197,34 @@ test('coverage.py changed-line gating uses executed and missing lines and decisi
     const full = gate.changedCheck(load('full'), path.join(directory, 'src'), 'coveragepy', directory, 'base', baselineFile);
     assert.deepEqual(full, {lines: [1, 1], branches: [0, 0]});
     assert.throws(() => gate.changedCheck(load('partial'), path.join(directory, 'src'), 'coveragepy', directory, 'base', baselineFile), /changed uncovered|repository-wide/);
+  }));
+
+// Guard: the gate reads `.clouseau-local.json` itself (loadRecipe, for plan, totals-plan, changed-plan and declared-plan) on
+// the base branch's file in consumer CI. Every documented optional field must change nothing for any of them, and an unknown
+// field must still fail every one with the recipe error. The samples are the shared list (test/local-optional-keys.cjs).
+test('every recipe subcommand accepts every documented optional field and still rejects an unknown one', () => repository(
+  {'src/a.js': 'const a = 1;\nconst b = a ? 1 : 2;\n'}, {'src/a.js': 'const a = 1;\nconst b = a ? 3 : 2;\n'}, directory => {
+    sh(directory, 'git', 'branch', 'base', 'HEAD~1');
+    const run = (...argv) => {
+      let out = ''; let err = '';
+      const status = gate.main(argv, {cwd: directory, stdout: text => {out += text;}, stderr: text => {err += text;}});
+      return {status, out, err};
+    };
+    const write = (name, value) => fs.writeFileSync(path.join(directory, name), JSON.stringify(value));
+    write('cov.json', istanbulReport(path.join(directory, 'src/a.js'), 1));
+    write('base.json', {lines: [2, 2], branches: [2, 2]});
+    const recipe = {version: 2, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['true']],
+      coverage: [{format: 'istanbul', report: 'cov.json', source_directory: 'src'}]};
+    write('plain.json', recipe);
+    write('optional.json', {...recipe, ...everyOptional()});
+    write('unknown.json', {...recipe, ...everyOptional(), reviewreuse: 'outcome'});
+    const commands = file => [['plan', file], ['totals-plan', file], ['changed-plan', file, '.', 'base', 'base.json'], ['declared-plan', file, '.', 'base']];
+    const plain = commands('plain.json').map(argv => run(...argv));
+    assert.equal(plain[0].status, 0, plain[0].err);
+    assert.deepEqual(commands('optional.json').map(argv => run(...argv)), plain);
+    for (const result of commands('unknown.json').map(argv => run(...argv))) {
+      assert.equal(result.status, 1); assert.match(result.err, /Unknown version 2 coverage recipe field/);
+    }
   }));
 
 test('changed plans measure every part and the command line exposes mode, totals and gates', () => repository(

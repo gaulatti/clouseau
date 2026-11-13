@@ -47,12 +47,20 @@ function validateTrust(trust) {
     Number.isSafeInteger(trust.max_age_seconds) && trust.max_age_seconds > 0 &&
     trust.max_age_seconds <= 172800, 'explicit trust policy and maximum age required');
   if (trust.attest !== undefined) validateAttest(trust.attest);
+  // Opt-in, protected: whether a local review whose findings send it to a human is signed ("signed"), so CI holds it for the
+  // maintainer instead of reviewing it again. Absent: only a passing review is ever signed.
+  requireReceipt(trust.human_review === undefined || trust.human_review === 'signed', 'human_review must be "signed" when set');
   // Opt-in, protected: what a receipt is bound to. Absent binds the exact head and base commits, as always; "diff" binds the
   // normalized diff instead (receipt-patch.cjs), which verifySources then requires to equal the pull request's.
   requireReceipt(trust.binding === undefined || trust.binding === 'diff', 'binding must be "diff" when set');
   // Opt-in, protected: the owner's confirmation follows the diff too (policy.cjs confirms()); only together with the binding.
   requireReceipt(trust.confirmation === undefined || (trust.confirmation === 'diff' && trust.binding === 'diff'),
     'confirmation must be "diff" when set, and only together with binding "diff"');
+  // Opt-in, protected: what the gate does when only the base moved under the assessed head (branch-update.cjs settle). "hold"
+  // (the meaning when absent) posts the needs-branch-update notice; "update" merges the base server-side with `update-token`.
+  // Only together with the binding, under which a base-only update leaves a receipt standing.
+  requireReceipt(trust.base_moved === undefined || (['hold', 'update'].includes(trust.base_moved) && trust.binding === 'diff'),
+    'base_moved must be "hold" or "update" when set, and only together with binding "diff"');
   const ids = new Set();
   for (const key of trust.keys) {
     requireReceipt(key && typeof key.id === 'string' && /^[a-zA-Z0-9_-]{1,80}$/.test(key.id) &&
@@ -66,6 +74,17 @@ function validateTrust(trust) {
   }
   return trust;
 }
+
+// The decisions a receipt may carry: a pass, and only with the protected opt-in, findings that a maintainer may clear.
+// A maintainer clears findings only: `repair_required` also results from a violated or unresolved gate (scope, security,
+// compatibility, completeness), which no owner confirmation waives, so every gate of both reviews must be satisfied or
+// inapplicable. A review without a report to read is never signable this way. Nor is one that left an earlier blocking
+// finding neither retained nor resolved: the maintainer would see only the new findings, so it is incomplete.
+const HUMAN_REVIEW = 'repair_required';
+const gatesClear = reviews => Array.isArray(reviews) && reviews.length > 0 && reviews.every(item =>
+  Array.isArray(item?.report?.gates) && item.report.gates.every(gate => ['satisfied', 'inapplicable'].includes(gate.state)));
+const signable = (decision, humanReview, reviews, unresolved = 0) => decision === 'auto_approve' ||
+  (humanReview === true && decision === HUMAN_REVIEW && unresolved === 0 && gatesClear(reviews));
 
 // A record without `partition` takes the unchanged path below. A chunked record is verified by the chunked verifier
 // (new shape if present, else current); it only supplies the merged reviews, and the single derivation continues here.
@@ -97,7 +116,8 @@ function reviewDecision(record, {chunked = null} = {}) {
   const combined = combine(reviews);
   const decision = state.unresolved.length && combined === 'auto_approve' ? 'review_incomplete' : combined;
   reject(result.decision === decision, 'claimed decision differs from calculated decision', 'record');
-  return {decision, reviews};
+  // The count of earlier findings left unresolved is not enumerable, so the verified result keeps its shape for every caller.
+  return Object.defineProperty({decision, reviews}, 'unresolved', {value: state.unresolved.length});
 }
 
 // The only shape of the review reuse claim: the keying and two counts of reviewer calls.
@@ -105,8 +125,11 @@ const reuseClaim = claim => claim !== null && typeof claim === 'object' && Objec
   claim.mode === 'outcome' && [claim.reused, claim.fresh].every(count => Number.isSafeInteger(count) && count >= 0);
 
 function issueReceipt({record, privateKey, keyId, issuer, reviewerSha, reviewerDigest = engineDigest(), reviewerSemantics, now = Date.now(), lifetime = 172800,
-  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation, reviewReuse}) {
-  requireReceipt(reviewDecision(record, {chunked}).decision === 'auto_approve', 'only a passing review can be signed');
+  nonce = crypto.randomBytes(32).toString('hex'), chunked = null, attestation, humanReview = false, reviewReuse}) {
+  // With `humanReview` (the protected `human_review: "signed"`) a review with findings that require a human is signed too.
+  // Integrity violations and incomplete reviews never are; failed verification never reaches signing (verification-attestation.cjs).
+  const derived = reviewDecision(record, {chunked});
+  requireReceipt(signable(derived.decision, humanReview, derived.reviews, derived.unresolved), 'only a passing review can be signed');
   requireReceipt(sha(reviewerSha) && /^[a-f0-9]{64}$/.test(reviewerDigest) && /^[a-f0-9]{64}$/.test(nonce) && Number.isSafeInteger(lifetime) &&
     lifetime > 0 && lifetime <= 172800 && (reviewerSemantics === undefined || /^[a-f0-9]{64}$/.test(reviewerSemantics)),
   'invalid runner revision, challenge or lifetime');
@@ -159,7 +182,7 @@ function signingKey(bundle, trust) {
 const engineVouches = claim => require('./review-semantics.cjs').acceptor()(claim);
 
 function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha, reviewerSha, reviewerDigest = engineDigest(), configDigest, policyDigest,
-  pullNumber, now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches}) {
+  pullNumber, now = Date.now(), engine = null, chunked = undefined, compatible = engineVouches, humanReview = false}) {
   validateTrust(trust);
   const key = signingKey(bundle, trust);
   const p = bundle.payload;
@@ -205,7 +228,7 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
     (!reviewerSha || p.reviewer_sha === reviewerSha) && p.reviewer_digest === reviewerDigest &&
     (engine || trust.reviewer_digest === reviewerDigest);
   if (!engineMatches) {
-    reject(record.result.decision === 'auto_approve', 'review did not pass', 'not_passing');
+    reject(signable(record.result.decision, humanReview, record.result.reviews), 'review did not pass', 'not_passing');
     // A different revision is accepted only when the protected engine that is running vouches for the receipt's review
     // semantics (`compatible` reads nothing but that engine's own checkout). Without a vouching decision, or for a
     // fixed-digest trust, the exact comparison above stands and the receipt is ignored.
@@ -222,8 +245,10 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   reject(wiring.problem(trust.chunked) === null, 'invalid protected chunked review configuration', 'settings');
   const chunkedOptions = chunked !== undefined ? chunked : (Object.hasOwn(record, 'partition') ? wiring.verifierOptions(trust) : null);
   const result = reviewDecision(record, {chunked: chunkedOptions});
-  reject(result.decision === 'auto_approve', 'review did not pass', 'not_passing');
-  return {record, ...result, attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
+  // Only a caller that asks for it ever receives a signed non-pass, marked `human_review`; today that is only `clouseau review`
+  // checking the receipt it has just signed. Every other caller refuses it as before, so it can never stand for a pass.
+  reject(signable(result.decision, humanReview, result.reviews, result.unresolved), 'review did not pass', 'not_passing');
+  return {record, ...result, ...(result.decision === HUMAN_REVIEW ? {human_review: true} : {}), attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
 }
 
 function verifyReceipt(bundle, options) {
@@ -422,7 +447,7 @@ const detailOf = error => error instanceof ReceiptRejected ? error.detail : {};
 
 // The one decision for a claimed receipt: `ref` is set only when it verifies in every respect. Any other outcome returns
 // the fixed class in `rejected` (or neither, when no receipt is claimed) and the receipt is never consulted again.
-async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest, reviewerDigest}) {
+async function screenReceipt({github, repo, pr, engine, trust, configDigest, policyDigest, reviewerDigest, humanReview = false}) {
   let ref;
   try {ref = marker(pr.body);} catch (error) {return {ref: null, rejected: error.reason, detail: error.detail};}
   if (!ref) return {ref: null, rejected: null};
@@ -434,7 +459,7 @@ async function screenReceipt({github, repo, pr, engine, trust, configDigest, pol
   }
   try {
     const verified = verifyReceipt(bundle, {engine, trust, repository: `${repo.owner}/${repo.repo}`, author: pr.user.login, pullNumber: pr.number,
-      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest, reviewerDigest});
+      headSha: pr.head.sha, baseSha: pr.base.sha, configDigest, policyDigest, reviewerDigest, humanReview});
     return {ref, bundle, verified, rejected: null};
   } catch (error) {return {ref: null, rejected: rejection(error) ?? 'malformed', detail: detailOf(error)};}
 }
@@ -454,4 +479,4 @@ async function screenSources(options) {
   }
 }
 
-module.exports = {screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, validateAttest, attestable, AUTHOR, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
+module.exports = {signable, screenReceipt, screenSources, DOMAIN, MAX_RECEIPT_BYTES, validateTrust, validateAttest, attestable, AUTHOR, reviewDecision, issueReceipt, verifySignedRecord, verifyReceipt, marker, loadReceipt, verifySources};
