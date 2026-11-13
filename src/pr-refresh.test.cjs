@@ -1,4 +1,5 @@
 'use strict';
+const {everyOptional} = require('../test/local-optional-keys.cjs');
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -694,11 +695,11 @@ test('the base\'s .clouseau-local.json "review_reuse": "outcome" opts every revi
   }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
 });
 
-test('a version 2 base .clouseau-local.json with "review_reuse": "outcome" is read and opts every review in', async t => {
+test('a version 2 base .clouseau-local.json with every documented optional field is read by review and refresh, and review_reuse opts every review in', async t => {
   const {config, calls, runtime} = signedFixture(t);
   // The strict version 2 top-level allowlist must admit the documented optional field, or every review refuses the recipe.
   const local = {version: 2, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md', verification: [['node', '--version']],
-    coverage: [{format: 'istanbul', report: 'coverage.json', source_directory: 'src'}], review_reuse: 'outcome'};
+    coverage: [{format: 'istanbul', report: 'coverage.json', source_directory: 'src'}], ...everyOptional()};
   await pullRepository(async f => {
     const lines = () => fs.readdirSync(path.join(f.work, 'src')).reduce((n, name) => n + fs.readFileSync(path.join(f.work, 'src', name), 'utf8').split('\n').length, 0);
     const run = {...runtime(f), attest: ({technical}) => technical,
@@ -712,5 +713,9 @@ test('a version 2 base .clouseau-local.json with "review_reuse": "outcome" is re
     const second = await review();
     assert.equal(calls.length, firstCalls); assert.equal(second.reused_calls, firstCalls);
     assert.deepEqual(JSON.parse(fs.readFileSync(second.receipt, 'utf8')).payload.review_reuse, {mode: 'outcome', reused: firstCalls, fresh: 0});
+    // `clouseau refresh` reads the same base recipe: a base move is merged, reviewed from the stored answers and published.
+    f.advance('docs.md', 'moved\n');
+    const refreshed = await main(['refresh', '--pr', '7', '--directory', f.work, '--request-file', request(f.root), '--harness', 'claude'], run);
+    assert.equal(refreshed.status, 'refreshed'); assert.equal(refreshed.harness_invocations, 0); assert.equal(f.remoteHead(), f.head());
   }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
 });

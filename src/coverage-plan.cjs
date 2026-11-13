@@ -4,7 +4,8 @@ const {safePath} = require('./acceptance-sources.cjs');
 const {packageDirectory, validPartShape} = require('./coverage-util.cjs');
 
 // The top-level fields every `.clouseau-local.json` carries, and the optional ones it documents (docs/local-review.md).
-// Version 2 accepts exactly these; readLocalConfig validates the value of each optional field.
+// Version 2 accepts exactly these, and every reader of the file checks its top-level keys against V2_LOCAL_KEYS (this list;
+// never a copy). readLocalConfig validates the value of each optional field.
 const REQUIRED_LOCAL_KEYS = Object.freeze(['version', 'base_branch', 'readme', 'repository_policy', 'verification', 'coverage']);
 const OPTIONAL_LOCAL_KEYS = Object.freeze(['review_reuse']);
 const V2_LOCAL_KEYS = Object.freeze([...REQUIRED_LOCAL_KEYS, ...OPTIONAL_LOCAL_KEYS]);
@@ -32,4 +33,4 @@ function coverageParts(config, {allowUnsupported = false} = {}) {
   return parts;
 }
 
-module.exports = {coverageParts, REQUIRED_LOCAL_KEYS, OPTIONAL_LOCAL_KEYS};
+module.exports = {coverageParts, REQUIRED_LOCAL_KEYS, OPTIONAL_LOCAL_KEYS, V2_LOCAL_KEYS};
