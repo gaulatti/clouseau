@@ -8,7 +8,7 @@ const {digest} = require('./acceptance.cjs');
 const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
 const {askHarness, assertHarness} = require('./local-harness.cjs');
-const {issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
+const {signable, issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
@@ -244,6 +244,11 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   const priorFindings = previous?.findings || [];
   const sameRevision = previous && previous.head_sha === head && previous.base_sha === baseSha && previous.reviewer_digest === reviewer.digest;
   if (sameRevision && previous.decision !== 'auto_approve') {
+    // A signed review that requires a human is never sampled again on the same revision, even once its receipt expires.
+    if (previous.decision === 'repair_required' && previous.has_receipt === true) {
+      throw new Error('This revision already has a signed review that requires a human; it is never reviewed again. CI does not accept this ' +
+        'receipt until the owner-decision hold lands; commit (an empty commit is enough) and review the new head, which must retain or resolve its findings');
+    }
     throw new Error('This revision already has a non-passing local review; repair the implementation or trusted evidence before reassessing');
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
@@ -408,16 +413,20 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   fs.mkdirSync(path.dirname(output), {recursive: true});
   fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
   let receipt = null;
-  if (result.decision === 'auto_approve' && identity) {
+  // With the protected `human_review: "signed"` a review whose findings alone send it to a maintainer is signed as well (its
+  // verification passed: with an identity, anything else stopped before review). Integrity violations, incomplete reviews (an
+  // earlier finding left unresolved included) and any violated or unresolved gate never are: the same rule `issueReceipt` enforces.
+  const humanReview = identity !== null && ciConfig.local_review.human_review === 'signed';
+  if (identity && signable(result.decision, humanReview, chunking ? reviews : result.reviews, findings.unresolved.length)) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
       reviewerSemantics: require('./review-semantics.cjs').semanticsDigest(),
-      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null,
+      lifetime: ciConfig.local_review.max_age_seconds, attestation, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null, humanReview,
       ...(outcomeReuse ? {reviewReuse: {mode: 'outcome', reused: reusing.stats.reused, fresh: result.usage.length - reusing.stats.reused}} : {})});
     verifyReceipt(bundle, {engine, trust: ciConfig.local_review, repository: collected.snapshot.repository, author: pull ? pull.author : identity.github_actor, pullNumber: pull?.number,
       headSha: head, baseSha: collected.snapshot.base_sha, reviewerSha, reviewerDigest: reviewer.digest,
-      configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest});
+      configDigest: collected.snapshot.config_digest, policyDigest: collected.snapshot.policy_digest, humanReview});
     receipt = path.join(cache, 'receipt.json');
     fs.writeFileSync(receipt, JSON.stringify(bundle) + '\n', {mode: 0o600});
   }
