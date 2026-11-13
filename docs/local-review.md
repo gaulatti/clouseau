@@ -843,10 +843,10 @@ With `"signed"`, `clouseau review` also signs a review whose only blocker is gra
 
 `issueReceipt` enforces the same rule as `clouseau review`, so no other caller can sign more. A signed non-pass is never
 acceptable as a pass: every verifier (`verifySignedRecord`, and through it `verifyReceipt` and `screenReceipt`) refuses it as
-`not_passing` unless its caller explicitly asks for it, and only `receipt-standing.cjs` (used by `clouseau refresh`) asks.
-`clouseau refresh` treats such a receipt as up to date and does not review it again, and `clouseau review` never reviews
-the same revision again once it has a signed review that requires a human. To sign again, the author commits (an empty
-commit is enough) and reviews the new head, which must retain or resolve the earlier findings.
+`not_passing` unless its caller explicitly asks for it, and today only `clouseau review`, checking the receipt it has just
+signed, asks. `clouseau review` never reviews the same revision again once it has a signed review that requires a human;
+it stops and says so. To sign again, the author commits (an empty commit is enough) and reviews the new head, which must
+retain or resolve the earlier findings.
 
 **Until CI holds such a receipt for a maintainer, the setting is dark and fails closed.** CI does not ask for the signed
 non-pass: the assessment, the gate and `operation: attested` refuse the receipt as `not_passing`, exactly as they refuse any
