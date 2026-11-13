@@ -5,7 +5,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "88e6caf4ad488856f9ad5de1e1d0587921fe46118248688bac9da3948a347c2a"
+      "sha256": "7c54ff85709c143909079b15799224a8f2a12f04eceb16381c90553d8cb333a8"
     },
     {
       "path": "src/local-cli.cjs",
@@ -15,7 +15,7 @@
     {
       "path": "src/local-git.cjs",
       "mode": 0,
-      "sha256": "3a1a5f011313797db22fc4f99bc9339d8a9e15d19830a2ed5052794875976e02"
+      "sha256": "8a336a28e3441fe79ab23ebf2ca7037514641cfe59adf847f012279204ecce91"
     },
     {
       "path": "src/receipt-hold.cjs",
