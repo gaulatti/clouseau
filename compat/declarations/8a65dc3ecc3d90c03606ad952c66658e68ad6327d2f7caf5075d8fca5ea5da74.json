@@ -5,7 +5,12 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "a2a810a3b4a40931d48f03873f7fae97b3c022735841fecdbe35c5422f84a70f"
+      "sha256": "a051fa9fa1c1c8ffaf2748fd5ca72dcb3f1afcdacfac610fb89c64da232e6452"
+    },
+    {
+      "path": "src/branch-update.cjs",
+      "mode": 0,
+      "sha256": "8eab9240a39fb08e7528fcf2004ccc482845d637b167e6df9af29b0f83c89a14"
     },
     {
       "path": "src/local-cli.cjs",
@@ -15,12 +20,12 @@
     {
       "path": "src/local-receipt.cjs",
       "mode": 0,
-      "sha256": "d79766ea3498ef7f8eddbf46a988fe9dcc87a025765f60296909c082c992497f"
+      "sha256": "06a749da6e11003e81d4d0f27f303d66eb110c703978e7d34b7ccb76bb884d01"
     },
     {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "8deff42efa01528390a76c8f49d4918a875b6669ce6dabaef98cc91066b75743"
+      "sha256": "6f89ceaa45fa3cfb932d5abd7d22160a5598012af9c89d9e684abb8314ce9842"
     },
     {
       "path": "src/pr-refresh.cjs",
