@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/compat-declarations.cjs",
+      "mode": 0,
+      "sha256": "386ac104d9338ed716665d1ac2b8fdd1e21156db9102a3591f8630cec25c2157"
+    },
+    {
+      "path": "src/pr-refresh.cjs",
+      "mode": 0,
+      "sha256": "fe7bea291bcf22a7117d3a349b7ba6734f8cd896d0f91da2b4905f2ce98b7cd1"
+    }
+  ]
+}
