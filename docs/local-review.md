@@ -621,6 +621,11 @@ When a confirmation of an earlier head carries under `confirmation: "diff"`:
 | a base change to the lines around the branch's change, to `.github/clouseau.json` or to the purpose contract | voids it |
 | a patchless or truncated file list, an unknown commit or another lineage | voids it |
 
+Observed in this repository: gaulatti/clouseau#250 merged on its refreshed head b407c24 with the owner's only confirmation
+naming the earlier head a32c894 (gate run 43339412416, 2026-11-13), and gaulatti/clouseau#253 merged on d627c7c with the
+only confirmation naming fe6ca3a (gate run 43346604645). In both cases the refresh was a merge of the base that left the diff
+unchanged, and no new comment was needed.
+
 ### Base moved: hold or update (opt-in)
 
 When the base moves after a pull request was assessed and only the base differs (the live head is still the assessed head), the
