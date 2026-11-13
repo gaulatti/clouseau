@@ -95,7 +95,7 @@ test('the unit cap holds the pull request before any provider call and names the
   assert.equal(fs.existsSync(f.recordPath), false);
   const posted = [];
   await require('./incomplete.cjs').post({github: {paginate: async () => [], rest: {issues: {listComments: async () => ({data: []}),
-    createComment: async args => {posted.push(args.body); return {data: {id: 1}};}}}}, context: f.context, assessment});
+    createComment: async args => {posted.push(args.body);}}}}, context: f.context, assessment});
   assert.match(posted[0], /max_units = 2/);
   assert.doesNotMatch(posted[0], /too big|too large/i);
 }, {config: on({enabled: true, max_units: 2})}));
