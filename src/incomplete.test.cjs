@@ -141,6 +141,10 @@ test('a notice whose cause changes is a new comment that notifies; the earlier o
   // The same cause again: the current notice is updated in place.
   await post({github, context, assessment: {...held, cause: 'receipt_history_changed', reason: 'Still changed.'}});
   assert.deepEqual(writes.slice(3).map(([kind, args]) => [kind, args.comment_id]), [['update', 82]]);
+  // An earlier notice that names no cause (an older engine's) is a different cause too.
+  comments.push({id: 90, user: {login: 'github-actions[bot]'}, body: `${MARKER}\n## Clouseau review incomplete\n\nNo cause line.`});
+  await post({github, context, assessment: {...held, cause: 'receipt_history_changed', reason: 'Changed again.'}});
+  assert.deepEqual(writes.slice(4).map(([kind, args]) => [kind, args.comment_id ?? null]), [['create', null], ['update', 90]]);
   // The history-changed steps name what resolves it, never a local re-review.
   const text = body({...held, cause: 'receipt_history_changed'}, 'https://github.com/example/product/actions/runs/42');
   assert.match(text, /Remove the `clouseau-local-review` marker/);

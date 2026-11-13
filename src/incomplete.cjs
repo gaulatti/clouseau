@@ -147,10 +147,10 @@ async function post({github, context, assessment}) {
     await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: text});
     return;
   }
-  const {data: created} = await github.rest.issues.createComment({...repo, issue_number, body: text});
+  const created = await github.rest.issues.createComment({...repo, issue_number, body: text});
   if (existing) {
-    await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: `Superseded: this review notice was replaced by a newer ` +
-      `one${created?.html_url ? ` (${created.html_url})` : ''} because its cause changed.`});
+    await github.rest.issues.updateComment({...repo, comment_id: existing.id,
+      body: `Superseded: this review notice was replaced by a newer one (${created.data.html_url}) because its cause changed.`});
   }
 }
 
