@@ -609,6 +609,47 @@ unknown commit or another lineage never matches, and any other API failure surfa
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
 
+### Base moved: hold or update (opt-in)
+
+When the base moves after a pull request was assessed and only the base differs (the live head is still the assessed head), the
+gate stops. The protected `local_review.base_moved` in `.github/clouseau.json` on the base branch says what it does then. It is
+valid only together with `binding: "diff"` (any other combination, or a value other than these two, fails configuration
+validation, like `confirmation`):
+
+| `base_moved` | The gate, after a base-only move |
+| --- | --- |
+| absent or `"hold"` (the default) | posts the `base_moved` needs-branch-update notice and fails, exactly as before; the owner updates the branch |
+| `"update"` | for an approved revision (a decision of `auto_approve` or `owner_decision` and, where the gate requires a maintainer's confirmation: the owner decision itself, a protected path or a bot-authored pull request, that confirmation of this head), merges the base into the branch server-side (`updateBranch` with `expected_head_sha`), posts no notice, and ends the job with cause `base_update_requested` (`Branch updated server-side ...`): this revision is neither approved nor merged, and the new head's own run continues. Anything else (another decision, or a confirmation still outstanding) posts the notice and fails, as under `"hold"`: Clouseau never merges the base into a branch that is not yet approved |
+
+The update needs the gate step's `update-token` input: a token whose push **starts workflows**, with contents: write on the
+repository (a fine-grained PAT or an App token, like `repair-token`; the reference template passes the same
+`CLOUSEAU_REPAIR_TOKEN` secret to both). When the base brings changes to `.github/workflows/`, GitHub also requires workflows
+permission (workflows: write for a fine-grained token or App, the `workflow` scope for a classic token). Without it GitHub
+refuses the update and the gate fails with that refusal, updating nothing. The workflow `GITHUB_TOKEN` cannot be used: a push made with it starts no workflow, so
+the new head would have no verification. Without `update-token` the gate holds as under `"hold"`, and the notice says to set
+the `update-token` input of the gate step. A head in a fork is never updated (the notice says so). When GitHub refuses with
+HTTP 422 (a merge conflict with the base, or a head that moved) the gate falls back to the notice, which says so and asks the
+owner to update by hand; any other refusal fails the job with GitHub's error. Under `"update"`, `reconcile-base` also updates
+**every** stale same-repository pull request in one run instead of one at a time, because under the diff binding a base-only
+update needs no fresh review; under `"hold"` it is unchanged. A repository that does not set `base_moved` is unaffected even
+when the token is supplied.
+
+**What runs on the updated head.** The new head's own `pull_request` run. Its `attested` job answers `'true'` while the
+diff-bound receipt still attests (the diff is unchanged and the base's `.clouseau-local.json` is the signed one), so `verify`
+skips every receipt-covered step; only steps outside the receipt's recipe still run (none in the reference template; this
+repository's own engine self-tests, for example). Then the assessment reuses the receipt with zero CI AI calls: no reviewer is
+asked, and under `confirmation: "diff"` the owner's confirmation carries. The receipt-covered commands are **not** re-run on
+the base merged with the branch. This is the same outcome as `clouseau refresh` answering `updated` today, with the same
+accepted limit (see the test waiver above): a break caused only by the base move is found after merge. When the merge changed
+the diff, the receipt no longer covers it and the new head is verified and reviewed as any new head.
+
+**Loop bound.** The update is requested only when the live head equals the assessed head and only the base moved, and
+`expected_head_sha` makes GitHub refuse if the head moved meanwhile. A rerun of the old head's gate sees the new head, so it
+is not a base-only move and requests nothing: the same (head, base) is updated at most once. The new head's assessment carries
+the new base, so it requests another update only if the base moves again. Updating a branch never moves the base, so two pull
+requests cannot update each other. `src/acceptance-controller-base-moved.test.cjs` and `src/base-reconcile-base-moved.test.cjs`
+prove these at the gate (both base-move checks, including the private-merge boundary) and at reconciliation.
+
 ### Renewing a receipt that no longer verifies
 
 When the base has not moved (or, under the diff binding, at any time), `refresh` does not answer `up_to_date` merely because nothing needs merging. It judges the

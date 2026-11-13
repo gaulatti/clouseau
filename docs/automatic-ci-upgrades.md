@@ -341,7 +341,9 @@ is behind:
    starts normal verification, a fresh independent review and, where required,
    a fresh local receipt. Only one PR is updated per push so the next sibling
    merge does not invalidate several in-flight re-reviews; the merge of the
-   updated PR is itself a push that updates the next one.
+   updated PR is itself a push that updates the next one. Under the protected
+   `local_review.base_moved: "update"` every stale same-repository PR is
+   updated in the same run instead (see below).
 3. Every other stale PR (all of them without `update-token`, forks, deleted head
    repositories, conflicts or a refused update) gets one visible
    `clouseau-needs-branch-update` comment, updated in place on later pushes.
@@ -407,6 +409,34 @@ the base branch, or a `workflow_run` trigger that watches a different workflow; 
 review-run-only job condition; issues write without contents or actions write; and queued (never
 cancelled) runs. A condition that also admits `schedule` is accepted because it still contains the
 `workflow_run` clause.
+
+### Opt-in: update the branch instead of holding
+
+A consumer that sets the protected `local_review.base_moved: "update"` (valid only with `binding: "diff"`; the default
+`"hold"` is today's behavior; see [local review](local-review.md#base-moved-hold-or-update-opt-in)) lets the gate merge a moved
+base into the branch server-side instead of posting the notice when the pull request is approved (including any maintainer confirmation the gate requires), and lets `reconcile-base` update every stale same-repository
+PR in one run instead of one at a time. Upgrade steps:
+
+1. Pass `update-token` to the gate step of `approve-and-merge`. The reference template passes
+   `update-token: ${{ secrets.CLOUSEAU_REPAIR_TOKEN }}`, the same secret as `repair-token`: one token serves both. Use
+   whatever secret your workflow already passes as `repair-token` (this repository's own workflow calls it `DEPLOYMENT_TOKEN`).
+2. That token must start workflows (a `GITHUB_TOKEN` push starts none) and needs contents: write on the repository. When the
+   base brings changes to `.github/workflows/`, GitHub refuses the update unless the token may also change workflows
+   (a fine-grained token or GitHub App with workflows: write, or a classic token with the `workflow` scope). The gate then
+   fails with GitHub's refusal and nothing is updated. Grant it, or update such a branch by hand.
+3. Set `"base_moved": "update"` under `local_review` in `.github/clouseau.json` (a protected change, confirmed by the owner).
+
+On the updated head only the new head's own `pull_request` run follows: `verify` skips the receipt-covered steps while the
+diff-bound receipt still attests, so they are not re-run on the merged base (as with `clouseau refresh` answering `updated`), no
+reviewer is asked, and under `confirmation: "diff"` the owner's confirmation carries. The old head's gate ends with cause
+`base_update_requested`. Loop bound: an update is requested only for the assessed head with only the base moved, with
+`expected_head_sha`; a rerun sees the new head and requests nothing, the new head carries the new base, and updating a
+branch never moves the base. Without the setting the token is never used.
+
+On a controller-managed private-owner repository (the merge the acceptance controller performs itself), the update happens at
+the gate's first check, before the controller's merge, and the updated head then merges by the same atomic fast-forward. The
+base can still move in the seconds between that check and the controller's own re-read of the pull request; that rare case,
+and an exact-revert record, keep holding with the notice (fail closed) and are updated by the next reconcile or base move.
 
 ## Operations and boundaries
 
