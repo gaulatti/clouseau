@@ -199,15 +199,25 @@ function declarationMeaning(path, status, patch) {
   return JSON.stringify([value.decision, value.changes.map(change => [change.path, change.mode, change.sha256 === null])]);
 }
 
+// The one rule both the receipt binding (withoutDeclarations) and the owner's diff-following confirmation (policy.cjs
+// confirms) apply: split changed files into declarations, compared by their meaning, and every other file, compared byte for
+// byte. `entries` are {path, status, patch}; the result keeps the other entries in order and the meanings sorted.
+function splitDeclarations(entries) {
+  const meanings = []; const others = [];
+  for (const entry of entries) {
+    const meaning = declarationMeaning(entry.path, entry.status, entry.patch);
+    if (meaning === null) others.push(entry); else meanings.push(meaning);
+  }
+  return {meanings: meanings.sort(), others};
+}
+
 function withoutDeclarations({snapshot, files}) {
-  const signed = snapshot.files.filter(item => declarationMeaning(item.path, item.status,
-    hostedForm(signedPatch(snapshot, item), {filename: item.path, status: item.status})) !== null);
-  const live = files.filter(file => declarationMeaning(file.filename, file.status, file.patch) !== null);
-  const meanings = list => list.map(([path, status, patch]) => declarationMeaning(path, status, patch)).sort();
-  const signedMeanings = meanings(signed.map(item => [item.path, item.status,
-    hostedForm(signedPatch(snapshot, item), {filename: item.path, status: item.status})]));
-  const liveMeanings = meanings(live.map(file => [file.filename, file.status, file.patch]));
-  if (JSON.stringify(signedMeanings) !== JSON.stringify(liveMeanings)) {
+  const signedSplit = splitDeclarations(snapshot.files.map(item => ({item, path: item.path, status: item.status,
+    patch: hostedForm(signedPatch(snapshot, item), {filename: item.path, status: item.status})})));
+  const liveSplit = splitDeclarations(files.map(file => ({file, path: file.filename, status: file.status, patch: file.patch})));
+  const signed = snapshot.files.filter(item => !signedSplit.others.some(entry => entry.item === item));
+  const live = files.filter(file => !liveSplit.others.some(entry => entry.file === file));
+  if (JSON.stringify(signedSplit.meanings) !== JSON.stringify(liveSplit.meanings)) {
     throw new ReceiptPatchMismatch((signed[0] ?? live[0]).path ?? (signed[0] ?? live[0]).filename);
   }
   const dropped = new Set(signed.map(item => item.path));
@@ -215,4 +225,4 @@ function withoutDeclarations({snapshot, files}) {
     files: files.filter(file => !live.includes(file))};
 }
 
-module.exports = {ReceiptPatchMismatch, hostedForm, verifyPatches, canonicalHunks, diffDigest, withoutDeclarations};
+module.exports = {ReceiptPatchMismatch, hostedForm, verifyPatches, canonicalHunks, diffDigest, withoutDeclarations, splitDeclarations};

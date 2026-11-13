@@ -123,9 +123,9 @@ function verifyRecord(record, assessment, config, engine = null) {
   const derived = humanHold && ['auto_approve', 'repair_required'].includes(result.decision) ? 'owner_decision' :
     decided(result, record.controls || Boolean(record.local_authorization));
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
-  // Under the setting, a held receipt (or one a maintainer has since confirmed) may find its own published ledger on the pull request.
-  const ownLedger = humanReviewSigned(config) && Boolean(record.local_receipt) && (humanHold || Boolean(record.local_authorization));
-  return {state, ownLedger, confirmation: findingsHold(signed), ...publication({...result, decision: assessment.decision},
+  // A record carried by a local receipt may find on the pull request the ledger the gate published from it on an earlier run
+  // (a hold for owner confirmation, a base move): the write boundary accepts exactly that ledger and no other.
+  return {state, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed), ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
@@ -262,13 +262,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             '(AGENTS.md, CI workflow or configuration, the repository policy or another configured sensitive path); ' +
             'the exact-head owner confirmation is missing.');
         }
-        // On the owner-decision hold (protected `human_review: "signed"`) the gate publishes this receipt's own findings before
-        // the maintainer approves, so the run that approval starts finds them on the pull request. A ledger whose findings equal
-        // exactly what this signed record publishes is that, not a change; any other history still voids the receipt.
-        const holds = humanReviewSigned(config) && (verified.human_review === true || Boolean(controls));
-        const own = holds && digest(previous.findings) === digest(reconcile({...verified.record.result, reviews: verified.reviews},
+        // The gate publishes this receipt's findings on its first run, before an owner confirmation or a base update lets a
+        // later run finish. A ledger whose findings equal exactly what this signed record reconciles to is that publication,
+        // not a change; any other history still voids the receipt. The record keeps the signed history either way, so the gate
+        // re-derives exactly the ledger it already published.
+        const own = digest(previous.findings) === digest(reconcile({...verified.record.result, reviews: verified.reviews},
           verified.record.snapshot, verified.record.previous.findings).findings);
-        // The record keeps the signed history either way, so the gate re-derives exactly the ledger it already published.
         const recorded = own ? {...previous, findings: verified.record.previous.findings} : previous;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) && !own) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
@@ -470,7 +469,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
-    // The ledger this held record published itself (before the maintainer approved) is not a change in history.
+    // The ledger this record's own receipt published on an earlier run is not a change in history (verifyRecord, ownLedger).
     const ownLedger = verifiedRecord.ownLedger && digest(current.findings) === digest(verifiedRecord.state.findings);
     if (digest(current) !== digest(record.previous) && !ownLedger) throw new Error('Acceptance history changed; reassess the current record');
     const links = [];

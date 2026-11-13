@@ -19,8 +19,10 @@
 // not accept it, a forged or missing marker) is renewed: no merge, the same review, publication and marker, and no push of the
 // branch, whose head is unchanged.
 
+const fs = require('node:fs');
 const path = require('node:path');
 const cp = require('node:child_process');
+const compat = require('./compat-declarations.cjs');
 const {git, githubRepository, readLocalConfig, assertUnchanged} = require('./local-git.cjs');
 const {AGENTS} = require('./local-agent.cjs');
 const {assertHarness} = require('./local-harness.cjs');
@@ -107,6 +109,48 @@ function merge({directory, remoteBase, branch}) {
   }
 }
 
+// The compatibility declarations of the merged tree, judged by the repository's own check (`inspect` of
+// compat-declarations.cjs, which the maintainer tool's `verify` uses; docs/receipt-compatibility.md). It applies only to a repository that carries the tooling,
+// a `compat/` manifest and a `compat/declarations/` directory (Clouseau's own); anywhere else it reads nothing more and
+// returns null. A clean tree also returns null. A merge that changed a declared semantic file leaves that declaration pinning
+// stale content; when that is the only problem, every stale declaration has one decision and together they declare exactly the
+// pull request's own semantic changes, they are replaced by one declaration with that decision over the same files, written
+// by the maintainer tool's own `declare`, and committed. Every other finding refuses, with the merge left in the local branch.
+function repinDeclarations({directory, remoteBase, head}) {
+  if (!fs.existsSync(path.join(directory, compat.MANIFEST)) || !fs.existsSync(path.join(directory, compat.DECLARATIONS))) return null;
+  const state = compat.inspect(directory);
+  if (!state.problems.length && !state.undeclared.length) return null;
+  const refuse = reason => new Error(`Merged ${remoteBase} locally, but the compatibility declarations of the merged tree do not verify: ${reason}. ` +
+    `Nothing was pushed; the merge commit remains in the local branch for you to inspect (git reset --hard ${head} discards it)`);
+  // `inspect` names which of its problems are stale content pins (`stale`, `staleProblems`); any other problem refuses.
+  const others = state.problems.length - state.staleProblems;
+  if (others) {
+    throw refuse(`it has problems besides stale content pins, so the base's change to a declared file is not folded yet or the tree needs a repair (${state.problems.join('; ')})`);
+  }
+  if (state.undeclared.length) throw refuse(`an undeclared semantic change (${state.undeclared.join(', ')})`);
+  const names = new Set(state.stale);
+  const stale = state.declarations.filter(declaration => names.has(declaration.name));
+  const declared = [...new Set(stale.flatMap(declaration => declaration.changes.map(change => change.path)))].sort();
+  const changed = [...state.changed.keys()].sort();
+  if (declared.join('\0') !== changed.join('\0')) {
+    throw refuse(`the declared path set (${declared.join(', ')}) differs from the pull request's changed semantic paths (${changed.join(', ')})`);
+  }
+  const decisions = [...new Set(stale.map(declaration => declaration.decision))];
+  if (decisions.length !== 1) throw refuse(`the stale declarations carry mixed decisions (${decisions.sort().join(', ')})`);
+  for (const declaration of stale) fs.rmSync(path.join(directory, compat.DECLARATIONS, declaration.name));
+  // The maintainer tool's own `declare`; whatever it could not repair, the check after the commit reports.
+  compat.declare(directory, decisions[0]);
+  git(directory, ['add', '--all', '--', compat.DECLARATIONS]);
+  git(directory, ['commit', '--quiet', '-m', `chore(compat): re-pin the compatibility declaration after merging ${remoteBase}`]);
+  const after = compat.inspect(directory);
+  if (after.problems.length || after.undeclared.length) {
+    throw new Error(`Re-pinning the compatibility declaration after merging ${remoteBase} left the tree failing its check (${[...after.problems, ...after.undeclared].join('; ')}). ` +
+      `Nothing was pushed; the merge and re-pin commits remain in the local branch for you to inspect (git reset --hard ${head} discards them)`);
+  }
+  const added = fs.readdirSync(path.join(directory, compat.DECLARATIONS)).filter(name => !state.declarations.some(declaration => declaration.name === name));
+  return {decision: decisions[0], removed: stale.map(declaration => declaration.name), added};
+}
+
 async function refreshPull(args, {review, publish, standing, installed, state, execute = cp.execFileSync, available = name => cp.spawnSync(name, ['--version'], {stdio: 'ignore'}).status === 0}) {
   if (!/^[1-9][0-9]{0,8}$/.test(args.pr || '')) throw new Error('--pr takes a pull request number');
   if (Boolean(args.agent) === Boolean(args.harness)) throw new Error('Choose exactly one of --agent (inside an AI harness) or --harness (headless)');
@@ -171,11 +215,17 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
         merged = true;
       }
       if (merged && localDiff(directory, remoteBase, 'HEAD') === before) {
+        // Invariant: `updated` never pushes a head that fails a cheap deterministic invariant of the repository. Nothing was
+        // reviewed, so nothing else would catch it before CI does. Here that is the compatibility check: a stale declaration is
+        // re-pinned in this same push when that is provably the whole repair, and anything else refuses before the push.
+        const repinned = repinDeclarations({directory, remoteBase, head});
         // A plain push, never forced: a pull request that moved meanwhile rejects it and nothing on GitHub changes.
         git(directory, ['push', 'origin', `HEAD:refs/heads/${pull.ref}`]);
+        const note = `Merged ${remoteBase} into pull request ${number} and pushed it. Its local review receipt still covers the unchanged diff (protected binding: diff); nothing was reviewed or published`;
         return {status: 'updated', pull_request: number, previous_head_sha: head, head_sha: git(directory, ['rev-parse', 'HEAD']).trim(),
           base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: true,
-          note: `Merged ${remoteBase} into pull request ${number} and pushed it. Its local review receipt still covers the unchanged diff (protected binding: diff); nothing was reviewed or published`};
+          ...repinned ? {declaration: 're-pinned', note: `${note}. The merge changed a declared semantic file, so the ${repinned.decision} compatibility declaration ` +
+            `was re-pinned to the merged content in the same push (${repinned.removed.join(', ')} replaced by ${repinned.added.join(', ')})`} : {note}};
       }
     }
   }
@@ -226,4 +276,4 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   return {...result, ...context, status: 'refreshed', pushed: true, ...fields};
 }
 
-module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff, localDiff};
+module.exports = {refreshPull, withMarker, merge, resumable, bindsDiff, localDiff, repinDeclarations};
