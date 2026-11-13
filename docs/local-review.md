@@ -991,7 +991,11 @@ Deliberately unchanged, because they are intent and infrastructure rather than
 receipt verification: a verified receipt still cannot replace changed review
 history or supply protected-control owner authorization (the controller holds,
 and the notice now names which rule: cause `receipt_protected_controls` or
-`receipt_history_changed`);
+`receipt_history_changed`). The acceptance ledger the gate itself published from
+the same receipt on an earlier run (one held for the owner's confirmation, or by a
+base move) is not a change of history: a ledger whose findings equal exactly what
+the signed record reconciles to is accepted by the assessment and by the gate's
+write boundary, and any other ledger still voids the receipt;
 a GitHub outage, rate limit or permission error while reading the receipt is
 reported with its ordinary cause, not ignored; and the post-assessment gate
 re-verifies the exact accepted record immediately before approval or merge and
