@@ -37,4 +37,29 @@ async function fixture() {
     policyDigest: f.snapshot.policy_digest, now: 10000000};
   return f;
 }
-module.exports = {fixture};
+
+// The record with one graded blocking finding in the examiner's report and every gate still satisfied: its recalculated
+// decision is `repair_required` because of the finding alone. `mutate` runs on the copy before the decision is recomputed.
+function withFinding(record, mutate = () => {}) {
+  const {FACTORS} = require('../src/acceptance.cjs');
+  const {reviewDecision} = require('../src/local-receipt.cjs');
+  const copy = structuredClone(record);
+  const report = copy.result.reviews[0].report;
+  const [evidence] = report.accounting[0].evidence;
+  report.findings.push({id: 'fictional-defect', title: 'Fictional defect', path: report.accounting[0].path,
+    cause: 'The changed path no longer preserves the accepted contract.', trigger: 'A fictional input.', consequence: 'A fictional regression.',
+    obligation: 'Restore the accepted contract.', evidence: [evidence],
+    factors: Object.fromEntries(FACTORS.defect.map(name => [name, {value: name.includes('excess') ? 0 : 1, evidence: [evidence], reason: 'Established by the cited source.'}])),
+    blast_radius: 1, opportunity: {mechanical: false, beneficial: false, within_scope: false, verified: false}, repair_paths: [report.accounting[0].path]});
+  // A role with findings records its grading round as well.
+  copy.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
+    ({role, phase, harness: 'codex', session: `fictional-${role}-${phase}`, request_digest: digest(role), response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
+  copy.result.execution_digest = digest(copy.result.usage);
+  mutate(copy);
+  for (const decision of ['repair_required', 'blocked_integrity', 'review_incomplete']) {
+    copy.result.decision = decision;
+    try {reviewDecision(copy); return copy;} catch { /* try the next decision */ }
+  }
+  throw new Error('no consistent decision');
+}
+module.exports = {fixture, withFinding};
