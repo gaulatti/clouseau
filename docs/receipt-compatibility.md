@@ -89,7 +89,9 @@ the text, but the merged content then matches neither declaration, so `verify` f
 declaration and declares again. That is the safe direction. Where the protected `local_review.binding: "diff"` applies, the
 second declaration does not void the pull request's diff-bound receipt as long as it keeps the same verdict over the same
 files: CI compares declarations by what they declare, not by the digests they pin (see
-[binding a receipt to its diff](local-review.md#binding-a-receipt-to-its-diff-opt-in)).
+[binding a receipt to its diff](local-review.md#binding-a-receipt-to-its-diff-opt-in)). `clouseau refresh` makes that second declaration
+itself when it merges the base with no review (`updated`) and that is the only repair the merged tree needs; otherwise it
+refuses to push.
 
 ## Why the list cannot go stale silently (the enforcement argument)
 
@@ -172,6 +174,7 @@ Each pull request that changes semantic files declares the change (`declare`); n
 - A wrong `--compatible` is a human error the system makes visible but cannot detect.
 - The neutral table is conservative; moving more files into it (with a reason) reduces how often a declaration is needed.
 - The fold and the maintainer tool (`src/review-compatibility-cli.cjs`, `scripts/review-compatibility`) are receipt-neutral, as `bump`
-  always was, so editing them does not change the digest; they are protected review controls and `src/review-compatibility-cli.test.cjs`
+  always was, so editing them does not change the digest. The rules they apply to declarations (`inspect`, `declare`) live in
+  `src/compat-declarations.cjs`, which is semantic, because `clouseau refresh` also applies them before an `updated` push; they are protected review controls and `src/review-compatibility-cli.test.cjs`
   pins their behaviour. `.github/workflows/compat-fold.yml` is pinned by `.github/tests/compat-fold.test.mjs` (permissions, refs, no
   secret, plain push to main).
