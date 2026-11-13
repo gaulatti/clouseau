@@ -105,7 +105,7 @@ test('the notice is created once and then updated in place', async () => {
   const comments = []; const writes = [];
   const github = {rest: {issues: {
     listComments: async () => ({data: comments}),
-    createComment: async args => {writes.push(['create', args]); comments.push({id: 77, user: {login: 'github-actions[bot]'}, body: args.body});},
+    createComment: async args => {writes.push(['create', args]); comments.push({id: 77, user: {login: 'github-actions[bot]'}, body: args.body}); return {data: {id: 77}};},
     updateComment: async args => {writes.push(['update', args]);},
   }}, paginate: async (method, args) => (await method(args)).data};
   comments.push({id: 1, user: {login: 'someone'}, body: `${MARKER}\nforged by another user`});
@@ -118,6 +118,33 @@ test('the notice is created once and then updated in place', async () => {
   assert.equal(writes[0][1].issue_number, 5);
   assert.ok(writes[0][1].body.includes('https://github.com/example/product/actions/runs/42'));
   assert.ok(writes[1][1].body.includes('bbbbbbbbbbbb'));
+});
+
+test('a notice whose cause changes is a new comment that notifies; the earlier one points to it and is no longer found', async () => {
+  const comments = []; const writes = [];
+  const github = {rest: {issues: {
+    listComments: async () => ({data: comments}),
+    createComment: async args => {writes.push(['create', args]); const id = 80 + writes.length;
+      comments.push({id, user: {login: 'github-actions[bot]'}, body: args.body}); return {data: {id, html_url: `https://github.com/example/product/pull/5#issuecomment-${id}`}};},
+    updateComment: async args => {writes.push(['update', args]); const item = comments.find(entry => entry.id === args.comment_id); if (item) item.body = args.body;},
+  }}, paginate: async (method, args) => (await method(args)).data};
+  const context = {repo: {owner: 'example', repo: 'product'}, runId: 42};
+  const held = {number: 5, head_sha: 'a'.repeat(40), cause: 'receipt_protected_controls', reason: 'The exact-head owner confirmation is missing.'};
+  await post({github, context, assessment: held});
+  // The owner confirmed, and the next run is held for another reason: a new comment, not an edit nobody is told about.
+  await post({github, context, assessment: {...held, cause: 'receipt_history_changed', reason: 'The findings changed.'}});
+  assert.deepEqual(writes.map(([kind]) => kind), ['create', 'create', 'update']);
+  assert.match(writes[1][1].body, /\*\*Cause:\*\* `receipt_history_changed`/);
+  assert.equal(writes[2][1].comment_id, 81);
+  assert.match(writes[2][1].body, /^Superseded: .*issuecomment-82\).*cause changed\.$/);
+  assert.ok(!writes[2][1].body.includes(MARKER), 'the superseded notice is no longer found as the current one');
+  // The same cause again: the current notice is updated in place.
+  await post({github, context, assessment: {...held, cause: 'receipt_history_changed', reason: 'Still changed.'}});
+  assert.deepEqual(writes.slice(3).map(([kind, args]) => [kind, args.comment_id]), [['update', 82]]);
+  // The history-changed steps name what resolves it, never a local re-review.
+  const text = body({...held, cause: 'receipt_history_changed'}, 'https://github.com/example/product/actions/runs/42');
+  assert.match(text, /Remove the `clouseau-local-review` marker/);
+  assert.doesNotMatch(text, /Run the local review again/);
 });
 
 test('an annotation is raised only for an incomplete review', () => {

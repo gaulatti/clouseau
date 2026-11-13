@@ -371,6 +371,19 @@ re-run on its own after an owner confirmation fails with cause `assessment_preda
 "Re-run all jobs" notice, instead of failing as if no confirmation existed. An assessment from an older engine carries
 no stamp and keeps the old behaviour.
 
+When a held review's cause changes (for example an owner's `/approve-intent` clears `receipt_protected_controls` and the
+next run is held for another reason), the review notice is posted as a **new** comment, so whoever follows the pull request
+is notified. The earlier notice is replaced by a one-line pointer to the new one. A notice whose cause stays the same is
+still updated in place. For `receipt_history_changed` the notice now says what resolves it: a local review always signs
+its own history, so reviewing again locally cannot change it. Remove the `clouseau-local-review` marker so the CI reviewer
+reviews the head with the recorded findings, or ask a maintainer.
+
+One timing rule for owners: the assessment records the owner's confirmation it read, and the gate of the same run checks
+that the comments still say the same. An owner comment (a repeated `/approve-intent`, say) posted after the assessment and
+before the gate makes that gate fail with `Local review owner authorization changed; confirm this exact revision again`.
+The comment also starts a fresh reassessment, which reads it and decides normally, so no further action is needed. Posting
+the confirmation once and waiting for its run avoids the extra run.
+
 ## Approved PRs after a sibling merge moves the base
 
 Approval, the assessment and any local receipt are bound to the head **and** the
