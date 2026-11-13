@@ -156,6 +156,14 @@ test('the base\'s change to a declared file that is not folded yet refuses: noth
   }, {feature: declaredLong('compatible')});
 });
 
+test('a merged tree whose compatibility manifest cannot be read refuses with that problem, never a later check', async () => {
+  await pullRepository(async f => {
+    // The base change to the declared file lands with an unreadable manifest: inspect stops at it.
+    f.advance(directory => {earlierLong()(directory); fs.writeFileSync(path.join(directory, 'compat/manifest.json'), '{not json');});
+    await refused(f, /it has problems besides stale content pins, so the base's change to a declared file is not folded yet or the tree needs a repair \(.*JSON/);
+  }, {feature: declaredLong('compatible')});
+});
+
 test('a stale declaration whose path set differs from the pull request\'s changed semantic paths refuses: nothing is pushed', async () => {
   await pullRepository(async f => {
     f.advance(earlierLong());

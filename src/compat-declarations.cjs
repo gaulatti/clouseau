@@ -79,7 +79,7 @@ function inspect(root) {
     statement = semantics.readStatement(root);
     manifest = parseManifest(fs.readFileSync(path.join(root, MANIFEST), 'utf8'));
     live = semantics.entries(root);
-  } catch (error) {return {problems: [error.message], undeclared: [], changed: new Map(), declarations: []};}
+  } catch (error) {return {problems: [error.message], stale: [], staleProblems: 0, undeclared: [], changed: new Map(), declarations: []};}
   if (semantics.digestOf(manifest.entries) !== statement.current) {
     problems.push(`${MANIFEST} does not describe the semantics ${statement.current} that ${semantics.STATEMENT} names; ` +
       'only the protected fold (or bump) writes them together, so restore both from main');
