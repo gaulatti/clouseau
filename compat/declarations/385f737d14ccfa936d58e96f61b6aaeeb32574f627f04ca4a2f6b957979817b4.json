@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "10a5ca006521f7d88b0e7fc4503882f968dfacba7b35fc098b59f046830402c2"
+    },
+    {
+      "path": "src/local-cli.cjs",
+      "mode": 0,
+      "sha256": "1da8d1966de710856e715d0a93d925113582cd6b85a6889e816a60871cff1268"
+    },
+    {
+      "path": "src/local-git.cjs",
+      "mode": 0,
+      "sha256": "3a1a5f011313797db22fc4f99bc9339d8a9e15d19830a2ed5052794875976e02"
+    },
+    {
+      "path": "src/receipt-hold.cjs",
+      "mode": 0,
+      "sha256": "6372acd497cfaba1b60987adc84e90ff6979acbd970f03e26aefe6469c4addb8"
+    }
+  ]
+}
