@@ -609,6 +609,18 @@ unknown commit or another lineage never matches, and any other API failure surfa
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
 
+When a confirmation of an earlier head carries under `confirmation: "diff"`:
+
+| Change since the confirmed head | Confirmation |
+| --- | --- |
+| a merge of the base, or a rebase onto it, that leaves the pull request's diff unchanged | carries |
+| a base change elsewhere in a changed file (only the hunk offsets move) | carries |
+| a re-declaration of compatibility (`compat/declarations/`) after a base merge that keeps every verdict over the same files and only re-pins content hashes | carries, exactly as the receipt binding treats it (`splitDeclarations` in `src/receipt-patch.cjs`, the one rule both use) |
+| a declaration whose verdict changed, a newly declared file, or a declaration added or removed | voids it |
+| a new commit, or a conflict resolution that alters the branch's own lines | voids it |
+| a base change to the lines around the branch's change, to `.github/clouseau.json` or to the purpose contract | voids it |
+| a patchless or truncated file list, an unknown commit or another lineage | voids it |
+
 ### Base moved: hold or update (opt-in)
 
 When the base moves after a pull request was assessed and only the base differs (the live head is still the assessed head), the
