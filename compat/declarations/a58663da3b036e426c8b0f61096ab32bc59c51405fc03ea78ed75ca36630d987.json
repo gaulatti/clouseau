@@ -10,7 +10,7 @@
     {
       "path": "src/local-cli.cjs",
       "mode": 0,
-      "sha256": "1da8d1966de710856e715d0a93d925113582cd6b85a6889e816a60871cff1268"
+      "sha256": "b4065d883d7e3d5894d792645aecdee08cf6bc635a6ff41e5e5946c528a48ebd"
     },
     {
       "path": "src/local-git.cjs",
