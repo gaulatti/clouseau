@@ -475,6 +475,9 @@ async function screenSources(options) {
     // A patch mismatch names its file to the caller, but only a file the pull request itself changed: the path
     // otherwise comes from the receipt, which is untrusted text.
     if (error.code === 'RECEIPT_PATCH_MISMATCH' && options.files.some(file => file.filename === error.path)) options.note?.(error.path);
+    // A repository contract that changed on the live base names its file. verifySources sets `detail.file` only there, and only
+    // to a path the protected configuration names (readme, repository_policy), so it is never receipt text.
+    if (error instanceof ReceiptRejected && error.detail?.file !== undefined) options.note?.(error.detail.file);
     return reason;
   }
 }

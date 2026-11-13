@@ -105,7 +105,8 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
       // The count GitHub reports; a fictional or unrelated head has none.
       let changed;
       try {changed = githubFiles(bare, pull.head).length;} catch {changed = undefined;}
-      return JSON.stringify({...pull, base_sha: git(bare, ['rev-parse', 'refs/heads/main']).trim(), changed_files: changed});
+      // GitHub's base sha can lag the base branch (it is updated on pull request events); `pull.base_sha` sets that lag.
+      return JSON.stringify({...pull, base_sha: pull.base_sha ?? git(bare, ['rev-parse', 'refs/heads/main']).trim(), changed_files: changed});
     };
     return await run({root, bare, work, other, advance, head, remoteHead, pull, events, execute, commit, write});
   } finally {delete process.env.GIT_SSH_COMMAND; fs.rmSync(root, {recursive: true, force: true});}
@@ -204,6 +205,38 @@ test('through the command under binding "diff": the receipt stands across a base
     git(f.work, ['push', '-q', 'origin', 'HEAD:refs/heads/feature']); f.pull.head = f.head();
     const changed = await refresh(f, {request: requestFile});
     assert.equal(changed.status, 'renewed', JSON.stringify(changed)); assert.match(changed.cause, /receipt_source/); assert.ok(calls.length > asked);
+  }, {ciConfig: config});
+});
+
+// #243: under binding "diff" CI also requires each repository contract (readme, repository_policy) signed in the receipt to equal
+// its file at the live base. A base move that edits README.md leaves the diff unchanged but voids the receipt, so refresh must
+// judge the receipt against the base it merges, never against GitHub's lagging base sha, and review instead of pushing `updated`.
+test('under binding "diff" a base move that changes a repository contract is reviewed, never pushed as updated (#243)', async t => {
+  const {runtime, refresh, calls, config} = signedFixture(t, {binding: 'diff'});
+  await pullRepository(async f => {
+    const requestFile = request(f.root);
+    const first = await main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], runtime(f));
+    assert.equal(first.decision, 'auto_approve');
+    const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], runtime(f));
+    f.pull.body = `Body.\n\n${published.marker}\n`;
+    // GitHub still reports the base the receipt was signed against.
+    f.pull.base_sha = git(f.bare, ['rev-parse', 'refs/heads/main']).trim();
+    const asked = calls.length;
+    const before = f.head();
+    const moved_base = f.advance('README.md', 'Handle an accepted request, reject missing input and say why.\n', 'docs: restate the purpose');
+    // Judged as CI judges it at the moved base, the receipt no longer stands, and the cause names the contract that changed.
+    git(f.work, ['fetch', '-q', 'origin', 'main']);
+    const judged = await receiptStanding({directory: f.work, base: 'origin/main', repo: {owner: 'example', repo: 'local-fixture'},
+      pull: {...f.pull, base_sha: moved_base, changed_files: 2}, execute: f.execute, installed});
+    assert.equal(judged.usable, false); assert.equal(judged.cause, 'receipt_source'); assert.match(judged.sentence, /README\.md/);
+    const moved = await refresh(f, {request: requestFile});
+    assert.notEqual(moved.status, 'updated', JSON.stringify(moved));
+    assert.equal(moved.status, 'refreshed', JSON.stringify(moved)); assert.ok(calls.length > asked, 'the merged head is reviewed');
+    assert.notEqual(f.head(), before); assert.equal(f.remoteHead(), f.head());
+    // What CI judges on the pushed head, with the live base: the new receipt stands.
+    f.pull.head = f.head(); delete f.pull.base_sha;
+    const stands = await refresh(f, {request: requestFile});
+    assert.equal(stands.status, 'up_to_date', JSON.stringify(stands)); assert.match(stands.note, /still verifies/);
   }, {ciConfig: config});
 });
 

@@ -61,11 +61,12 @@ async function receiptStanding({directory, base, repo, pull, execute, installed}
       files.push(...batch);
       if (batch.length < 100) break;
     }
+    let file;
     const rejected = await screenSources({github: githubReader(execute), repo, snapshot: screened.verified.record.snapshot, config, files,
       reviewerSha: screened.bundle.payload.reviewer_sha, pr: {number: pull.number, changed_files: pull.changed_files,
-        head: {sha: pull.head, repo: {owner: {login: repo.owner}, name: repo.repo}}, base: {sha: pull.base_sha}}});
+        head: {sha: pull.head, repo: {owner: {login: repo.owner}, name: repo.repo}}, base: {sha: pull.base_sha}}, note: named => {file = named;}});
     if (rejected) {
-      const cause = describe(rejected, {});
+      const cause = describe(rejected, {detail: file === undefined ? {} : {file}});
       return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};
     }
     return {applicable: true, usable: true, binding: 'diff'};
