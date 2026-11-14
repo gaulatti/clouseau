@@ -321,9 +321,9 @@ suite and is insufficient as the required approval result for this flow. Comment
 `request-reassessment` with actions write, contents read, and issues and pull-requests
 write access; they rerun the current revision's existing `pull_request_target` run. Its test job
 is skipped, so confirming intent does not rebuild the container. A comment's handler waits for a run that is still
-assessing (growing gaps, 550 s at most) and reruns it once it ends without success; a run that outlasts the wait gets the
-`assessment_predates_confirmation` notice with the recovery step. The job's `timeout-minutes` must exceed that wait
-(`12` in `examples/consumer-ci.yml`). The handler
+assessing (growing gaps, 130 s at most, sized to the job's existing `timeout-minutes: 3`) and reruns it once it ends
+without success; a run that outlasts the wait gets the `assessment_predates_confirmation` notice with the recovery step.
+An optional concurrency-group change keeps non-command comments from cancelling that wait (see the upgrade notes). The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
 A request that does not validate is refused, not ignored. That covers an `/approve-intent` or `/hosted-review` naming
 another head, malformed text, or a commenter without write permission. The `request-reassessment` job fails red with

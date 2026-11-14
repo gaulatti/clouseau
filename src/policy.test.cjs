@@ -848,7 +848,7 @@ test('a metadata run that outlasts the confirmation wait gets one stale-assessme
   assert.ok(notices[0].args.body.startsWith(`<!-- clouseau-stale-assessment:${SHA}:51 -->\n## Clouseau: assessment predates your confirmation\n`));
   assert.match(notices[0].args.body, /\*\*Cause:\*\* `assessment_predates_confirmation`.*\(https:\/\/github\.com\/gaulatti\/colombo\/pull\/8#issuecomment-51\)/);
   assert.match(notices[0].args.body, /\*\*Re-run all jobs\*\* \(not "Re-run failed jobs"\)/);
-  assert.deepEqual(delays, [10000, 20000, 40000, 80000, 160000, 240000], 'the whole bounded wait, through the default sleep');
+  assert.deepEqual(delays, [10000, 20000, 40000, 60000], 'the whole bounded wait (130 s), through the default sleep');
   assert.match(messages.at(-1), /still running after the whole wait; posted the assessment_predates_confirmation notice for confirmation 51/);
   // The same request again (a re-run of the job): the notice is found, not posted twice.
   await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info: message => messages.push(message)}, wait: async () => {}});
@@ -886,7 +886,7 @@ test('a confirmation that lands while the metadata run is assessing waits for it
   assert.equal(f.writes.filter(w => w.name === 'comment').length, 0, 'no notice: the request was made');
   assert.deepEqual({status: f.state.run.status, conclusion: f.state.run.conclusion}, {status: 'completed', conclusion: 'success'});
   assert.match(messages.at(-1), /Requested a trusted PR metadata reassessment/);
-  assert.deepEqual(gaps, [10000, 20000, 40000, 80000], 'the bounded growing wait, stopped when the run completed');
+  assert.deepEqual(gaps, [10000, 20000, 40000, 60000], 'the bounded growing wait, the run completing at its last poll');
   // A run that was still assessing and then succeeded already passed: nothing is rerun.
   const passed = reassessmentFixture(); passed.state.run.status = 'in_progress'; let polls = 0;
   await policy.requestReassessment({github: passed.github, context: commentTrigger(), core: {info: message => messages.push(message)},

@@ -381,18 +381,58 @@ reviews the head with the recorded findings, or ask a maintainer.
 One timing rule for owners: the assessment records the owner's confirmation it read, and the gate of the same run checks
 that the comments still say the same. An owner comment (a repeated `/approve-intent`, say) posted after the assessment and
 before the gate makes that gate fail with `Local review owner authorization changed; confirm this exact revision again`.
-The comment's own reassessment does not assume that run will read it: it waits for the run with growing gaps (10, 20, 40, 80,
-160 and 240 s, 550 s or about 9 minutes at most). When the run ends without success it reruns it once (a run that was still
-going and then succeeded needs nothing; a run that had already ended when the request first looks is rerun as before), and
-the rerun's assessment reads the confirmation, so no further action is needed. When the run is still going after the whole
-wait, the reassessment posts the `assessment_predates_confirmation` notice once for that head and confirmation (marker
+The comment's own reassessment does not assume that run will read it: it waits for the run with growing gaps (10, 20, 40 and
+60 s, 130 s at most). When the run ends without success it reruns it once, and the rerun's assessment reads the
+confirmation, so no further action is needed. When the run is still going after the whole wait, the reassessment posts the
+`assessment_predates_confirmation` notice once for that head and confirmation (marker
 `<!-- clouseau-stale-assessment:<head>:<comment id> -->`) with the recovery step: **Re-run all jobs** on the latest
-**Clouseau CI** run, or post the same `/approve-intent` again. A newer comment on the same pull request cancels the older
-waiter (the workflow's `issue_comment` concurrency group). The cost: the comment-triggered `request-reassessment` job holds
-a runner for up to about 9 minutes, so its `timeout-minutes` must exceed that; consumer workflows upgrade it from `3` to `12`,
-as `examples/consumer-ci.yml` does (with `3` the job is stopped mid-wait and neither reruns nor posts the notice). Any other
-comment on the pull request also starts a run in that same group and cancels the waiter. Posting the confirmation once and
-waiting for its run avoids the extra run.
+**Clouseau CI** run, or post the same `/approve-intent` again. Posting the confirmation once and waiting for its run avoids
+the extra run.
+
+The 130 s cap is sized to the existing `timeout-minutes: 3` of the comment-triggered `request-reassessment` job, so no
+consumer has to change that timeout. Over the last 19 successful runs of that job in this repository the whole job took
+12 to 18 s including the earlier single 5 s wait, so at most 13 s of overhead. The engine states 30 s of overhead (that
+plus the extra run polls and the notice's comment listing and creation) and keeps at least 20 s of margin for the notice
+to be written before the job is stopped: 180 - 30 - 20 = 130 s. `COMMENT_WAIT_GAPS` and `COMMENT_JOB_OVERHEAD_SECONDS` in
+`src/policy.cjs` hold the numbers, and a workflow test checks both workflow files against them. The cost is that the comment
+job holds a runner for up to about 2.5 minutes instead of a few seconds. The verification path (`workflow_run`) keeps its
+own 550 s schedule.
+
+**Optional upgrade: keep other comments from cancelling the waiter.** The workflow-level concurrency group puts every
+`issue_comment` run of a pull request in one group with `cancel-in-progress: true`, and GitHub starts a run for every
+comment, whatever it says. A newer `/approve-intent` or `/hosted-review` should supersede an older waiter; any other
+comment ("looks good") should not. Append this to the workflow's `concurrency.group` so a comment that starts no
+reassessment gets a group of its own:
+
+```yaml
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}${{ github.event_name == 'issue_comment' && !startsWith(github.event.comment.body, '/approve-intent ') && !startsWith(github.event.comment.body, '/hosted-review ') && format('-{0}', github.run_id) || '' }}
+  cancel-in-progress: true
+```
+
+The group of every other event is unchanged. The test is the same `startsWith` as the `request-reassessment` job
+condition, so exactly the comments that start that job share the group. Actions `startsWith` ignores case and does not trim,
+and the engine trims and is case-sensitive, so two differences remain. A command in another case (`/APPROVE-INTENT <sha>`)
+or with a malformed rest (`/approve-intent soon`) starts the job and joins the shared group: it cancels a waiting
+request, and its own job then fails red with `Stale or malformed intent confirmation`. A command with leading whitespace
+starts no job (as before) and gets its own group. If you skip this step, a non-command comment posted during the wait
+cancels the waiter, and the behaviour is then what it is today: the gate stays failed until someone re-runs it or posts
+the confirmation again.
+
+A consumer that upgrades the engine and changes nothing in its workflow is no worse off than today in any case:
+
+| When the confirmation's request runs | Now | Before |
+| --- | --- | --- |
+| The run had already completed | Rerun | Rerun |
+| The run was in progress, then fails within the wait | Rerun once | Left failed |
+| The run was in progress, then succeeds | No rerun: it passed | No rerun |
+| The run outlasts the wait | The `assessment_predates_confirmation` notice | Nothing, silently |
+| A newer command comment cancels the waiter | That comment's own request waits and takes over | Same |
+| A non-command comment cancels the waiter (no group split) | As before | Left failed |
+
+One residual remains: a transient-failure or rate-limit backoff longer than the 20 s margin can still let the 3-minute
+timeout stop the job before it reruns or posts the notice. The comment job then shows red (timed out). The run never passes
+silently.
 
 ## Approved PRs after a sibling merge moves the base
 

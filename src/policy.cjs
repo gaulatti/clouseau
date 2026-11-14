@@ -8,6 +8,16 @@ const {retryTransient} = require('./transient-retry.cjs');
 const staleAssessment = require('./stale-assessment.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
+// The comment-triggered request-reassessment job runs under the workflow's existing `timeout-minutes: 3` (180 s), so a
+// comment's wait is sized to fit it rather than to the verification path's 550 s. Measured over the last 19 successful
+// request-reassessment runs of gaulatti/clouseau: the whole job took 12-18 s including the then single 5 s wait, so at most
+// 13 s of overhead (setup and checkout 3-6 s, the engine step's API calls, post steps 1-3 s). The stated overhead,
+// COMMENT_JOB_OVERHEAD_SECONDS, is 30 s: the measured 13 s plus the extra run polls and the notice's comment listing and
+// creation. With at least 20 s of margin for the notice to be written before the job is killed, the comment may wait at most
+// 180 - 30 - 20 = 130 s: 10 + 20 + 40 + 60 s. .github/tests/reassessment-notice.test.mjs checks both workflow files against it.
+const COMMENT_WAIT_GAPS = Object.freeze([10000, 20000, 40000, 60000]);
+const COMMENT_JOB_OVERHEAD_SECONDS = 30;
+
 // Whether the protected `local_review` lets an owner confirmation follow the diff: only `confirmation: "diff"` together with
 // `binding: "diff"` (validateTrust refuses any other combination).
 const confirmationFollowsDiff = localReview => localReview?.binding === 'diff' && localReview?.confirmation === 'diff';
@@ -329,13 +339,14 @@ async function reassess({github, context, core, wait, api, write, state = {}}) {
   }
   // Let an already-finishing gate consume the new comment or finish before rerun.
   // A verification completion can arrive while the pending review is still ending.
-  // A finishing review is awaited with growing gaps (10, 20, 40, 80, 160, 240 s: 550 s, about 9 minutes) and conditional
-  // requests, so a verification completion costs a handful of requests per PR instead of one every 10 s.
-  // A comment (`/approve-intent` or `/hosted-review`) waits the same way: a run in progress when it lands made its assessment
-  // before it, and that run's gate then fails on the comment ('Local review owner authorization changed'), so the comment's own
-  // request must outlast that run and rerun it. A newer comment cancels this waiter (the issue_comment concurrency group).
-  const awaitsGate = fromVerification || context.eventName === 'issue_comment';
-  const gaps = awaitsGate ? [10000, 20000, 40000, 80000, 160000, 240000] : [5000];
+  // A finishing review is awaited with growing gaps (10, 20, 40, 80, 160, 240 s) and conditional requests, so a
+  // verification completion costs a handful of requests per PR instead of one every 10 s.
+  // A comment (`/approve-intent` or `/hosted-review`) waits too, on its own shorter schedule (COMMENT_WAIT_GAPS): a run in
+  // progress when it lands made its assessment before it, and that run's gate then fails on the comment ('Local review owner
+  // authorization changed'), so the comment's own request must outlast that run and rerun it. A newer command comment cancels
+  // this waiter (the issue_comment concurrency group).
+  const gaps = fromVerification ? [10000, 20000, 40000, 80000, 160000, 240000] :
+    context.eventName === 'issue_comment' ? COMMENT_WAIT_GAPS : [5000];
   const runCache = new Map(); let latest, finishing;
   for (const gap of gaps) {
     await wait(gap);
@@ -942,4 +953,4 @@ return {assess, assessWhenReady, awaitVerification, requestReassessment, gate, f
 
 }
 
-module.exports = {createPolicy, intentText, protectedChanges, confirmationFollowsDiff};
+module.exports = {createPolicy, intentText, protectedChanges, confirmationFollowsDiff, COMMENT_WAIT_GAPS, COMMENT_JOB_OVERHEAD_SECONDS};

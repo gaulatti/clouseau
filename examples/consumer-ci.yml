@@ -35,8 +35,10 @@ on:
         default: false
 permissions:
   contents: read
+# A comment that does not start request-reassessment (any comment but `/approve-intent ` or `/hosted-review `) gets its own
+# group, so it can never cancel a reassessment waiting for an assessment run; command comments supersede each other.
 concurrency:
-  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.event.issue.number || inputs.pull_request || github.ref }}${{ github.event_name == 'issue_comment' && !startsWith(github.event.comment.body, '/approve-intent ') && !startsWith(github.event.comment.body, '/hosted-review ') && format('-{0}', github.run_id) || '' }}
   cancel-in-progress: true
 jobs:
   resolve-clouseau:
@@ -454,8 +456,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && (startsWith(github.event.comment.body, '/approve-intent ') || startsWith(github.event.comment.body, '/hosted-review '))) ||
       (github.event_name == 'workflow_dispatch' && inputs.pull_request != '' && !inputs.check_author)
     runs-on: ubuntu-latest
-    # A confirmation comment waits up to 550 s for an assessment run in progress, then reruns it (src/policy.cjs reassess).
-    timeout-minutes: 12
+    timeout-minutes: 3
     # issues and pull-requests write only for the notice that a requested reassessment could not be requested. Commenting on a
     # pull request with the workflow token needs both (issue 142: issues: write alone got HTTP 403). The job runs trusted main
     # and the frozen engine, never pull request code.
