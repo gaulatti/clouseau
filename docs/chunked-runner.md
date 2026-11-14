@@ -5,7 +5,7 @@ Status: live. `clouseau review` calls `src/chunked-review.cjs` through `src/chun
 (an ordinary review asks the same prompts in the same order).
 
 `chunkedReview({snapshot, plan, seams, ask, chunked, journal, scope})` runs every unit of a `clouseau-partition/1`
-plan through the unchanged examiner and challenger on that unit's `unitView`, then one blind integration pass per
+or `/2` plan (a `/2` unit is reviewed with its `context_ids`, and its prompt says what they are) through the unchanged examiner and challenger on that unit's `unitView`, then one blind integration pass per
 role, `mergeUnitReports`, and one grading round per role over the merged findings. It returns
 `{result, partition, seams, reviews}`: `result` and `partition` have the record v3 shape the chunked verifier
 accepts (no merged report or scores stored); `reviews` carry the merged reports for `combine` and `reconcile`.
