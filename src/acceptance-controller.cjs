@@ -91,7 +91,11 @@ function verifyRecord(record, assessment, config, engine = null) {
     for (const field of ['snapshot', 'result', 'controls', ...(Object.hasOwn(signed.record, 'partition') ? ['partition', 'seams'] : [])]) {
       if (digest(record[field]) !== digest(signed.record[field])) throw new Error('Local review record was substituted');
     }
-    if (digest(record.previous.findings) !== digest(signed.record.previous.findings)) throw new Error('Local review history was substituted');
+    // Both histories are signed: `previous` is the record's own (always empty for `clouseau review`), `local_previous` the
+    // finding history the receipt was reviewed against.
+    if (digest([record.previous.findings, record.local_previous]) !== digest([signed.record.previous.findings, signed.record.local_previous])) {
+      throw new Error('Local review history was substituted');
+    }
   }
   // New shape if present, else current. A local receipt record keeps its own path.
   // A partitioned local receipt keeps the local path. Its merged reviews are the ones the receipt verification derived from the
@@ -115,7 +119,7 @@ function verifyRecord(record, assessment, config, engine = null) {
     review.scores = validateApproval(review.report, view, record.discovery ? withDiscovery(view, record.discovery) : view);
   }
   result.decision = combine(reviews);
-  const state = reconcile(result, record.snapshot, record.previous.findings);
+  const state = reconcile(result, record.snapshot, signedHistory(record));
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
   // A signed review that requires a human (protected `human_review: "signed"`), or a receipt for a change the fixed rules send
   // to a human, is the owner-decision hold: a maintainer approves the exact head, or the author repairs.
@@ -128,6 +132,11 @@ function verifyRecord(record, assessment, config, engine = null) {
   return {state, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed), ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
+
+// The finding history a record's result is reconciled with: a local receipt's signed local history (`local_previous`, which
+// local-receipt.cjs binds to the reviewed `snapshot.prior_findings`), else the record's `previous`. A ledger an earlier head's
+// receipt published and the later receipt carries is then reproduced exactly; any other ledger reconciles differently.
+const signedHistory = record => (Object.hasOwn(record, 'local_previous') ? record.local_previous : record.previous).findings;
 
 // Opt-in, protected: a signed review that requires a human is a receipt CI holds for the maintainer (local-receipt.cjs).
 const humanReviewSigned = config => config.local_review?.human_review === 'signed';
@@ -263,11 +272,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             'the exact-head owner confirmation is missing.');
         }
         // The gate publishes this receipt's findings on its first run, before an owner confirmation or a base update lets a
-        // later run finish. A ledger whose findings equal exactly what this signed record reconciles to is that publication,
-        // not a change; any other history still voids the receipt. The record keeps the signed history either way, so the gate
+        // later run finish. A ledger whose findings equal exactly what this signed record reconciles to with its signed local
+        // history is that publication, or one an earlier head's receipt published and this receipt carries; it is not a change.
+        // Any other history still voids the receipt. The record keeps the signed history either way, so the gate
         // re-derives exactly the ledger it already published.
         const own = digest(previous.findings) === digest(reconcile({...verified.record.result, reviews: verified.reviews},
-          verified.record.snapshot, verified.record.previous.findings).findings);
+          verified.record.snapshot, signedHistory(verified.record)).findings);
         const recorded = own ? {...previous, findings: verified.record.previous.findings} : previous;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) && !own) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
@@ -469,7 +479,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
-    // The ledger this record's own receipt published on an earlier run is not a change in history (verifyRecord, ownLedger).
+    // The ledger this record's own receipt published on an earlier run, or that its signed local history carries, is not a change
+    // in history: `state` is reconciled with that signed history (verifyRecord, signedHistory, ownLedger).
     const ownLedger = verifiedRecord.ownLedger && digest(current.findings) === digest(verifiedRecord.state.findings);
     if (digest(current) !== digest(record.previous) && !ownLedger) throw new Error('Acceptance history changed; reassess the current record');
     const links = [];

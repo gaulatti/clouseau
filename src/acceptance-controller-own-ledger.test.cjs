@@ -118,13 +118,17 @@ function withAdvisory(copy) {
 }
 
 // The hosted record of this pull request turned into a signed local receipt, served at its immutable reference, as
-// `clouseau review` and `clouseau publish` leave it: `previous` is always `{comment: null, findings: []}`.
-function serveReceipt(f, record, {trusted, advisory}) {
+// `clouseau review` and `clouseau publish` leave it: `previous` is always `{comment: null, findings: []}`. With `carried`, the
+// review ran against that local finding history, as `clouseau review` signs it: the reviewed `snapshot.prior_findings` and the
+// record's `local_previous.findings` (local-cli.cjs), which receipt verification binds together.
+function serveReceipt(f, record, {trusted, advisory, carried}) {
   const keys = crypto.generateKeyPairSync('ed25519');
   trusted.local_review.keys = [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false,
     public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}];
   const copy = structuredClone(record);
-  copy.snapshot.number = 0; copy.snapshot.config_digest = digest(trusted); refresh(copy.snapshot);
+  copy.snapshot.number = 0; copy.snapshot.config_digest = digest(trusted);
+  if (carried) {copy.snapshot.prior_findings = structuredClone(carried); copy.local_previous = {findings: structuredClone(carried)};}
+  refresh(copy.snapshot);
   copy.result.snapshot = copy.snapshot.digest; copy.result.config_digest = copy.snapshot.config_digest;
   copy.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
     ({role, phase, harness: 'codex', session: `fictional-${role}-${phase}`, request_digest: digest(role), response_digest: digest(phase), transport_digest: digest({fixture_only: true})})));
@@ -148,7 +152,7 @@ function serveReceipt(f, record, {trusted, advisory}) {
 function ownLedger(bundle, number = 3) {
   const signed = bundle.payload.record;
   const {reviews} = reviewDecision(signed);
-  const state = reconcile({...signed.result, reviews}, signed.snapshot, signed.previous.findings);
+  const state = reconcile({...signed.result, reviews}, signed.snapshot, (signed.local_previous || signed.previous).findings);
   return publication({...signed.result, reviews, decision: 'owner_decision'}, {...signed.snapshot, number}, state).body;
 }
 
@@ -157,13 +161,16 @@ const approvals = f => f.state.writes.filter(item => item.name === 'approve').le
 const confirmation = f => ({id: 950, user: {login: config.manual_reviewer, type: 'User'}, body: `/approve-intent ${f.state.pr.head.sha}`});
 
 // A public pull request that changes a protected path (`src/upload.test.js` is made sensitive), reviewed by a signed receipt.
-async function protectedReceipt(f, {advisory = true} = {}) {
+// With `carry`, an earlier head's receipt with an advisory finding is signed first and its ledger kept as `earlier`; the receipt
+// served is a later one whose own review has no findings and whose local history is `carry(findings of that ledger)`.
+async function protectedReceipt(f, {advisory = true, carry = null} = {}) {
   const hosted = createPolicy(config);
   assert.equal((await hosted.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl})).decision, 'auto_approve');
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   const trusted = {...config, sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js'], local_review: {mode: 'optional',
     reviewer_sha: 'e'.repeat(40), reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800}};
-  const bundle = serveReceipt(f, record, {trusted, advisory});
+  const earlier = carry ? ownLedger(serveReceipt(f, record, {trusted, advisory: true})) : null;
+  const bundle = serveReceipt(f, record, carry ? {trusted, advisory: false, carried: carry(stateOf(earlier).findings)} : {trusted, advisory});
   const policy = createPolicy(trusted);
   const assess = async () => {
     const calls = f.state.calls;
@@ -172,7 +179,7 @@ async function protectedReceipt(f, {advisory = true} = {}) {
     return result;
   };
   const gate = assessment => policy.gate({github: f.github, context: f.context, core: f.core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}});
-  return {trusted, bundle, policy, assess, gate};
+  return {trusted, bundle, earlier, policy, assess, gate};
 }
 
 test('a receipt held for protected controls finds its own published ledger after the owner confirms, and the gate approves', () => fixture(async f => {
@@ -235,6 +242,52 @@ test('a receipt with no findings: its empty ledger is accepted as before, and a 
     assert.deepEqual(JSON.parse(fs.readFileSync(f.recordPath)).previous, {comment: 7101, findings: []});
     await r.gate(result);
     assert.equal(approvals(f), 1);
+  });
+});
+
+test('a later receipt whose signed local history carries the ledger an earlier head\'s receipt published meets it, and the gate approves', () => fixture(async f => {
+  const r = await protectedReceipt(f, {carry: findings => findings});
+  const signed = r.bundle.payload.record;
+  const carried = stateOf(r.earlier).findings;
+  assert.equal(carried.length, 1); assert.equal(carried[0].state, 'advisory_closed'); assert.equal(carried[0].blocking, false);
+  // The later receipt's own review has no findings; its signed record still holds `previous: {comment: null, findings: []}`, and
+  // the earlier ledger only in its local history.
+  assert.ok(signed.result.reviews.every(review => review.report.findings.length === 0));
+  assert.deepEqual(signed.previous, {comment: null, findings: []});
+  assert.deepEqual(signed.local_previous.findings, carried); assert.deepEqual(signed.snapshot.prior_findings, carried);
+  assert.equal(r.bundle.payload.record.result.decision, 'auto_approve');
+  f.state.comments = [bot(7101, r.earlier), confirmation(f)];
+  const confirmed = await r.assess();
+  assert.notEqual(confirmed.cause, 'receipt_history_changed', confirmed.reason);
+  assert.equal(confirmed.decision, 'owner_decision', confirmed.reason);
+  assert.equal(confirmed.review_source, 'authenticated_local');
+  // The stored record keeps the signed history; the gate re-derives the ledger from the signed local history.
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.recordPath)).previous, {comment: 7101, findings: []});
+  // That local history is bound to the receipt: a record carrying any other one is a substitution.
+  const complete = await r.policy.rehydrate(JSON.parse(fs.readFileSync(f.recordPath)), confirmed, {github: f.github, repo: f.context.repo});
+  const {verifyRecord} = require('./acceptance-controller.cjs');
+  const swapped = {...complete, local_previous: {findings: []}};
+  assert.throws(() => verifyRecord(swapped, {...confirmed, record_digest: digest(swapped)}, r.trusted), /history was substituted/);
+  await r.gate(confirmed);
+  assert.equal(approvals(f), 1, 'the exact-head confirmation approves');
+  const updated = ledgerWrites(f);
+  assert.equal(updated.length, 1); assert.equal(updated[0].name, 'update-ledger'); assert.equal(updated[0].args.comment_id, 7101);
+  assert.deepEqual(stateOf(updated[0].args.body).findings, carried, 'the gate writes exactly the pull request ledger');
+}));
+
+test('a later receipt whose signed local history differs from the pull request ledger is still refused', async () => {
+  const variants = {
+    dropped: () => [],
+    different: () => [{...FOREIGN}],
+    extra: findings => [...findings, {...FOREIGN}],
+  };
+  for (const [name, carry] of Object.entries(variants)) await fixture(async f => {
+    const r = await protectedReceipt(f, {carry});
+    f.state.comments = [bot(7101, r.earlier), confirmation(f)];
+    const refused = await r.assess();
+    assert.equal(refused.decision, 'review_incomplete', name);
+    assert.equal(refused.cause, 'receipt_history_changed', name);
+    assert.equal(refused.record_digest, undefined, name);
   });
 });
 
@@ -308,9 +361,10 @@ test('private owner path: a held receipt with an advisory finding merges by the 
 test('the gate write boundary accepts only the ledger the receipt itself publishes, and a hosted record never', async () => {
   // A receipt assessed before its ledger was on the pull request: its record holds `{comment: null, findings: []}`. By the
   // gate, the ledger a concurrent gate run published from the same receipt is there.
-  const variants = ['own', 'different', 'state', 'extra'];
+  // `carried*`: a later receipt whose signed local history carries the ledger an earlier head's receipt published.
+  const variants = ['own', 'different', 'state', 'extra', 'carried', 'carried-dropped'];
   for (const name of variants) await fixture(async f => {
-    const r = await protectedReceipt(f);
+    const r = await protectedReceipt(f, name.startsWith('carried') ? {carry: findings => findings} : {});
     f.state.comments = [confirmation(f)];
     const assessment = await r.assess();
     assert.equal(assessment.decision, 'owner_decision', assessment.reason);
@@ -321,11 +375,15 @@ test('the gate write boundary accepts only the ledger the receipt itself publish
       different: withState(own, value => {value.findings = [{...FOREIGN}];}),
       state: withState(own, value => {value.findings = [{...value.findings[0], state: 'confirmed'}];}),
       extra: withState(own, value => {value.findings = [...value.findings, {...FOREIGN}];}),
+      carried: r.earlier,
+      'carried-dropped': r.earlier && withState(r.earlier, value => {value.findings = [];}),
     }[name];
+    if (name === 'carried') assert.deepEqual(stateOf(body).findings, stateOf(own).findings, 'the later receipt reproduces the earlier ledger');
     f.state.comments = [bot(7101, body), confirmation(f)];
-    if (name === 'own') {
+    if (['own', 'carried'].includes(name)) {
       await r.gate(assessment);
-      assert.equal(approvals(f), 1);
+      assert.equal(approvals(f), 1, name);
+      assert.deepEqual(stateOf(ledgerWrites(f)[0].args.body).findings, stateOf(body).findings, name);
     } else {
       await assert.rejects(r.gate(assessment), /Acceptance history changed; reassess the current record/, name);
       assert.equal(approvals(f), 0, name);
