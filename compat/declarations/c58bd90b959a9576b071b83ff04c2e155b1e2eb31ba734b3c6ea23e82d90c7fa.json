@@ -1,0 +1,31 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "action.yml",
+      "mode": 0,
+      "sha256": "3e26fd2a7d30487574b11d90ced122c1f6d9accce3075b7a0e4fcb11f9bc94dd"
+    },
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "b6b3a3830c6235c0c0e02a6576fbcd30958d1cdbbbe236183f1b10bd1eb2f1f4"
+    },
+    {
+      "path": "src/incomplete.cjs",
+      "mode": 0,
+      "sha256": "dd1b9fc3ad5ec3645b34d84bdc9ad898f58a8e9f6507694727695a287976ef9f"
+    },
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "777aa0d44d37c3ab24e259ce935c935a1323c21b0f37d5acd3494b0e70107f54"
+    },
+    {
+      "path": "src/stale-assessment.cjs",
+      "mode": 0,
+      "sha256": "7373bfa6b2588021cba52cf11b2ea99405c011e3737340efcf7bf475486baf9a"
+    }
+  ]
+}

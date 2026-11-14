@@ -318,10 +318,24 @@ The `native-gate` and `wait-for-verification` action inputs default to `true`.
 The native job summary preserves detailed reasons; no additional API check is
 created in native mode. A `GITHUB_TOKEN` API check can attach to another run's
 suite and is insufficient as the required approval result for this flow. Comment/manual handlers call
-`request-reassessment` with actions write and contents/pull-requests read access;
-they rerun the current revision's existing `pull_request_target` run. Its test job
+`request-reassessment` with actions write, contents read, and issues and pull-requests
+write access; they rerun the current revision's existing `pull_request_target` run. Its test job
 is skipped, so confirming intent does not rebuild the container. The handler
 validates maintainer permission and exact comment SHA before requesting a rerun.
+A request that does not validate is refused, not ignored. That covers an `/approve-intent` or `/hosted-review` naming
+another head, malformed text, or a commenter without write permission. The `request-reassessment` job fails red with
+`Stale or malformed intent confirmation` or `Only a maintainer can request reassessment`. Nothing is rerun and no notice
+is posted. Comment again with the current head.
+GitHub 5xx and short rate-limit failures are retried with the shared transient backoff (every packaged
+step retries its reads; see the upgrade notes).
+A request that still cannot be made is never silent: once the engine validated it (an exact-head request by a maintainer), the pull request gets a
+`clouseau-reassessment-unrequested` notice saying the comment was received and how
+to recover (that notice is the only reason for the write access; commenting on a pull request needs both). When the gate is
+re-run on its own ("Re-run failed jobs") with an assessment that held for that missing confirmation
+(`receipt_protected_controls`) and was made before an owner confirmation of the same head, it fails with cause
+`assessment_predates_confirmation`.
+It posts one notice per head and confirmation asking for **Re-run all jobs**, and it
+never reads the confirmation into a decision itself: only a new assessment does.
 
 Run `finalize` in a separate job after the native gate succeeds, with actions
 write and contents/pull-requests read access and no provider key. Guard that job

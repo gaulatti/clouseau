@@ -305,12 +305,84 @@ The `actions/github-script` client defaults to `retries: 0`, so a single HTTP 5x
 `GET /pulls/{n}` within about a minute of a pull request being opened was observed returning 503 to several runs at once.
 Every packaged step of the Clouseau action now installs a read retry first (`src/github-retry.cjs`): GET and HEAD are
 retried on 5xx or a short rate limit with the shared 2 s / 6 s / 15 s backoff, while writes keep their own handling, which
-checks that an earlier attempt did not land, so a review, comment or merge is never sent twice. A consumer workflow
-upgrades by adding `retries: 3` under `with:` of each of its own inline `actions/github-script` steps, which only read.
-For the reference template these are the five steps of `assess-intent` and `check-author`.
+checks that an earlier attempt did not land, so a review, comment or merge is never sent twice.
+
+**Consumer upgrade: add `retries: 3` only to inline steps that make no write.** The `retries` input of
+`actions/github-script` turns on the Octokit retry plugin for the whole step, and that plugin repeats *writes* too: a step
+that comments, labels, dispatches, approves or merges and gets a 5xx after GitHub already applied the write would apply it
+twice. So, for each inline `actions/github-script` step in your workflows:
+
+1. Find them: `grep -rn "actions/github-script" .github/workflows`.
+2. Read the step's `script:`, including every engine function it calls (`require(...)` of `.clouseau-ci/src/...`), and look
+   for any write: a `github.rest.*.create*`, `update*`, `delete*`, `merge*`, `add*`, `remove*`, `set*`, `enable*`,
+   `disable*`, `submit*` or `dismiss*` call, a `github.request('POST' | 'PUT' | 'PATCH' | 'DELETE' ...)`, or a GraphQL
+   mutation.
+3. If the step makes no write, add `retries: 3` under its `with:` block. If it writes, leave it at the default
+   `retries: 0` (it then fails on a 5xx as before), or move the write into a packaged Clouseau operation, whose writes have
+   their own landed check.
+
+Not upgrading changes nothing: the step keeps today's behaviour. The packaged steps of the Clouseau action need no change;
+they retry reads themselves.
+
+In the reference template, these steps carry `retries: 3`. All of them read only, end to end (audited against the engine on
+`main`):
+
+| Job, step | GitHub calls |
+|---|---|
+| `assess-intent`, "Verify the owner-authorized frozen reviewer installation" | `pulls.get`, `issues.listComments` |
+| `assess-intent`, "Wait for tests and exact coverage" | `pulls.get`; then `policy.technicalRun`: `actions.listWorkflowRuns`, `actions.listJobsForWorkflowRun`, and, when verification steps were skipped, the receipt check `verification-attestation.receiptAttests`: `repos.getContent`, `git.getBlob`, `pulls.listFiles` |
+| `assess-intent`, "Select authenticated local review or the installed CI reviewer" | none (reads the event payload) |
+| `assess-intent`, "Hand an unusable receipt to the separate hosted review" | none (reads a job output) |
+| `check-author`, "Verify independent repair author without writing" | `users.getAuthenticated`, `repos.get` |
+
+The workflow test `.github/tests/github-script-retries.test.mjs` fails if an inline step with `retries` contains a write
+call in its own script text. It cannot see inside the engine functions a script calls, which is why the table above records
+those calls by hand.
 
 When the `attested` decision still fails, the checks run in full as before, but the job summary and a warning now say
 `Receipt not consulted: GitHub API unavailable; verification ran in full.`, so a full run is never mistaken for a normal one.
+
+## A requested reassessment is never lost silently
+
+The comment-triggered `request-reassessment` job retries GitHub 5xx and short rate-limit failures. When a request still
+cannot be made, it posts a `clouseau-reassessment-unrequested` notice on the pull request. A consumer workflow upgrades by
+changing that job's `permissions` to:
+
+```yaml
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: write
+```
+
+The job still checks out only trusted `main` and the frozen engine, never pull request code. Commenting on a pull request
+needs both write permissions (see the reconcile notes below). Without them the retry still works; the notice itself then
+fails visibly, and the log names the missing permissions.
+A separate `workflow_run` reassessment file needs no change: no person asked for that request, so it posts nothing.
+A request that does not validate is refused rather than ignored: a stale or malformed `/approve-intent` (another head,
+extra text) or a non-maintainer's comment fails the `request-reassessment` job red with its reason. Nothing is rerun and no
+notice is posted, because the notice is only for a validated request. Describe it the same way in your own README.
+
+The packaged `assess` step now stamps `assessed_at` into the assessment: GitHub's own `date` for its last listing of the pull
+request's comments, the same clock that dates the comments, so a confirmation created after it was not seen (one created in
+the same second counts as seen). With it, a gate
+re-run on its own after an owner confirmation fails with cause `assessment_predates_confirmation` and one
+"Re-run all jobs" notice, instead of failing as if no confirmation existed. An assessment from an older engine carries
+no stamp and keeps the old behaviour.
+
+When a held review's cause changes (for example an owner's `/approve-intent` clears `receipt_protected_controls` and the
+next run is held for another reason), the review notice is posted as a **new** comment, so whoever follows the pull request
+is notified. The earlier notice is replaced by a one-line pointer to the new one. A notice whose cause stays the same is
+still updated in place. For `receipt_history_changed` the notice now says what resolves it: a local review always signs
+its own history, so reviewing again locally cannot change it. Remove the `clouseau-local-review` marker so the CI reviewer
+reviews the head with the recorded findings, or ask a maintainer.
+
+One timing rule for owners: the assessment records the owner's confirmation it read, and the gate of the same run checks
+that the comments still say the same. An owner comment (a repeated `/approve-intent`, say) posted after the assessment and
+before the gate makes that gate fail with `Local review owner authorization changed; confirm this exact revision again`.
+The comment also starts a fresh reassessment, which reads it and decides normally, so no further action is needed. Posting
+the confirmation once and waiting for its run avoids the extra run.
 
 ## Approved PRs after a sibling merge moves the base
 
