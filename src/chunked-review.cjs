@@ -20,7 +20,7 @@ const {digest} = require('./acceptance.cjs');
 const {investigate, gradeReview, stageInstructions, reviewContext, policy} = require('./local-review.cjs');
 const {unitView, mergeUnitReports} = require('./review-units.cjs');
 const {combine} = require('./acceptance-review.cjs');
-const {SCHEME, parseParams, elideQuotes} = require('./chunked-record.cjs');
+const {SCHEMES, parseParams, elideQuotes} = require('./chunked-record.cjs');
 const {segmentLimit} = require('./change-table.cjs');
 const {selectSeams, overflowEntry} = require('./integration-plan.cjs');
 
@@ -125,6 +125,7 @@ const guarded = ({ask, limits, unit = null}) => async task => {
 const unitNote = (view, total) => `This review covers one unit (${view.unit.id} of ${total}) of a change too large for one snapshot. ` +
   'evidence.unit lists the paths this unit owns, evidence.change_manifest lists every changed path and its owning unit, and evidence.foreign_hunks are read-only patches of changed files owned by other units. ' +
   'Account for and report findings only on owned paths. Source requests are not available for a unit: record missing material evidence as missing coverage. ' +
+  (view.unit.context_ids.length ? 'evidence.unit.context_ids names whole sources of changed files owned by other units that reach this unit through a seam (an import, a consumed export, a removed import or a test subject): read them as context for the owned paths; their own units account for them. ' : '') +
   'A later integration pass examines the seams between units.\n';
 
 // What the integration pass of one role sees: its own unit reports only (never the other role's), reduced to
@@ -217,8 +218,8 @@ function mergeWithIntegration({reports, integration, snapshot, seams}) {
 async function chunkedReview({snapshot, plan, seams = [], ask, chunked, journal = memoryJournal(), scope = null}) {
   const limits = runnerLimits(chunked);
   const {params} = limits;
-  if (plan?.scheme !== SCHEME || !Array.isArray(plan.units) || !plan.units.length) {
-    throw refuse('plan_invalid', 'A clouseau-partition/1 plan with at least one unit is required');
+  if (!SCHEMES.includes(plan?.scheme) || !Array.isArray(plan.units) || !plan.units.length) {
+    throw refuse('plan_invalid', `A ${SCHEMES.join(' or ')} plan with at least one unit is required`);
   }
   // Size never refuses a review: any number of units runs in waves of `concurrency` sessions.
   checkSeams(seams);
@@ -226,7 +227,7 @@ async function chunkedReview({snapshot, plan, seams = [], ask, chunked, journal 
   const specs = plan.units.map(unit => ({id: unit.id, owned: [...unit.owned], context_ids: [...(unit.context_ids ?? [])], ...(unit.parts ? {parts: unit.parts} : {})}));
   const limit = segmentLimit({unit_ceiling: params.C, shared: params.S});
   const views = specs.map(spec => unitView(snapshot, spec, {units: specs, sharedCap: params.S, segmentLimit: limit}));
-  const partition = {scheme: SCHEME, params: {C: params.C, S: params.S},
+  const partition = {scheme: plan.scheme, params: {C: params.C, S: params.S},
     units: specs.map((spec, index) => ({...spec, view_digest: views[index].digest, cost: plan.units[index].cost})), plan_digest: plan.plan_digest};
   const remembered = memoized(ask, journal, scope);
 

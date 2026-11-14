@@ -51,7 +51,11 @@ async function receiptStanding({directory, base, repo, pull, execute, installed}
   const reviewer = installed();
   const screened = await screenReceipt({github: githubReader(execute), repo, engine: {...SOURCE, sha: reviewer.sha, digest: reviewer.digest},
     pr: {number: pull.number, body: pull.body, user: {login: pull.author}, head: {sha: pull.head}, base: {sha: pull.base_sha}},
-    trust: config.local_review, configDigest: digest(config), policyDigest: digest(fs.readFileSync(POLICY, 'utf8')), reviewerDigest: reviewer.digest});
+    trust: config.local_review, configDigest: digest(config), policyDigest: digest(fs.readFileSync(POLICY, 'utf8')), reviewerDigest: reviewer.digest,
+    humanReview: config.local_review.human_review === 'signed'});
+  // Under the protected `human_review: "signed"` a signed review that requires a human stands too, as CI holds it for the
+  // maintainer: nothing is reviewed again for it.
+  const held = screened.ref && screened.verified.human_review ? {human_review: true} : {};
   // Under the protected `binding: "diff"` the head no longer binds the receipt, so its diff must equal the pull request's, as
   // CI checks it (screenSources), on the changed files GitHub reports now.
   if (screened.ref && config.local_review.binding === 'diff') {
@@ -61,16 +65,17 @@ async function receiptStanding({directory, base, repo, pull, execute, installed}
       files.push(...batch);
       if (batch.length < 100) break;
     }
+    let file;
     const rejected = await screenSources({github: githubReader(execute), repo, snapshot: screened.verified.record.snapshot, config, files,
       reviewerSha: screened.bundle.payload.reviewer_sha, pr: {number: pull.number, changed_files: pull.changed_files,
-        head: {sha: pull.head, repo: {owner: {login: repo.owner}, name: repo.repo}}, base: {sha: pull.base_sha}}});
+        head: {sha: pull.head, repo: {owner: {login: repo.owner}, name: repo.repo}}, base: {sha: pull.base_sha}}, note: named => {file = named;}});
     if (rejected) {
-      const cause = describe(rejected, {});
+      const cause = describe(rejected, {detail: {file}});
       return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};
     }
-    return {applicable: true, usable: true, binding: 'diff'};
+    return {applicable: true, usable: true, binding: 'diff', ...held};
   }
-  if (screened.ref) return {applicable: true, usable: true};
+  if (screened.ref) return {applicable: true, usable: true, ...held};
   const cause = describe(screened.rejected ?? 'absent', {detail: screened.detail});
   return {applicable: true, usable: false, cause: cause.code, sentence: cause.sentence};
 }

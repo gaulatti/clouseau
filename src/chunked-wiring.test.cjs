@@ -104,13 +104,16 @@ test('protected chunked configuration can only tighten the defaults; invalid val
   assert.equal(settings({}).params.C, 450000);
   assert.equal(settings({chunked: {enabled: false}}), null);
   const tight = settings({chunked: {force: true, params: {C: 100000, S: 50000}, concurrency: 1, unit_deadline_ms: 1000, integration_cap: 5000}});
-  assert.deepEqual(tight, {params: {C: 100000, S: 50000}, concurrency: 1, unit_deadline_ms: 1000, integration_cap: 5000, integration_call_seams: 60, integration_max_seams: 400, force: true});
+  assert.deepEqual(tight, {params: {C: 100000, S: 50000}, partition: 1, concurrency: 1, unit_deadline_ms: 1000, integration_cap: 5000, integration_call_seams: 60, integration_max_seams: 400, force: true});
   assert.deepEqual(DEFAULT_SETTINGS.params, {C: 450000, S: 100000});
+  assert.equal(settings({}).partition, 1, 'without the setting a review uses clouseau-partition/1');
+  assert.equal(settings({chunked: {partition: 2}}).partition, 2);
   assert.equal(verifierOptions({chunked: {enabled: false}}), null);
   assert.deepEqual(verifierOptions(undefined).params, {C: 450000, S: 100000});
   for (const bad of [null, [], 'x', {unknown: 1}, {enabled: 'yes'}, {force: 1}, {enabled: false, force: true}, {params: null}, {params: {C: 1}},
     {params: {C: 450001, S: 1}}, {params: {C: 1, S: 100001}}, {params: {C: 0, S: 1}}, {params: {C: 1.5, S: 1}, },
-    {concurrency: 3}, {concurrency: 0}, {unit_deadline_ms: 300001}, {integration_cap: 250001}, {integration_cap: '1'}, {integration_call_seams: 61}, {integration_max_seams: 401}, {integration_max_seams: 0}]) {
+    {concurrency: 3}, {concurrency: 0}, {unit_deadline_ms: 300001}, {integration_cap: 250001}, {integration_cap: '1'}, {integration_call_seams: 61}, {integration_max_seams: 401}, {integration_max_seams: 0},
+    {partition: 0}, {partition: 3}, {partition: '2'}, {partition: 1.5}, {partition: null}]) {
     assert.ok(problem(bad), JSON.stringify(bad));
     assert.throws(() => settings({chunked: bad}), /Invalid protected chunked review configuration/);
   }

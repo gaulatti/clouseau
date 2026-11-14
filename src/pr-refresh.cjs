@@ -197,7 +197,8 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
       if (!judged.applicable || judged.usable) {
         return {status: 'up_to_date', pull_request: number, head_sha: head, base_sha: git(directory, ['rev-parse', remoteBase]).trim(), pushed: false,
-          note: `Pull request ${number} already contains ${remoteBase}${judged.applicable ? ' and its local review receipt still verifies' : ''}; nothing to refresh`};
+          note: `Pull request ${number} already contains ${remoteBase}${judged.applicable ? ' and its local review receipt still verifies' : ''}${judged.human_review ?
+            ` (its signed review requires a human: a maintainer approves this head with /approve-intent ${head}, or repair and review again)` : ''}; nothing to refresh`};
       }
       renewal = judged;
       process.stderr.write(`Renewing the local review receipt of pull request ${number} (cause: ${renewal.cause}): ${renewal.sentence}\n`);
@@ -206,7 +207,9 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       // CI judges it. The base is merged locally and the normalized diff recomputed: when it equals the diff before the merge,
       // the branch is brought up to date (a controller-managed merge needs it strictly ahead of the base) with no review and no
       // new receipt. When the merge changed it (the base moved a line inside a hunk's context), the merged head is reviewed.
-      const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
+      // The receipt is judged against the base being merged, as CI will judge the pushed head: GitHub's `base_sha` can lag the
+      // branch, and a repository contract (readme, repository_policy) the base changed voids the receipt with the diff unchanged.
+      const judged = await standing({directory, base: remoteBase, repo, pull: {...pull, base_sha: git(directory, ['rev-parse', remoteBase]).trim()}, execute, installed});
       let before = null;
       if (judged.usable) {
         before = localDiff(directory, git(directory, ['merge-base', 'HEAD', remoteBase]).trim(), 'HEAD');

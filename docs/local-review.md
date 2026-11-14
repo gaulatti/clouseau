@@ -516,7 +516,9 @@ Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`.
    [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch). Under the
    protected `binding: "diff"`, when the pull request does not contain the base tip and its receipt still covers its diff, the
    base is merged and the normalized diff recomputed; if it is unchanged the merge is pushed with no review and the command
-   ends with `updated` (see [Binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)); otherwise the steps
+   ends with `updated`. The receipt is judged against the base being merged, as CI will judge the pushed head, not against the
+   base sha GitHub reports (which can lag the branch): a base that changed a repository contract (`readme`,
+   `repository_policy`) voids it with the diff unchanged, so the merged head is reviewed instead (see [Binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)); otherwise the steps
    continue on that merge;
 2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
    `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;
@@ -634,7 +636,9 @@ changes the diff's context lines, so it voids the confirmation too; a change els
 hunk offsets, which the normalized diff ignores. A patchless or truncated file list, an
 unknown commit or another lineage never matches, and any other API failure surfaces. The comment itself stays exactly
 `/approve-intent <sha>`. The recorded authorization names the head it was applied to and, when that differs, the
-`confirmed_sha` it was given for. Without the setting, a confirmation names the exact head, as before. Where the binding applies: `verifySignedRecord` (the head and base comparison),
+`confirmed_sha` it was given for. Without the setting, a confirmation names the exact head, as before. While a held signed review
+has findings that require a human, the setting does not apply: the confirmation must name the exact head (see
+[signing a review that requires a human](#signing-a-review-that-requires-a-human-opt-in)). Where the binding applies: `verifySignedRecord` (the head and base comparison),
 `verifySources` (revisions, sources, contract and verification refs, the lockfile summary, and the diff through `verifyPatches`),
 and through them `screenReceipt`, `screenSources`, `receiptAttests`, `rehydrate` and `verifyRecord` (the record's revisions), and
 `receipt-standing.cjs` and `pr-refresh.cjs`. An installation receipt is never diff-bound.
@@ -919,29 +923,63 @@ the base branch accepts exactly one value, `"signed"`; any other value (an empty
 the configuration invalid (`human_review must be "signed" when set`). Absent, nothing changes: only a passing review is
 ever signed.
 
-With `"signed"`, `clouseau review` also signs a review whose only blocker is graded findings:
+With `"signed"`, `clouseau review` also signs a review whose only blocker is graded findings, and CI enforces it instead of
+repeating it:
 
-| Local result | Signed outcome |
-| --- | --- |
-| tests or the coverage gate fail | nothing (no review is run) |
-| test integrity violated (`blocked_integrity`) | nothing |
-| another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing |
-| an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) |
-| findings at or above the threshold, every gate of both reviews satisfied or inapplicable (`repair_required`) | the review, signed with its findings |
-| clean | the passing review, as today |
+| Local result | Signed outcome | CI |
+| --- | --- | --- |
+| tests or the coverage gate fail | nothing (no review is run) | nothing to reuse; the author fixes |
+| test integrity violated (`blocked_integrity`) | nothing | nothing to reuse; the author fixes |
+| another gate violated or unresolved (scope, security, compatibility, completeness), with or without findings | nothing | nothing to reuse; CI reviews the change itself |
+| an earlier blocking finding neither retained nor resolved | nothing (the review is incomplete) | nothing to reuse; CI reviews the change itself |
+| findings at or above the threshold, every gate of both reviews satisfied or inapplicable (`repair_required`) | the review, signed with its findings | `owner_decision`: held until a maintainer confirms the exact head (`/approve-intent <head sha>` or an approving review) |
+| a change the fixed rules send to a human (protected review controls, sensitive paths) | the passing review | the same `owner_decision` hold, instead of today's `receipt_protected_controls` |
+| clean | the passing review, as today | approve and merge as today |
 
 `issueReceipt` enforces the same rule as `clouseau review`, so no other caller can sign more. A signed non-pass is never
 acceptable as a pass: every verifier (`verifySignedRecord`, and through it `verifyReceipt` and `screenReceipt`) refuses it as
-`not_passing` unless its caller explicitly asks for it, and today only `clouseau review`, checking the receipt it has just
-signed, asks. `clouseau review` never reviews the same revision again once it has a signed review that requires a human;
-it stops and says so. To sign again, the author commits (an empty commit is enough) and reviews the new head, which must
-retain or resolve the earlier findings.
+`not_passing` unless its caller explicitly asks for it. Four callers ask: `clouseau review`, checking the receipt it has just
+signed, and, only under `"signed"`, `receipt-standing.cjs` for `clouseau refresh` and CI's assessment and gate, which turn it
+into the hold. `operation: attested` never asks, so CI runs the tests; a claimed `auto_approve` for it is a decision
+mismatch. `clouseau refresh` treats it as up to date and names the approval it waits for. `clouseau review` never reviews
+the same revision again once it has a signed review that requires a human; it stops and says so, so an unchanged verdict
+cannot be resampled. To sign again, the author commits (an empty commit is enough:
+`git commit --allow-empty -m "chore: request a new review"`) and runs `clouseau review` and `clouseau publish` on the new
+head, then puts the new marker in the pull request body and pushes. `clouseau refresh --pr N` does not do this for a held
+review: it publishes and pushes only a review that ends in `auto_approve`, and for any other decision it pushes nothing and
+says so. The new review must retain the earlier findings with their identity or resolve them with current-source evidence;
+one that drops a finding is incomplete and signs nothing. It is a fresh investigation, so it may also report new findings.
 
-**Until CI holds such a receipt for a maintainer, the setting is dark and fails closed.** CI does not ask for the signed
-non-pass: the assessment, the gate and `operation: attested` refuse the receipt as `not_passing`, exactly as they refuse any
-failing review. An optional-mode repository ignores it and reviews the change itself; a repository that requires a receipt
-reports `review_incomplete` (`local_receipt_required`). Nothing is approved or merged on its strength, and a maintainer's
-`/approve-intent` does not clear its findings.
+**CI holds such a receipt for a maintainer.** The hold is the existing owner-decision path; there is no second approval
+mechanism. The pull request shows the verdict and its findings from the signed record, and CI makes no AI call. A
+maintainer's confirmation of the head may clear findings at or above the threshold; it never clears a failed test run, a
+failed coverage gate, a test-integrity violation or any other violated or unresolved gate, which sign nothing and must be
+fixed. While the signed review has findings that require a human, a confirmation counts only when it names the exact
+current head, and nothing carries, whatever `local_review.confirmation` says: not after a merge of the base with the same
+diff, and not after the empty commit that requests a new review. A hold without findings (protected controls or sensitive
+paths with a passing review) follows the one rule of
+[binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in), in two modes:
+- Without the protected `local_review.confirmation: "diff"`, a confirmation names one exact head, so the owner confirms the
+  new head again.
+- With it, a confirmation of an earlier head of this pull request carries to the new head when the normalized diff is the
+  same and the base's configuration and purpose contract are unchanged. That holds after a merge of the base or a rebase;
+  any change to the diff voids it.
+
+When the receipt expires (`max_age_seconds`, at most 48 hours) before a maintainer approves, CI ignores it and reviews the
+change itself. While the hold waits, the gate publishes the signed findings in the pull request's acceptance ledger. The run
+that a maintainer's approval starts finds that ledger on the pull request; under this setting a ledger whose findings equal
+exactly what the signed record publishes is that record's own output, so the assessment and the gate accept it and keep the
+signed history in the record. The ledger is judged against the receipt's signed local history (`local_previous`, the
+`prior_findings` the review ran against): the signed record reconciled with that history must give exactly the ledger's
+findings. So a ledger an earlier head's receipt published, and a later receipt carries in its local history, is accepted
+too, and the gate publishes the same ledger. A ledger in the legacy form, the signed record reconciled with its own
+`previous` (`[]` for a local receipt), which every gate published before the local history was used, is accepted as well and
+keeps that form, so a pull request held across the upgrade is unaffected; a pull request without a ledger gets the form
+reconciled with the signed local history. The legacy form is accepted until no open pull request carries one
+(`LEGACY_LEDGER` in `src/acceptance-controller.cjs`). A ledger with any other findings is still a change in history
+(`receipt_history_changed` at the assessment, "Acceptance history changed" at the gate). A review of the same head with the
+same local history signs the same history, so reviewing again does not clear that hold; a ledger from another source (the
+hosted review, a different runner) needs a receipt reviewed against that ledger, or a maintainer.
 
 ### A receipt that does not verify is ignored
 
@@ -1041,8 +1079,11 @@ and the notice now names which rule: cause `receipt_protected_controls` or
 `receipt_history_changed`). The acceptance ledger the gate itself published from
 the same receipt on an earlier run (one held for the owner's confirmation, or by a
 base move) is not a change of history: a ledger whose findings equal exactly what
-the signed record reconciles to is accepted by the assessment and by the gate's
-write boundary, and any other ledger still voids the receipt;
+the signed record reconciles to with its signed local history is accepted by the
+assessment and by the gate's write boundary. The ledger is judged against that
+signed local history, so a ledger an earlier head's receipt published and the later
+receipt carries is accepted as well, as is a ledger in the legacy form (reconciled with `[]`) that an earlier gate
+already published, which keeps its form; any other ledger still voids the receipt;
 a GitHub outage, rate limit or permission error while reading the receipt is
 reported with its ordinary cause, not ignored; and the post-assessment gate
 re-verifies the exact accepted record immediately before approval or merge and
@@ -1058,7 +1099,10 @@ confirmation (`/approve-intent <head sha>` from the configured maintainer). It n
 exact head, unless the protected `local_review.confirmation: "diff"` lets a confirmation of an
 earlier head of the same normalized diff, against an unchanged base configuration and contract,
 stand for it (see above). A receipt can never grant it, so CI holds such a PR as `review_incomplete` with
-cause `receipt_protected_controls` and a reason naming the protected controls.
+cause `receipt_protected_controls` and a reason naming the protected controls
+(under the protected `local_review.human_review: "signed"` the same PR is instead
+held as `owner_decision` until that confirmation, see
+[signing a review that requires a human](#signing-a-review-that-requires-a-human-opt-in)).
 `clouseau review` and `clouseau publish` print the same condition as a
 `warning:` on stderr and a `warnings` entry in their JSON result, naming only
 the repository paths. This includes the mandatory agent-standard updater commit
@@ -1125,7 +1169,7 @@ A missing or unreadable part, or a part that does not join to the signed root, i
 
 `clouseau review` (and `respond`/`publish`, which continue and publish the same review) never refuses a change for its size.
 It collects the change as before; when the complete evidence does not fit one 900,000-character snapshot (or a changed file is
-over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`), bounded unit views
+over 300,000 bytes) it re-collects without a cap and takes the chunked path end to end: partition (`clouseau-partition/1`, or `/2` when configured), bounded unit views
 (a file too large for one unit is split into segments), both roles on every unit through the unchanged reviewer, controller-computed
 seams, one blind integration pass per role (none when there are no seams), merge, one grading round per role, one chunked record (`version 3`, multi-part
 when it exceeds one receipt) and ONE signed receipt. A change that fits is reviewed and signed exactly as before (record `version 2`,
@@ -1144,6 +1188,7 @@ values) can only **tighten** it:
 | `integration_cap` | integration session input | at most 250000 |
 | `integration_call_seams` | seams one integration session is given (more seams, more sessions) | at most 60 |
 | `integration_max_seams` | seams the integration pass examines at all; the rest are recorded `missing` and hold approval | at most 400 |
+| `partition` | the partition scheme a local review produces: `1` (`clouseau-partition/1`) or `2` (`clouseau-partition/2`, below) | `1` when absent |
 
 No argument or environment variable changes them. A unit that misses the deadline stops the review with `unit_deadline` and the
 ceiling to use; lower `params.C` in the protected configuration and review again. A crashed headless review resumes from its journal
@@ -1151,9 +1196,68 @@ ceiling to use; lower `params.C` in the protected configuration and review again
 
 The hosted CI review has its own dark, opt-in counterpart for a pull request that has no usable receipt: see `docs/chunked-hosted.md` (`acceptance.chunked_hosted`).
 
+### When a change is chunked
+
+The 900,000-character budget counts the whole base and head text of every changed file, plus its patch, not the size of the
+diff. A change that touches a few large files is therefore chunked however small its diff: this document alone is about
+87,000 characters, so a one-line edit to it costs about 180,000 characters of the budget (base text, head text and patch,
+as the planner prices it), and five such files fill it. Consumers with large source or documentation files hit chunking routinely, so what a unit can
+see decides whether a chunked review can approve at all.
+
+### What a unit sees: partition schemes
+
+Both schemes group files into the same units (above, and "Review partition" below); they differ only in the `context_ids`
+each unit is reviewed with. A unit can never request a source (a request refuses the whole review), so what is not in its
+view it can only record as missing coverage, which leaves `review_completeness` unresolved; CI then holds approval
+(`acceptance.cjs` `approvalHold`) and refuses to reuse the receipt.
+
+* **`clouseau-partition/1`** (the default). A unit sees its own files' base and head sources, shared context (contracts,
+  the verification record, the request, unchanged sources such as the engine, within S), the change manifest (every changed
+  path and its owning unit), and the patches only (`foreign_hunks`) of changed files its own JavaScript files import. It sees
+  no source of another unit's changed files, so a unit whose file is imported by, imports, or is tested by another unit's
+  file records that file as missing. A change to `src/policy.cjs`, `src/local-cli.cjs` and `src/acceptance-controller.cjs`
+  with their tests ends with every unit listing the others as missing.
+* **`clouseau-partition/2`** (`"partition": 2`). Each unit additionally sees, as whole read-only sources in `context_ids`,
+  the other end of every seam it is an end of (`src/seam-context.cjs`): the changed files it imports, that import it,
+  whose removed path it still imports, and the subjects or tests across a unit boundary. Ends are added most relevant seam
+  first (removed import, consumed export, test subject, plain import; `src/integration-plan.cjs`), each read at head (at
+  base for a file the change removes), while the unit's view still fits 900,000 characters; an end that does not fit is
+  skipped whole and smaller ones are still tried, never cut. Only changed files of the same snapshot are added, never an
+  unchanged caller or test (those are not collected), so the shared context of other units does not move. The unit prompt
+  then says that `evidence.unit.context_ids` are other units' files to read as context, accounted for by their own units.
+  The context is a pure function of the snapshot and the protected parameters: no model chooses it and no session is added.
+  A unit that still lacks evidence (an unchanged caller, an end too large to fit) records it as missing, as under `/1`.
+  Each unit's input grows up to the same cap, so the hosted `max_input_tokens` estimate counts the context too.
+
+Nothing activates on merge: without `partition` every review is `/1`, exactly as before (the same partition, views,
+prompts and record). Turning `/2` on is a change to the protected base-branch configuration; rollback is removing it.
+
+**When a repository needs `/2`.** Landing the scheme is a mechanics change with no effect on existing consumers. Opting a
+repository in is a review-semantics change for that repository: its unit reviewers receive the other ends of their seams
+among the changed files, so their findings and completeness can differ from a `/1` review of the same change. Receipts
+signed under `/1` still verify (below). Turn `/2` on when the repository's changes are being chunked and CI refuses
+their receipts for completeness (`receipt_completeness`: units recorded each other's files as missing). A repository whose
+changes are never chunked, or whose chunked receipts CI accepts, gains nothing from it.
+
+### Receipts under each scheme
+
+The record names its scheme (`partition.scheme`), and the verifier recomputes the partition, the context of every unit, the
+views and the seams under **that** scheme from the signed snapshot and the protected `{C, S}`, whatever scheme the protected
+configuration currently makes local review produce. So:
+
+* every `/1` receipt, including those issued before `/2` existed, is recomputed with empty context exactly as before and
+  stays valid, before and after `partition: 2` is set (`src/seam-context.test.cjs` verifies a `/1` record produced by the
+  earlier engine byte for byte);
+* a `/2` receipt exists only once the setting is on, and is recomputed with the controller's seam context; a unit whose
+  `context_ids` differ in any way from the recomputation (`context of unit … differs`) or a scheme the verifier does not
+  know (`unknown or malformed partition scheme`) is refused, so the receipt is ignored and CI reviews;
+* the scheme is bound into `plan_digest` and every `view_digest`, so the reuse of remembered unit answers (`unit-reuse`)
+  misses once for every unit when the scheme changes.
+
 ## Review partition
 
-`src/review-partition.cjs` implements scheme `clouseau-partition/1`, the first stage of reviewing a change
+`src/review-partition.cjs` implements schemes `clouseau-partition/1` and `/2` (identical grouping; `/2` units also get seam
+context, see "What a unit sees" above), the first stage of reviewing a change
 whose complete evidence exceeds the 900,000-character snapshot budget in bounded units. It is deterministic
 and model-free; `clouseau review` uses it for a change that does not fit one snapshot.
 
