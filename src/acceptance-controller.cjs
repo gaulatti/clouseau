@@ -111,7 +111,10 @@ function verifyRecord(record, assessment, config, engine = null) {
   // LEGACY_LEDGER: the ledger a gate published before the signed local history was used, reconciled with the record's own
   // `previous` (`[]` for a local receipt). Only a pull request that already carries a ledger in exactly that form keeps it.
   const legacyForm = Boolean(record.local_receipt) && Object.hasOwn(record, 'local_previous') ? form(reconcile(result, record.snapshot, record.previous.findings)) : null;
-  return {...form(state), legacy: legacyForm, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed)};
+  // INPUT_HISTORY: the signed local history itself (`local_previous`, bound to the reviewed `snapshot.prior_findings`). A ledger
+  // equal to it is the one this receipt was reviewed against; the gate then publishes `state`, reconciled with it.
+  const input = Boolean(record.local_receipt) && Object.hasOwn(record, 'local_previous') ? record.local_previous.findings : null;
+  return {...form(state), legacy: legacyForm, input, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed)};
 }
 
 // LEGACY_LEDGER is removable once no open pull request of a consumer carries a ledger a gate published in the legacy form
@@ -260,7 +263,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         // The record keeps the signed history either way, so the gate re-derives exactly the ledger it already published.
         const reconciled = history => digest(reconcile({...verified.record.result, reviews: verified.reviews},
           verified.record.snapshot, history).findings);
-        const own = [signedHistory(verified.record), verified.record.previous.findings].some(history => digest(previous.findings) === reconciled(history));
+        // INPUT_HISTORY: so is a ledger equal to the signed local history the receipt was reviewed against (`local_previous`): a
+        // later receipt whose own review adds or changes findings. This is the acceptance for histories without a signed chain;
+        // an unpublished intermediate review, or a legacy-form ledger followed by a later receipt, is still refused (a later
+        // change adds a signed chain for those).
+        const input = Object.hasOwn(verified.record, 'local_previous') && digest(previous.findings) === digest(verified.record.local_previous.findings);
+        const own = input || [signedHistory(verified.record), verified.record.previous.findings].some(history => digest(previous.findings) === reconciled(history));
         const recorded = own ? {...previous, findings: verified.record.previous.findings} : previous;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) && !own) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
@@ -467,7 +475,10 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     // An existing ledger in the legacy form stays in that form (LEGACY_LEDGER); a pull request without a ledger gets the new form.
     const legacyLedger = Boolean(verifiedRecord.legacy) && current.comment !== null && !matches(verifiedRecord) && matches(verifiedRecord.legacy);
     const accepted = legacyLedger ? verifiedRecord.legacy : verifiedRecord;
-    if (digest(current) !== digest(record.previous) && !matches(accepted)) throw new Error('Acceptance history changed; reassess the current record');
+    // INPUT_HISTORY: a ledger equal to the signed local history the receipt was reviewed against is accepted too (histories
+    // without a signed chain); the gate publishes `state`, the ledger reconciled with that history.
+    const input = Boolean(verifiedRecord.input) && current.comment !== null && digest(current.findings) === digest(verifiedRecord.input);
+    if (digest(current) !== digest(record.previous) && !matches(accepted) && !input) throw new Error('Acceptance history changed; reassess the current record');
     const {body, pages} = accepted;
     const links = [];
     for (const [index, page] of pages.entries()) {

@@ -1008,16 +1008,31 @@ change itself. While the hold waits, the gate publishes the signed findings in t
 that a maintainer's approval starts finds that ledger on the pull request; under this setting a ledger whose findings equal
 exactly what the signed record publishes is that record's own output, so the assessment and the gate accept it and keep the
 signed history in the record. The ledger is judged against the receipt's signed local history (`local_previous`, the
-`prior_findings` the review ran against): the signed record reconciled with that history must give exactly the ledger's
-findings. So a ledger an earlier head's receipt published, and a later receipt carries in its local history, is accepted
-too, and the gate publishes the same ledger. A ledger in the legacy form, the signed record reconciled with its own
-`previous` (`[]` for a local receipt), which every gate published before the local history was used, is accepted as well and
-keeps that form, so a pull request held across the upgrade is unaffected; a pull request without a ledger gets the form
-reconciled with the signed local history. The legacy form is accepted until no open pull request carries one
-(`LEGACY_LEDGER` in `src/acceptance-controller.cjs`). A ledger with any other findings is still a change in history
-(`receipt_history_changed` at the assessment, "Acceptance history changed" at the gate). A review of the same head with the
-same local history signs the same history, so reviewing again does not clear that hold; a ledger from another source (the
-hosted review, a different runner) needs a receipt reviewed against that ledger, or a maintainer.
+`prior_findings` the review ran against). Besides an existing but empty ledger (equal to the record's own signed `previous`),
+the assessment and the gate's write boundary accept exactly three ledgers:
+- **the signed local history itself**: the ledger the receipt was reviewed against. A later receipt whose own review adds a
+  finding, re-finds one in another state or reopens a closed one is accepted, and the gate publishes the signed record
+  reconciled with that history (`INPUT_HISTORY` in `src/acceptance-controller.cjs`);
+- **the signed record reconciled with that history**: the receipt's own publication on an earlier run, or a ledger an earlier
+  head's receipt published that a later receipt carries unchanged; the gate publishes the same ledger;
+- **the legacy form**, the signed record reconciled with its own `previous` (`[]` for a local receipt), which every gate
+  published before the local history was used. It keeps that form, so a pull request held across the upgrade is unaffected;
+  a pull request without a ledger gets the form reconciled with the signed local history. The legacy form is accepted until
+  no open pull request carries one (`LEGACY_LEDGER` in `src/acceptance-controller.cjs`).
+
+A ledger with any other findings is still a change in history (`receipt_history_changed` at the assessment, "Acceptance
+history changed" at the gate), and so is the private-merge re-check against the ledger the gate published. Two histories
+are known to be refused today, because nothing signed links the pull request's ledger to the receipt's local history:
+- **an unpublished intermediate review**: a review between two published receipts (a repair round) was never published, so
+  the local history the next receipt signs includes its findings and is not the ledger;
+- **a legacy-form ledger followed by a later receipt**: the later receipt's local history is the earlier review reconciled
+  with its own local history, not the legacy-form ledger on the pull request.
+
+A later change adds a signed history chain for both. Until then, the exit is to remove the local-review marker from the
+pull request body so the CI reviewer reviews the change (under the protected `hosted_review: "manual"`, a maintainer comments
+`/hosted-review <head>`), or a maintainer. A review of the same head with the same local history signs the same history, so
+reviewing again does not clear that hold; a ledger from another source (the hosted review, a different runner) needs a
+receipt reviewed against that ledger, or a maintainer.
 
 ### A receipt that does not verify is ignored
 
@@ -1119,9 +1134,15 @@ the same receipt on an earlier run (one held for the owner's confirmation, or by
 base move) is not a change of history: a ledger whose findings equal exactly what
 the signed record reconciles to with its signed local history is accepted by the
 assessment and by the gate's write boundary. The ledger is judged against that
-signed local history, so a ledger an earlier head's receipt published and the later
-receipt carries is accepted as well, as is a ledger in the legacy form (reconciled with `[]`) that an earlier gate
-already published, which keeps its form; any other ledger still voids the receipt;
+signed local history, so the three accepted ledgers are that signed local history
+itself (a later receipt whose review adds or changes findings; the gate publishes the
+reconciled ledger), the signed record reconciled with it (a ledger an earlier head's
+receipt published and the later receipt carries), and a ledger in the legacy form
+(reconciled with `[]`) that an earlier gate already published, which keeps its form;
+any other ledger still voids the receipt, including, until a signed history chain is
+added, a ledger after an unpublished intermediate review and a legacy-form ledger
+followed by a later receipt (see the exit above: remove the marker so the CI reviewer
+reviews, `/hosted-review <head>` under `hosted_review: "manual"`, or a maintainer);
 a GitHub outage, rate limit or permission error while reading the receipt is
 reported with its ordinary cause, not ignored; and the post-assessment gate
 re-verifies the exact accepted record immediately before approval or merge and
