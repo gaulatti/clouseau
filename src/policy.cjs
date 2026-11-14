@@ -377,9 +377,13 @@ async function forcePushedHeads(github, repo, number) {
 // force pushes replaced or made. A patchless or truncated file list, or an unknown commit, never matches. The
 // base `sha` was confirmed against must carry the same protected configuration and purpose contract as the live base: a
 // confirmation never carries across a base change to either.
+// When the hold is a signed review that carries findings a human must see (protected `human_review: "signed"`), the caller
+// passes `{findings: true}`: only a confirmation of the exact head counts, so nothing carries, whatever the setting says. A
+// re-review (even of an empty commit) carries findings the owner never confirmed.
 const confirmations = new Map();
-async function confirms(github, repo, pr, sha) {
+async function confirms(github, repo, pr, sha, hold = {}) {
   if (sha === pr.head.sha) return true;
+  if (hold.findings === true) return false;
   if (!intentDiff || typeof sha !== 'string' || !/^[a-f0-9]{40}$/.test(sha)) return false;
   const key = `${repo.owner}/${repo.repo}#${pr.number}:${pr.base.sha}:${pr.head.sha}:${sha}`;
   // A failed comparison is not kept: the next call (a rate-limit retry) compares again.
@@ -428,20 +432,21 @@ async function confirms(github, repo, pr, sha) {
 }
 
 // Whether an issue comment confirms this head: `/approve-intent <sha>` (with an `Accepted purpose:` block, unless `exact`, as
-// the gate requires) whose `sha` confirms() accepts. The gate and the reassessment it starts both decide by this.
-async function commentConfirms(github, repo, pr, body, {exact = false} = {}) {
+// the gate requires) whose `sha` confirms() accepts. The gate and the reassessment it starts both decide by this; only the
+// gate knows the hold, so only it passes a signed findings hold (`findings`, confirms()).
+async function commentConfirms(github, repo, pr, body, {exact = false, ...hold} = {}) {
   const named = intentAny(body);
   if (!named || (exact && body.trim() !== `/approve-intent ${named.sha}`)) return false;
-  return confirms(github, repo, pr, named.sha);
+  return confirms(github, repo, pr, named.sha, hold);
 }
 
-async function purposeConfirmation(github, repo, pr, comments) {
+async function purposeConfirmation(github, repo, pr, comments, hold = {}) {
   let comment = null;
   let intent = null;
   for (const item of [...comments].reverse()) {
     if (!(item.user?.type === 'User' && item.user.login === MANUAL_REVIEWER && Number.isSafeInteger(item.id) && item.id > 0)) continue;
     const named = intentAny(item.body);
-    if (named && await confirms(github, repo, pr, named.sha)) {comment = item; intent = named; break;}
+    if (named && await confirms(github, repo, pr, named.sha, hold)) {comment = item; intent = named; break;}
   }
   if (!comment) return null;
   const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: comment.user.login});
@@ -474,7 +479,7 @@ async function humanRequirement(github, repo, pr, files, assessment) {
     required: selfAuthored || (!intentPending && assessment.decision !== 'auto_approve') || Boolean(scopeReason(files, pr, managed.exempt, managed.protect))};
 }
 
-async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) {
+async function maintainerConfirmed(github, repo, pr, {reviewOnly = false, ...hold} = {}) {
   const canConfirm = async user => {
     if (!user || user.type !== 'User') return false;
     const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login});
@@ -482,8 +487,8 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false} = {}) 
   };
   // With the setting, the author's permission is read before any diff comparison, so a comment from anyone else starts none.
   // Without it, confirms() answers without a request, and the order is unchanged.
-  const confirmedBy = async (user, sha) => intentDiff ? await canConfirm(user) && await confirms(github, repo, pr, sha) :
-    await confirms(github, repo, pr, sha) && await canConfirm(user);
+  const confirmedBy = async (user, sha) => intentDiff ? await canConfirm(user) && await confirms(github, repo, pr, sha, hold) :
+    await confirms(github, repo, pr, sha, hold) && await canConfirm(user);
   const reviews = await github.paginate(github.rest.pulls.listReviews, {...repo, pull_number: pr.number, per_page: 100});
   const latest = new Map();
   for (const review of reviews) {
@@ -617,8 +622,10 @@ function needsDeployment(files) {
 // The values a gate notice may mention; `pr` is the last pull request read, which always exists once the gate runs.
 const gateNoticeContext = (context, pr, repo) => ({repo: `${repo.owner}/${repo.repo}`, run: String(context.runId), head: pr.head.sha, number: String(pr.number)});
 
+// `confirmation` is what the caller that verified the record knows about the hold: `{findings: true}` for a signed review that
+// carries findings (confirms()), else nothing. Every confirmation check of this gate decides by it.
 async function gate({github, context, core, assessment = JSON.parse(process.env.ASSESSMENT),
-  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null}) {
+  wait = sleep, maxPolls = 180, mergePolls = 30, nativeGate = false, verifyAcceptance = null, confirmation = {}}) {
   const repo = context.repo;
   const pull_number = numberFor(context);
   const getPr = async () => (await readPull(github, repo, pull_number)).data;
@@ -636,7 +643,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
   }
   if (context.eventName === 'issue_comment') {
     // The comment is exactly `/approve-intent <sha>`, as before; only which `sha` counts follows `local_review.confirmation`.
-    if (!await commentConfirms(github, repo, pr, context.payload.comment.body, {exact: true})) {
+    if (!await commentConfirms(github, repo, pr, context.payload.comment.body, {...confirmation, exact: true})) {
       throw new Error('Stale or malformed intent confirmation');
     }
     const {data} = await github.rest.repos.getCollaboratorPermissionLevel({...repo, username: context.payload.comment.user.login});
@@ -697,7 +704,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
     if (nativeGate && intentPending) throw new Error('AI assessment must finish after successful verification before the native policy job can pass');
     const {managed, required: humanRequired} = await humanRequirement(github, repo, pr, files, assessment);
     for (const notice of managed.notices) core.info(notice);
-    if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) {
+    if (humanRequired && !await maintainerConfirmed(github, repo, pr, {...confirmation, reviewOnly: selfAuthored})) {
       if (!pr.assignees?.some(user => user.login === MANUAL_REVIEWER)) {
         await github.rest.issues.addAssignees({...repo, issue_number: pull_number, assignees: [MANUAL_REVIEWER]});
       }
@@ -749,7 +756,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       core.info('Technical gate passed; requested intent assessment. No approval has been granted.');
       return;
     }
-    if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
+    if (humanRequired && !await maintainerConfirmed(github, repo, pr, {...confirmation, reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
     const currentProtection = manualMerge || controllerManaged ? await protection() : null;
     if (manualMerge && ownership.automatic && codeownersRequired &&
         !(await codeowners.authority({github, repo, pr, files})).automatic) throw new Error('Code ownership changed before manual-mode approval');
@@ -787,7 +794,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
           await verifyAcceptance();
           const current = await protection();
           if (!current.controllerManaged) throw new Error('Private-plan acceptance mode changed before merge');
-          if (humanRequired && !await maintainerConfirmed(github, repo, pr, {reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
+          if (humanRequired && !await maintainerConfirmed(github, repo, pr, {...confirmation, reviewOnly: selfAuthored})) throw new Error('Maintainer confirmation was withdrawn');
         }});
       await finish('success', `Tests, ${COVERAGE.brief}, validated acceptance and fresh approval passed. Controller-enforced owner merge completed: ${pr.merge_commit_sha}. Native branch protection is unavailable.`);
       if (!nativeGate) await finalize({github, context, core, assessment, wait, mergePolls, pr, files});
