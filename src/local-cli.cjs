@@ -126,7 +126,8 @@ function executeVerification({directory, config, additional = [], run = cp.spawn
 }
 
 function reviewStatus(technical = {}) {
-  return {decision_scope: 'review_reuse_only', independent_ci_required: true, merge_authority: false,
+  return {decision_scope: 'signed_review_reuse', ci_verification: 'attested_by_receipt_or_run_in_ci', approval_authority: 'ci_gate',
+    trust_boundary: 'enrolled_workstation_key',
     local_verification: {commands: technical.verification_status || 'unavailable', coverage: technical.coverage || {status: 'unavailable', passed: false}}};
 }
 

@@ -721,7 +721,7 @@ async function gate({github, context, core, assessment = JSON.parse(process.env.
       const cause = gateNotice.intentCause({selfAuthored, scope: scopeReason(files, pr, managed.exempt, managed.protect), controlReason: REVIEW_CONTROL_REASON});
       const summary = `A maintainer's second opinion is required.\n\n${selfReview}${reason}\n\n` +
         `To confirm this change belongs in this repository, comment:\n\n\`/approve-intent ${pr.head.sha}\`\n\n` +
-        `This confirms intent only. All tests and ${COVERAGE.full} remain mandatory.\n\n${gateNotice.intentBlock(cause, noticeContext)}`;
+        `This confirms intent only. All tests and ${COVERAGE.full} must still pass in CI or be attested by a valid receipt.\n\n${gateNotice.intentBlock(cause, noticeContext)}`;
       await finish('action_required', summary);
       const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number: pull_number, per_page: 100});
       if (!comments.some(comment => comment.user.type === 'Bot' && comment.body.includes(marker))) {

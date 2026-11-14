@@ -56,13 +56,16 @@ controls. It cannot authorize ordinary changes, auto-merge or deployment.
    unavailable coverage alone does not force a failing AI quality verdict;
    demonstrated defects, deceptive tests and missing material context still do.
    Report the AI decision separately from local verification/coverage status.
-   CI's separate tests and exact-100% coverage gate remain mandatory before
-   approval and merge; a local quality verdict cannot claim those results.
+   A signed receipt attests the declared verification only when every declared
+   command and the coverage gate CI enforces passed on the reviewed head; then CI
+   may skip those tests, otherwise CI runs them before approval and merge. The
+   AI quality verdict itself never claims verification results.
 5. An enrolled runner selects its installed signing identity automatically.
    Pass `--identity FILE` when multiple enrolled identities require selection.
    A passing final AI quality review produces a signed reuse receipt
-   automatically. The receipt cannot authorize technical approval or merge,
-   including when local coverage is below 100%. Never read,
+   automatically. CI accepts it in place of its own AI review after verifying the
+   signature and every binding; the CI gate still decides approval and merge, and
+   a receipt whose verification did not fully pass attests no tests. Never read,
    print, transmit or copy the identity's private material into a repository,
    prompt, tool environment or report. The identity file belongs to the trusted
    local runner, not to project source. Developer-owned workstations and their
