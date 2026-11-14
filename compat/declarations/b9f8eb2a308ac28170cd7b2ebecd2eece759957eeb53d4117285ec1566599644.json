@@ -10,7 +10,7 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "d9c27dacf3f2e93aa7120141062f7046ddeaca85a74d3de8e82c2888d70e2d2f"
+      "sha256": "09b4933755bf1f9a99420e410edf2487bb75597e085ead3c2e2798933494ed01"
     },
     {
       "path": "src/incomplete.cjs",
