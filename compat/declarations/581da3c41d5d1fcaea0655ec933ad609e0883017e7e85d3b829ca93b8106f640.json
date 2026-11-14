@@ -30,7 +30,7 @@
     {
       "path": "src/local-cli.cjs",
       "mode": 0,
-      "sha256": "7cf816ec75fed77a6909a484b56781f413741af0f6613061ba5b0de930e1f6e6"
+      "sha256": "7e1838347978f37eea9bb3e0f4c59c5db6d89dbe910d12faa1aa096bd54c39a0"
     },
     {
       "path": "src/review-partition.cjs",
