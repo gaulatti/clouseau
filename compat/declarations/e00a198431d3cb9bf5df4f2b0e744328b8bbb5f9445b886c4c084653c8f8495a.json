@@ -5,17 +5,17 @@
     {
       "path": "src/local-receipt.cjs",
       "mode": 0,
-      "sha256": "fd0762863a479298c2a2519fe7f7d86af298bd622331dec8a7527441970ecba3"
+      "sha256": "b884a476ce248830085ae7b7da509b4f40e716511b8f51a2ebaf7891f38cdaff"
     },
     {
       "path": "src/pr-refresh.cjs",
       "mode": 0,
-      "sha256": "07cacda88d8e5c57d7964d70e3a0e0e3851d3629b35b7b4403426f48367dd30c"
+      "sha256": "80f1f5d42d96fd50b890b3fde385c509c17f549975639d47f2c8a7eefffaa26d"
     },
     {
       "path": "src/receipt-standing.cjs",
       "mode": 0,
-      "sha256": "70b20535e3aa2e8252c4957a53fb9d2fbcdd19f361ba496bea14510f66e81122"
+      "sha256": "0ea9149d5a316acdde492df06221caab153c9767f85a0e837268f14446356cbe"
     }
   ]
 }
