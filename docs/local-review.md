@@ -350,6 +350,16 @@ the failure then names the receipt class (`receipt_expired` with its expiry inst
 the receipt ([notices](notices.md#skipped-verification-step-without-an-attesting-receipt)).
 The job named in `verification.job` must still exist and succeed, so keep it as a job whose steps are skipped rather than removing it.
 
+A check that no receipt may stand in for stays in the workflow without an `attested` condition, and the configuration does
+not list it. It may sit in `verification.job` itself or in another job of the same workflow. The gate requires the whole
+verification run to conclude `success`, not only the listed steps, so its failure blocks approval like a failure of a
+required step, and it needs no configuration key. In Clouseau's own CI, `verify` holds both kinds of step. The four
+receipt-covered steps listed in `.github/clouseau.json` take the `attested` condition. Under a condition that never reads it
+are the coverage-contract self-tests, which test the engine's coverage gate rather than the change, and
+`scripts/review-compatibility verify`, which checks the review-semantics declarations against the merged tree. The
+declaration check must stay outside the receipt: under `binding: "diff"` a receipt compares declarations by what they
+declare, not by their digests ([receipt compatibility](receipt-compatibility.md)).
+
 ## Evidence size
 
 The review cache's `snapshot.json`, the `record` output and the signed `receipt.json` are
