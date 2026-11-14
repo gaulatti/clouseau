@@ -10,19 +10,21 @@
 // non-chunked path builds, and the caller continues with reconcile, combine and the decision comparison.
 //
 // The partition and merge functions belong to other modules, so they are injected (`hooks`):
-//   partition({snapshot, params}) -> {scheme, params, units: [{id, owned, context_ids, view_digest, cost}], plan_digest}
-//   unitView(snapshot, unitSpec)  -> a snapshot-shaped view with its own `digest`
+//   partition({snapshot, params, scheme}) -> {scheme, params, units: [{id, owned, context_ids, view_digest, cost}], plan_digest}
+//   unitView(snapshot, unitSpec, scheme)  -> a snapshot-shaped view with its own `digest`
 //   seams({snapshot, plan})       -> controller-computed seams
 //   merge({role, unitReports: [{unit, report}], integration, snapshot, plan}) -> one ordinary merged report
-// `params` are the PROTECTED parameters ({C, S}); nothing is ever read from the record. A record is never refused for
+// `scheme` is the partition scheme the record names, and only a known one (review-partition.cjs SCHEMES) is recomputed:
+// /1 units carry no context, /2 units the seam context the controller chose (seam-context.cjs). Either way the context
+// is recomputed, never trusted. `params` are the PROTECTED parameters ({C, S}); nothing is ever read from the record. A record is never refused for
 // its size: the snapshot and the unit count are unbounded, and a record too large for one receipt is stored as a
 // signed multi-part receipt (receipt-parts.cjs).
 
 const {digest, validateReport} = require('./acceptance.cjs');
 const {validateInspection} = require('./acceptance-review.cjs');
 const {locations, grade} = require('./acceptance-grading.cjs');
+const {SCHEME, SCHEMES} = require('./review-partition.cjs');
 
-const SCHEME = 'clouseau-partition/1';
 const ROLES = ['examiner', 'challenger'];
 const MAX_RECEIPT_BYTES = 3000000;
 // The largest record signed as ONE receipt, leaving headroom for the envelope. A larger partitioned record is signed as a
@@ -184,7 +186,7 @@ function usable(chunked) {
 function chunkedVerifier(record, chunked) {
   const {params, hooks} = usable(chunked);
   const {snapshot, result, partition} = record;
-  need(partition && typeof partition === 'object' && Object.keys(partition).sort().join(',') === 'params,plan_digest,scheme,units' && partition.scheme === SCHEME,
+  need(partition && typeof partition === 'object' && Object.keys(partition).sort().join(',') === 'params,plan_digest,scheme,units' && SCHEMES.includes(partition.scheme),
     `unknown or malformed partition scheme ${named(partition?.scheme)}`);
   return {
     snapshotDigest: () => snapshotDigest(snapshot),
@@ -192,13 +194,22 @@ function chunkedVerifier(record, chunked) {
       need(digest(partition.params) === digest(planParams(params)), 'partition parameters differ from the protected configuration');
       need(Array.isArray(partition.units) && partition.units.length > 0, 'partition has no units');
       checkOwnership(snapshot, partition);
+      const {scheme} = partition;
+      const expected = hooks.partition({snapshot, params, scheme});
+      // The context a unit was reviewed with is the controller's, recomputed for the record's scheme; a unit the
+      // recomputation does not have is refused below as a forged partition.
+      for (const unit of partition.units) {
+        const recomputed = expected.units?.find(item => item.id === unit.id);
+        need(!recomputed || digest(recomputed.context_ids) === digest(unit.context_ids),
+          `context of unit ${unit.id} differs from the ${scheme} context recomputed from the signed evidence`);
+      }
       const views = new Map();
       for (const unit of partition.units) {
-        const view = hooks.unitView(snapshot, unit);
+        const view = hooks.unitView(snapshot, unit, scheme);
         need(view.digest === unit.view_digest, `view digest of unit ${unit.id} differs from the recomputed unit view`);
         views.set(unit.id, view);
       }
-      need(digest(hooks.partition({snapshot, params})) === digest(partition),
+      need(digest(expected) === digest(partition),
         'forged partition: it differs from the plan recomputed from the signed evidence and protected parameters');
       need(Array.isArray(record.seams) && digest(hooks.seams({snapshot, plan: partition})) === digest(record.seams),
         'seams differ from the seams recomputed from the signed evidence');
@@ -221,4 +232,4 @@ function chunkedVerifier(record, chunked) {
   };
 }
 
-module.exports = {SCHEME, RECORD_LIMIT, ChunkedRecordError, parseParams, snapshotDigest, elideQuotes, rehydrateQuotes, chunkedVerifier};
+module.exports = {SCHEME, SCHEMES, RECORD_LIMIT, ChunkedRecordError, parseParams, snapshotDigest, elideQuotes, rehydrateQuotes, chunkedVerifier};

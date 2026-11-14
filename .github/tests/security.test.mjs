@@ -46,7 +46,8 @@ test('the fork guard and the credential boundary cannot silently disappear from 
   assert.ok(config.verification.steps.includes('Test workflow security'));
   const step = workflow.jobs.verify.steps.find(step => step.name === 'Test workflow security');
   assert.match(step.run, /npm test/);
-  assert.equal(step.if, workflow.jobs.verify.steps[0].if);
+  // A receipt-covered step: it takes the same guard as the coverage gate, the one the attested decision can skip.
+  assert.equal(step.if, workflow.jobs.verify.steps.find(step => step.name === 'Enforce 100% line and branch coverage').if);
   for (const [name, job] of Object.entries(workflow.jobs)) {
     if (name !== 'apply-repair') assert.ok(!JSON.stringify(job).includes('secrets.DEPLOYMENT_TOKEN'), name);
   }
