@@ -5,12 +5,12 @@
     {
       "path": "src/acceptance-controller.cjs",
       "mode": 0,
-      "sha256": "7c54ff85709c143909079b15799224a8f2a12f04eceb16381c90553d8cb333a8"
+      "sha256": "7fdd7b0df7e8f054cc1d5080f5cbd26ea9d53e19a21c394ebec15654a625f151"
     },
     {
       "path": "src/local-cli.cjs",
       "mode": 0,
-      "sha256": "0965abe814c6ccc9316291fd28445c0a0af65f8820c897582e6b2eae27101b8e"
+      "sha256": "d8ea1f5d6ec7f7aa5cedf51882025a2fe7bd4b9fef5189cbe18bda7336023d01"
     },
     {
       "path": "src/local-git.cjs",
