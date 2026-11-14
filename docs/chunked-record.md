@@ -8,7 +8,7 @@ decision are unchanged. Nothing produces a partitioned record yet (unit runner a
 
 ```
 snapshot      combined snapshot, of any size (it is reviewed in bounded unit views; only the views are capped)
-partition     {scheme: 'clouseau-partition/1', params: {C, S}, units: [{id, owned, context_ids, parts?, view_digest, cost}], plan_digest}
+partition     {scheme: 'clouseau-partition/1' | 'clouseau-partition/2', params: {C, S}, units: [{id, owned, context_ids, parts?, view_digest, cost}], plan_digest}
 seams         controller-computed; the verifier recomputes them
 result.reviews[]  {role, unit_reports: [{unit, report, drafts?}], integration: [...], drafts, grading}
 result.usage[]    one entry per harness call, tagged `unit` (investigation) or by `phase` (`integration`, `grading`)
@@ -21,12 +21,14 @@ to the derived report; the answer, its value and the set of ids must match.
 ## What the verifier checks, in order
 
 1. The verifier was given protected parameters and hooks; a partitioned record is otherwise rejected.
-2. Scheme `clouseau-partition/1` and the exact partition fields.
+2. A known scheme (`clouseau-partition/1` or `/2`, from `src/review-partition.cjs` `SCHEMES`) and the exact partition
+   fields. Everything after this step is recomputed under the scheme the record names.
 3. `partition.params` equals the protected `{C, S}` (never read from the record); any number of units.
 4. The combined snapshot's digest is recomputed, whatever its size.
 5. I1: every changed path is owned by exactly one unit (duplicate, unowned and foreign paths are named); a file split into
    segments (`parts: {path: {index, count}}`) is owned by one unit per segment, every index of `0..count-1` exactly once. I3: context ids
-   exist. I4: each `view_digest` equals the recomputed unit view.
+   exist. Each unit's `context_ids` equal the context recomputed for the record's scheme (empty under `/1`, the seam context
+   of `src/seam-context.cjs` under `/2`). I4: each `view_digest` equals the recomputed unit view.
 6. The partition recomputed from the signed snapshot and protected parameters equals the stored one, and so do the seams.
 7. Per role: exactly one report per unit, each bound to its own view digest (a swapped report is refused), thin quotes
    rehydrated from the unit view, then the existing `validateInspection` against that view.
@@ -40,7 +42,7 @@ comparison then run unchanged, so there is still one decision derivation.
 
 `options.chunked = {params: {C, S}, hooks: {partition, unitView, seams, merge}}` is accepted by
 `issueReceipt`, `verifySignedRecord`, `verifyReceipt` and `reviewDecision`. Parameters come only from protected
-configuration (`cap` and `max_units`, bounds of an earlier contract, are still accepted and bound nothing). The hooks are the partition and merge modules, injected so this module does not depend on them.
+configuration (`cap` and `max_units`, bounds of an earlier contract, are still accepted and bound nothing). The hooks are the partition and merge modules, injected so this module does not depend on them. `partition` and `unitView` take the scheme the record names (`partition({snapshot, params, scheme})`, `unitView(snapshot, unit, scheme)`); the real hooks (`chunked-wiring.cjs` `hooksFor`) recompute either scheme.
 CI verifies a partitioned local receipt through `verifyReceipt`, which takes the parameters from the protected `local_review.chunked`; the controller reuses the merged reviews that verification derives, so a signed chunked review is reused with zero CI AI calls.
 
 ## Quote elision

@@ -40,8 +40,12 @@ const NEXT_STEPS = Object.freeze({
     'The review is reassessed when verification completes, or run `gh run rerun {run} --failed --repo {repo}` after the time stated in the reason.'],
   receipt_protected_controls: ['A local receipt cannot stand in for the owner. Ask a maintainer to comment exactly `/approve-intent {head}` on this pull request.',
     'Or remove the protected-file change (for example an AGENTS.md update, which should stay out of an ordinary pull request) and push a new head.'],
-  receipt_history_changed: ['The pull request records review findings that this receipt\'s own review did not produce (from the CI reviewer, or from another receipt). A local receipt cannot take that history over, and reviewing again locally does not change it.',
-    'Remove the `clouseau-local-review` marker from the pull request description so the CI reviewer reviews this head with the recorded findings, or ask a maintainer to review it.'],
+  receipt_history_changed: ['The receipt\'s signed finding history must reconcile to exactly the pull request\'s acceptance ledger, and it does not. ' +
+    'A review of this head with the same local history signs the same history, so reviewing again does not change this.',
+    'If the ledger came from another source (for example the hosted review or a different runner), review on a runner whose history matches it ' +
+    'and publish that receipt (`clouseau publish --directory . --receipt RECEIPT_FILE`).',
+    'Remove the `clouseau-local-review` marker from the pull request description so the CI reviewer reviews this head with the recorded findings, ' +
+    'or ask a maintainer to review it.'],
   chunked_record_invalid: ['The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head (`clouseau review ...`).',
     'Publish it: `clouseau publish --directory . --receipt RECEIPT_FILE`, and update the marker in the pull request description.'],
   decision_mismatch: ['The assessment and the stored record disagree (both decisions are in the reason). ' + RERUN, 'If it repeats, report it with the link to this workflow run.'],
