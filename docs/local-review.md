@@ -962,7 +962,11 @@ exactly what the signed record publishes is that record's own output, so the ass
 signed history in the record. The ledger is judged against the receipt's signed local history (`local_previous`, the
 `prior_findings` the review ran against): the signed record reconciled with that history must give exactly the ledger's
 findings. So a ledger an earlier head's receipt published, and a later receipt carries in its local history, is accepted
-too, and the gate publishes the same ledger. A ledger with any other findings is still a change in history
+too, and the gate publishes the same ledger. A ledger in the legacy form, the signed record reconciled with its own
+`previous` (`[]` for a local receipt), which every gate published before the local history was used, is accepted as well and
+keeps that form, so a pull request held across the upgrade is unaffected; a pull request without a ledger gets the form
+reconciled with the signed local history. The legacy form is accepted until no open pull request carries one
+(`LEGACY_LEDGER` in `src/acceptance-controller.cjs`). A ledger with any other findings is still a change in history
 (`receipt_history_changed` at the assessment, "Acceptance history changed" at the gate). A review of the same head with the
 same local history signs the same history, so reviewing again does not clear that hold; a ledger from another source (the
 hosted review, a different runner) needs a receipt reviewed against that ledger, or a maintainer.
@@ -1068,7 +1072,8 @@ base move) is not a change of history: a ledger whose findings equal exactly wha
 the signed record reconciles to with its signed local history is accepted by the
 assessment and by the gate's write boundary. The ledger is judged against that
 signed local history, so a ledger an earlier head's receipt published and the later
-receipt carries is accepted as well; any other ledger still voids the receipt;
+receipt carries is accepted as well, as is a ledger in the legacy form (reconciled with `[]`) that an earlier gate
+already published, which keeps its form; any other ledger still voids the receipt;
 a GitHub outage, rate limit or permission error while reading the receipt is
 reported with its ordinary cause, not ignored; and the post-assessment gate
 re-verifies the exact accepted record immediately before approval or merge and

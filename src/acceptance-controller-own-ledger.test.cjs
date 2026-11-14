@@ -149,12 +149,15 @@ function serveReceipt(f, record, {trusted, advisory, carried}) {
 // no record), so the ledger an earlier gate run published from this receipt is constructed here as exactly `publication(...)`'s
 // body for the signed record, the ledger the gate publishes from it once it holds a record. The tests check that the gate, once
 // it runs, publishes the same findings.
-function ownLedger(bundle, number = 3) {
+function ownLedger(bundle, number = 3, {legacy = false} = {}) {
   const signed = bundle.payload.record;
   const {reviews} = reviewDecision(signed);
-  const state = reconcile({...signed.result, reviews}, signed.snapshot, (signed.local_previous || signed.previous).findings);
+  const history = legacy ? signed.previous : signed.local_previous || signed.previous;
+  const state = reconcile({...signed.result, reviews}, signed.snapshot, history.findings);
   return publication({...signed.result, reviews, decision: 'owner_decision'}, {...signed.snapshot, number}, state).body;
 }
+// The legacy form: what every gate published before the signed local history was used, reconciled with `previous` (`[]`).
+const legacyLedger = bundle => ownLedger(bundle, 3, {legacy: true});
 
 const ledgerWrites = f => f.state.writes.filter(item => ['create-ledger', 'update-ledger'].includes(item.name) && item.args.body.includes(MARKER));
 const approvals = f => f.state.writes.filter(item => item.name === 'approve').length;
@@ -163,14 +166,14 @@ const confirmation = f => ({id: 950, user: {login: config.manual_reviewer, type:
 // A public pull request that changes a protected path (`src/upload.test.js` is made sensitive), reviewed by a signed receipt.
 // With `carry`, an earlier head's receipt with an advisory finding is signed first and its ledger kept as `earlier`; the receipt
 // served is a later one whose own review has no findings and whose local history is `carry(findings of that ledger)`.
-async function protectedReceipt(f, {advisory = true, carry = null} = {}) {
+async function protectedReceipt(f, {advisory = true, carry = null, laterAdvisory = false} = {}) {
   const hosted = createPolicy(config);
   assert.equal((await hosted.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl})).decision, 'auto_approve');
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   const trusted = {...config, sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js'], local_review: {mode: 'optional',
     reviewer_sha: 'e'.repeat(40), reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800}};
   const earlier = carry ? ownLedger(serveReceipt(f, record, {trusted, advisory: true})) : null;
-  const bundle = serveReceipt(f, record, carry ? {trusted, advisory: false, carried: carry(stateOf(earlier).findings)} : {trusted, advisory});
+  const bundle = serveReceipt(f, record, carry ? {trusted, advisory: laterAdvisory, carried: carry(stateOf(earlier).findings)} : {trusted, advisory});
   const policy = createPolicy(trusted);
   const assess = async () => {
     const calls = f.state.calls;
@@ -362,7 +365,9 @@ test('the gate write boundary accepts only the ledger the receipt itself publish
   // A receipt assessed before its ledger was on the pull request: its record holds `{comment: null, findings: []}`. By the
   // gate, the ledger a concurrent gate run published from the same receipt is there.
   // `carried*`: a later receipt whose signed local history carries the ledger an earlier head's receipt published.
-  const variants = ['own', 'different', 'state', 'extra', 'carried', 'carried-dropped'];
+  // `carried-dropped` is an empty ledger: this later receipt has no findings of its own, so that is its legacy form, the ledger
+  // every gate on main published from it, and it stays accepted (LEGACY_LEDGER). `carried-foreign` matches neither form.
+  const variants = ['own', 'different', 'state', 'extra', 'carried', 'carried-dropped', 'carried-foreign'];
   for (const name of variants) await fixture(async f => {
     const r = await protectedReceipt(f, name.startsWith('carried') ? {carry: findings => findings} : {});
     f.state.comments = [confirmation(f)];
@@ -377,10 +382,11 @@ test('the gate write boundary accepts only the ledger the receipt itself publish
       extra: withState(own, value => {value.findings = [...value.findings, {...FOREIGN}];}),
       carried: r.earlier,
       'carried-dropped': r.earlier && withState(r.earlier, value => {value.findings = [];}),
+      'carried-foreign': r.earlier && withState(r.earlier, value => {value.findings = [...value.findings, {...FOREIGN}];}),
     }[name];
     if (name === 'carried') assert.deepEqual(stateOf(body).findings, stateOf(own).findings, 'the later receipt reproduces the earlier ledger');
     f.state.comments = [bot(7101, body), confirmation(f)];
-    if (['own', 'carried'].includes(name)) {
+    if (['own', 'carried', 'carried-dropped'].includes(name)) {
       await r.gate(assessment);
       assert.equal(approvals(f), 1, name);
       assert.deepEqual(stateOf(ledgerWrites(f)[0].args.body).findings, stateOf(body).findings, name);
@@ -401,4 +407,69 @@ test('the gate write boundary accepts only the ledger the receipt itself publish
     await assert.rejects(policy.gate({github: f.github, context: f.context, core: f.core, recordPath: f.recordPath, assessment, nativeGate: true}),
       /Acceptance history changed; reassess the current record/);
   });
+});
+
+// F1: a receipt with a non-empty signed local history and findings of its own, whose ledger a gate published in the legacy form
+// (reconciled with `[]`) while the pull request was held, as every gate on main did. A second gate run still accepts it and
+// leaves that ledger in its form; a pull request without a ledger gets the form reconciled with the signed local history.
+const LEGACY = {carry: () => [{...FOREIGN}], laterAdvisory: true};
+
+test('a ledger published in the legacy form from a receipt with local history passes a second gate run unchanged', () => fixture(async f => {
+  const r = await protectedReceipt(f, LEGACY);
+  const signed = r.bundle.payload.record;
+  assert.equal(signed.result.decision, 'auto_approve');
+  assert.deepEqual(signed.local_previous.findings, [{...FOREIGN}]);
+  const legacy = legacyLedger(r.bundle);
+  assert.notDeepEqual(stateOf(legacy).findings, stateOf(ownLedger(r.bundle)).findings, 'the two forms differ for this receipt');
+  assert.equal(stateOf(legacy).findings.length, 1, 'the legacy form holds only the receipt\'s own advisory finding');
+  f.state.comments = [bot(7101, legacy), confirmation(f)];
+  const confirmed = await r.assess();
+  assert.notEqual(confirmed.cause, 'receipt_history_changed', confirmed.reason);
+  assert.equal(confirmed.decision, 'owner_decision', confirmed.reason);
+  assert.deepEqual(JSON.parse(fs.readFileSync(f.recordPath)).previous, {comment: 7101, findings: []});
+  await r.gate(confirmed);
+  assert.equal(approvals(f), 1);
+  const updated = ledgerWrites(f);
+  assert.equal(updated.length, 1); assert.equal(updated[0].args.comment_id, 7101);
+  assert.deepEqual(stateOf(updated[0].args.body).findings, stateOf(legacy).findings, 'the legacy-form ledger keeps its form');
+}));
+
+test('a pull request without a ledger gets the form reconciled with the signed local history', () => fixture(async f => {
+  const r = await protectedReceipt(f, LEGACY);
+  f.state.comments = [confirmation(f)];
+  const confirmed = await r.assess();
+  assert.equal(confirmed.decision, 'owner_decision', confirmed.reason);
+  await r.gate(confirmed);
+  assert.equal(approvals(f), 1);
+  const written = ledgerWrites(f);
+  assert.equal(written.length, 1); assert.equal(written[0].name, 'create-ledger');
+  assert.deepEqual(stateOf(written[0].args.body).findings, stateOf(ownLedger(r.bundle)).findings);
+}));
+
+test('a foreign, extra or changed finding is refused against both ledger forms, at the assessment and at the gate', async () => {
+  const mutations = {
+    foreign: () => [{...FOREIGN, id: 'e'.repeat(64)}],
+    extra: findings => [...findings, {...FOREIGN, id: 'e'.repeat(64)}],
+    changed: findings => [{...findings[0], state: 'confirmed', blocking: true}, ...findings.slice(1)],
+  };
+  for (const form of ['legacy', 'carried']) for (const [name, mutate] of Object.entries(mutations)) {
+    const label = `${form}-${name}`;
+    const ledger = r => withState(form === 'legacy' ? legacyLedger(r.bundle) : ownLedger(r.bundle), value => {value.findings = mutate(value.findings);});
+    await fixture(async f => {
+      const r = await protectedReceipt(f, LEGACY);
+      f.state.comments = [bot(7101, ledger(r)), confirmation(f)];
+      const refused = await r.assess();
+      assert.equal(refused.cause, 'receipt_history_changed', label);
+      assert.equal(refused.record_digest, undefined, label);
+    });
+    await fixture(async f => {
+      const r = await protectedReceipt(f, LEGACY);
+      f.state.comments = [confirmation(f)];
+      const assessment = await r.assess();
+      assert.equal(assessment.decision, 'owner_decision', label);
+      f.state.comments = [bot(7101, ledger(r)), confirmation(f)];
+      await assert.rejects(r.gate(assessment), /Acceptance history changed; reassess the current record/, label);
+      assert.equal(approvals(f), 0, label);
+    });
+  }
 });

@@ -129,10 +129,16 @@ function verifyRecord(record, assessment, config, engine = null) {
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
   // A record carried by a local receipt may find on the pull request the ledger the gate published from it on an earlier run
   // (a hold for owner confirmation, a base move): the write boundary accepts exactly that ledger and no other.
-  return {state, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed), ...publication({...result, decision: assessment.decision},
-    {...record.snapshot, number: assessment.number}, state)};
+  const form = formed => ({state: formed, ...publication({...result, decision: assessment.decision}, {...record.snapshot, number: assessment.number}, formed)});
+  // LEGACY_LEDGER: the ledger a gate published before the signed local history was used, reconciled with the record's own
+  // `previous` (`[]` for a local receipt). Only a pull request that already carries a ledger in exactly that form keeps it.
+  const legacyForm = Boolean(record.local_receipt) && Object.hasOwn(record, 'local_previous') ? form(reconcile(result, record.snapshot, record.previous.findings)) : null;
+  return {...form(state), legacy: legacyForm, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed)};
 }
 
+// LEGACY_LEDGER is removable once no open pull request of a consumer carries a ledger a gate published in the legacy form
+// (reconciled with `[]` from a receipt with a non-empty signed local history): drop `legacy` in verifyRecord, the second history
+// in the assessment's own-ledger check, and the legacy branch of the gate's write boundary.
 // The finding history a record's result is reconciled with: a local receipt's signed local history (`local_previous`, which
 // local-receipt.cjs binds to the reviewed `snapshot.prior_findings`), else the record's `previous`. A ledger an earlier head's
 // receipt published and the later receipt carries is then reproduced exactly; any other ledger reconciles differently.
@@ -274,10 +280,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         // The gate publishes this receipt's findings on its first run, before an owner confirmation or a base update lets a
         // later run finish. A ledger whose findings equal exactly what this signed record reconciles to with its signed local
         // history is that publication, or one an earlier head's receipt published and this receipt carries; it is not a change.
-        // Any other history still voids the receipt. The record keeps the signed history either way, so the gate
-        // re-derives exactly the ledger it already published.
-        const own = digest(previous.findings) === digest(reconcile({...verified.record.result, reviews: verified.reviews},
-          verified.record.snapshot, signedHistory(verified.record)).findings);
+        // So is the legacy form, reconciled with the record's own `previous` (`[]` for a local receipt), which every gate
+        // published before the signed local history was used (LEGACY_LEDGER). Any other history still voids the receipt.
+        // The record keeps the signed history either way, so the gate re-derives exactly the ledger it already published.
+        const reconciled = history => digest(reconcile({...verified.record.result, reviews: verified.reviews},
+          verified.record.snapshot, history).findings);
+        const own = [signedHistory(verified.record), verified.record.previous.findings].some(history => digest(previous.findings) === reconciled(history));
         const recorded = own ? {...previous, findings: verified.record.previous.findings} : previous;
         if (digest(previous.findings) !== digest(verified.record.previous.findings) && !own) {
           throw held('receipt_history_changed', 'The review findings recorded on the pull request changed after the local receipt was issued.');
@@ -446,7 +454,6 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       await require('./incomplete.cjs').post({github, context, assessment: incomplete});
       return hold(reason);
     }
-    const {body, pages} = verifiedRecord;
     await require('./incomplete.cjs').resolvePending({github, context, number: assessment.number});
     if (record.snapshot.repository !== `${context.repo.owner}/${context.repo.repo}`) throw new Error('Acceptance record belongs to a different repository');
     const {data: pr} = await readPull(github, context.repo, numberFor(context));
@@ -481,8 +488,12 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     const current = priorState(comments, record.snapshot.repository, pr.number);
     // The ledger this record's own receipt published on an earlier run, or that its signed local history carries, is not a change
     // in history: `state` is reconciled with that signed history (verifyRecord, signedHistory, ownLedger).
-    const ownLedger = verifiedRecord.ownLedger && digest(current.findings) === digest(verifiedRecord.state.findings);
-    if (digest(current) !== digest(record.previous) && !ownLedger) throw new Error('Acceptance history changed; reassess the current record');
+    const matches = candidate => verifiedRecord.ownLedger && digest(current.findings) === digest(candidate.state.findings);
+    // An existing ledger in the legacy form stays in that form (LEGACY_LEDGER); a pull request without a ledger gets the new form.
+    const legacyLedger = Boolean(verifiedRecord.legacy) && current.comment !== null && !matches(verifiedRecord) && matches(verifiedRecord.legacy);
+    const accepted = legacyLedger ? verifiedRecord.legacy : verifiedRecord;
+    if (digest(current) !== digest(record.previous) && !matches(accepted)) throw new Error('Acceptance history changed; reassess the current record');
+    const {body, pages} = accepted;
     const links = [];
     for (const [index, page] of pages.entries()) {
       const marker = page.split('\n')[0];
@@ -533,7 +544,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             throw new Error('Exact recorded purpose authorization changed before private merge');
           }
         }
-        if (digest(priorState(currentComments, currentRecord.snapshot.repository, pr.number).findings) !== digest(latest.state.findings)) {
+        if (digest(priorState(currentComments, currentRecord.snapshot.repository, pr.number).findings) !== digest((legacyLedger ? latest.legacy : latest).state.findings)) {
           throw new Error('Acceptance findings changed before private merge');
         }
       },
