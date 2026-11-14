@@ -29,6 +29,9 @@ how to raise it.
 * `force` (boolean), `params` (`{C, S}`), `concurrency`, `unit_deadline_ms`, `integration_cap`, `integration_call_seams`
   and `integration_max_seams` mean what they mean for `local_review.chunked` (`docs/local-review.md`) and may only be
   tightened below the same defaults. `force: true` reviews a change that fits one snapshot in units too (qualification).
+* `partition` (`1` or `2`, default `1`) picks the partition scheme exactly as for `local_review.chunked`: under `2` every unit
+  also reads the other ends of its seams (`docs/local-review.md`, "What a unit sees"), and the `max_input_tokens` estimate
+  made before the run counts that context.
 * Enabling it requires `grader: "deepseek"`: the chunked path grades the merged findings with the `grading_model`.
 
 The configuration digest covers this object, so turning the feature on or off changes the digest. A record assessed under

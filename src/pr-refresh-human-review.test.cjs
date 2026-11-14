@@ -122,7 +122,7 @@ function signedFixture(t, localReview = {}) {
   return {state, config, calls, runtime, refresh};
 }
 
-test('under human_review "signed" a review with findings is signed and never reviewed again; without it, or with a violated gate, nothing is signed', async t => {
+test('under human_review "signed" a review with findings is signed, stands for refresh, and is never reviewed again by it; without it, or with a violated gate, nothing is signed', async t => {
   // The examiner reports one defect (graded at the top level, so it blocks), or violates a gate with no finding.
   const failing = (calls, kind) => {
     const pass = fakeHarness(calls);
@@ -153,9 +153,28 @@ test('under human_review "signed" a review with findings is signed and never rev
       if (!humanReview) {assert.equal(first.receipt, null, 'without the opt-in a review with findings signs nothing'); return;}
       if (kind === 'gate') {assert.equal(first.receipt, null, 'a violated gate is never signed, whatever the setting'); return;}
       assert.ok(first.receipt, 'with the opt-in the review with findings is signed');
-      // The same revision is never reviewed again. Until CI holds such a receipt, the only way forward is a new commit.
+      const published = await main(['publish', '--directory', f.work, '--receipt', first.receipt], asked);
+      f.pull.body = `Body.\n\n${published.marker}\n`;
+      const before = calls.length;
+      const standing = await refresh(f, {request: requestFile});
+      assert.equal(standing.status, 'up_to_date', JSON.stringify(standing));
+      assert.match(standing.note, /its signed review requires a human: a maintainer approves this head with \/approve-intent [a-f0-9]{40}/);
+      assert.equal(calls.length, before, 'nothing is reviewed again');
+      // The same revision is never reviewed again; the refusal names the two ways forward.
       await assert.rejects(main(['review', '--directory', f.work, '--base', 'origin/main', '--request-file', requestFile, '--harness', 'claude'], asked),
-        /signed review that requires a human; it is never reviewed again\. CI does not accept this receipt until the owner-decision hold lands; commit \(an empty commit is enough\)/);
+        /signed review that requires a human; it is never reviewed again\. Until its receipt expires, CI holds it for a maintainer's \/approve-intent of this exact head; or commit \(an empty commit is enough\)/);
     }, {ciConfig: config});
   }
+});
+
+test('under human_review "signed" the protected-controls warning names the owner-decision hold instead of an incomplete review', () => {
+  const {controlWarnings} = require('./local-cli.cjs');
+  const fixture = require('../test/fixtures/config.json');
+  const base = {...fixture, version: 2, sensitive_paths: [...(fixture.sensitive_paths || []), 'src/guarded.js'], local_review: {mode: 'optional'}};
+  const paths = ['src/guarded.js'];
+  const [today] = controlWarnings(base, paths, {directory: process.cwd(), baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40)});
+  assert.match(today, /and will report review_incomplete\./);
+  const [held] = controlWarnings({...base, local_review: {mode: 'optional', human_review: 'signed'}}, paths, {directory: process.cwd(), baseSha: 'a'.repeat(40), headSha: 'b'.repeat(40)});
+  assert.match(held, /and will hold it as owner_decision until then\./);
+  assert.doesNotMatch(held, /review_incomplete/);
 });
