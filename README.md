@@ -7,8 +7,11 @@ Inside Claude Code, Codex or opencode the calling agent supplies the review
 sessions (`--agent`); the headless `--harness` form is for a plain terminal.
 Local AI review runs regardless of coverage percentage or availability and keeps
 its quality verdict separate from real verification results. Opted-in CI verifies
-an enrolled runner's passing AI receipt without repeating the review, then still
-requires its own tests and exact coverage before approval/merge. See
+an enrolled runner's passing AI receipt without repeating the review. When that
+receipt also attests the repository's declared verification (every declared
+command and the coverage gate passed on the reviewed head), CI may skip those tests;
+otherwise CI runs its own tests and exact coverage before approval/merge. The trust
+boundary is the enrolled workstation key. See
 [local review, installation and trust boundaries](docs/local-review.md).
 New to Clouseau? Start with the [quickstart](docs/quickstart.md).
 How a receipt stays valid across engine revisions: [receipt compatibility](docs/receipt-compatibility.md).
@@ -152,7 +155,9 @@ the repository's `DEEPSEEK_API_KEY`. `gate` needs contents/pull-requests/issues/
 actions write permissions and must receive no provider key. Pass the
 assessment output between jobs. The action cannot elevate the caller's token.
 Version 1's shared model is `deepseek-flash`; changes are sent to it only after
-technical verification succeeds. It assesses repository fit and supported intent,
+technical verification succeeds. Version 2 instead runs two independent roles, an
+examiner and a challenger, on the models selected in `acceptance` (for example
+`deepseek-flash` and `deepseek-v4-pro`), with a separate grader. It assesses repository fit and supported intent,
 including large test improvements. There is no file-count or line-count approval
 cutoff. New product decisions and unclear scope require the owner’s judgment.
 A missing or token-truncated provider completion is retried within the same
@@ -202,8 +207,9 @@ reported gap still fail.
 
 Protocol v2 also supports explicit `"merge_mode": "manual"` in accepted base
 configuration. Repository auto-merge must be disabled in this mode, including
-for owner-authored PRs. Tests, exact coverage, review, source binding and
-current-head code-owner approval for external contributors when CODEOWNERS is configured remain mandatory.
+for owner-authored PRs. Review, source binding and current-head code-owner approval
+for external contributors when CODEOWNERS is configured are still required, and
+tests and exact coverage must still pass in CI or be attested by a valid receipt.
 Available branch protection is still enforced. Only GitHub's specific HTTP 403
 private-plan upgrade response, together with verified private visibility and an
 unprotected branch, permits approval without host-enforced protection. Generic
@@ -244,7 +250,7 @@ literal requirement to that revision and revalidates it before writing. Ordinary
 PR prose remains untrusted; every mechanism still earns its own justification.
 An agent delegated to install an accepted scope may record these confirmations
 on the owner's behalf through its repairs without repeated approval prompts.
-All tests and exact coverage remain mandatory. Changes invalidate the decision.
+All tests and exact coverage must still pass, in CI or attested by a valid receipt. Changes invalidate the decision.
 The Actions bot cannot approve its own PR; it needs an independent human review.
 First-time fork workflow authorization remains GitHub's responsibility.
 
