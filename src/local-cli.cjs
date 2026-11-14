@@ -366,7 +366,7 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   const reusing = createReuse({directory: path.join(state, 'unit-reuse'), read: reuse.read === true || outcomeReuse, outcome: outcomeReuse,
     semantics: require('./review-semantics.cjs').semanticsDigest(), literals: () => {
       if (chunking && !unitDigests) {
-        unitDigests = chunkedWiring.hooksFor(active.params).partition({snapshot: collected.snapshot}).units.map(unit => unit.view_digest);
+        unitDigests = chunkedWiring.activeHooks(active).partition({snapshot: collected.snapshot}).units.map(unit => unit.view_digest);
       }
       return {base: baseSha, head, digests: [collected.snapshot.digest, ...(unitDigests || [])]};
     }});

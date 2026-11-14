@@ -1,10 +1,11 @@
 'use strict';
 
-// Deterministic partition of a large change into review units (scheme
-// clouseau-partition/1, see the chunked review design, section 2). Pure and
+// Deterministic partition of a large change into review units (schemes
+// clouseau-partition/1 and /2, see the chunked review design, section 2). Pure and
 // model-free: the same changed-file table and parameters give the same plan in
-// any input order, so CI can recompute it. Nothing here is called by the review
-// flow yet.
+// any input order, so CI can recompute it. Both schemes group files into units
+// identically; the scheme is bound into the plan digest, and /2 additionally gives
+// each unit seam context (seam-context.cjs), which is not decided here.
 //
 // A change is never refused for its size. A file whose evidence is too large for one unit is split into bounded
 // segments (see file-segments.cjs), each owned by a different unit, and the number of units is unbounded: running
@@ -14,6 +15,8 @@ const {isTestPath, moduleStem} = require('./acceptance.cjs');
 const fs = require('node:fs');
 
 const SCHEME = 'clouseau-partition/1';
+// Every scheme a plan may name. /1 units carry no context; /2 units carry the controller-chosen seam context.
+const SCHEMES = Object.freeze([SCHEME, 'clouseau-partition/2']);
 // unit_ceiling C and shared S are owned-source and shared-context characters; budget is the snapshot cap a unit
 // view must fit and reserve what a view adds besides owned and shared sources (change manifest and foreign hunks).
 // A file or atom costing more than budget - shared - reserve cannot be one unit and is split into segments of at
@@ -171,7 +174,8 @@ function checkOwnership(plan, paths) {
   return true;
 }
 
-function partition(input, overrides = {}) {
+function partition(input, overrides = {}, {scheme = SCHEME} = {}) {
+  if (!SCHEMES.includes(scheme)) throw new TypeError(`unknown partition scheme ${JSON.stringify(scheme)}`);
   const params = parameters(overrides);
   const files = input.map(normalize).sort((a, b) => compare(a.path, b.path));
   for (let index = 1; index < files.length; index++) {
@@ -202,7 +206,7 @@ function partition(input, overrides = {}) {
       renamed: Object.fromEntries(members.filter(file => file.previous).map(file => [file.path, file.previous])),
       ...(Object.keys(parts).length ? {parts} : {})};
   });
-  const plan = {scheme: SCHEME, params, units};
+  const plan = {scheme, params, units};
   checkOwnership(plan, files.map(file => file.path));
   return {...plan, plan_digest: digest(plan)};
 }
@@ -243,4 +247,4 @@ function main(argv, io = {}) {
   }
 }
 
-module.exports = {SCHEME, DEFAULTS, PartitionRefusal, atomKey, pairName, pairKeys, parameters, cost, threshold, inflate, checkOwnership, partition, render, main};
+module.exports = {SCHEME, SCHEMES, DEFAULTS, PartitionRefusal, atomKey, pairName, pairKeys, parameters, cost, threshold, inflate, checkOwnership, partition, render, main};
