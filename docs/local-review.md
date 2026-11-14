@@ -506,7 +506,9 @@ Optional: `--directory`, `--identity`, `--additional-checks`, `--engine latest`.
    [renewed](#renewing-a-receipt-that-no-longer-verifies) (steps 3 to 5 below, no merge and no push of the branch). Under the
    protected `binding: "diff"`, when the pull request does not contain the base tip and its receipt still covers its diff, the
    base is merged and the normalized diff recomputed; if it is unchanged the merge is pushed with no review and the command
-   ends with `updated` (see [Binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)); otherwise the steps
+   ends with `updated`. The receipt is judged against the base being merged, as CI will judge the pushed head, not against the
+   base sha GitHub reports (which can lag the branch): a base that changed a repository contract (`readme`,
+   `repository_policy`) voids it with the diff unchanged, so the merged head is reviewed instead (see [Binding a receipt to its diff](#binding-a-receipt-to-its-diff-opt-in)); otherwise the steps
    continue on that merge;
 2. check with `git merge-tree` that the merge is clean, then **merge** the base (`git merge --no-ff`, message
    `Merge origin/<base> into <branch>`). There is no rebase and no force-push anywhere in the command;

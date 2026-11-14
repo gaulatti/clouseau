@@ -207,7 +207,9 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
       // CI judges it. The base is merged locally and the normalized diff recomputed: when it equals the diff before the merge,
       // the branch is brought up to date (a controller-managed merge needs it strictly ahead of the base) with no review and no
       // new receipt. When the merge changed it (the base moved a line inside a hunk's context), the merged head is reviewed.
-      const judged = await standing({directory, base: remoteBase, repo, pull, execute, installed});
+      // The receipt is judged against the base being merged, as CI will judge the pushed head: GitHub's `base_sha` can lag the
+      // branch, and a repository contract (readme, repository_policy) the base changed voids the receipt with the diff unchanged.
+      const judged = await standing({directory, base: remoteBase, repo, pull: {...pull, base_sha: git(directory, ['rev-parse', remoteBase]).trim()}, execute, installed});
       let before = null;
       if (judged.usable) {
         before = localDiff(directory, git(directory, ['merge-base', 'HEAD', remoteBase]).trim(), 'HEAD');
