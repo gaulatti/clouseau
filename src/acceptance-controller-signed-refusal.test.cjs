@@ -1,6 +1,7 @@
 'use strict';
-// CI boundary for a receipt signed under the protected local_review.human_review "signed" before CI holds such a receipt: it is
-// refused as `not_passing` and merges nothing. Kept apart from acceptance-controller.test.cjs so a change here does not resend
+// CI boundary for a receipt signed for graded findings under the protected local_review.human_review "signed": with the setting
+// CI holds it for the maintainer's exact-head /approve-intent and never approves it; without it the receipt is refused as
+// `not_passing`. Either way it merges nothing. Kept apart from acceptance-controller.test.cjs so a change here does not resend
 // that file as review evidence.
 
 const {test} = require('node:test');
@@ -107,14 +108,14 @@ async function fixture(run) {
   }
 }
 
-test('human_review "signed" before the CI hold: a receipt signed for graded findings is refused as not_passing and merges nothing', () => fixture(async f => {
+test('a receipt signed for graded findings is held for /approve-intent under human_review "signed", refused as not_passing without it, and merges nothing', () => fixture(async f => {
   // A real CI record of this change, re-signed locally as the contributor's receipt.
   await createPolicy(config).assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
   const record = JSON.parse(fs.readFileSync(f.recordPath));
   const keys = crypto.generateKeyPairSync('ed25519');
-  const localReview = mode => ({mode, reviewer_sha: 'e'.repeat(40), reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800,
+  const localReview = (mode, humanReview) => ({mode, reviewer_sha: 'e'.repeat(40), reviewer_digest: require('./local-version.cjs').engineDigest(), max_age_seconds: 172800,
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false, public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}],
-    human_review: 'signed'});
+    ...(humanReview ? {human_review: 'signed'} : {})});
   const sign = (trusted, findings) => {
     let copy = structuredClone(record);
     copy.snapshot.number = 0; copy.snapshot.config_digest = digest(trusted); refresh(copy.snapshot);
@@ -131,46 +132,67 @@ test('human_review "signed" before the CI hold: a receipt signed for graded find
   const core = {info() {}, summary: {addRaw() {return this;}, async write() {}}};
   const merges = () => f.state.writes.filter(item => MERGE_WRITES.includes(item.name)).map(item => item.name);
 
-  for (const mode of ['required', 'optional']) {
-    const trusted = {...config, local_review: localReview(mode)};
-    const signed = sign(trusted, true);
-    assert.equal(signed.payload.record.result.decision, 'repair_required', 'the receipt is signed for graded findings alone');
-    f.serve(signed);
-    // `operation: attested` never accepts it: the repository runs its own checks.
-    assert.deepEqual(await receiptAttests({github: f.github, repo: f.context.repo, pr: f.state.pr, config: trusted, engine: null, explain: true}),
-      {attests: false, rejected: 'not_passing', detail: {}});
-    assert.equal(await decide({github: f.github, context: f.context, config: trusted, engine: null}), false);
-    const policy = createPolicy(trusted);
-    const calls = f.state.calls;
-    const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: () => {}});
-    assert.equal(assessment.receipt_notice, 'not_passing', assessment.reason);
-    assert.notEqual(assessment.review_source, 'authenticated_local', 'the signed non-pass is never the review CI acts on');
-    if (mode === 'required') {
-      // Required mode cannot review the change itself: it asks for a new receipt and approves nothing.
-      assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, 'local_receipt_required');
-      assert.equal(f.state.calls, calls, 'no provider call');
-      await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}}));
-      assert.deepEqual(merges(), []);
-    } else {
-      // Optional mode ignores the receipt and reviews the change itself; the receipt carries nothing into that record.
-      assert.ok(f.state.calls > calls, 'CI reviewed the change itself');
-      const own = JSON.parse(fs.readFileSync(f.recordPath));
-      assert.ok(!own.local_receipt_reference && !own.local_receipt, 'the refused receipt is not carried as evidence');
+  for (const humanReview of [true, false]) {
+    for (const mode of ['required', 'optional']) {
+      const label = `${mode}, human_review ${humanReview ? '"signed"' : 'absent'}`;
+      const trusted = {...config, local_review: localReview(mode, humanReview)};
+      const signed = sign(trusted, true);
+      assert.equal(signed.payload.record.result.decision, 'repair_required', 'the receipt is signed for graded findings alone');
+      f.serve(signed);
+      // `operation: attested` never accepts it, whatever the setting: the repository runs its own checks.
+      assert.deepEqual(await receiptAttests({github: f.github, repo: f.context.repo, pr: f.state.pr, config: trusted, engine: null, explain: true}),
+        {attests: false, rejected: 'not_passing', detail: {}}, label);
+      assert.equal(await decide({github: f.github, context: f.context, config: trusted, engine: null}), false, label);
+      const policy = createPolicy(trusted);
+      const calls = f.state.calls;
+      const assessment = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: () => {}});
+      if (humanReview) {
+        // CI holds the signed findings for the maintainer's exact-head confirmation; it makes no AI call and approves nothing.
+        assert.equal(assessment.decision, 'owner_decision', `${label}: ${assessment.reason}`);
+        assert.equal(assessment.review_source, 'authenticated_local', label);
+        assert.match(assessment.reason, new RegExp(`requires a human review \\(its signed findings are listed in the review\\); a maintainer approves this exact head with \`/approve-intent ${f.state.pr.head.sha}\``));
+        assert.equal(f.state.calls, calls, `${label}: no provider call`);
+        f.state.writes.length = 0;
+        await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}}),
+          /A maintainer intent confirmation is required/);
+        // The gate asks the maintainer for /approve-intent of this exact head. It may arm native auto-merge, as every owner-decision
+        // hold does, but that waits for the required approving review: nothing is approved and no ref is written.
+        assert.ok(f.state.writes.some(item => item.name === 'create-ledger' && item.args.body.includes(`/approve-intent ${f.state.pr.head.sha}`)), label);
+        assert.deepEqual(merges().filter(name => name !== 'enable-auto'), [], label);
+        continue;
+      }
+      assert.equal(assessment.receipt_notice, 'not_passing', `${label}: ${assessment.reason}`);
+      assert.notEqual(assessment.review_source, 'authenticated_local', 'the signed non-pass is never the review CI acts on');
+      if (mode === 'required') {
+        // Required mode cannot review the change itself: it asks for a new receipt and approves nothing.
+        assert.equal(assessment.decision, 'review_incomplete'); assert.equal(assessment.cause, 'local_receipt_required');
+        assert.equal(f.state.calls, calls, 'no provider call');
+        await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment, nativeGate: true, wait: async () => {}}));
+        assert.deepEqual(merges(), []);
+      } else {
+        // Optional mode ignores the receipt and reviews the change itself; the receipt carries nothing into that record.
+        assert.ok(f.state.calls > calls, 'CI reviewed the change itself');
+        const own = JSON.parse(fs.readFileSync(f.recordPath));
+        assert.ok(!own.local_receipt_reference && !own.local_receipt, 'the refused receipt is not carried as evidence');
+      }
     }
   }
 
   // The write boundary: a passing receipt's approved record, whose referenced bundle is then the graded-findings receipt, is
-  // re-verified by the gate and refused. Nothing is approved, auto-merge is not enabled and no ref is written. (With the passing
-  // bundle still served, this same gate call approves and enables auto-merge.)
-  f.state.writes.length = 0;
-  const trusted = {...config, local_review: localReview('required')};
-  const policy = createPolicy(trusted);
-  f.serve(sign(trusted, false));
-  const passing = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: () => {}});
-  assert.equal(passing.decision, 'auto_approve', passing.reason);
-  assert.equal(passing.review_source, 'authenticated_local');
-  f.serve(sign(trusted, true));
-  await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: passing, nativeGate: true, wait: async () => {}}),
-    error => error.reason === 'not_passing' && /review did not pass/.test(error.message));
-  assert.deepEqual(merges(), []);
+  // re-verified by the gate and refused, with or without the setting. Nothing is approved, auto-merge is not enabled and no ref
+  // is written. (With the passing bundle still served, this same gate call approves and enables auto-merge.)
+  for (const humanReview of [false, true]) {
+    f.state.writes.length = 0;
+    const trusted = {...config, local_review: localReview('required', humanReview)};
+    const policy = createPolicy(trusted);
+    f.serve(sign(trusted, false));
+    const passing = await policy.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl, report: () => {}});
+    assert.equal(passing.decision, 'auto_approve', passing.reason);
+    assert.equal(passing.review_source, 'authenticated_local');
+    f.serve(sign(trusted, true));
+    await assert.rejects(policy.gate({github: f.github, context: f.context, core, recordPath: f.recordPath, assessment: passing, nativeGate: true, wait: async () => {}}),
+      // Without the setting the bundle is refused as not passing; with it the bundle verifies as a hold, which is not the approved record.
+      humanReview ? /Stale or altered acceptance record/ : error => error.reason === 'not_passing' && /review did not pass/.test(error.message));
+    assert.deepEqual(merges(), []);
+  }
 }));

@@ -86,7 +86,7 @@ function verifyRecord(record, assessment, config, engine = null) {
     signed = require('./local-receipt.cjs').verifyReceipt(record.local_receipt, {
       engine, trust: config.local_review, repository: record.snapshot.repository, author: record.local_author, pullNumber: assessment.number,
       headSha: assessment.head_sha, baseSha: assessment.base_sha,
-      configDigest: digest(config), policyDigest: policyDigest(),
+      configDigest: digest(config), policyDigest: policyDigest(), humanReview: humanReviewSigned(config),
     });
     for (const field of ['snapshot', 'result', 'controls', ...(Object.hasOwn(signed.record, 'partition') ? ['partition', 'seams'] : [])]) {
       if (digest(record[field]) !== digest(signed.record[field])) throw new Error('Local review record was substituted');
@@ -117,16 +117,28 @@ function verifyRecord(record, assessment, config, engine = null) {
   result.decision = combine(reviews);
   const state = reconcile(result, record.snapshot, record.previous.findings);
   if (state.unresolved.length && ['auto_approve', 'owner_decision'].includes(result.decision)) result.decision = 'review_incomplete';
-  const derived = decided(result, record.controls || Boolean(record.local_authorization));
+  // A signed review that requires a human (protected `human_review: "signed"`), or a receipt for a change the fixed rules send
+  // to a human, is the owner-decision hold: a maintainer approves the exact head, or the author repairs.
+  const humanHold = Boolean(record.local_receipt) && (signed.human_review === true || record.local_controls === true);
+  const derived = humanHold && ['auto_approve', 'repair_required'].includes(result.decision) ? 'owner_decision' :
+    decided(result, record.controls || Boolean(record.local_authorization));
   if (assessment.decision !== derived) throw new DecisionMismatch(assessment.decision, derived);
   // A record carried by a local receipt may find on the pull request the ledger the gate published from it on an earlier run
   // (a hold for owner confirmation, a base move): the write boundary accepts exactly that ledger and no other.
-  return {state, ownLedger: Boolean(record.local_receipt), ...publication({...result, decision: assessment.decision},
+  return {state, ownLedger: Boolean(record.local_receipt), confirmation: findingsHold(signed), ...publication({...result, decision: assessment.decision},
     {...record.snapshot, number: assessment.number}, state)};
 }
 
-function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle, discovery}) {
-  return {...verified, discovery, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}), previous, technical,
+// Opt-in, protected: a signed review that requires a human is a receipt CI holds for the maintainer (local-receipt.cjs).
+const humanReviewSigned = config => config.local_review?.human_review === 'signed';
+// A held signed review that carries findings a human must see: only a confirmation of the exact head counts for it (policy.cjs
+// confirms()), so the owner confirms the findings of the review that holds. Any other hold (protected controls or sensitive
+// paths with a passing review) confirms as before.
+const findingsHold = verified => verified?.human_review === true ? {findings: true} : {};
+
+function localRecord(verified, {engine, authorization, previous, technical, author, artifact, bundle, discovery, controls = false}) {
+  return {...verified, discovery, ...(engine ? {engine} : {}), ...(authorization ? {local_authorization: authorization} : {}),
+    ...(controls ? {local_controls: true} : {}), previous, technical,
     local_author: author, local_artifact: artifact, local_receipt: bundle};
 }
 
@@ -149,17 +161,18 @@ function createAcceptancePolicy(config, legacy, engine = null) {
     }
     const extra = Object.keys(record).filter(key => !COMPACT_KEYS.includes(key));
     if (record.local_receipt_reference !== true || Object.hasOwn(record, 'local_receipt') || Object.hasOwn(record, 'snapshot') ||
-        COMPACT_KEYS.some(key => !Object.hasOwn(record, key)) || extra.some(key => !['engine', 'local_authorization'].includes(key))) {
+        COMPACT_KEYS.some(key => !Object.hasOwn(record, key)) || extra.some(key => !['engine', 'local_authorization', 'local_controls'].includes(key)) ||
+        (Object.hasOwn(record, 'local_controls') && (record.local_controls !== true || !humanReviewSigned(config)))) {
       throw new Error('Invalid compact local review record');
     }
     const receipts = require('./local-receipt.cjs');
     const bundle = await receipts.loadReceipt({github, repo, ref: record.local_artifact, trust: config.local_review});
     const verified = receipts.verifyReceipt(bundle, {engine, trust: config.local_review,
       repository: `${repo.owner}/${repo.repo}`, author: record.local_author, pullNumber: assessment.number, headSha: assessment.head_sha,
-      baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest()});
+      baseSha: assessment.base_sha, configDigest: digest(config), policyDigest: policyDigest(), humanReview: humanReviewSigned(config)});
     return localRecord(verified.record, {engine: record.engine, authorization: record.local_authorization,
       previous: record.previous, technical: record.technical, author: record.local_author,
-      artifact: record.local_artifact, bundle, discovery: record.discovery});
+      artifact: record.local_artifact, bundle, discovery: record.discovery, controls: record.local_controls === true});
   }
 
   async function assess({github, context, fetchImpl, retryWait, report, recordPath = RECORD, receiptOnly: receiptRoute = false, ignoreReceipt = false}) {
@@ -187,7 +200,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       // CI then reviews the change itself (or, where a receipt is required, asks for a new one) and shows a fixed notice.
       // The hosted fallback after an unusable receipt holds the provider credential, so it never reads the receipt at all.
       const screened = ignoreReceipt ? {ref: null} : await receipts.screenReceipt({github, repo, pr, engine, trust: config.local_review,
-        configDigest: digest(config), policyDigest: policyDigest()});
+        configDigest: digest(config), policyDigest: policyDigest(), humanReview: humanReviewSigned(config)});
       let receiptRef = screened.ref;
       const {bundle, verified} = screened;
       const mode = receiptOnly || config.local_review?.mode === 'required' ? 'required' : config.hosted_review === 'manual' ? 'manual' : 'optional';
@@ -238,10 +251,13 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         const managed = await legacy.managedExemptions(github, repo, pr, files);
         if (report) managed.notices.forEach(report);
         const controls = legacy.scopeReason(files, pr, managed.exempt, managed.protect);
-        const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments) : null;
+        const authorization = controls === legacy.REVIEW_CONTROL_REASON ? await legacy.purposeConfirmation(github, repo, pr, comments, findingsHold(verified)) : null;
         // A verified receipt still never grants owner confirmation. Name which rule holds the review.
         const held = (cause, message) => Object.assign(new Error(message), {code: 'RECEIPT_AUTHORITY', cause_code: cause});
-        if (controls && !authorization) {
+        // Opt-in (protected `human_review: "signed"`): a change the fixed rules send to a human is held for the maintainer on the
+        // owner-decision path instead of leaving the receipt unusable.
+        const controlsHold = Boolean(controls) && !authorization && humanReviewSigned(config);
+        if (controls && !authorization && !controlsHold) {
           throw held('receipt_protected_controls', 'A verified local receipt cannot authorize a change to protected review controls ' +
             '(AGENTS.md, CI workflow or configuration, the repository policy or another configured sensitive path); ' +
             'the exact-head owner confirmation is missing.');
@@ -266,18 +282,21 @@ function createAcceptancePolicy(config, legacy, engine = null) {
             reason: `${kind} local quality review verified without an AI rerun; independent CI acceptance remains blocked: ${technicalBlock.reason}`};
         }
         const record = localRecord(verified.record, {engine, authorization, previous: recorded, technical, author: pr.user.login,
-          artifact: receiptRef, bundle, discovery});
+          artifact: receiptRef, bundle, discovery, controls: controlsHold});
         // The signed bundle already lives at an immutable reference. Transport
         // only the run-specific facts; the write boundary rehydrates and
         // independently re-verifies the complete record from that reference.
         const compact = {version: 2, local_receipt_reference: true, local_artifact: receiptRef,
           local_author: pr.user.login, previous: recorded, technical, discovery, ...(engine ? {engine} : {}),
-          ...(authorization ? {local_authorization: authorization} : {})};
+          ...(authorization ? {local_authorization: authorization} : {}), ...(controlsHold ? {local_controls: true} : {})};
         fs.writeFileSync(recordPath, JSON.stringify(compact, null, 2) + '\n');
-        if (report) report(`${kind} local Clouseau review verified.${signedBy} CI AI calls: 0.`);
-        return {...identity, decision: authorization ? 'owner_decision' : 'auto_approve', record_digest: digest(record),
+        const human = verified.human_review === true || controlsHold;
+        if (report) report(`${kind} local Clouseau review verified${human ? '; it requires a human review' : ''}.${signedBy} CI AI calls: 0.`);
+        return {...identity, decision: authorization || human ? 'owner_decision' : 'auto_approve', record_digest: digest(record),
           record_reference_digest: digest(compact), review_source: attested ? 'maintainer_attested' : 'authenticated_local', provider_api_calls: 0,
-          reason: `${kind} passing local review; source, scores and CI verification validated without an AI rerun.`};
+          reason: human ? `${kind} local review requires a human review (${verified.human_review ? 'its signed findings are listed in the review' :
+            'it changes protected review controls'}); a maintainer approves this exact head with \`/approve-intent ${pr.head.sha}\`, or the author repairs and reviews again. ` +
+            'Source and signature validated without an AI rerun.' : `${kind} passing local review; source, scores and CI verification validated without an AI rerun.`};
       }
       // Opt-in (protected `exact_revert`): a tree byte-identical to an earlier tree of the base history needs no fresh review.
       const exact = config.exact_revert ? await require('./exact-revert.cjs').assess({github, repo, pr, files, comments, technical, legacy,
@@ -431,7 +450,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       if (!['auto_approve', 'owner_decision'].includes(assessment.decision)) return false;
       const files = await github.paginate(github.rest.pulls.listFiles, {...context.repo, pull_number: current.number, per_page: 100});
       const {required, selfAuthored} = await legacy.humanRequirement(github, context.repo, current, files, assessment);
-      return !required || await legacy.maintainerConfirmed(github, context.repo, current, {reviewOnly: selfAuthored});
+      return !required || await legacy.maintainerConfirmed(github, context.repo, current, {...verifiedRecord.confirmation, reviewOnly: selfAuthored});
     };
     const baseMoved = async current => branchUpdate.settle({github, updateGithub, repo: context.repo, pr: current, assessment,
       baseBranch: config.base_branch,
@@ -446,7 +465,7 @@ function createAcceptancePolicy(config, legacy, engine = null) {
       throw new Error('Accepted purpose confirmation changed; reassess the current evidence');
     }
     if (record.local_authorization && digest(record.local_authorization) !==
-        digest(await legacy.purposeConfirmation(github, context.repo, pr, comments))) {
+        digest(await legacy.purposeConfirmation(github, context.repo, pr, comments, verifiedRecord.confirmation))) {
       throw new Error('Local review owner authorization changed; confirm this exact revision again');
     }
     const current = priorState(comments, record.snapshot.repository, pr.number);
@@ -497,8 +516,9 @@ function createAcceptancePolicy(config, legacy, engine = null) {
         if (digest(currentTechnical) !== digest(currentRecord.technical)) throw new Error('Verification changed before private merge');
         const currentComments = await github.paginate(github.rest.issues.listComments,
           {...context.repo, issue_number: pr.number, per_page: 100});
-        for (const authorization of [currentRecord.snapshot.intent_confirmation, currentRecord.local_authorization].filter(Boolean)) {
-          if (digest(authorization) !== digest(await legacy.purposeConfirmation(github, context.repo, currentPr, currentComments))) {
+        // The accepted purpose the review read confirms as it did; the owner authorization of a findings hold follows its rule.
+        for (const [authorization, hold] of [[currentRecord.snapshot.intent_confirmation, {}], [currentRecord.local_authorization, latest.confirmation]]) {
+          if (authorization && digest(authorization) !== digest(await legacy.purposeConfirmation(github, context.repo, currentPr, currentComments, hold))) {
             throw new Error('Exact recorded purpose authorization changed before private merge');
           }
         }
@@ -506,6 +526,8 @@ function createAcceptancePolicy(config, legacy, engine = null) {
           throw new Error('Acceptance findings changed before private merge');
         }
       },
+      // The gate's own confirmation checks (maintainerConfirmed, an `/approve-intent` comment) follow the same hold rule.
+      confirmation: verifiedRecord.confirmation,
       assessment: {...assessment, decision: assessment.decision === 'owner_decision' ? 'second_opinion' : 'auto_approve'}});
   }
 

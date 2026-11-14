@@ -245,8 +245,9 @@ function verifySignedRecord(bundle, {trust, repository, author, headSha, baseSha
   reject(wiring.problem(trust.chunked) === null, 'invalid protected chunked review configuration', 'settings');
   const chunkedOptions = chunked !== undefined ? chunked : (Object.hasOwn(record, 'partition') ? wiring.verifierOptions(trust) : null);
   const result = reviewDecision(record, {chunked: chunkedOptions});
-  // Only a caller that asks for it ever receives a signed non-pass, marked `human_review`; today that is only `clouseau review`
-  // checking the receipt it has just signed. Every other caller refuses it as before, so it can never stand for a pass.
+  // Only a caller that asks for it ever receives a signed non-pass, marked `human_review`: `clouseau review` checking the receipt
+  // it has just signed, and, under `human_review: "signed"`, receipt-standing for refresh and CI's assessment and gate, which hold
+  // it for the maintainer. Every other caller refuses it as before, so it can never stand for a pass.
   reject(signable(result.decision, humanReview, result.reviews, result.unresolved), 'review did not pass', 'not_passing');
   return {record, ...result, ...(result.decision === HUMAN_REVIEW ? {human_review: true} : {}), attestation: Object.hasOwn(p, 'attestation') ? p.attestation : null};
 }
