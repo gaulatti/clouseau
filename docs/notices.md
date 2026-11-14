@@ -80,7 +80,7 @@ Values shown in a sentence are re-validated when rendered: commit ids must be 40
 | `github_api_error` | GitHub rejected an API request this review needs; the status and endpoint are in the reason. Re-run only the failed jobs: `gh run rerun {run} --failed --repo {repo}`. |
 | `github_rate_limit` | No change is needed: the repository installation token used its GitHub API budget. |
 | `receipt_protected_controls` | A local receipt cannot stand in for the owner. Ask a maintainer to comment exactly `/approve-intent {head}` on this pull request. |
-| `receipt_history_changed` | The findings on the pull request changed after the receipt was issued. Run the local review again on this exact head so the receipt reflects them (`clouseau review ...`). |
+| `receipt_history_changed` | The receipt's signed finding history must reconcile to exactly the pull request's acceptance ledger, and it does not. A review of this head with the same local history signs the same history, so reviewing again does not change this. If the ledger came from another source (for example the hosted review or a different runner), review on a runner whose history matches it and publish that receipt, or ask a maintainer. |
 | `chunked_record_invalid` | The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head (`clouseau review ...`). |
 | `decision_mismatch` | The assessment and the stored record disagree (both decisions are in the reason). Re-run only the failed jobs: `gh run rerun {run} --failed --repo {repo}`. |
 | `evidence_incomplete` | Open the log of the failed assessment job in the workflow run below for the diagnostic and repair the missing evidence. |

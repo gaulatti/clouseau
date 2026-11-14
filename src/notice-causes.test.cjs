@@ -297,3 +297,12 @@ test('every declared-coverage cause class names its sentence and numbered steps,
   assert.ok(section.includes('for coverage part N (<format>, source <source>, declaration <dir>/package.json)'));
   assert.ok(section.includes('with the changed file\'s path'));
 });
+
+test('receipt_history_changed never sends the author to a re-review that signs the same history', () => {
+  const text = body({number: 42, head_sha: SHA_A, cause: 'receipt_history_changed', reason: 'The review findings recorded on the pull request changed after the local receipt was issued.'}, URL);
+  // A review of the same head with the same local history signs the same history, so it cannot clear this hold.
+  assert.doesNotMatch(text, /Run the local review again|so the receipt reflects them/);
+  assert.match(text, /signs the same history, so reviewing again does not change this/);
+  assert.match(text, /must reconcile to exactly the pull request's acceptance ledger/);
+  assert.match(text, /or ask a maintainer/);
+});

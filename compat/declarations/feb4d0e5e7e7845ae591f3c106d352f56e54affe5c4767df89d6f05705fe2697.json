@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-controller.cjs",
+      "mode": 0,
+      "sha256": "549a61005ba38f2d691762a7a26bedbc1e36a535154fba4c1c2519933947d3db"
+    },
+    {
+      "path": "src/incomplete.cjs",
+      "mode": 0,
+      "sha256": "f77f91d60da6725b0bc74cc35860e7c5eba1f0cd0fae4a85a52a596e9e724416"
+    }
+  ]
+}
