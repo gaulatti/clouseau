@@ -296,7 +296,7 @@ test('a later receipt whose signed local history differs from the pull request l
 
 // The controller-managed private-owner path (acceptance-controller.test.cjs privateOwnerFixture and privateReceiptFixture):
 // a private plan without native protection, merged by the atomic `updateRefs` write after verifyAcceptance re-verifies.
-async function privateOwner(f) {
+async function privateOwner(f, {carried = null} = {}) {
   const owner = createPolicy({...config, merge_mode: 'automatic'});
   const hosted = await owner.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl});
   assert.equal(hosted.decision, 'auto_approve');
@@ -321,7 +321,7 @@ async function privateOwner(f) {
   const trusted = {...config, merge_mode: 'automatic', sensitive_paths: [...config.sensitive_paths, 'src/upload.test.js'],
     local_review: {mode: 'required', reviewer_sha: 'e'.repeat(40), central_source: {...require('./central-version.cjs').SOURCE}, max_age_seconds: 172800}};
   const engine = {...require('./central-version.cjs').SOURCE, sha: trusted.local_review.reviewer_sha, digest: require('./local-version.cjs').engineDigest()};
-  const bundle = serveReceipt(f, record, {trusted, advisory: true});
+  const bundle = serveReceipt(f, record, {trusted, advisory: true, ...(carried ? {carried} : {})});
   const policy = createPolicy(trusted, {engine});
   const assess = () => policy.assess({github: f.github, context: f.context, recordPath: f.recordPath,
     fetchImpl: async () => {throw new Error('No paid local receipt fallback');}});
@@ -330,13 +330,16 @@ async function privateOwner(f) {
 }
 
 test('private owner path: a held receipt with an advisory finding merges by the atomic write after the owner confirms', async () => {
-  for (const changed of [false, true]) await fixture(async f => {
-    const p = await privateOwner(f);
+  // `legacy`: the receipt has a non-empty signed local history, and the ledger an earlier gate published is in the legacy form
+  // (LEGACY_LEDGER); the atomic write's re-check compares against that same form.
+  for (const [changed, legacy] of [[false, false], [true, false], [false, true], [true, true]]) await fixture(async f => {
+    const p = await privateOwner(f, legacy ? {carried: [{...FOREIGN}]} : {});
     const first = await p.assess();
     assert.equal(first.cause, 'receipt_protected_controls');
     await assert.rejects(p.gate(first), /produced no acceptance record/);
     assert.deepEqual(ledgerWrites(f), []);
-    const body = ownLedger(p.bundle);
+    const body = legacy ? legacyLedger(p.bundle) : ownLedger(p.bundle);
+    if (legacy) assert.notDeepEqual(stateOf(body).findings, stateOf(ownLedger(p.bundle)).findings);
     assert.deepEqual(stateOf(body).findings.map(item => item.state), ['advisory_closed']);
     f.state.comments = [bot(7101, body), confirmation(f)];
     const confirmed = await p.assess();
