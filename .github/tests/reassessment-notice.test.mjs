@@ -27,3 +27,27 @@ test('the packaged assess step watches the comment reads before the assessment r
   const emit = script.indexOf('if (assessedAt()) assessment = {...assessment, assessed_at: assessedAt()};');
   assert.ok(emit > 0 && emit < script.indexOf("core.setOutput('assessment'"));
 });
+
+// A confirmation comment's reassessment waits up to 550 s (10 + 20 + 40 + 80 + 160 + 240) for an assessment run in progress.
+// A newer comment on the same pull request must supersede that waiter, never run beside it, and the job must outlive the wait.
+test('a comment-triggered reassessment runs in its pull request issue_comment group, which cancels an older waiter', async () => {
+  const {Evaluator, Lexer, Parser, data} = await import('@actions/expressions');
+  const typed = value => value === null ? new data.Null() : typeof value === 'string' ? new data.StringData(value) :
+    typeof value === 'number' ? new data.NumberData(value) : new data.Dictionary(...Object.entries(value).map(([key, item]) => ({key, value: typed(item)})));
+  const evaluate = (expression, context) => new Evaluator(new Parser(new Lexer(expression).lex().tokens, Object.keys(context), []).parse(), typed(context)).evaluate();
+  const comment = (number, body) => ({github: {event_name: 'issue_comment', ref: 'refs/heads/main',
+    event: {pull_request: null, issue: {number, pull_request: {}}, comment: {body}}}, inputs: {pull_request: '', evaluate_acceptance: false}});
+  for (const [path, prefix] of [['.github/workflows/ci.yml', 'clouseau-ci'], ['examples/consumer-ci.yml', 'ci']]) {
+    const workflow = read(path);
+    const job = workflow.jobs['request-reassessment'];
+    assert.equal(job.concurrency, undefined, `${path}: no job group of its own, so the workflow group decides`);
+    assert.equal(workflow.concurrency['cancel-in-progress'], true, path);
+    const group = context => workflow.concurrency.group.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => evaluate(expression, context).coerceString());
+    const head = 'a'.repeat(40);
+    assert.equal(evaluate(job.if, comment(19, `/approve-intent ${head}`)).value, true, path);
+    assert.equal(group(comment(19, `/approve-intent ${head}`)), `${prefix}-issue_comment-19`, path);
+    assert.equal(group(comment(19, `/approve-intent ${head}`)), group(comment(19, `/hosted-review ${head}`)), `${path}: a newer request supersedes the waiter`);
+    assert.notEqual(group(comment(19, `/approve-intent ${head}`)), group(comment(20, `/approve-intent ${head}`)), `${path}: other pull requests are independent`);
+    assert.ok(job['timeout-minutes'] * 60 > 550 + 60, `${path}: the job outlives the 550 s wait`);
+  }
+});

@@ -27,16 +27,27 @@ async function newerConfirmation({github, context, assessment, legacy, number, b
   const confirmation = await legacy.purposeConfirmation(github, repo, pr, comments);
   const comment = confirmation && comments.find(item => item.id === confirmation.comment_id);
   if (!comment || !(Date.parse(comment.created_at) > assessedAt)) return null; // the same second counts as seen
-  const marker = `<!-- ${MARKER}:${pr.head.sha}:${comment.id} -->`;
-  if (!comments.some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`))) {
-    await github.rest.issues.createComment({...repo, issue_number: number, body: `${marker}\n## Clouseau: assessment predates your confirmation\n\n` +
-      `**Cause:** \`${CAUSE}\`: this run's assessment of \`${pr.head.sha.slice(0, 12)}\` was made before your confirmation ` +
-      `(${comment.html_url}), so it does not contain it and this gate cannot use it.\n\n` +
-      '**Next step:** open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** (not "Re-run failed jobs"), ' +
-      'or post the same `/approve-intent` comment again. Your confirmation is kept; nothing else is needed.'});
-  }
+  await noticeStale({github, repo, number, head: pr.head.sha, comment, comments});
   return `Cause: \`${CAUSE}\`. The assessment of this head was made before the owner confirmation ${comment.id}; re-run all jobs so a new ` +
     'assessment reads it. "Re-run failed jobs" reuses the earlier assessment.';
+}
+
+// The once-per-head-and-confirmation notice that an assessment of `head` was made before the owner confirmation `comment`
+// (an issue comment with `id` and `html_url`), so it does not contain it, and how to recover. Both callers post it from here,
+// so its text and marker stay one definition: the gate's check above, and a confirmation's reassessment whose wait the
+// assessment run outlasted (policy.cjs `reassess`). `comments` is the pull request's comment listing when the caller already
+// has it; without it the listing is read here, so a retried call looks again before posting. True when it was posted now,
+// false when it already existed.
+async function noticeStale({github, repo, number, head, comment, comments}) {
+  const listed = comments ?? await github.paginate(github.rest.issues.listComments, {...repo, issue_number: number, per_page: 100});
+  const marker = `<!-- ${MARKER}:${head}:${comment.id} -->`;
+  if (listed.some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`))) return false;
+  await github.rest.issues.createComment({...repo, issue_number: number, body: `${marker}\n## Clouseau: assessment predates your confirmation\n\n` +
+    `**Cause:** \`${CAUSE}\`: this run's assessment of \`${head.slice(0, 12)}\` was made before your confirmation ` +
+    `(${comment.html_url}), so it does not contain it and this gate cannot use it.\n\n` +
+    '**Next step:** open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** (not "Re-run failed jobs"), ' +
+    'or post the same `/approve-intent` comment again. Your confirmation is kept; nothing else is needed.'});
+  return true;
 }
 
 // When the assessment last listed the pull request's comments, on GitHub's own clock: the `date` header of the response to the
@@ -57,4 +68,4 @@ function watchCommentReads(github) {
   return () => last;
 }
 
-module.exports = {CAUSE, MARKER, newerConfirmation, watchCommentReads};
+module.exports = {CAUSE, MARKER, newerConfirmation, noticeStale, watchCommentReads};

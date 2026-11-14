@@ -5,6 +5,7 @@ const {readPull} = require('./pull-read.cjs');
 const branchConflict = require('./branch-conflict.cjs');
 const {requestReview} = require('./provider.cjs');
 const {retryTransient} = require('./transient-retry.cjs');
+const staleAssessment = require('./stale-assessment.cjs');
 const {pollSchedule, graceSeconds, WAITING_REASON, withRateLimit, RateLimitHold, heldReason, headShaOf, conditionalGet} = require('./verification-wait.cjs');
 
 // Whether the protected `local_review` lets an owner confirmation follow the diff: only `confirmation: "diff"` together with
@@ -328,21 +329,37 @@ async function reassess({github, context, core, wait, api, write, state = {}}) {
   }
   // Let an already-finishing gate consume the new comment or finish before rerun.
   // A verification completion can arrive while the pending review is still ending.
-  // A finishing review is awaited with growing gaps (10, 20, 40, 80, 160, 240 s) and conditional requests, so a
-  // verification completion costs a handful of requests per PR instead of one every 10 s.
-  const gaps = fromVerification ? [10000, 20000, 40000, 80000, 160000, 240000] : [5000];
-  const runCache = new Map(); let latest;
+  // A finishing review is awaited with growing gaps (10, 20, 40, 80, 160, 240 s: 550 s, about 9 minutes) and conditional
+  // requests, so a verification completion costs a handful of requests per PR instead of one every 10 s.
+  // A comment (`/approve-intent` or `/hosted-review`) waits the same way: a run in progress when it lands made its assessment
+  // before it, and that run's gate then fails on the comment ('Local review owner authorization changed'), so the comment's own
+  // request must outlast that run and rerun it. A newer comment cancels this waiter (the issue_comment concurrency group).
+  const awaitsGate = fromVerification || context.eventName === 'issue_comment';
+  const gaps = awaitsGate ? [10000, 20000, 40000, 80000, 160000, 240000] : [5000];
+  const runCache = new Map(); let latest, finishing;
   for (const gap of gaps) {
     await wait(gap);
     latest = (await api(() => conditionalGet(runCache, `run#${runs[0].id}`,
       headers => github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id, ...(headers['if-none-match'] ? {headers} : {})})))).data;
     if (latest.status === 'completed') break;
+    finishing = true;
   }
   if (latest.status !== 'completed') {
+    const comment = context.eventName === 'issue_comment' && context.payload.comment;
+    if (comment && String(comment.body).trim() !== `/hosted-review ${pr.head.sha}`) {
+      // The run outlasted the whole wait: its assessment predates this confirmation, so it cannot pass on it. Tell the owner,
+      // once per head and confirmation, how to recover. Every attempt of the write lists the comments first.
+      const posted = await write(() => staleAssessment.noticeStale({github, repo, number: pull_number, head: pr.head.sha, comment}));
+      core.info(posted ? `The trusted review was still running after the whole wait; posted the ${staleAssessment.CAUSE} notice for confirmation ${comment.id}.` :
+        `The trusted review was still running after the whole wait; the ${staleAssessment.CAUSE} notice for confirmation ${comment.id} was already posted.`);
+      return;
+    }
     core.info('The trusted review is still running and will read the current intent confirmation.');
     return;
   }
-  if (fromVerification && latest.conclusion === 'success') {
+  // A review that was still running when the request arrived and then succeeded needs nothing more: it passed. A run that
+  // had already completed when a comment's request first looked is rerun whatever its conclusion, as before.
+  if ((fromVerification || finishing) && latest.conclusion === 'success') {
     core.info('The trusted review already succeeded; no reassessment is needed.');
     return;
   }

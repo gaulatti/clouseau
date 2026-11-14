@@ -791,7 +791,8 @@ function reassessmentFixture() {
   return f;
 }
 const commentTrigger = () => ({...context, eventName: 'issue_comment', payload: {
-  issue: {number: 8, pull_request: {}}, comment: {user: human, body: `/approve-intent ${SHA}`},
+  issue: {number: 8, pull_request: {}}, comment: {id: 51, html_url: 'https://github.com/gaulatti/colombo/pull/8#issuecomment-51',
+    user: human, body: `/approve-intent ${SHA}`},
 }});
 
 test('intent comment reruns only the trusted metadata workflow for the exact revision', async () => {
@@ -829,16 +830,86 @@ test('reassessment rejects unauthorized, stale, unrelated and missing metadata r
   }
 });
 
-test('an active metadata run consumes confirmation without duplicating work', async t => {
+test('a metadata run that outlasts the confirmation wait gets one stale-assessment notice and no rerun', async t => {
   const f = reassessmentFixture(); f.state.run.status = 'in_progress';
   const policy = createPolicy(require('../test/fixtures/config.json'));
-  t.mock.method(global, 'setTimeout', callback => {callback(); return 0;});
-  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info() {} }});
-  assert.equal(f.writes.length, 0);
-  f.state.run.status = 'completed'; f.state.run.pull_requests = [{number: 8}];
-  f.github.rest.actions.listWorkflowRuns = async () => ({data: {workflow_runs: [{...f.state.run, id: 21}, f.state.run]}});
-  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info() {}}, wait: async () => {}});
-  assert.equal(f.writes.find(w => w.name === 'rerun').args.run_id, 22);
+  const messages = [];
+  // A posted comment is listed by the next read, so a second request finds it.
+  f.github.rest.issues.createComment = async args => {
+    f.writes.push({name: 'comment', args}); f.state.comments.push({user: bot, body: args.body}); return {data: {id: 900}};
+  };
+  const delays = [];
+  t.mock.method(global, 'setTimeout', (callback, ms) => {delays.push(ms); callback(); return 0;});
+  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info: message => messages.push(message)}});
+  assert.equal(f.writes.filter(w => w.name === 'rerun').length, 0, 'a running run cannot be rerun');
+  const notices = f.writes.filter(w => w.name === 'comment');
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].args.issue_number, 8);
+  assert.ok(notices[0].args.body.startsWith(`<!-- clouseau-stale-assessment:${SHA}:51 -->\n## Clouseau: assessment predates your confirmation\n`));
+  assert.match(notices[0].args.body, /\*\*Cause:\*\* `assessment_predates_confirmation`.*\(https:\/\/github\.com\/gaulatti\/colombo\/pull\/8#issuecomment-51\)/);
+  assert.match(notices[0].args.body, /\*\*Re-run all jobs\*\* \(not "Re-run failed jobs"\)/);
+  assert.deepEqual(delays, [10000, 20000, 40000, 80000, 160000, 240000], 'the whole bounded wait, through the default sleep');
+  assert.match(messages.at(-1), /still running after the whole wait; posted the assessment_predates_confirmation notice for confirmation 51/);
+  // The same request again (a re-run of the job): the notice is found, not posted twice.
+  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info: message => messages.push(message)}, wait: async () => {}});
+  assert.equal(f.writes.filter(w => w.name === 'comment').length, 1);
+  assert.equal(f.writes.filter(w => w.name === 'rerun').length, 0);
+  assert.match(messages.at(-1), /notice for confirmation 51 was already posted/);
+  // A `/hosted-review` request is no owner confirmation: it keeps the plain log line and posts nothing.
+  const hosted = commentTrigger(); hosted.payload.comment.body = `/hosted-review ${SHA}`;
+  await policy.requestReassessment({github: f.github, context: hosted, core: {info: message => messages.push(message)}, wait: async () => {}});
+  assert.equal(f.writes.length, 1);
+  assert.match(messages.at(-1), /still running and will read the current intent confirmation/);
+  // A dispatched request keeps its single short wait and posts nothing.
+  const gaps = [];
+  await policy.requestReassessment({github: f.github, context: {...context, actor: human.login, eventName: 'workflow_dispatch'},
+    core: {info: message => messages.push(message)}, wait: async ms => {gaps.push(ms);}});
+  assert.deepEqual(gaps, [5000]); assert.equal(f.writes.length, 1);
+  assert.match(messages.at(-1), /still running and will read the current intent confirmation/);
+});
+
+test('a confirmation that lands while the metadata run is assessing waits for its gate to fail, then reruns it once', async () => {
+  // The run assessed before the comment, so its gate fails on it ('Local review owner authorization changed'). The comment's own
+  // request outlasts it and reruns it; the rerun assesses with the confirmation and its gate passes. No second comment is needed.
+  const f = reassessmentFixture(); f.state.run.status = 'in_progress'; f.state.run.conclusion = null;
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const gaps = []; const messages = [];
+  const request = f.github.request;
+  f.github.request = async (route, args) => {
+    const result = await request(route, args);
+    if (route.startsWith('POST')) Object.assign(f.state.run, {status: 'completed', conclusion: 'success'}); // the rerun's gate passes
+    return result;
+  };
+  await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info: message => messages.push(message)},
+    wait: async ms => {gaps.push(ms); if (gaps.length === 4) Object.assign(f.state.run, {status: 'completed', conclusion: 'failure'});}});
+  assert.deepEqual(f.writes.filter(w => w.name === 'rerun').map(w => w.args.run_id), [22], 'exactly one rerun');
+  assert.equal(f.writes.filter(w => w.name === 'comment').length, 0, 'no notice: the request was made');
+  assert.deepEqual({status: f.state.run.status, conclusion: f.state.run.conclusion}, {status: 'completed', conclusion: 'success'});
+  assert.match(messages.at(-1), /Requested a trusted PR metadata reassessment/);
+  assert.deepEqual(gaps, [10000, 20000, 40000, 80000], 'the bounded growing wait, stopped when the run completed');
+  // A run that was still assessing and then succeeded already passed: nothing is rerun.
+  const passed = reassessmentFixture(); passed.state.run.status = 'in_progress'; let polls = 0;
+  await policy.requestReassessment({github: passed.github, context: commentTrigger(), core: {info: message => messages.push(message)},
+    wait: async () => {if (++polls === 2) passed.state.run.status = 'completed';}});
+  assert.equal(passed.writes.length, 0);
+  assert.match(messages.at(-1), /already succeeded/);
+  // A run already completed when the request first looks is rerun whatever its conclusion, as before.
+  const done = reassessmentFixture();
+  await policy.requestReassessment({github: done.github, context: commentTrigger(), core: {info() {}}, wait: async () => {}});
+  assert.equal(done.writes.filter(w => w.name === 'rerun').length, 1);
+});
+
+test('a waiter superseded by a newer comment is cancelled mid-wait and writes nothing', async () => {
+  // GitHub cancels the older run of the same issue_comment concurrency group (cancel-in-progress); the runner stops the waiting
+  // step, modelled here as the sleep never returning normally.
+  const f = reassessmentFixture(); f.state.run.status = 'in_progress';
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  let slept = 0;
+  const cancelled = Object.assign(new Error('The operation was canceled.'), {name: 'AbortError'});
+  await assert.rejects(policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info() {}},
+    wait: async () => {if (++slept === 3) throw cancelled;}}), error => error === cancelled);
+  assert.equal(slept, 3);
+  assert.deepEqual(f.writes, [], 'no rerun and no notice from a superseded waiter');
 });
 
 test('separate finalization validates revision and dispatches CD only for the merged main head', async () => {
@@ -1019,6 +1090,18 @@ test('a completed verification run reassesses a review that ended pending, witho
   assert.deepEqual(gaps, [10000, 20000, 40000], 'growing gaps: three requests, not a poll every 10 s');
   const waits = gaps.length;
   assert.equal(waits, 3); assert.equal(ending.writes.filter(w => w.name === 'rerun').length, 1);
+});
+
+test('a verification completion waits the whole schedule for a running review, then leaves it and posts nothing', async () => {
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const f = reassessmentFixture(); f.state.run.status = 'in_progress';
+  const gaps = []; const messages = [];
+  await policy.requestReassessment({github: f.github, context: verificationTrigger(), core: {info: message => messages.push(message)},
+    wait: async ms => {gaps.push(ms);}});
+  assert.deepEqual(gaps, [10000, 20000, 40000, 80000, 160000, 240000]);
+  assert.equal(gaps.reduce((sum, ms) => sum + ms, 0), 550000, 'about 9 minutes at most');
+  assert.deepEqual(f.writes, [], 'no rerun, and no notice: no person asked');
+  assert.deepEqual(messages, ['The trusted review is still running and will read the current intent confirmation.']);
 });
 
 test('a completed verification run never reruns a succeeded, running, stale, unrelated or absent review', async () => {

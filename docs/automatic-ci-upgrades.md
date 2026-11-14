@@ -381,8 +381,18 @@ reviews the head with the recorded findings, or ask a maintainer.
 One timing rule for owners: the assessment records the owner's confirmation it read, and the gate of the same run checks
 that the comments still say the same. An owner comment (a repeated `/approve-intent`, say) posted after the assessment and
 before the gate makes that gate fail with `Local review owner authorization changed; confirm this exact revision again`.
-The comment also starts a fresh reassessment, which reads it and decides normally, so no further action is needed. Posting
-the confirmation once and waiting for its run avoids the extra run.
+The comment's own reassessment does not assume that run will read it: it waits for the run with growing gaps (10, 20, 40, 80,
+160 and 240 s, 550 s or about 9 minutes at most). When the run ends without success it reruns it once (a run that was still
+going and then succeeded needs nothing; a run that had already ended when the request first looks is rerun as before), and
+the rerun's assessment reads the confirmation, so no further action is needed. When the run is still going after the whole
+wait, the reassessment posts the `assessment_predates_confirmation` notice once for that head and confirmation (marker
+`<!-- clouseau-stale-assessment:<head>:<comment id> -->`) with the recovery step: **Re-run all jobs** on the latest
+**Clouseau CI** run, or post the same `/approve-intent` again. A newer comment on the same pull request cancels the older
+waiter (the workflow's `issue_comment` concurrency group). The cost: the comment-triggered `request-reassessment` job holds
+a runner for up to about 9 minutes, so its `timeout-minutes` must exceed that; consumer workflows upgrade it from `3` to `12`,
+as `examples/consumer-ci.yml` does (with `3` the job is stopped mid-wait and neither reruns nor posts the notice). Any other
+comment on the pull request also starts a run in that same group and cancels the waiter. Posting the confirmation once and
+waiting for its run avoids the extra run.
 
 ## Approved PRs after a sibling merge moves the base
 
