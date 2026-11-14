@@ -82,7 +82,7 @@ test('combined evidence has no size cap: the snapshot digest is recomputed whate
 
 test('an altered or non-partition-shaped plan is refused', async () => {
   const f = await chunkedFixture();
-  for (const partition of [null, 'plan', {...f.plan, scheme: 'clouseau-partition/2'}, {...f.plan, extra: true}]) {
+  for (const partition of [null, 'plan', {...f.plan, scheme: 'clouseau-partition/3'}, {...f.plan, extra: true}]) {
     const record = clone(f.record); record.partition = partition;
     rejects(record, f.chunked, /unknown or malformed partition scheme/);
   }
