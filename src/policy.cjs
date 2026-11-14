@@ -272,7 +272,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
   return {pending: true, state: 'deadline'};
 }
 
-async function reassess({github, context, core, wait, api}) {
+async function reassess({github, context, core, wait, api, write, state = {}}) {
   const repo = context.repo;
   // A completed PR verification run reassesses a review that ended pending
   // without holding a runner. The event is a trusted run of this workflow.
@@ -310,6 +310,8 @@ async function reassess({github, context, core, wait, api}) {
     const {data: permission} = await api(() => github.rest.repos.getCollaboratorPermissionLevel({...repo, username: user.login}));
     if (user.type !== 'User' || !['admin', 'maintain', 'write'].includes(permission.permission)) throw new Error('Only a maintainer can request reassessment');
     if (pr.state !== 'open' || pr.draft || pr.base.ref !== config.base_branch) throw new Error('PR is not ready for reassessment');
+    // From here a failure answers a request the engine validated: an exact-head confirmation or request by a maintainer.
+    state.validated = true;
   }
   const {data} = await api(() => github.rest.actions.listWorkflowRuns({...repo, workflow_id: WORKFLOW,
     event: 'pull_request_target', head_sha: pr.head.sha, per_page: 100}));
@@ -344,18 +346,64 @@ async function reassess({github, context, core, wait, api}) {
     core.info('The trusted review already succeeded; no reassessment is needed.');
     return;
   }
-  await api(() => github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id}));
+  // Every attempt after the first, whichever retry layer starts it, first checks whether an earlier one had landed: GitHub
+  // refuses a second rerun of a running run.
+  let tries = 0;
+  await write(async () => {
+    if (tries++ > 0 && (await github.rest.actions.getWorkflowRun({...repo, run_id: runs[0].id})).data.status !== 'completed') return;
+    await github.request('POST /repos/{owner}/{repo}/actions/runs/{run_id}/rerun', {...repo, run_id: runs[0].id});
+  });
   core.info('Requested a trusted PR metadata reassessment. Contributor tests are not rerun.');
 }
 
 // Reassessment is itself an API consumer and runs exactly when many PRs finish together, so it retries
 // rate-limited calls with the shared bounded backoff. If the budget stays exhausted it fails with an explicit
 // message naming when to re-run, instead of an unhandled HttpError.
+// Reads are retried on 5xx by the read hook every packaged step installs (github-retry.cjs), so they are not retried again
+// here; the rerun is a write, retried with the shared transient backoff and its landed check. A request that still cannot
+// be made never fails silently: once the engine validated it (an exact-head request by a maintainer), the pull request is
+// told the request was received and how to recover. A failure before that is only logged.
 async function requestReassessment({github, context, core, wait = sleep}) {
-  const api = call => withRateLimit(call, {wait, report: message => core.info(message)});
-  try {return await reassess({github, context, core, wait, api});} catch (error) {
-    if (!(error instanceof RateLimitHold)) throw error;
-    throw new Error(`Reassessment held: ${heldReason(error)} Re-run this job after that time; contributor tests are not rerun.`);
+  const report = message => core.info(message);
+  const transient = call => retryTransient(call, {operation: 'requesting the reassessment', head: 'unknown', wait, report});
+  const api = call => withRateLimit(call, {wait, report});
+  const write = call => withRateLimit(() => transient(call), {wait, report});
+  const state = {validated: false};
+  try {return await reassess({github, context, core, wait, api, write, state});} catch (error) {
+    const {TransientExhausted, isTransient} = require('./transient-retry.cjs');
+    if (!(error instanceof RateLimitHold) && !(error instanceof TransientExhausted) && !isTransient(error)) throw error;
+    const why = error instanceof RateLimitHold ? heldReason(error) : error instanceof TransientExhausted ?
+      `GitHub kept failing transiently (${error.attempts} attempts).` : `GitHub kept failing transiently (HTTP ${Number.isInteger(error.status) ? error.status : 'error'}).`;
+    if (state.validated) await reportUnrequested({github, context, core, transient, why});
+    else core.info('The reassessment request could not be validated before GitHub failed; no notice is posted for an unvalidated request.');
+    throw new Error(`Reassessment ${error instanceof RateLimitHold ? 'held' : 'could not be requested'}: ${why} Re-run this job after that time; contributor tests are not rerun.`);
+  }
+}
+
+const UNREQUESTED = 'clouseau-reassessment-unrequested';
+// The visible notice for a reassessment asked for on a pull request (a comment or a dispatch naming it) that could not be
+// requested. A notice that cannot be written is logged and never hides the original failure.
+async function reportUnrequested({github, context, core, transient, why}) {
+  // Only a validated comment or dispatch request gets here, and both read the number before any API call.
+  const number = numberFor(context);
+  const asked = context.eventName === 'issue_comment' ? String(context.payload.comment.body).trim().split('\n')[0].slice(0, 120) : 'the dispatched reassessment';
+  // One notice per request (the comment, or the dispatched run): every attempt, including the first of a re-run job, first
+  // looks for it, so neither a retry nor a re-run of this job posts it twice.
+  const marker = `<!-- ${UNREQUESTED}:${context.eventName === 'issue_comment' ? `comment-${context.payload.comment.id}` : `run-${context.runId}`} -->`;
+  const body = `${marker}\n## Clouseau: reassessment not requested\n\n` +
+    `Your request (\`${asked.replaceAll('`', '')}\`) was received, but Clouseau could not request the reassessment: ${why}\n\n` +
+    '**Nothing was lost.** To recover, open the latest **Clouseau CI** run of this pull request and choose **Re-run all jobs** ' +
+    '(not "Re-run failed jobs": that reuses the assessment made before your comment), or post the same comment again.';
+  const posted = async () => (await github.paginate(github.rest.issues.listComments, {...context.repo, issue_number: number, per_page: 100}))
+    .some(item => item.user?.login === 'github-actions[bot]' && String(item.body).startsWith(`${marker}\n`));
+  try {
+    await transient(async () => {
+      if (await posted()) return;
+      await github.rest.issues.createComment({...context.repo, issue_number: number, body});
+    });
+  } catch (error) {
+    core.info(`The reassessment notice could not be posted on PR ${number} (HTTP ${Number.isInteger(error.status) ? error.status : 'unknown'}); ` +
+      'commenting on a pull request needs the job permissions issues: write and pull-requests: write.');
   }
 }
 

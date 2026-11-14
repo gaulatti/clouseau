@@ -43,7 +43,9 @@ const NEXT_STEPS = Object.freeze({
   receipt_history_changed: ['The receipt\'s signed finding history must reconcile to exactly the pull request\'s acceptance ledger, and it does not. ' +
     'A review of this head with the same local history signs the same history, so reviewing again does not change this.',
     'If the ledger came from another source (for example the hosted review or a different runner), review on a runner whose history matches it ' +
-    'and publish that receipt (`clouseau publish --directory . --receipt RECEIPT_FILE`), or ask a maintainer.'],
+    'and publish that receipt (`clouseau publish --directory . --receipt RECEIPT_FILE`).',
+    'Remove the `clouseau-local-review` marker from the pull request description so the CI reviewer reviews this head with the recorded findings, ' +
+    'or ask a maintainer to review it.'],
   chunked_record_invalid: ['The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head (`clouseau review ...`).',
     'Publish it: `clouseau publish --directory . --receipt RECEIPT_FILE`, and update the marker in the pull request description.'],
   decision_mismatch: ['The assessment and the stored record disagree (both decisions are in the reason). ' + RERUN, 'If it repeats, report it with the link to this workflow run.'],
@@ -139,10 +141,21 @@ async function post({github, context, assessment}) {
   const issue_number = assessment.number;
   const runUrl = `https://github.com/${repo.owner}/${repo.repo}/actions/runs/${context.runId}`;
   const comments = await github.paginate(github.rest.issues.listComments, {...repo, issue_number, per_page: 100});
-  const existing = comments.find(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(`${MARKER}\n`));
+  const existing = [...comments].reverse().find(item => item.user?.login === 'github-actions[bot]' && item.body.startsWith(`${MARKER}\n`));
   const text = body(assessment, runUrl);
-  if (existing) await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: text});
-  else await github.rest.issues.createComment({...repo, issue_number, body: text});
+  // The same cause is updated in place. A different cause (the hold changed after the owner acted, for example) is a new
+  // comment, which notifies whoever follows the pull request; an in-place edit notifies nobody. The earlier notice keeps a
+  // one-line pointer and loses the marker, so later runs find only the current one.
+  const causeOf = value => /\*\*Cause:\*\* `([a-z_]+)`/.exec(value)?.[1] ?? null;
+  if (existing && causeOf(existing.body) === causeOf(text)) {
+    await github.rest.issues.updateComment({...repo, comment_id: existing.id, body: text});
+    return;
+  }
+  const created = await github.rest.issues.createComment({...repo, issue_number, body: text});
+  if (existing) {
+    await github.rest.issues.updateComment({...repo, comment_id: existing.id,
+      body: `Superseded: this review notice was replaced by a newer one (${created.data.html_url}) because its cause changed.`});
+  }
 }
 
 const PENDING = '<!-- clouseau-review-pending -->';
