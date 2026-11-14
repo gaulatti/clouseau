@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/local-receipt.cjs",
+      "mode": 0,
+      "sha256": "fd0762863a479298c2a2519fe7f7d86af298bd622331dec8a7527441970ecba3"
+    },
+    {
+      "path": "src/pr-refresh.cjs",
+      "mode": 0,
+      "sha256": "07cacda88d8e5c57d7964d70e3a0e0e3851d3629b35b7b4403426f48367dd30c"
+    },
+    {
+      "path": "src/receipt-standing.cjs",
+      "mode": 0,
+      "sha256": "70b20535e3aa2e8252c4957a53fb9d2fbcdd19f361ba496bea14510f66e81122"
+    }
+  ]
+}

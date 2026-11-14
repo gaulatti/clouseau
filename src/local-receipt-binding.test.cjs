@@ -96,6 +96,10 @@ test('binding "diff": the signed revisions stand in for the live ones, full-file
   for (const changed of ['README.md', '.github/clouseau.md']) {
     liveContract = {[changed]: `${signedContract(changed)}\nA rule added on the base.\n`};
     await assert.rejects(verifySources(options), error => error.reason === 'source' && error.detail?.file === changed && /contract changed on the live base/.test(error.message), changed);
+    // The screen CI and refresh use names it to the caller, so the notice says which contract changed (#243).
+    const named = [];
+    assert.equal(await screenSources({...options, note: file => named.push(file)}), 'source', changed);
+    assert.deepEqual(named, [changed]);
   }
   liveContract = {'README.md': {symlink: true}};
   github.rest.repos.getContent = async args => {
