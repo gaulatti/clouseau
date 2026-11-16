@@ -5,7 +5,7 @@
     {
       "path": "src/policy.cjs",
       "mode": 0,
-      "sha256": "2ba36c819cde46fc2a280fdf58e72c0c7b3c9f6889405e2cca488be6f7c1cdb7"
+      "sha256": "d7f189d5c3244808aeeeb861e201c5be0406755fb9943276ac87c389104ae59d"
     },
     {
       "path": "src/stale-assessment.cjs",
