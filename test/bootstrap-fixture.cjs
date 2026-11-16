@@ -13,7 +13,7 @@ const {issueReceipt} = require('../src/local-receipt.cjs');
 
 const NOW = 10_000_000;
 
-async function fixture(run, {nativePython = false, centralSource = false, engineSource = false} = {}) {
+async function fixture(run, {nativePython = false, centralSource = false, engineSource = false, localExtra = {}} = {}) {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'clouseau-bootstrap-fixture-'));
   const directory = path.join(temporary, 'repository');
   const state = path.join(temporary, 'runner');
@@ -41,7 +41,7 @@ async function fixture(run, {nativePython = false, centralSource = false, engine
     const local = {version: 1, base_branch: 'main', readme: 'README.md', repository_policy: 'AGENTS.md',
       verification: nativePython ? [['python3', '-m', 'coverage', 'run', '--branch', '--source=app', '-m', 'unittest', 'discover', '-s', 'tests'],
         ['python3', '-m', 'coverage', 'json', '-o', 'coverage.json']] : [['node', '--version']],
-      coverage: {format: nativePython ? 'coveragepy' : 'istanbul', report: 'coverage.json', source_directory: nativePython ? 'app' : 'src'}};
+      coverage: {format: nativePython ? 'coveragepy' : 'istanbul', report: 'coverage.json', source_directory: nativePython ? 'app' : 'src'}, ...localExtra};
     const config = {version: 2, base_branch: 'main', workflow: 'ci.yml',
       verification: {job: 'verify', steps: ['Enforce 100% line and branch coverage']}, manual_reviewer: 'fixture-owner',
       repository_policy: '.github/clouseau.md', readme: 'README.md', sensitive_paths: [], deployment: null,
