@@ -4,7 +4,7 @@
 // every guard, and a field with a sample is exercised by every reader at once.
 const {OPTIONAL_LOCAL_KEYS} = require('../src/coverage-plan.cjs');
 
-const SAMPLES = Object.freeze({review_reuse: 'outcome'});
+const SAMPLES = Object.freeze({review_reuse: 'outcome', review_history: 'pull_request'});
 
 function everyOptional() {
   const missing = OPTIONAL_LOCAL_KEYS.filter(key => !Object.hasOwn(SAMPLES, key));
