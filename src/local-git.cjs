@@ -194,4 +194,42 @@ function assertUnchanged(directory, snapshot) {
     git(directory, ['status', '--porcelain']).trim()) throw new Error('Local source changed during review; no receipt issued');
 }
 
-module.exports = {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound};
+// GitHub's contents API returns the text of a file up to 1 MB; above that it returns `encoding: "none"` and no content.
+const CONTENTS_LIMIT = 1024 * 1024;
+
+// The two GitHub API calls the shared importer discovery makes (acceptance-sources.cjs `supplyTests`, `readOptional`,
+// `fetchText`), answered from the local checkout so `clouseau review` runs the discovery CI runs on its receipt:
+//   rest.git.getTree({tree_sha, recursive})  -> {data: {truncated: false, tree: [{path, type: 'blob', size}]}}  (git ls-tree -r -l)
+//   rest.repos.getContent({path, ref})        -> {data: {encoding: 'base64', content, size}}                   (git show ref:path)
+// The owner and repository of a request are ignored: the checkout is the repository. A path or ref that does not exist
+// throws `status: 404`, as GitHub does; a path that names a directory answers a listing (an array), as GitHub does.
+function gitContents(directory) {
+  const run = (args, options = {}) => cp.execFileSync('git', ['-C', directory, ...args], {stdio: ['ignore', 'pipe', 'pipe'], ...options});
+  // The object a revision names, or GitHub's 404 when it names none (an unknown ref, or a path absent at that ref).
+  const resolve = spec => {
+    try {return run(['rev-parse', '--verify', '--quiet', spec], {encoding: 'utf8'}).trim();}
+    catch (error) {
+      if (error.status === 1) throw Object.assign(new Error(`Not Found: ${spec}`), {status: 404});
+      throw error;
+    }
+  };
+  return {rest: {
+    git: {getTree: async ({tree_sha: treeSha}) => {
+      const tree = run(['ls-tree', '-r', '-l', '-z', resolve(`${treeSha}^{tree}`)], {encoding: 'utf8', maxBuffer: Infinity}).split('\0').filter(Boolean).map(line => {
+        const tab = line.indexOf('\t');
+        const [, type, , size] = line.slice(0, tab).split(/ +/);
+        return {path: line.slice(tab + 1), type, size: Number(size)};
+      }).filter(entry => entry.type === 'blob');
+      return {data: {truncated: false, tree}};
+    }},
+    repos: {getContent: async ({path: filename, ref}) => {
+      const object = resolve(`${ref}:${filename}`);
+      if (run(['cat-file', '-t', object], {encoding: 'utf8'}).trim() !== 'blob') return {data: []};
+      const size = Number(run(['cat-file', '-s', object], {encoding: 'utf8'}).trim());
+      if (size > CONTENTS_LIMIT) return {data: {encoding: 'none', content: '', size}};
+      return {data: {encoding: 'base64', content: run(['show', `${ref}:${filename}`], {maxBuffer: CONTENTS_LIMIT + 1}).toString('base64'), size}};
+    }},
+  }};
+}
+
+module.exports = {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound, gitContents};

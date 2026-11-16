@@ -59,6 +59,8 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
       verification: [['node', '--version']], coverage: {format: 'istanbul', report: 'coverage.json', source_directory: 'src'}}));
     write(work, 'src/handler.js', handler('Boolean(input)', 'base'));
     write(work, 'src/unrelated.js', 'module.exports = 0;\n');
+    // An existing test importing both changed files, so a signed review passes the receipt hold CI applies (receipt-hold.cjs).
+    write(work, 'test/handler.test.js', "require('../src/handler.js');\nrequire('../src/new.js');\n");
     if (ciConfig) write(work, '.github/clouseau.json', JSON.stringify(ciConfig));
     for (const [name, text] of Object.entries(files)) write(work, name, text);
     commit(work, 'feat: accept input'); git(work, ['push', '-q', 'origin', 'main']);

@@ -70,3 +70,44 @@ test('through clouseau review: a reviewer asking for more than fits still gets a
       assert.deepEqual(seen.omitted_sources.filter(item => LARGE.includes(item.path)), omitted);
     } finally {fs.rmSync(state, {recursive: true, force: true});}
   }, large));
+
+// The rest of a request is still read after an omission: a regression that stopped at the first omitted path would leave
+// the small source after it unread.
+test('a path requested after an omitted one is still read', () =>
+  repository(async f => {
+    const {snapshot, addSources} = collectLocal({...f, request: 'Reject missing input.', technical: {}});
+    await addSources([...LARGE, 'docs/small.txt']);
+    const omitted = (snapshot.omitted_sources || []).map(item => item.path);
+    assert.ok(omitted.some(name => LARGE.includes(name)), JSON.stringify(omitted));
+    assert.ok(!omitted.includes('docs/small.txt'));
+    assert.ok(Object.values(snapshot.sources).some(source => source.path === 'docs/small.txt'));
+  }, directory => {large(directory); fs.writeFileSync(path.join(directory, 'docs/small.txt'), 'small\n');}));
+
+// A review kept within one omission entry of the cap fails closed when a requested source is then omitted: the entry itself
+// takes the evidence past the budget (documented in docs/local-review.md). A source already in the evidence is never removed
+// to make room, so the failure is the budget error and the present source is still there.
+test('within one omission entry of the cap, an omission fails closed and a present source is never removed', async () => {
+  const setup = pad => directory => {
+    large(directory);
+    fs.writeFileSync(path.join(directory, 'docs/pad.txt'), 'p'.repeat(pad));
+    fs.writeFileSync(path.join(directory, 'docs/big.txt'), 'b'.repeat(1000));
+  };
+  const FILL = ['docs/a.txt', 'docs/b.txt', 'docs/c.txt', 'docs/pad.txt'];
+  let measured;
+  await repository(async f => {
+    const {snapshot, addSources} = collectLocal({...f, request: 'Reject missing input.', technical: {}});
+    await addSources(FILL);
+    assert.equal(snapshot.omitted_sources, undefined);
+    measured = evidenceSize(snapshot);
+  }, setup(1));
+  const pad = 1 + BUDGET - 10 - measured;
+  await repository(async f => {
+    const {snapshot, addSources} = collectLocal({...f, request: 'Reject missing input.', technical: {}});
+    await addSources(FILL);
+    assert.equal(evidenceSize(snapshot), BUDGET - 10);
+    const present = Object.keys(snapshot.sources).find(id => snapshot.sources[id].path === 'docs/a.txt');
+    await assert.rejects(addSources(['docs/big.txt', 'docs/a.txt']), /exceeds the source budget/);
+    assert.ok(snapshot.sources[present], 'the present source was removed');
+    assert.deepEqual(snapshot.omitted_sources, [{path: 'docs/big.txt', reason: OVER_BUDGET}]);
+  }, setup(pad));
+});

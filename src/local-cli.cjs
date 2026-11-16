@@ -5,10 +5,11 @@ const path = require('node:path');
 const cp = require('node:child_process');
 const crypto = require('node:crypto');
 const {digest} = require('./acceptance.cjs');
-const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound} = require('./local-git.cjs');
+const {git, githubRepository, readLocalConfig, collectLocal, assertUnchanged, SourceNotFound, gitContents} = require('./local-git.cjs');
 const {localReview} = require('./local-review.cjs');
 const {askHarness, assertHarness} = require('./local-harness.cjs');
-const {signable, issueReceipt, verifyReceipt, attestable, AUTHOR} = require('./local-receipt.cjs');
+const {signable, issueReceipt, verifyReceipt, reviewDecision, attestable, AUTHOR} = require('./local-receipt.cjs');
+const {receiptHold, holdRule, openSeams} = require('./receipt-hold.cjs');
 const {engineDigest} = require('./local-version.cjs');
 const {SOURCE, acceptsEngine} = require('./central-version.cjs');
 const {reconcile} = require('./acceptance-ledger.cjs');
@@ -407,17 +408,23 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   assertUnchanged(directory, collected.snapshot);
   const findings = reconcile(chunking ? {...result, reviews} : result, collected.snapshot, priorFindings);
   if (findings.unresolved.length && result.decision === 'auto_approve') result.decision = 'review_incomplete';
-  reusing.commit(result.decision);
   const record = chunkedRecord || {version: 2, snapshot: collected.snapshot, result, previous: {comment: null, findings: []},
     local_previous: {findings: priorFindings}, controls: false, technical};
   fs.mkdirSync(path.dirname(output), {recursive: true});
   fs.writeFileSync(output, JSON.stringify(record) + '\n', {mode: 0o600});
-  let receipt = null;
   // With the protected `human_review: "signed"` a review whose findings alone send it to a maintainer is signed as well (its
   // verification passed: with an identity, anything else stopped before review). Integrity violations, incomplete reviews (an
   // earlier finding left unresolved included) and any violated or unresolved gate never are: the same rule `issueReceipt` enforces.
   const humanReview = identity !== null && ciConfig.local_review.human_review === 'signed';
-  if (identity && signable(result.decision, humanReview, chunking ? reviews : result.reviews, findings.unresolved.length)) {
+  const signing = identity && signable(result.decision, humanReview, chunking ? reviews : result.reviews, findings.unresolved.length);
+  // A receipt CI's receipt hold would refuse is never signed: the review is reported incomplete and the rule that held is named.
+  const held = signing ?
+    await signingHold({directory, record, chunked: chunking ? chunkedWiring.verifierOptions(ciConfig.local_review) : null}) : null;
+  const decision = held ? 'review_incomplete' : result.decision;
+  if (held) process.stderr.write(`${heldNotice(held)}\n`);
+  reusing.commit(decision);
+  let receipt = null;
+  if (signing && !held) {
     if (digest(installed()) !== digest(reviewer)) throw new Error('Clouseau installation changed during review; no receipt issued');
     const bundle = issueReceipt({record, privateKey: identity.private_key, keyId: identity.id,
       issuer: identity.issuer, reviewerSha, reviewerDigest: reviewer.digest,
@@ -433,12 +440,59 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   fs.mkdirSync(path.dirname(historyPath), {recursive: true, mode: 0o700});
   fs.writeFileSync(historyPath, JSON.stringify({version: 1, repository, branch, head_sha: head, base_sha: baseSha,
     reviewer_sha: reviewerSha, reviewer_digest: reviewer.digest, request_digest: requestDigest, cache_id: cacheId,
-    has_receipt: Boolean(receipt), decision: result.decision, findings: findings.findings}), {mode: 0o600});
+    has_receipt: Boolean(receipt), decision, findings: findings.findings}), {mode: 0o600});
   // The requirement of an accepted review is what `refresh` defaults to when it is not given a file.
-  if (result.decision === 'auto_approve') recordRequirement({state, repository, branch, head, cacheId, cache, request, additional});
-  return {decision: result.decision, record: output, receipt, head_sha: head,
+  if (decision === 'auto_approve') recordRequirement({state, repository, branch, head, cacheId, cache, request, additional});
+  return {decision, ...(held ? {receipt_hold: held} : {}), record: output, receipt, head_sha: head,
     base_sha: collected.snapshot.base_sha, reviewer_sha: reviewerSha, provider_api_calls: 0, ...attested(attestation),
     harness_invocations: result.usage.length - reusing.stats.reused, reused_calls: reusing.stats.reused, ...reviewStatus(technical), ...warn(collected.snapshot.paths, {baseSha: collected.snapshot.base_sha, headSha: head}, technical)};
+}
+
+// The receipt hold CI applies to a local receipt (acceptance-controller.cjs, receipt-hold.cjs), applied to the record about
+// to be signed: `approvalHold` for every review on the snapshot plus the importer discovery CI runs, here answered by the
+// local checkout at the same base and head; and, for a chunked record, the open-seams rule. The reviews are the ones the
+// receipt check derives from the record. Returns null when nothing holds, else what held, named so the author can act.
+async function signingHold({directory, record, chunked}) {
+  const {snapshot} = record;
+  const {reviews} = reviewDecision(record, {chunked});
+  const {hold} = await receiptHold({github: gitContents(directory), repo: snapshot.head_repository, snapshot, reviews});
+  if (hold) {
+    const {rule, file} = holdRule(hold);
+    if (rule === 'untested') return {rule, reason: hold, files: file.split(', ')};
+    if (rule === 'completeness') return {rule, reason: hold, missing: recordedMissing(record, reviews)};
+    return {rule, reason: hold};
+  }
+  if (!chunked) return null;
+  const ends = new Map(record.seams.map(seam => [seam.id, [seam.a.unit, seam.b.unit]]));
+  const seams = record.result.reviews.flatMap(review => openSeams(review).map(row => ({role: review.role, seam: row.seam, state: row.state,
+    units: ends.get(row.seam), reason: row.reason})));
+  return seams.length ? {rule: 'open_seams', reason: 'integration left seams open', seams} : null;
+}
+
+// What the reviews recorded as missing (coverage sources and dependencies in state `missing`) and what the controller
+// omitted. A local report always carries both coverage lists (review_manifest_version; acceptance.cjs validates them), and a
+// completeness hold always has at least one row: approvalHold holds it only on something recorded missing or omitted. A chunked record names the review unit whose report recorded it; a single snapshot names only the role.
+function recordedMissing(record, reviews) {
+  const {snapshot} = record;
+  const missingOf = report => [...report.coverage.sources.filter(item => item.state === 'missing')
+    .map(item => snapshot.sources[item.source]?.path ?? item.source),
+  ...report.coverage.dependencies.filter(item => item.state === 'missing').map(item => item.path)];
+  const rows = Object.hasOwn(record, 'partition') ?
+    record.result.reviews.flatMap(review => review.unit_reports.flatMap(({unit, report}) => missingOf(report).map(file => ({role: review.role, unit, path: file})))) :
+    reviews.flatMap(review => missingOf(review.report).map(file => ({role: review.role, path: file})));
+  const omitted = (snapshot.omitted_sources || []).map(item => ({omitted: true, path: item.path, reason: item.reason}));
+  return [...new Map([...rows, ...omitted].map(row => [JSON.stringify(row), row])).values()];
+}
+
+function heldNotice(held) {
+  const named = {
+    integrity: () => 'test integrity is unresolved',
+    untested: () => `no supplied or discovered test imports ${held.files.join(', ')}`,
+    completeness: () => `review completeness is unresolved; recorded missing: ${held.missing.map(row =>
+      `${row.path}${row.unit ? ` (unit ${row.unit}, ${row.role})` : row.role ? ` (${row.role})` : ' (omitted)'}`).join(', ')}`,
+    open_seams: () => `integration left seams open: ${held.seams.map(row => `${row.seam} ${row.state} between units ${row.units.join(' and ')} (${row.role})`).join(', ')}`,
+  }[held.rule]();
+  return `Local review held (${held.rule}): CI would refuse this receipt because ${named}. No receipt issued; decision review_incomplete.`;
 }
 
 const attested = attestation => attestation ? {maintainer_attested: {author: attestation.author, pull_request: attestation.number}} : {};
@@ -530,4 +584,4 @@ async function main(argv, runtime = {}) {
   throw new Error(require('./cli-usage.cjs').usage());
 }
 
-module.exports = {options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main};
+module.exports = {recordedMissing, heldNotice, options, stateDirectory, initializeIdentity, verificationEnvironment, executeVerification, reviewStatus, installation, readHistory, runReview, publishReceipt, controlWarnings, main};
