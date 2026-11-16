@@ -429,6 +429,11 @@ A consumer that upgrades the engine and changes nothing in its workflow is no wo
 | The run outlasts the wait | The `assessment_predates_confirmation` notice | Nothing, silently |
 | A newer command comment cancels the waiter | That comment's own request waits and takes over | Same |
 | A non-command comment cancels the waiter (no group split) | As before | Left failed |
+| The author pushes during the wait | Nothing rerun or posted: the new head's run is left alone and needs its own confirmation | Within the 5 s wait, a rerun of the earlier head's run; otherwise nothing |
+
+Before any rerun or notice, the comment's request reads the pull request again. If its head is no longer the one the
+confirmation named, the request stops and writes nothing: rerunning the earlier head's run could not pass and could cancel
+the new head's run in the shared group.
 
 One residual remains: a transient-failure or rate-limit backoff longer than the 20 s margin can still let the 3-minute
 timeout stop the job before it reruns or posts the notice. The comment job then shows red (timed out). The run never passes

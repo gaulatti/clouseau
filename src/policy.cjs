@@ -355,6 +355,14 @@ async function reassess({github, context, core, wait, api, write, state = {}}) {
     if (latest.status === 'completed') break;
     finishing = true;
   }
+  // A push during a comment's wait moved the head: the watched run, and the confirmation, name the earlier head. The new head's
+  // own run assesses it and needs its own confirmation, so this request reruns nothing (a rerun of the earlier run could cancel
+  // the new head's run in the shared group) and posts nothing.
+  if (context.eventName === 'issue_comment' &&
+      (await api(() => readPull(github, repo, pull_number))).data.head.sha !== pr.head.sha) {
+    core.info(`The pull request head moved during the wait; this request names ${pr.head.sha.slice(0, 12)}, so nothing is rerun or posted.`);
+    return;
+  }
   if (latest.status !== 'completed') {
     const comment = context.eventName === 'issue_comment' && context.payload.comment;
     if (comment && String(comment.body).trim() !== `/hosted-review ${pr.head.sha}`) {

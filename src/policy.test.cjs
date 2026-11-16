@@ -912,6 +912,34 @@ test('a waiter superseded by a newer comment is cancelled mid-wait and writes no
   assert.deepEqual(f.writes, [], 'no rerun and no notice from a superseded waiter');
 });
 
+test('a push during a confirmation wait leaves both runs alone: no rerun of the earlier head, no notice', async () => {
+  // The push's pull_request_target run cancels the watched run (same group, cancel-in-progress), so the waiter sees it completed
+  // and not successful. The confirmation named the earlier head; the new head's run must not be disturbed by a rerun.
+  const PUSHED = 'c'.repeat(40);
+  const policy = createPolicy(require('../test/fixtures/config.json'));
+  const cases = {
+    cancelled: (f, polls) => {if (polls === 2) {f.state.pr.head.sha = PUSHED; Object.assign(f.state.run, {status: 'completed', conclusion: 'cancelled'});}},
+    outlasted: (f, polls) => {if (polls === 1) f.state.pr.head.sha = PUSHED;},
+    alreadyCompleted: (f, polls) => {if (polls === 1) f.state.pr.head.sha = PUSHED;},
+  };
+  for (const [name, push] of Object.entries(cases)) {
+    const f = reassessmentFixture();
+    if (name !== 'alreadyCompleted') Object.assign(f.state.run, {status: 'in_progress', conclusion: null});
+    else Object.assign(f.state.run, {status: 'completed', conclusion: 'failure'});
+    const messages = []; let polls = 0;
+    await policy.requestReassessment({github: f.github, context: commentTrigger(), core: {info: message => messages.push(message)},
+      wait: async () => {push(f, ++polls);}});
+    assert.deepEqual(f.writes, [], `${name}: no rerun and no notice`);
+    assert.equal(f.writes.some(w => w.name === 'rerun' || w.name === 'comment'), false);
+    assert.match(messages.at(-1), new RegExp(`head moved during the wait; this request names ${SHA.slice(0, 12)}, so nothing is rerun or posted`), name);
+  }
+  // A request whose head did not move still reruns a run that failed during the wait (unchanged).
+  const kept = reassessmentFixture(); Object.assign(kept.state.run, {status: 'in_progress', conclusion: null}); let polls = 0;
+  await policy.requestReassessment({github: kept.github, context: commentTrigger(), core: {info() {}},
+    wait: async () => {if (++polls === 2) Object.assign(kept.state.run, {status: 'completed', conclusion: 'failure'});}});
+  assert.deepEqual(kept.writes.filter(w => w.name === 'rerun').map(w => w.args.run_id), [22]);
+});
+
 test('separate finalization validates revision and dispatches CD only for the merged main head', async () => {
   const policy = createPolicy(require('../test/fixtures/config.json'));
   for (const changed of ['number', 'head', 'base']) {
