@@ -32,9 +32,13 @@ test('wiki update identity must describe one exact repository revision and deplo
     {wiki_base_sha: 'bad'}, {deployment_run_id: 0}, {deployment_run_id: 1.5}]) assert.throws(() => validateIdentity({...identity, ...change}));
 });
 
-test('wiki bundle refuses extra authority, stale identity and unsafe or duplicate paths', () => {
+test('wiki bundle refuses stale identity and unsafe or duplicate paths, and ignores fields nobody asked for', () => {
   assert.deepEqual(validateBundle(bundle(), identity, wiki), bundle());
-  for (const value of [null, {}, {...bundle(), shell: 'do not execute'}, {...bundle(), version: 2},
+  // gaulatti/ariston#217: an unknown field grants no authority because nothing reads it; it is ignored, not refused.
+  const extra = {...bundle([{path: 'Guide.md', content: 'x', extra: true}]), shell: 'do not execute'};
+  assert.equal(validateBundle(extra, identity, wiki), extra);
+  const missing = bundle(); delete missing.repository;
+  for (const value of [null, {}, missing, {...bundle(), version: 2},
     {...bundle(), repository: 'other/repo'}, {...bundle(), updates: null},
     {...bundle(), updates: Array.from({length: 21}, (_, i) => ({path: `${i}.md`, content: 'x'}))}]) {
     assert.throws(() => validateBundle(value, identity, wiki));
@@ -42,7 +46,7 @@ test('wiki bundle refuses extra authority, stale identity and unsafe or duplicat
   for (const name of [null, '../Page.md', '/Page.md', '.git.md', 'AGENTS.md', 'agents.md', 'x'.repeat(101) + '.md', 'Page.txt']) {
     assert.throws(() => validateBundle(bundle([{path: name, content: 'x'}]), identity, wiki), /Unsafe/);
   }
-  for (const page of [{path: 'Guide.md', content: 'x', extra: true}, {path: 'Guide.md', content: null},
+  for (const page of [{path: 'Guide.md'}, {path: 'Guide.md', content: null},
     {path: 'Guide.md', content: ' '}, {path: 'Guide.md', content: 'x'.repeat(128001)}, {path: 'Guide.md', content: 'x\0y'}]) {
     assert.throws(() => validateBundle(bundle([page]), identity, wiki));
   }

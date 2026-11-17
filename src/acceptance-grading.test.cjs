@@ -109,6 +109,21 @@ test('an unknown answer counts as level0 and an ambiguous Jev answer goes to one
   assert.equal(validateReport(result.report, f.snapshot).decision, 'auto_approve');
 }));
 
+// gaulatti/ariston#217: a grade or probability key nobody asked for is ignored; every asked id is still required.
+test('extra answer ids and unasked probability keys are ignored and logged, never a failure or a score input', credentials(async () => {
+  assert.deepEqual(grade({choice: 'level4', confidence: 1, probabilities: {level4: 1, level0x: 0.5, novel: 0.9, unknown: 0}}), {value: 1, ambiguous: false});
+  const f = withFinding(); const logs = [];
+  const result = await gradeReport({...f, provider: 'deepseek', model: 'deepseek-flash', log: line => logs.push(line), fetchImpl: async (_, options) => {
+    const packet = JSON.parse(JSON.parse(options.body).messages[1].content);
+    return deepseekAnswer({...Object.fromEntries(Object.keys(packet.questions).map(id => [id, 'level4'])), invented: 'level0', other: 'level0'});
+  }});
+  assert.equal(validateReport(result.report, f.snapshot).findings[0].score, 100);
+  assert.equal(result.grading.decisions.length, 9, 'only asked ids are graded');
+  assert.ok(logs.includes('Factor grading: ignored 2 unrecognized answer id(s) from deepseek'));
+  await assert.rejects(gradeReport({...f, provider: 'deepseek', model: 'deepseek-flash', fetchImpl: async () =>
+    ({ok: true, json: async () => ({choices: [{finish_reason: 'stop', message: {content: '{"answers":"level4"}'}}]})})}), /Incomplete/);
+}));
+
 test('unknown providers and incomplete factor results cannot become an acceptance record', credentials(async () => {
   const f = withFinding();
   await assert.rejects(gradeReport({...f, provider: 'unknown'}), /Unknown/);

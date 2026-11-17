@@ -254,6 +254,7 @@ async function awaitVerification({github, context, core, expectedHead, wait = sl
       return result;
     }
     if (!result.pending) {
+      if (result.unrecognized) core.info(`Ignored unrecognized step conclusions (treated as final): ${result.unrecognized.join('; ')}`);
       core.info(`Verified PR CI: ${result.url}. Clouseau acceptance can now start.`);
       core.setOutput('verified', 'true');
       return result;
@@ -592,7 +593,10 @@ async function maintainerConfirmed(github, repo, pr, {reviewOnly = false, ...hol
 
 const etags = new Map();
 const JOB_REREADS = 3;
-const FINAL_STEP = new Set(['success', 'failure', 'cancelled', 'skipped', 'timed_out', 'neutral', 'action_required', 'stale']);
+// The step conclusions GitHub documents. Any other non-null conclusion is still final (a step that reports one has
+// finished), and is noted rather than awaited: an unrecognized value never holds the gate until the grace timeout.
+const KNOWN_STEP = new Set(['success', 'failure', 'cancelled', 'skipped', 'timed_out', 'neutral', 'action_required', 'stale']);
+const MAX_NOTED = 5;
 
 // Final success, a final failure naming the job or step, or not-final with what is awaited.
 function judgeVerification(run, jobs) {
@@ -609,8 +613,10 @@ function judgeVerification(run, jobs) {
   // is absent, skipped or unsuccessful is a definite, named failure rather than a reason to keep waiting.
   const listed = verify.steps ?? [];
   if (!listed.length) return waiting(`job "${verify.name}" lists no steps yet`);
-  const open = listed.find(step => !step.conclusion || !FINAL_STEP.has(step.conclusion));
+  const open = listed.find(step => !step.conclusion);
   if (open) return waiting(`step "${open.name}" has no final conclusion yet`);
+  const unknown = listed.filter(step => !KNOWN_STEP.has(step.conclusion));
+  const noted = unknown.length ? {unrecognized: unknown.slice(0, MAX_NOTED).map(step => `step "${String(step.name).slice(0, 100)}" concluded ${String(step.conclusion).slice(0, 40)}`)} : {};
   let skipped = null;
   for (const name of VERIFY_STEPS) {
     const step = listed.find(item => item.name === name);
@@ -619,7 +625,7 @@ function judgeVerification(run, jobs) {
     else if (step.conclusion !== 'success') return {final: true, failure: `Required verification step "${name}" concluded ${step.conclusion}`};
   }
   // A skipped step is a failure unless the caller proves a valid receipt attests the verification.
-  return {final: true, verify, ...(skipped ? {skipped} : {})};
+  return {final: true, verify, ...(skipped ? {skipped} : {}), ...noted};
 }
 
 // A skipped required step whose receipt was refused names the receipt's fixed class (with only the values that class may
@@ -677,7 +683,8 @@ async function technicalRun(github, repo, pr, {receipt = false, wait = sleep} = 
   return receipt ? {url: run.html_url, run_id: run.id, attempt: run.run_attempt,
     head_sha: run.head_sha, event: run.event, conclusion: run.conclusion,
     job: {id: verify.id, name: verify.name, conclusion: verify.conclusion,
-      steps: verify.steps.map(step => ({name: step.name, conclusion: step.conclusion}))}} : {url: run.html_url};
+      steps: verify.steps.map(step => ({name: step.name, conclusion: step.conclusion}))}} :
+    {url: run.html_url, ...(verdict.unrecognized ? {unrecognized: verdict.unrecognized} : {})};
 }
 
 async function assertProtection(github, repo, policyJob = CHECK) {

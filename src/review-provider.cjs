@@ -64,6 +64,8 @@ function decodeJSON(raw) {
 // invalid tool call or malformed JSON is retried with the same prompt and no extra evidence, at most
 // twice, and every failed attempt is returned in `attempts`. Other failures are final.
 const TRANSIENT_RETRIES = 2;
+// The finish reasons DeepSeek documents for chat completions.
+const FINISH_REASONS = new Set(['stop', 'length', 'tool_calls', 'content_filter', 'insufficient_system_resource']);
 
 async function requestJSON({messages, model, thinking = true, schemas, fetchImpl = fetch, wait = delay, report = () => {}}) {
   if (!MODELS.includes(model)) throw new Error('Unsupported acceptance model');
@@ -102,6 +104,10 @@ async function requestJSON({messages, model, thinking = true, schemas, fetchImpl
     const complete = choice?.finish_reason === (schemas ? 'tool_calls' : 'stop');
     report(`Acceptance provider: model=${model}, attempt=${attempt + 1}/3, outcome=${choice?.finish_reason || 'missing'}`);
     if (!complete) {
+      // A finish reason DeepSeek does not document is a structure failure, not a verdict: retried on the same path.
+      if (typeof choice?.finish_reason === 'string' && !FINISH_REASONS.has(choice.finish_reason)) {
+        await retry(new Error('Acceptance provider returned an unrecognized finish reason'), 'unrecognized_finish_reason'); continue;
+      }
       if (choice?.finish_reason !== 'length' || attempt === 2) throw new Error('Acceptance provider did not complete the bounded review');
       await wait(++attempt * 1000); continue;
     }
@@ -138,20 +144,25 @@ async function requestJev({state, questions, fetchImpl = fetch, wait = delay, re
     }
     if (!response.ok) throw new Error(`Jev provider unavailable: HTTP ${response.status}`);
     const body = await response.json();
-    if (body.model !== JEV_MODEL || !body.answers || Object.keys(body.answers).sort().join('\0') !== ids.sort().join('\0')) {
+    // The model pin is exact. Every asked question and every criterion must be answered; an answer, field or probability
+    // key that was not asked for is ignored (named in the log, capped) and never read.
+    const present = (object, keys) => object !== null && typeof object === 'object' && !Array.isArray(object) && keys.every(key => Object.hasOwn(object, key));
+    if (body.model !== JEV_MODEL || !present(body.answers, ids)) {
       throw new Error('Jev returned a different model or incomplete question set');
     }
+    const ignored = Object.keys(body.answers).filter(key => !ids.includes(key));
     for (const id of ids) {
       const answer = body.answers[id];
       const options = Object.keys(questions[id].criteria);
-      if (answer.type !== 'choice' || !options.includes(answer.choice) ||
+      const probabilities = present(answer?.probabilities, options) ? options.map(key => answer.probabilities[key]) : null;
+      if (probabilities) ignored.push(...Object.keys(answer.probabilities).filter(key => !options.includes(key)).map(key => `${id}.probabilities.${key}`));
+      if (answer?.type !== 'choice' || !options.includes(answer.choice) ||
           !Number.isFinite(answer.confidence) || answer.confidence < 0 || answer.confidence > 1 ||
-          !answer.probabilities || Object.keys(answer.probabilities).sort().join('\0') !== options.sort().join('\0') ||
-          Object.values(answer.probabilities).some(value => !Number.isFinite(value) || value < 0 || value > 1) ||
+          !probabilities || probabilities.some(value => !Number.isFinite(value) || value < 0 || value > 1) ||
           // Live responses round probabilities to two decimal places. Keep
           // the original distribution and allow only its aggregate rounding
           // error; never renormalize it into a more confident answer.
-          Math.abs(Object.values(answer.probabilities).reduce((sum, value) => sum + value, 0) - 1) > options.length * 0.005 + 0.000001) {
+          Math.abs(probabilities.reduce((sum, value) => sum + value, 0) - 1) > options.length * 0.005 + 0.000001) {
         const error = new Error('Jev returned an invalid typed probability distribution');
         error.details = {question: id, answer};
         throw error;
@@ -159,6 +170,7 @@ async function requestJev({state, questions, fetchImpl = fetch, wait = delay, re
     }
     usage.push({provider: 'typesafe', requested_model: JEV_MODEL, model: body.model,
       milliseconds: Date.now() - started, tokens: body.usage || null});
+    if (ignored.length) report(`Jev provider: ignored ${ignored.length} unrecognized key(s): ${ignored.slice(0, 10).map(key => key.slice(0, 80)).join(', ')}`);
     report(`Jev provider: model=${JEV_MODEL}, questions=${ids.length}, outcome=complete`);
     return {value: body.answers, usage};
   }

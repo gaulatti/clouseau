@@ -46,7 +46,8 @@ test('every failure path of the AI step ends in a classified hold that names the
   const cases = [
     ['invalid tool call', () => requestJSON({model: 'deepseek-flash', messages, wait, ...bad([])}), 'review_output_invalid', /invalid tool call or malformed JSON/],
     ['malformed JSON', () => requestJSON({model: 'deepseek-flash', messages, wait, fetchImpl: async () => reply({choices: [{finish_reason: 'stop', message: {content: '{"x":'}}]})}), 'review_output_invalid', /3 consecutive attempts/],
-    ['unfinished answer', () => requestJSON({model: 'deepseek-flash', messages, wait, fetchImpl: async () => reply({choices: [{finish_reason: 'other'}]})}), 'provider_incomplete', /token budget/],
+    ['unfinished answer', () => requestJSON({model: 'deepseek-flash', messages, wait, fetchImpl: async () => reply({choices: [{finish_reason: 'content_filter'}]})}), 'provider_incomplete', /token budget/],
+    ['unrecognized finish reason', () => requestJSON({model: 'deepseek-flash', messages, wait, fetchImpl: async () => reply({choices: [{finish_reason: 'other'}]})}), 'review_output_invalid', /unrecognized finish reason on 3 consecutive attempts/],
     ['invalid evidence', async () => validateReport(stale, f.snapshot), 'review_output_invalid', /stale identity or missing summary/],
     ['unbindable finding', async () => { const facts = modelTemplate(noAnchor.snapshot); facts.findings.push({}); return materialize(facts, noAnchor.snapshot); }, 'review_output_invalid', /cannot bind/],
     ['unit paths', async () => { const facts = modelTemplate(paths.snapshot); facts.units[0].paths = []; return materialize(facts, paths.snapshot); }, 'review_output_invalid', /cannot bind/],

@@ -1,0 +1,51 @@
+{
+  "version": 1,
+  "decision": "compatible",
+  "changes": [
+    {
+      "path": "src/acceptance-grading.cjs",
+      "mode": 0,
+      "sha256": "a2f239db7d05bed88af946fa2bffdab7938af4e993d24f6979dc1251150ebce9"
+    },
+    {
+      "path": "src/acceptance.cjs",
+      "mode": 0,
+      "sha256": "8c630549f2c7604108137dffa7ce6f3f127d57cf85e121b6e2d4f1d5e2b370e6"
+    },
+    {
+      "path": "src/coverage-gooutcomes.cjs",
+      "mode": 0,
+      "sha256": "c1ee17eee01707b9e117379e8cfe27a1496204899d3c62ff04b175932e2c8cc7"
+    },
+    {
+      "path": "src/coverage-lcov.cjs",
+      "mode": 0,
+      "sha256": "2be517ab23c012c7db9ac84bebef9d67b9988ffd3e76bad51a34fa9225f89e52"
+    },
+    {
+      "path": "src/incomplete.cjs",
+      "mode": 0,
+      "sha256": "92f3c452eb720771959f36ed4c6315b8eccb7d055ccf94a823b2eb564040af37"
+    },
+    {
+      "path": "src/local-agent.cjs",
+      "mode": 0,
+      "sha256": "17b87970d7db1fb8c01ccf8b2aed51eb7ce1f0f4df36a475e133f9dcdc396559"
+    },
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "7e9081e0a03efd73a3cb79b622b3cb4682afdc408c5a8d61c6908cd60511d9dd"
+    },
+    {
+      "path": "src/review-provider.cjs",
+      "mode": 0,
+      "sha256": "2e186397dff8071a8c4611a730b79eef7906bfb3f1f3edabd17b19edf25d52c4"
+    },
+    {
+      "path": "src/wiki.cjs",
+      "mode": 0,
+      "sha256": "c944d55b332d39712183976604d8c2fb482b4294f25a670fd9c2e512ae3ea1bc"
+    }
+  ]
+}

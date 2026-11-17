@@ -19,8 +19,9 @@ const {inventory, moduleOf} = require('./coverage-go.cjs');
 const MAX_BUILDS = 16;
 const word = /^[a-z0-9_]{1,40}$/;
 
-const keysAre = (value, required, optional = []) => isObject(value) && required.every(key => Object.hasOwn(value, key)) &&
-  Object.keys(value).every(key => required.includes(key) || optional.includes(key));
+// Every required field must be present; a field the reader does not know is ignored and never read (gaulatti/ariston#217).
+// The schema and version pin, the status enum and each file's sha256 binding to its current bytes stay strict.
+const keysAre = (value, required) => isObject(value) && required.every(key => Object.hasOwn(value, key));
 const count = value => Number.isSafeInteger(value) && value >= 0 ? value : fail('Go outcome counts must be nonnegative safe integers');
 const text = value => typeof value === 'string' && value.length > 0 && value.length < 300 ? value : fail('Go outcome fields must be nonempty strings');
 
@@ -42,7 +43,7 @@ function header(report, modulePath) {
 }
 
 function sourceOf(entry, moduleRoot, root, sources, seen, cwd) {
-  if (!keysAre(entry, ['path', 'sha256', 'lines', 'status', 'statements', 'outcomes'], ['reason'])) fail('Malformed Go outcome file entry');
+  if (!keysAre(entry, ['path', 'sha256', 'lines', 'status', 'statements', 'outcomes'])) fail('Malformed Go outcome file entry');
   const relative = text(entry.path);
   if (relative.startsWith('/') || relative.includes('\\') || relative.split('/').some(part => !part || part === '.' || part === '..')) {
     fail(`Unsafe Go outcome path: ${relative}`);

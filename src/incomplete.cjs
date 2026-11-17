@@ -96,6 +96,9 @@ function classify(error) {
   if (/^Acceptance provider returned an invalid structured result$|^Acceptance provider returned malformed JSON$/.test(message)) {
     return {cause: 'review_output_invalid', reason: 'The reviewer model returned an unusable answer (invalid tool call or malformed JSON) on 3 consecutive attempts with the same prompt.'};
   }
+  if (message === 'Acceptance provider returned an unrecognized finish reason') {
+    return {cause: 'review_output_invalid', reason: 'The reviewer model ended its answer with an unrecognized finish reason on 3 consecutive attempts with the same prompt.'};
+  }
   if (message === 'Acceptance provider did not complete the bounded review') return {cause: 'provider_incomplete', reason: 'The reviewer model did not complete its answer within the bounded token budget.'};
   const invalid = /^Invalid acceptance evidence: (.*)$/.exec(message);
   if (invalid) {

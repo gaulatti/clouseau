@@ -80,7 +80,27 @@ test('a final failure names exactly the run, job or step that failed', async () 
   assert.equal(gone.result.failure, `Required verification step "${named[2]}" was not found in job "${config.verification.job}"`);
   assert.deepEqual(gone.waits, [], 'a conclusively absent required step on a settled job is blocked immediately');
   const odd = job({steps: steps().map((step, index) => index === 0 ? {...step, conclusion: 'mystery'} : step)});
-  assert.equal((await check([[odd]])).result.state, 'finalizing', 'an unknown conclusion is not final');
+  // gaulatti/ariston#217: any non-null conclusion is final. A required step still needs success; an unknown value on any
+  // other step is noted, never awaited until the grace timeout.
+  const strange = await check([[odd]]);
+  assert.equal(strange.result.failure, `Required verification step "${named[0]}" concluded mystery`);
+  assert.deepEqual(strange.waits, [], 'an unknown conclusion is final and not re-read');
+  const extra = job({steps: [...steps(), {name: 'Post Run actions/checkout', status: 'completed', conclusion: 'mystery'}]});
+  const tolerated = await check([[extra]]);
+  assert.deepEqual(tolerated.result, {url: run().html_url, unrecognized: ['step "Post Run actions/checkout" concluded mystery']});
+  assert.deepEqual(tolerated.waits, []);
+  const receipt = await check([[extra]], undefined, {receipt: true});
+  assert.equal(receipt.result.unrecognized, undefined, 'the receipt shape is unchanged');
+  const many = job({steps: [...steps(), ...Array.from({length: 7}, (_, index) => ({name: `x${index}`, status: 'completed', conclusion: 'new'}))]});
+  assert.equal((await check([[many]])).result.unrecognized.length, 5, 'the note is capped');
+  const outputs = {}; const info = [];
+  const core = {info: line => info.push(line), setOutput: (name, value) => {outputs[name] = value;}};
+  const github = api([[extra]]).github;
+  github.rest.pulls = {get: async () => ({data: {number: 3, state: 'open', draft: false, head: {sha: SHA, ref: 'f', repo: {id: 1}}, base: {ref: 'main'}}})};
+  const verified = await policy.awaitVerification({github, context: {repo, eventName: 'pull_request_target', payload: {pull_request: {number: 3, head: {sha: SHA}}}},
+    core, expectedHead: SHA, wait: async () => {}});
+  assert.equal(outputs.verified, 'true'); assert.equal(verified.url, run().html_url);
+  assert.ok(info.includes('Ignored unrecognized step conclusions (treated as final): step "Post Run actions/checkout" concluded mystery'));
 });
 
 test('the wait step publishes a precise incomplete assessment for a real failure and never fails on a transient snapshot', async () => {

@@ -264,7 +264,10 @@ The verification wait decides only from the final state of the latest attempt of
 exact-head `pull_request` run. A completed run whose job or step list is still being
 finalized (jobs in progress, steps without a conclusion, an empty list, a job list from a newer
 attempt than the run record) is re-read a bounded number of times and otherwise stays pending;
-it is never converted into a failure. A final failure names the run, job or step
+it is never converted into a failure. Any non-null step conclusion is final: a value GitHub does not document is not
+awaited until the grace timeout. A required step still needs `success` (an unknown value on it is a named failure); an
+unknown value on any other step is ignored and noted in the wait log (`Ignored unrecognized step conclusions (treated as
+final): ...`, at most five steps). A final failure names the run, job or step
 (`Required verification step "..." concluded skipped`) in an incomplete assessment that
 `await-verification` publishes through the composite action's `assessment` output (it
 maps `steps.assess` or, for this operation, `steps.await`). The wait step then ends

@@ -150,6 +150,43 @@ function validateValue(schema, value, where = '$', root = schema) {
   }
 }
 
+// An answer field the schema does not declare (where it sets additionalProperties: false) is not refused: it is removed
+// before validation and named, capped, in the registered response and the review journal (gaulatti/ariston#217). Only the
+// stripped answer is validated, registered and hashed, so the evidence never carries what nobody asked for. Required fields,
+// types, enums and constants are still validated exactly; they feed the score.
+const MAX_IGNORED = 20;
+function stripUnknown(schema, value, where = '$', root = schema, ignored = []) {
+  if (schema === null || typeof schema !== 'object' || Array.isArray(schema)) return {value, ignored};
+  if (schema.$ref !== undefined) {
+    const name = /^#\/\$defs\/([A-Za-z0-9]+)$/.exec(schema.$ref)?.[1];
+    const target = Object.hasOwn(root.$defs || {}, name) ? root.$defs[name] : null;
+    return target === null ? {value, ignored} : stripUnknown(target, value, where, root, ignored);
+  }
+  if (schema.const !== undefined || schema.enum !== undefined) return {value, ignored};
+  if (Array.isArray(schema.anyOf)) {
+    for (const option of schema.anyOf) {
+      const attempt = stripUnknown(option, value, where, root, []);
+      try {validateValue(option, attempt.value, where, root);} catch {continue;}
+      ignored.push(...attempt.ignored);
+      return {value: attempt.value, ignored};
+    }
+    return {value, ignored};
+  }
+  if (Array.isArray(value)) {
+    return {value: schema.items === undefined ? value : value.map((item, index) => stripUnknown(schema.items, item, `${where}[${index}]`, root, ignored).value), ignored};
+  }
+  if (value === null || typeof value !== 'object') return {value, ignored};
+  const properties = schema.properties || {};
+  const result = {};
+  for (const [name, item] of Object.entries(value)) {
+    if (Object.hasOwn(properties, name)) result[name] = stripUnknown(properties[name], item, `${where}.${name}`, root, ignored).value;
+    else if (schema.additionalProperties === false) ignored.push(`${where}.${name}`);
+    else result[name] = item;
+  }
+  return {value: result, ignored};
+}
+const noted = ignored => ignored.slice(0, MAX_IGNORED).map(name => name.slice(0, 200));
+
 function readJson(filename, label) {
   const text = fs.readFileSync(filename, 'utf8');
   if (text.length > MAX_ANSWER_CHARACTERS) fail(`${label} exceeds its size budget`);
@@ -215,7 +252,8 @@ function createExchange({directory, agent, journal}) {
       transport_digest: digest(text)};
     if (!fs.existsSync(consumed)) {
       fs.writeFileSync(consumed, '', {mode: 0o600});
-      journal({role: task.role, phase: task.phase, value: response.value, provenance});
+      journal({role: task.role, phase: task.phase, value: response.value, provenance,
+        ...(response.ignored ? {ignored: response.ignored} : {})});
     }
     return {value: response.value, provenance};
   }
@@ -239,10 +277,11 @@ function respond({request, answer, session}) {
   if (answerPath !== path.resolve(stored.answer_file)) fail('Write the answer to the answer_file named by the request');
   const rejections = fs.readdirSync(directory).filter(name => name.startsWith(`rejected-${match[1]}-`)).length;
   if (rejections >= MAX_REJECTIONS) fail('This request was rejected too many times; review stopped');
-  let value;
+  let value; let ignored;
   try {
-    value = readJson(answerPath, 'Agent answer').value;
-    validateValue(JSON.parse(fs.readFileSync(stored.schema_file, 'utf8')), value);
+    const schema = JSON.parse(fs.readFileSync(stored.schema_file, 'utf8'));
+    ({value, ignored} = stripUnknown(schema, readJson(answerPath, 'Agent answer').value));
+    validateValue(schema, value);
   } catch (error) {
     fs.writeFileSync(path.join(directory, `rejected-${match[1]}-${rejections + 1}.json`),
       JSON.stringify({reason: error.message}) + '\n', {mode: 0o600});
@@ -250,9 +289,11 @@ function respond({request, answer, session}) {
     throw error;
   }
   fs.writeFileSync(responsePath, JSON.stringify({version: 1, sequence: stored.sequence, agent: stored.agent,
-    request_digest: stored.request_digest, session, value}) + '\n', {mode: 0o600, flag: 'wx'});
+    request_digest: stored.request_digest, session, value,
+    ...(ignored.length ? {ignored: {count: ignored.length, fields: noted(ignored)}} : {})}) + '\n', {mode: 0o600, flag: 'wx'});
   return {status: 'answered', sequence: stored.sequence, role: stored.role, phase: stored.phase,
+    ...(ignored.length ? {ignored: {count: ignored.length, fields: noted(ignored)}} : {}),
     next: 'Repeat the identical review command.'};
 }
 
-module.exports = {AGENTS, SESSION_RULE, suggestSession, readablePrompt, AwaitingAgent, createExchange, respond, validateValue, shareSchema};
+module.exports = {AGENTS, SESSION_RULE, suggestSession, readablePrompt, AwaitingAgent, createExchange, respond, validateValue, stripUnknown, shareSchema};

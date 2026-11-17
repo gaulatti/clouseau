@@ -76,7 +76,6 @@ test('paths must be safe module-relative paths inside the source directory', () 
 
 test('the report header must be the exact supported schema for this module', () => withTree(directory => {
   rejects([], /Malformed Go outcome report/, directory);
-  rejects(edit(report => {report.extra = 1;}), /Malformed Go outcome report/, directory);
   rejects(edit(report => {delete report.files;}), /Malformed Go outcome report/, directory);
   rejects(edit(report => {report.schema = 'other';}), /Unsupported Go outcome report schema/, directory);
   rejects(edit(report => {report.version = 2;}), /Unsupported Go outcome report schema/, directory);
@@ -94,9 +93,22 @@ test('the report header must be the exact supported schema for this module', () 
   assert.deepEqual(measure(edit(report => {report.builds = [{goos: 'linux', goarch: 'amd64', tags: ['integration', 'go1.21']}];}), directory), {lines: [54, 48], branches: [46, 44]});
 }));
 
+// gaulatti/ariston#217: a field the reader does not know is ignored at every level; it changes no count.
+test('unknown report, build, file, statement and outcome fields are ignored', () => withTree(directory => {
+  const expected = measure(load('full'), directory);
+  assert.deepEqual(measure(edit(report => {
+    report.extra = 1; report.builds[0].arch_variant = 'v3';
+    for (const file of report.files) {
+      file.extra = {nested: true};
+      for (const statement of file.statements ?? []) statement.column = 4;
+      for (const outcome of file.outcomes ?? []) outcome.column = 4;
+    }
+  }), directory), expected);
+  rejects(edit(report => {delete report.builds[0].tags;}), /requires goos, goarch and tags/, directory);
+}));
+
 test('file entries, statuses, statements and outcomes are strictly shaped', () => withTree(directory => {
   rejects(edit(report => {report.files[0] = null;}), /Malformed Go outcome file entry/, directory);
-  rejects(edit(report => {report.files[0].extra = 1;}), /Malformed Go outcome file entry/, directory);
   rejects(edit(report => {entry(report, 'decide.go').status = 'covered';}), /Unknown Go outcome file status: decide\.go/, directory);
   rejects(edit(report => {entry(report, 'decide.go').reason = 'why';}), /Unknown Go outcome file status/, directory);
   rejects(edit(report => {entry(report, 'decide.go').statements = {};}), /Malformed Go outcome file entry/, directory);

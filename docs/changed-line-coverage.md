@@ -105,6 +105,14 @@ source files make up the application. The optional part field is
   summary, which differs from its `DA` records (measured: `LF:35` against 31 `DA` records), so the `DA` records
   alone are measured. `BRF`/`BRH` are still compared with the `BRDA` records, and the default part still compares all four.
 
+### Record tags the reader does not measure
+
+The reader measures `DA`, `BRDA`, `LF`, `LH`, `BRF` and `BRH` (and skips `TN`, `FN`, `FNDA`, `FNF`, `FNH`). Any other
+tag, such as the `VER:`, `FNL:` and `FNA:` records lcov 2.x writes, is ignored inside or outside a source record, and
+every command that measures the report appends
+`note: ... the lcov report has unrecognized record tags, which were ignored: FNA, FNL, VER` (at most ten tags). A
+malformed measured record (`DA:1,x`), a measured record outside a source record and mismatched totals still fail.
+
 ### Branches when the report has no `BRDA`
 
 `llvm-cov` lcov reports carry `BRF:0`/`BRH:0` and no `BRDA` record. For such a report branches are **not

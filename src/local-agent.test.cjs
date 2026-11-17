@@ -10,7 +10,7 @@ const {fixture} = require('../test/local-review-fixture.cjs');
 const {localReview} = require('./local-review.cjs');
 const {issueReceipt, verifyReceipt} = require('./local-receipt.cjs');
 const {runReview, main} = require('./local-cli.cjs');
-const {validateValue, respond, createExchange, shareSchema, AwaitingAgent, SESSION_RULE, suggestSession, readablePrompt} = require('./local-agent.cjs');
+const {validateValue, stripUnknown, respond, createExchange, shareSchema, AwaitingAgent, SESSION_RULE, suggestSession, readablePrompt} = require('./local-agent.cjs');
 const SESSION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/;
 const fixtureInstallation = () => ({sha: 'e'.repeat(40), digest: require('./local-version.cjs').engineDigest(), clean: true});
 
@@ -95,6 +95,59 @@ test('an agent answer is validated, bounded and cannot reuse a session', () => w
   assert.throws(() => respond({request: first.request_file, answer: first.answer_file, session: 'opencode-subagent-1'}), /rejected too many/);
   await assert.rejects(main(argv, deps), /rejected 3 times/);
 }));
+
+// gaulatti/ariston#217: an answer key the schema does not declare is stripped and named, never a rejection. Only the stripped
+// answer is registered, journaled and hashed; required fields and enums still reject.
+test('unknown answer keys are stripped, named in the response and journal, and never count as a rejection', () => withReview(async ({f, deps, argv}) => {
+  const {digest} = require('./acceptance.cjs');
+  let first = await main(argv, deps);
+  const request = JSON.parse(fs.readFileSync(first.request_file, 'utf8'));
+  const clean = subagent(request);
+  const noisy = structuredClone(clean);
+  noisy.confidence_note = 'extra'; noisy.report.gates[0].commentary = 'extra'; noisy.report.summary_v2 = 'extra';
+  fs.writeFileSync(first.answer_file, JSON.stringify(noisy));
+  const answered = respond({request: first.request_file, answer: first.answer_file, session: 'opencode-subagent-1'});
+  assert.deepEqual(answered.ignored, {count: 3, fields: ['$.report.gates[0].commentary', '$.report.summary_v2', '$.confidence_note']});
+  const responseFile = path.join(path.dirname(first.request_file), 'response-0001.json');
+  const stored = JSON.parse(fs.readFileSync(responseFile, 'utf8'));
+  assert.deepEqual(stored.value, clean, 'the registered answer is the stripped one');
+  assert.deepEqual(stored.ignored, answered.ignored);
+  assert.equal(fs.readdirSync(path.dirname(first.request_file)).filter(name => name.startsWith('rejected-')).length, 0);
+  let result; let sequence = 1;
+  for (let step = 0; step < 12; step++) {
+    result = await main(argv, deps);
+    if (result.status !== 'awaiting_agent') break;
+    fs.writeFileSync(result.answer_file, JSON.stringify(subagent(JSON.parse(fs.readFileSync(result.request_file, 'utf8')))));
+    const plain = respond({request: result.request_file, answer: result.answer_file, session: `opencode-subagent-${++sequence}`});
+    assert.equal(plain.ignored, undefined, 'a clean answer carries no notice');
+  }
+  assert.equal(result.decision, 'auto_approve');
+  const journal = fs.readFileSync(path.join(path.dirname(result.record), 'observations.jsonl'), 'utf8').trim().split('\n').map(line => JSON.parse(line));
+  const registered = journal.find(entry => entry.provenance?.session === 'opencode-subagent-1');
+  assert.deepEqual(registered.ignored, answered.ignored);
+  assert.deepEqual(registered.value, clean);
+  assert.equal(registered.provenance.response_digest, digest(clean), 'the hash covers the stripped answer');
+  assert.equal(journal.filter(entry => entry.ignored).length, 1);
+  assert.equal(git(f.directory, ['status', '--porcelain']), '');
+}));
+
+test('stripping follows the schema: references, alternatives, arrays, open objects, constants and the cap', () => {
+  const root = {type: 'object', additionalProperties: false, required: ['a'], properties: {
+    a: {$ref: '#/$defs/shared1'}, b: {anyOf: [{type: 'null'}, {type: 'object', additionalProperties: false, properties: {x: {type: 'integer'}}}]},
+    c: {type: 'array', items: {type: 'object', additionalProperties: false, properties: {y: {type: 'string'}}}}, d: {type: 'array'},
+    e: {type: 'object', properties: {}}, f: {enum: [{k: 1}]}, g: {const: {k: 1}}, h: {anyOf: [{type: 'string'}]}, i: {$ref: '#/$defs/absent'}, j: {$ref: 'other'}},
+    $defs: {shared1: {type: 'object', additionalProperties: false, properties: {z: {type: 'boolean'}}}}};
+  const value = {a: {z: true, drop: 1}, b: {x: 1, drop: 2}, c: [{y: 'q', drop: 3}, 'text'], d: [{keep: 1}], e: {keep: 2}, f: {k: 1}, g: {k: 1}, h: 7,
+    i: {keep: 3}, j: {keep: 4}, extra: 5};
+  const {value: stripped, ignored} = stripUnknown(root, value);
+  assert.deepEqual(stripped, {a: {z: true}, b: {x: 1}, c: [{y: 'q'}, 'text'], d: [{keep: 1}], e: {keep: 2}, f: {k: 1}, g: {k: 1}, h: 7, i: {keep: 3}, j: {keep: 4}});
+  assert.deepEqual(ignored, ['$.a.drop', '$.b.drop', '$.c[0].drop', '$.extra']);
+  assert.deepEqual(stripUnknown(null, {a: 1}).value, {a: 1}, 'an unusable schema strips nothing; validation still refuses it');
+  assert.deepEqual(stripUnknown({anyOf: [{type: 'null'}]}, null).value, null);
+  assert.deepEqual(stripUnknown({$ref: '#/$defs/none'}, {a: 1}).value, {a: 1}, 'a reference without definitions strips nothing');
+  const wide = Object.fromEntries(Array.from({length: 30}, (_, index) => [`k${index}`, index]));
+  assert.equal(stripUnknown({type: 'object', additionalProperties: false, properties: {}}, wide).ignored.length, 30);
+});
 
 test('a session cannot answer two requests and a tampered request is detected', () => withReview(async ({deps, argv}) => {
   const first = await main(argv, deps);

@@ -24,10 +24,13 @@ function text(value) {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= 2000;
 }
 
+// Every named field must be present. A field nobody asked for is ignored: nothing below reads or scores it, and every
+// iteration names its fields instead of enumerating the object (gaulatti/ariston#217).
 function keys(value, names) {
   requireThat(value && typeof value === 'object' && !Array.isArray(value) &&
-    Object.keys(value).sort().join('\0') === [...names].sort().join('\0'), `expected fields ${names.join(', ')}`);
+    names.every(name => Object.hasOwn(value, name)), `expected fields ${names.join(', ')}`);
 }
+const OPPORTUNITY = Object.freeze(['mechanical', 'beneficial', 'within_scope', 'verified']);
 
 function unique(values, label) {
   requireThat(Array.isArray(values) && values.every(text) && new Set(values).size === values.length, label);
@@ -58,7 +61,7 @@ function findingScore(finding) {
 function scoreReport(report) {
   const findings = report.findings.map(finding => {
     const score = findingScore(finding);
-    const xg = Object.values(finding.opportunity).every(value => value === true) ? 1 : 0;
+    const xg = OPPORTUNITY.every(name => finding.opportunity[name] === true) ? 1 : 0;
     const priority = Math.min(100, score + RULES.xg_bonus * xg / finding.blast_radius ** 2);
     return {id: finding.id, score, xg, priority, disposition: score >= RULES.defect_threshold ? 'blocking' : 'nonblocking'};
   });
@@ -466,7 +469,7 @@ function validateEvidence(report, snapshot) {
   };
   const factors = (value, group) => {
     keys(value, FACTORS[group]);
-    for (const factor of Object.values(value)) {point(factor); citations(factor.evidence);}
+    for (const name of FACTORS[group]) {point(value[name]); citations(value[name].evidence);}
   };
   requireThat(Array.isArray(report.units) && report.units.length > 0, 'empty acceptance plan');
   const unitIds = new Set();
@@ -490,8 +493,8 @@ function validateEvidence(report, snapshot) {
       snapshot.files.some(file => file.path === finding.path &&
         [file.base_source, file.head_source].includes(evidence.get(id).source))), 'finding lacks changed-path causal evidence');
     requireThat(Number.isFinite(finding.blast_radius) && finding.blast_radius >= 1 && finding.blast_radius <= 10, 'repair blast radius');
-    keys(finding.opportunity, ['mechanical', 'beneficial', 'within_scope', 'verified']);
-    requireThat(Object.values(finding.opportunity).every(value => typeof value === 'boolean'), 'opportunity evidence');
+    keys(finding.opportunity, OPPORTUNITY);
+    requireThat(OPPORTUNITY.every(name => typeof finding.opportunity[name] === 'boolean'), 'opportunity evidence');
     unique(finding.repair_paths, 'repair paths');
     requireThat(finding.repair_paths.length > 0 && finding.repair_paths.every(name => snapshot.paths.includes(name)), 'repair exceeds initial envelope');
   }

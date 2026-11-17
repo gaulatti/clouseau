@@ -148,6 +148,39 @@ test('Jev overloads back off but complete classifications and malformed answers 
   assert.equal(defaultClockCalls, 2, 'the default backoff clock also completes before retry');
 }));
 
+// gaulatti/ariston#217: what a provider adds that Clouseau did not ask for is ignored, never a failure.
+test('an unrecognized DeepSeek finish reason is a retried structure failure, not a final error', keys(async () => {
+  for (const finish of ['brand_new_reason', '']) {
+    const delays = []; const reports = []; let calls = 0;
+    const result = await requestJSON({model: 'deepseek-flash', messages, wait: async ms => delays.push(ms), report: line => reports.push(line), fetchImpl: async () =>
+      reply({choices: [{finish_reason: ++calls === 1 ? finish : 'stop', message: {content: '{"decision":"repair_required"}'}}]})});
+    assert.deepEqual(result.value, {decision: 'repair_required'}); assert.equal(calls, 2); assert.deepEqual(delays, [1000]);
+    assert.deepEqual(result.attempts, [{outcome: 'unrecognized_finish_reason', message: 'Acceptance provider returned an unrecognized finish reason'}]);
+    assert.ok(reports.includes('Acceptance provider: transient failure (unrecognized_finish_reason), retry 1/2 with the same prompt'));
+  }
+  let calls = 0;
+  await assert.rejects(requestJSON({model: 'deepseek-flash', messages, wait: async () => {}, fetchImpl: async () => {calls++; return reply({choices: [{finish_reason: 'novel'}]});}}),
+    /unrecognized finish reason/);
+  assert.equal(calls, 3, 'bounded by the existing retry budget');
+  calls = 0;
+  await assert.rejects(requestJSON({model: 'deepseek-flash', messages, wait: async () => {}, fetchImpl: async () => {calls++; return reply({choices: [{finish_reason: 'content_filter'}]});}}),
+    /did not complete/);
+  assert.equal(calls, 1, 'a documented terminal reason stays final');
+}));
+
+test('Jev answers, fields and probability keys nobody asked for are ignored; the model pin and asked keys stay strict', keys(async () => {
+  const body = jev();
+  body.answers.extra = {type: 'choice', choice: 'nope'}; body.answers.fit.explanation = 'new field'; body.answers.fit.probabilities.maybe = 0;
+  const reports = [];
+  const result = await requestJev({state: '', questions: question, report: line => reports.push(line), fetchImpl: async () => reply(body)});
+  assert.equal(result.value.fit.choice, 'yes');
+  assert.equal(reports[0], 'Jev provider: ignored 2 unrecognized key(s): extra, fit.probabilities.maybe');
+  for (const mutate of [r => {r.answers.fit = null;}, r => {r.answers = [];}, r => {delete r.answers.fit.probabilities.no;}]) {
+    const broken = jev(); mutate(broken);
+    await assert.rejects(requestJev({state: '', questions: question, fetchImpl: async () => reply(broken)}), /Jev returned/);
+  }
+}));
+
 test('Jev rejects missing keys, unbounded state, missing questions, wrong identity and invalid distributions', keys(async () => {
   delete process.env.TYPESAFE_API_KEY;
   await assert.rejects(requestJev({state: '', questions: question}), /not configured/);

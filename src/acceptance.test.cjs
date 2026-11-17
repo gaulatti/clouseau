@@ -87,9 +87,29 @@ test('prior findings close only with valid current-revision counterevidence', ()
   assert.equal(validateReport(report, snapshot).decision, 'repair_required', 'rename aliases preserve changed-path evidence');
 });
 
+// gaulatti/ariston#217: a field the validator does not know is ignored. It is never read or scored, every required field
+// and every enum stays strict, and the score is the one the known fields give.
+test('unknown report fields are ignored at every level and cannot change a score or a decision', () => {
+  const {report, snapshot} = fixture();
+  report.findings = [finding()];
+  const expected = validateReport(structuredClone(report), snapshot);
+  Object.assign(report, {extra: true, decisions: []});
+  report.evidence[0].note = 'x'; report.units[0].extra = 1; report.gates[0].override = 'satisfied'; report.accounting[0].extra = null;
+  const [item] = report.findings;
+  item.extra = {}; item.factors.novel = 'not a factor'; item.factors.severity.grade = 1;
+  item.opportunity.unasked = false;
+  assert.deepEqual(validateReport(report, snapshot), expected);
+  for (const value of [true, false]) {
+    const all = structuredClone(report);
+    for (const name of ['mechanical', 'beneficial', 'within_scope', 'verified']) all.findings[0].opportunity[name] = true;
+    all.findings[0].opportunity.unasked = value;
+    assert.equal(validateReport(all, snapshot).findings[0].xg, 1, 'an unasked opportunity flag cannot change xG');
+  }
+});
+
 test('all boundaries are strict and no evidence, accounting, or empty-plan escape exists', () => {
   const invalid = [
-    r => {r.extra = true;}, r => {r.version = 1;}, r => {r.snapshot = 'stale';}, r => {r.summary = '';},
+    r => {delete r.resolutions;}, r => {r.version = 1;}, r => {r.snapshot = 'stale';}, r => {r.summary = '';},
     r => {r.evidence = [];}, r => {r.evidence = null;}, r => {r.evidence.push(r.evidence[0]);},
     r => {r.evidence[0].source = 'invented';}, r => {r.evidence[0].start = 0;},
     r => {r.evidence[0].start = 0.5;}, r => {r.evidence[0].end = 50;}, r => {r.evidence[0].end = 3;},
@@ -111,7 +131,8 @@ test('all boundaries are strict and no evidence, accounting, or empty-plan escap
     r => {r.gates[0].state = 'pass';}, r => {r.accounting = [];},
     r => {r.gates[0].state = 'inapplicable';},
     r => {r.accounting[0].path = 'elsewhere.rs';}, r => {r.accounting[0].units = [];},
-    r => {r.accounting[0].units = ['invented'];}, r => {r.decisions = [];},
+    r => {r.accounting[0].units = ['invented'];}, r => {r.findings = [finding()]; delete r.findings[0].factors.reach;},
+    r => {r.findings = [finding()]; delete r.findings[0].opportunity.verified;},
   ];
   for (const mutate of invalid) {
     const {report, snapshot} = fixture(); mutate(report);

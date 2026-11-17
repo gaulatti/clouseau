@@ -18,10 +18,16 @@ const {candidates, productionName} = require('./coverage-istanbul.cjs');
 const {scopeFor, DEFAULT_SCOPE} = require('./coverage-scope.cjs');
 
 const IGNORED = /^(?:TN:.*|FN:.*|FNDA:.*|FNF:.*|FNH:.*|)$/;
+// The records this reader measures. Any other tag (lcov 2.x writes VER:, FNL: and FNA:) is ignored and named in a note,
+// capped, whether it appears inside or outside a source record; a measured record that is malformed still fails.
+const MEASURED = new Set(['DA', 'BRDA', 'LF', 'LH', 'BRF', 'BRH']);
+const MAX_NOTED_TAGS = 10;
+const tagOf = row => row.split(':')[0];
+const noteIgnored = (ignored, row) => {if (!IGNORED.test(row) && ignored.size < MAX_NOTED_TAGS) ignored.add(tagOf(row).slice(0, 40));};
 
 const integer = value => /^[0-9]+$/.test(value) && Number.isSafeInteger(Number(value)) ? Number(value) : fail('LCOV numbers must be nonnegative safe integers');
 
-function parseRecord(rows, producerLines) {
+function parseRecord(rows, producerLines, ignored) {
   const lines = new Map();
   const branches = [];
   const branchLines = [];
@@ -38,7 +44,7 @@ function parseRecord(rows, producerLines) {
       branches.push(taken === '-' ? 0 : integer(taken));
       branchLines.push(line);
     } else if (['LF', 'LH', 'BRF', 'BRH'].includes(tag)) totals[tag] = integer(value);
-    else if (!IGNORED.test(row)) fail(`Unsupported LCOV record: ${tag}`);
+    else noteIgnored(ignored, row);
   }
   const measured = {lines: [...lines.values()], branches};
   const covered = values => values.filter(count => count > 0).length;
@@ -65,6 +71,7 @@ function counters(text, sourceDirectory, cwd, detail, options = {}) {
   const counts = emptyCounts();
   let name = null;
   let rows = [];
+  const ignored = new Set();
   const finish = () => {
     const file = realPath(name, cwd);
     const relative = path.relative(root, file);
@@ -72,7 +79,7 @@ function counters(text, sourceDirectory, cwd, detail, options = {}) {
         !productionName(path.basename(file))) return;
     if (!sources.has(file) || seen.has(file)) fail(`Unexpected or duplicate application coverage: ${name}`);
     seen.add(file);
-    const measured = parseRecord(rows, scope.custom);
+    const measured = parseRecord(rows, scope.custom, ignored);
     if (detail) {
       detail.set(file, {lines: new Map([...measured.lineMap].map(([line, hits]) => [line, hits > 0])),
         branches: measured.branches.map((hits, index) => {
@@ -95,11 +102,13 @@ function counters(text, sourceDirectory, cwd, detail, options = {}) {
       finish();
       name = null;
     } else if (name !== null) rows.push(row);
-    else if (!IGNORED.test(row)) fail('LCOV data appears outside a source record');
+    else if (MEASURED.has(tagOf(row))) fail('LCOV data appears outside a source record');
+    else noteIgnored(ignored, row);
   }
   if (name !== null) fail('LCOV record is missing end_of_record');
   if (!seen.size) fail('Expected a nonempty LCOV report');
   if (counts.branches[0] === 0 && options.notes) options.notes.push(NO_BRANCHES);
+  if (ignored.size && options.notes) options.notes.push(`the lcov report has unrecognized record tags, which were ignored: ${[...ignored].sort().join(', ')}`);
   const missing = [...sources].filter(file => !seen.has(file));
   if (missing.length) fail('Missing application source coverage: ' + missing.sort().join(', ') + '\n' + missingSourceExplanation(missing));
   return counts;

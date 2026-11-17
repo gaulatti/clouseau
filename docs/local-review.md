@@ -241,7 +241,10 @@ proof-ID enumeration every citation site shares) once under `$defs` and points a
 `"$ref": "#/$defs/NAME"`; it is the same constraint as the full inline schema, a few KB
 instead of hundreds. `respond` validates the answer against the request schema (the
 supported subset, with only those `$defs` references, fails closed on unknown keywords), refuses a session identifier already used for
-another request in the exchange, and allows three attempts per request. A rejected answer's reason is passed to the next
+another request in the exchange, and allows three attempts per request. An answer key the schema does not declare is not a
+rejection: `respond` strips it before validation and names it (`ignored: {count, fields}`, at most 20 paths) in its output,
+the registered response and the review journal (`observations.jsonl`). Only the stripped answer is validated, registered
+and hashed (`response_digest`). A missing required field, a wrong type or a value outside an enum still rejects. A rejected answer's reason is passed to the next
 attempt. When an examiner or challenger drops or rewords a concern from its own earlier draft, the reason names that finding.
 For a restatement under the same identifier, it also names the first field that differs (cause or obligation) and quotes the
 earlier text, so the next fresh session can retain it verbatim or resolve it with current-source counterevidence. Repeating

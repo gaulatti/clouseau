@@ -58,8 +58,9 @@ application code is included; symbolic sources fail). `go list` decides which fi
   `inactive` with the reason, and the adapter fails naming it. Declare another build that includes it (below); the
   file is then measured from that build.
 - Each file carries the SHA-256 of its bytes and its line count. The adapter rejects a report whose bytes differ
-  from the checkout (stale or wrong source), a missing or unknown or duplicate file, an unknown field, a
-  non-integer or negative count, a line outside the file, and a duplicate outcome. The report names the Go version,
+  from the checkout (stale or wrong source), a missing or unknown or duplicate file, a missing required field, a
+  non-integer or negative count, a line outside the file, and a duplicate outcome. A field it does not know is ignored
+  at every level; the schema and version pin and the file status stay strict. The report names the Go version,
   module and every declared build.
 
 ## Recipe

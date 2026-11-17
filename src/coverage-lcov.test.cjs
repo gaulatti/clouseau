@@ -34,6 +34,22 @@ test('exact and partial LCOV counts are measured per distinct line and branch', 
   assert.deepEqual(measure(directory, both({da: ['1,0'], br: ['1,0,0,0']}).replace(/\n/g, '\r\n')), {lines: [2, 1], branches: [2, 1]});
 }));
 
+// gaulatti/ariston#217: lcov 2.x writes VER:, FNL: and FNA: records. A tag the reader does not measure is ignored and named
+// in a capped note, inside or outside a source record; a malformed measured record still fails.
+test('unrecognized LCOV record tags are ignored and noted, never a failure', () => tree(directory => {
+  const lcov2 = 'VER:2.0\n' + both({extra: ['VER:2.0', 'FNL:0,1,1', 'FNA:0,1,f', 'XX:1', 'garbage']});
+  const notes = [];
+  assert.deepEqual(gate.counters(lcov2, 'src', 'lcov', directory, undefined, {notes}), {lines: [2, 2], branches: [2, 2]});
+  assert.deepEqual(notes, ['the lcov report has unrecognized record tags, which were ignored: FNA, FNL, VER, XX, garbage']);
+  const many = both({extra: Array.from({length: 15}, (_, index) => `T${String(index).padStart(2, '0')}:1`)});
+  const capped = [];
+  gate.counters(many, 'src', 'lcov', directory, undefined, {notes: capped});
+  assert.equal(capped[0].split(': ')[1].split(', ').length, 10, 'the named tags are capped');
+  assert.deepEqual(measure(directory, both({extra: ['XX:1']})), {lines: [2, 2], branches: [2, 2]}, 'no notes sink is required');
+  assert.throws(() => measure(directory, both({extra: ['VER:2.0'], da: ['1,x']})), /nonnegative safe integers/);
+  assert.throws(() => measure(directory, 'BRDA:1,0,0,1\n' + both()), /outside a source record/);
+}));
+
 test('the gate reads a text report from disk and enforces exactness', () => tree(directory => {
   const report = path.join(directory, 'node.lcov');
   fs.writeFileSync(report, both());
@@ -77,7 +93,6 @@ test('malformed, partial, foreign and ambiguous LCOV cannot claim coverage', () 
   rejects(record('src/a.cjs'), /Missing application source coverage/);
   rejects(both() + record('src/a.cjs'), /Unexpected or duplicate/);
   rejects(both() + record('src/ghost.cjs'), /Unexpected or duplicate/);
-  rejects(record('src/a.cjs', {extra: ['XX:1']}) + record('src/b.mjs'), /Unsupported LCOV record: XX/);
   rejects(record('src/a.cjs', {da: ['1,x']}) + record('src/b.mjs'), /nonnegative safe integers/);
   rejects(record('src/a.cjs', {da: ['1']}) + record('src/b.mjs'), /nonnegative safe integers/);
   rejects(record('src/a.cjs', {br: ['1,0,0']}) + record('src/b.mjs'), /nonnegative safe integers/);

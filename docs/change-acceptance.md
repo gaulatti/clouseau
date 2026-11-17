@@ -90,6 +90,14 @@ A decisive negative Jev grade is never resampled with another model. Rounded
 probabilities are preserved; they are not normalized into greater confidence.
 Vendor confidence is never a substitute for source proof.
 
+What a provider adds that Clouseau did not ask for is ignored, never a failure (gaulatti/ariston#217). The Jev model pin is
+exact and every asked question and criterion must be answered, but an extra answer, field or probability key is ignored and
+named in the log; a grader answer for an id nobody asked about is ignored the same way. Only asked levels are read from a
+distribution. A DeepSeek `finish_reason` it does not document is a structure failure retried on the same bounded path as an
+invalid structured result; documented terminal reasons stay final. In an acceptance report every required field must be
+present and every enum and identity stays strict; a field the validator does not know is ignored, and nothing reads,
+scores or iterates it.
+
 Failure diagnostics retain the observed immutable snapshots, investigator replies,
 atomic grading packets and parsed responses, and graded reports before final
 validation. These inputs support offline reproduction without calling a model

@@ -38,13 +38,14 @@ function grade(answer) {
   }
   // Provider confidence expresses a distribution, never a proof.
   if (answer.choice === 'unknown' || answer.confidence < 0.91 || answer.probabilities.unknown >= 0.05) return {value: 0, ambiguous: true};
-  const levels = Object.entries(answer.probabilities).filter(([key, probability]) => key !== 'unknown' && probability >= 0.025)
+  // Only the asked levels are read; a probability key nobody asked for is ignored.
+  const levels = Object.entries(answer.probabilities).filter(([key, probability]) => /^level[0-4]$/.test(key) && probability >= 0.025)
     .map(([key]) => Number(key.at(-1)) / 4);
   if (!levels.length) throw new Error('Jev distribution has no supported semantic level');
   return {value: Math.min(...levels), ambiguous: levels.length > 1};
 }
 
-async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, log, observe = () => {}}) {
+async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, log = () => {}, observe = () => {}}) {
   const graded = structuredClone(report);
   const acceptancePolicy = fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
   const decisions = [];
@@ -82,7 +83,10 @@ async function gradeReport({report, snapshot, provider, model, fetchImpl, wait, 
     const answers = selected === 'typesafe' ? completion.value : completion.value.answers;
     observe({phase: 'grading_response', provider: selected, packet: {state, questions}, value: completion.value,
       transport: {raw: completion.raw, canonical: completion.canonical}});
-    if (!answers || Object.keys(answers).sort().join('\0') !== batch.map(item => item.id).sort().join('\0')) throw new Error('Incomplete atomic factor grades');
+    // Every asked id must be graded; an answer for an id nobody asked about is ignored and never read.
+    if (!answers || typeof answers !== 'object' || batch.some(item => !Object.hasOwn(answers, item.id))) throw new Error('Incomplete atomic factor grades');
+    const extra = Object.keys(answers).filter(key => !batch.some(item => item.id === key));
+    if (extra.length) log(`Factor grading: ignored ${extra.length} unrecognized answer id(s) from ${selected}`);
     for (const item of batch) {
       const {value, ambiguous} = grade(answers[item.id]);
       decisions.push({id: item.id, provider: selected, answer: answers[item.id], value});

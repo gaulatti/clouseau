@@ -4,6 +4,8 @@ const {requestWiki} = require('./provider.cjs');
 const assert = (condition, message) => {if (!condition) throw new Error(message);};
 const exact = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).sort().join(',') === [...keys].sort().join(',');
+// The named fields are required; a field nobody asked for is ignored and never published (gaulatti/ariston#217).
+const present = (value, keys) => value && typeof value === 'object' && !Array.isArray(value) && keys.every(key => Object.hasOwn(value, key));
 const sha = value => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value);
 const pageName = value => typeof value === 'string' &&
   /^[A-Za-z0-9_][A-Za-z0-9 _-]{0,99}\.md$/.test(value) && value.toLowerCase() !== 'agents.md';
@@ -42,13 +44,13 @@ function pageLinks(content) {
 }
 
 function validateBundle(bundle, expected, wiki) {
-  assert(exact(bundle, ['version', 'repository', 'source_sha', 'wiki_base_sha', 'deployment_run_id', 'updates']), 'Invalid wiki update schema');
+  assert(present(bundle, ['version', 'repository', 'source_sha', 'wiki_base_sha', 'deployment_run_id', 'updates']), 'Invalid wiki update schema');
   validateIdentity(bundle);
   assert(bundle.version === 1 && ['repository', 'source_sha', 'wiki_base_sha', 'deployment_run_id'].every(key => bundle[key] === expected[key]), 'Wiki update identity does not match this deployment');
   assert(Array.isArray(bundle.updates) && bundle.updates.length <= 20, 'Invalid wiki page count');
   const paths = new Set();
   for (const page of bundle.updates) {
-    assert(exact(page, ['path', 'content']) && pageName(page.path) && !paths.has(page.path), 'Unsafe or duplicate wiki page');
+    assert(present(page, ['path', 'content']) && pageName(page.path) && !paths.has(page.path), 'Unsafe or duplicate wiki page');
     assert(typeof page.content === 'string' && page.content.trim().length > 0 && Buffer.byteLength(page.content) <= 128000 &&
       !page.content.includes('\0'), 'Invalid wiki page content');
     paths.add(page.path);
