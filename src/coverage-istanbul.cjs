@@ -73,7 +73,7 @@ function measureEntry(entry, wantDetail) {
 // Distinguish native zero-statement sources by parsing them as data; application code is never executed.
 function requireCounterSites(file, filename, branches) {
   let required;
-  try {required = counterSites(fs.readFileSync(file, 'utf8'), path.extname(file));}
+  try {required = counterSites(fs.readFileSync(file, 'utf8'), path.extname(file), {decorators: true});}
   catch {fail(`Cannot inspect statement-free application source: ${file}`);}
   if (required.statements) fail(`No statements measured for application source: ${filename}`);
   if (required.branches && !Object.keys(branches).length) fail(`No branches measured for application source: ${filename}`);

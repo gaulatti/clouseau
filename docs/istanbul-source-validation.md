@@ -54,7 +54,7 @@ cases. `test/fixtures/istanbul-statement-free.json` contains actual
 declaration. Relative report paths are resolved from the fictional application
 parent directory without modifying the emitted map entries.
 
-## Decorated TypeScript (#261, opt-in, dormant)
+## Decorated TypeScript (#261)
 
 `counterSites(source, extension, {decorators: true})` also parses TypeScript's
 experimental decorator syntax in `.ts`/`.tsx`: Babel's `decorators-legacy`
@@ -62,9 +62,9 @@ parser plugin, the syntax Nest uses, including parameter decorators. Babel's
 standards-track `decorators` plugin is not used, because it refuses parameter
 decorators. The source is still parsed as data by the vendored parser, with no
 configuration, external plugin or execution. JavaScript keeps its parser
-unchanged. Without the option, decorator syntax still fails to parse, so the
-gate's behavior is unchanged until activation: an empty entry for a decorated
-file stops validation with `Cannot inspect statement-free application source`.
+unchanged. The gate passes the option (activated after #261): an empty entry for
+a decorated file stops validation with `No statements measured for application
+source`.
 
 A decorator is a statement site. It runs when its class is defined (TypeScript
 emits `X = __decorate([...], X)`). Every native producer measured for #261 emits
@@ -82,7 +82,7 @@ arguments is walked like any other expression: a conditional, logical
 expression or default parameter there is a branch site, and an arrow function's
 expression body is a statement site.
 
-**Activation** is a separate, named change: `src/coverage-istanbul.cjs`
+**Activation** was a separate, named change: `src/coverage-istanbul.cjs`
 `requireCounterSites` passes the option:
 
 ```diff
