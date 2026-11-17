@@ -1,8 +1,8 @@
 'use strict';
-// `"review_history": "pull_request"` is a reserved `.clouseau-local.json` key that no engine module acts on yet: every reader
-// of the recipe accepts the key and does exactly what it does without it, and none of them runs gh (a recording gh first on
-// PATH stays silent, test/gh-recorder.cjs). The CI assessment and gate of a receipt whose accepted recipe carries the key are
-// in review-history-ci-gate.test.cjs.
+// The proof that only `clouseau review` (and the refresh and attestation reviews built on it) acts on `"review_history":
+// "pull_request"`: every other reader of `.clouseau-local.json` accepts the key and does exactly what it does without it,
+// and none of them runs gh (a recording gh first on PATH stays silent, test/gh-recorder.cjs). The CI assessment and gate of a
+// receipt whose accepted recipe carries the key are in acceptance-controller-ledger-matrix.test.cjs.
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const cp = require('node:child_process');
@@ -123,13 +123,14 @@ test('verification attestation binds the accepted recipe by digest only: a recip
   assert.notEqual(digest({...v2, ...KEY}), digest(v2), 'the recipe digest is the only difference');
 });
 
-test('the review_history key is read by no engine module besides the configuration readers', () => {
+test('the review_history key is read by exactly one engine module besides the configuration readers', () => {
   const root = path.join(__dirname, '..');
   const mentions = fs.readdirSync(path.join(root, 'src')).filter(name => name.endsWith('.cjs') && !name.endsWith('.test.cjs'))
     .filter(name => fs.readFileSync(path.join(root, 'src', name), 'utf8').includes('review_history'));
-  assert.deepEqual(mentions.sort(), ['coverage-plan.cjs', 'local-git.cjs']);
+  // incomplete.cjs only names the key in the receipt_history_changed notice; review-history.cjs only in its messages.
+  assert.deepEqual(mentions.sort(), ['coverage-plan.cjs', 'incomplete.cjs', 'local-cli.cjs', 'local-git.cjs', 'review-history.cjs']);
   const readers = mentions.filter(name => /\.review_history\b|'review_history'/.test(fs.readFileSync(path.join(root, 'src', name), 'utf8')));
-  assert.deepEqual(readers.sort(), ['coverage-plan.cjs', 'local-git.cjs']);
+  assert.deepEqual(readers.sort(), ['coverage-plan.cjs', 'local-cli.cjs', 'local-git.cjs']);
   for (const name of [...fs.readdirSync(path.join(root, 'bin')).map(file => path.join('bin', file)), 'action.yml']) {
     assert.ok(!fs.readFileSync(path.join(root, name), 'utf8').includes('review_history'), name);
   }

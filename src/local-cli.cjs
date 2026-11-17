@@ -169,7 +169,8 @@ function readPull({repo, number, base, head, execute}) {
 }
 
 async function runReview(args, {ask = askHarness, execute = cp.execFileSync, verify = executeVerification, state = stateDirectory(), installed = installation,
-  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, attest = require('./verification-attestation.cjs').evaluate, reuse = {}, title, continued = pinning.argvFor(args)} = {}) {
+  cacheRoot = path.dirname(path.dirname(root)), run = pinning.execute, attest = require('./verification-attestation.cjs').evaluate, reuse = {}, title, continued = pinning.argvFor(args),
+  pullRequest = null} = {}) {
   const directory = path.resolve(args.directory || process.cwd());
   if (!args['request-file']) throw new Error('An explicit requirement file is required');
   const agent = args.agent;
@@ -242,7 +243,15 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   }
   const historyPath = path.join(state, 'ledgers', `${digest({repository, branch})}.json`);
   const previous = readHistory(historyPath, repository, branch);
-  const priorFindings = previous?.findings || [];
+  let priorFindings = previous?.findings || [];
+  // Opt-in by the base's configuration: review against the open pull request's acceptance ledger (review-history.cjs), the one
+  // of the attested or refreshed pull request when it is known, so the signed prior history equals the ledger CI compares.
+  let fromLedger = false;
+  if (config.review_history === 'pull_request') {
+    const selected = await require('./review-history.cjs').priorFindings({local: priorFindings, repo,
+      branch, number: pull ? pull.number : pullRequest, execute});
+    priorFindings = selected.findings; fromLedger = selected.number !== null;
+  }
   const sameRevision = previous && previous.head_sha === head && previous.base_sha === baseSha && previous.reviewer_digest === reviewer.digest;
   if (sameRevision && previous.decision !== 'auto_approve') {
     // A signed review that requires a human is never sampled again on the same revision, even once its receipt expires.
@@ -254,7 +263,9 @@ async function runReview(args, {ask = askHarness, execute = cp.execFileSync, ver
   }
   let cacheId = digest({repository, head, base: baseSha, reviewerSha, reviewerDigest: reviewer.digest,
     request, config, ciConfig, harness: agent ? `agent:${agent}` : args.harness || 'codex', priorFindings, ...(additional.length ? {additional} : {}), ...(pull ? {attest: pull} : {})});
-  if (sameRevision && previous.reviewer_sha === reviewerSha && previous.request_digest === requestDigest) cacheId = previous.cache_id;
+  // The local history of a finished review is its own output, so without the key the same revision keeps the input that
+  // produced it. A ledger is not written by this review: a changed ledger is a new input, and an unchanged one the same.
+  if (sameRevision && !fromLedger && previous.reviewer_sha === reviewerSha && previous.request_digest === requestDigest) cacheId = previous.cache_id;
   const cache = path.join(state, 'reviews', cacheId);
   const journal = path.join(cache, 'observations.jsonl');
   const cachedReceipt = path.join(cache, 'receipt.json');

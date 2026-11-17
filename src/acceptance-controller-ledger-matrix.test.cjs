@@ -8,6 +8,11 @@
 // `snapshot.prior_findings`); Out = reconcile(result, snapshot, In), what the gate publishes; Leg = reconcile(result, snapshot,
 // record.previous.findings), the legacy form (`previous` is always `{comment: null, findings: []}` for a local receipt).
 // The accepted ledgers: L ∈ {In, Out, Leg}, or an empty ledger L = [] (the record's own signed `previous`).
+//
+// Where In comes from: without the base's `"review_history": "pull_request"`, `clouseau review` signs this machine's local
+// history; with it, the pull request's ledger, read and validated by review-history.cjs `priorFindings` (the function
+// runReview calls), so In = L by construction. A `reviewHistory` row builds its later receipt from that function's answer to a
+// gh stand-in serving the row's ledger comment. CI never reads the key: the gate's rule is the same for every row.
 
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
@@ -22,6 +27,7 @@ const {MARKER, reconcile, publication} = require('./acceptance-ledger.cjs');
 const {issueReceipt, reviewDecision, verifyReceipt, DOMAIN} = require('./local-receipt.cjs');
 const {verifyRecord} = require('./acceptance-controller.cjs');
 const {refresh} = require('./acceptance-sources.cjs');
+const reviewHistory = require('./review-history.cjs');
 const {CASES, prepareCase} = require('../test/acceptance-cases.cjs');
 const {hostedFiles} = require('../test/hosted-files.cjs');
 
@@ -146,7 +152,7 @@ function resolve(copy, id, state = 'corrected') {
 // exact-head `/approve-intent`, and any number of signed local receipts for it. `sign` signs and serves a receipt: its signed
 // local history is `history` (`snapshot.prior_findings` and `local_previous.findings`, as `clouseau review` signs it) and
 // `review` adds its own findings. The last receipt signed is the one on the pull request.
-async function harness(f, {human = false} = {}) {
+async function harness(f, {human = false, recipe = null} = {}) {
   const hosted = createPolicy(config);
   assert.equal((await hosted.assess({github: f.github, context: f.context, recordPath: f.recordPath, fetchImpl: f.fetchImpl})).decision, 'auto_approve');
   const record = JSON.parse(fs.readFileSync(f.recordPath));
@@ -158,14 +164,28 @@ async function harness(f, {human = false} = {}) {
     keys: [{id: 'fixture', issuer: 'fixture-runner', github_actor: 'contributor', revoked: false, public_key: keys.publicKey.export({type: 'spki', format: 'pem'})}]}};
   let served = null;
   const original = f.github.rest.repos.getContent;
+  // `recipe`: the accepted base's `.clouseau-local.json`, which a receipt carries as a base source (collectLocal) and the
+  // receipt check compares with the live base.
+  const recipeText = recipe && JSON.stringify(recipe);
   f.github.rest.repos.getContent = async args => args.path === 'clouseau-review.json' && served ? {data: {encoding: 'base64',
-    content: Buffer.from(JSON.stringify(served)).toString('base64'), size: JSON.stringify(served).length}} : original(args);
+    content: Buffer.from(JSON.stringify(served)).toString('base64'), size: JSON.stringify(served).length}} :
+    recipe && args.path === '.clouseau-local.json' && args.ref === record.snapshot.base_sha ? {data: {encoding: 'base64',
+      content: Buffer.from(recipeText).toString('base64'), size: Buffer.byteLength(recipeText)}} : original(args);
   f.state.pr.body = `Ready change.\n<!-- clouseau-local-review:v1 ${'f'.repeat(40)} -->`;
   // The record `clouseau review` signs: `previous` is always `{comment: null, findings: []}`.
   const draft = (history, review = () => {}) => {
     const copy = structuredClone(record);
     copy.snapshot.number = 0; copy.snapshot.config_digest = digest(trusted);
     if (history) {copy.snapshot.prior_findings = structuredClone(history); copy.local_previous = {findings: structuredClone(history)};}
+    if (recipe) {
+      const id = `${copy.snapshot.base_sha}:.clouseau-local.json`;
+      copy.snapshot.sources[id] = {path: '.clouseau-local.json', ref: copy.snapshot.base_sha, authority: 'untrusted', kind: 'source', content: recipeText};
+      // Each review inventories every source: the recipe is excluded, citing the repository contract it is judged against.
+      for (const item of copy.result.reviews) {
+        const contract = item.report.coverage.sources.find(entry => entry.source.endsWith(':README.md'));
+        item.report.coverage.sources.push({source: id, state: 'excluded', reason: 'The verification recipe has no bearing on the reviewed behaviour.', evidence: contract.evidence});
+      }
+    }
     refresh(copy.snapshot);
     copy.result.snapshot = copy.snapshot.digest; copy.result.config_digest = copy.snapshot.config_digest;
     copy.result.usage = ['examiner', 'challenger'].flatMap(role => ['investigation', 'grading'].map(phase =>
@@ -208,7 +228,21 @@ async function harness(f, {human = false} = {}) {
       reconcile({...signed.result, reviews}, signed.snapshot, signed.local_previous?.findings || [])).body;
     return withState(body, value => {value.findings = structuredClone(findings);});
   };
-  return {trusted, record, draft, issue, reconciled, sign, assess, gate, ledger, privateKey};
+  // What `clouseau review` signs as In under `"review_history": "pull_request"`: runReview's own selection
+  // (review-history.cjs), given this machine's local history and a gh that serves the pull request's ledger comment for L.
+  const select = async (L, local) => {
+    const comments = [bot(7101, ledger(L))];
+    const slug = `${f.context.repo.owner}/${f.context.repo.repo}`;
+    const answers = {[`repos/${slug}`]: {fork: false}, [`repos/${slug}/pulls?head=${f.context.repo.owner}:fix%2Fupload&state=open&per_page=100`]: [{number: 3}],
+      [`repos/${slug}/issues/3/comments?per_page=100&page=1`]: comments};
+    const warnings = [];
+    const {findings, number} = await reviewHistory.priorFindings({local, repo: f.context.repo, branch: 'fix/upload', warn: text => warnings.push(text),
+      execute: (program, args) => {assert.equal(program, 'gh'); assert.ok(Object.hasOwn(answers, args[5]), args[5]); return JSON.stringify(answers[args[5]]);}});
+    assert.equal(number, 3);
+    assert.ok(same(findings, L), 'In = L by construction');
+    return {findings, warnings};
+  };
+  return {trusted, record, draft, issue, reconciled, sign, assess, gate, ledger, select, privateKey};
 }
 
 const ACCEPTED = {decision: 'owner_decision'};
@@ -305,13 +339,21 @@ const ROWS = [
       const later = h.sign({history: [...first.Out, {...FOREIGN}], review: copy => report(copy, 'B')});
       return {...later, L: []};
     }},
-  {name: '9. KNOWN: closed by PR 2 — legacy-form ledger, then a later receipt', vsMain: 'same', known: true, assess: REFUSED, gate: CHANGED,
+  // 9. Receipt 1 had a non-empty local history; a gate published it in the legacy form, reconciled with `[]`. Receipt 2 is
+  // reviewed against the local history `clouseau review` wrote after review 1 (without the key) or against the ledger (with it).
+  {name: '9. without review_history — legacy-form ledger, then a later receipt', vsMain: 'same', assess: REFUSED, gate: CHANGED,
     build: h => {
-      // Receipt 1 had a non-empty local history; a gate published it in the legacy form, reconciled with `[]`.
       const first = h.sign({history: [{...FOREIGN}], review: copy => report(copy, 'A')});
       assert.notDeepEqual(first.Leg, first.Out);
-      // Receipt 2 reviewed against the local history `clouseau review` wrote after review 1.
       const later = h.sign({history: first.Out, review: copy => report(copy, 'B')});
+      return {...later, L: first.Leg};
+    }},
+  {name: '9. with review_history — legacy-form ledger, then a later receipt', reviewHistory: true, vsMain: 'better', assess: ACCEPTED, gate: 'approve', publishes: 'Out',
+    build: async h => {
+      const first = h.sign({history: [{...FOREIGN}], review: copy => report(copy, 'A')});
+      const In = await h.select(first.Leg, first.Out);
+      assert.deepEqual(In.warnings, [], 'no local finding is a blocker');
+      const later = h.sign({history: In.findings, review: copy => report(copy, 'B')});
       return {...later, L: first.Leg};
     }},
   {name: '10. three receipts in sequence, all published (L = Out2 = In3)', vsMain: 'better', assess: ACCEPTED, gate: 'approve', publishes: 'Out',
@@ -321,10 +363,10 @@ const ROWS = [
       const third = h.sign({history: second.Out, review: copy => report(copy, 'C')});
       return {...third, L: second.Out};
     }},
-  {name: '11. KNOWN: closed by PR 2 — an unpublished intermediate review (repair rounds)', vsMain: 'same', known: true, assess: REFUSED, gate: CHANGED,
+  // 11. Review 2 found blocking B; it was never signed nor published, but `clouseau review` wrote its local history.
+  {name: '11. without review_history — an unpublished intermediate review (repair rounds)', vsMain: 'same', assess: REFUSED, gate: CHANGED,
     build: h => {
       const first = h.sign({review: copy => report(copy, 'A')});
-      // Review 2 found blocking B; it was never signed nor published, but `clouseau review` wrote its local history.
       const second = h.draft(first.Out, copy => report(copy, 'B', {blocking: true}));
       assert.equal(second.result.decision, 'repair_required');
       const history = h.reconciled(second, first.Out);
@@ -333,6 +375,49 @@ const ROWS = [
       const third = h.sign({history, review: copy => resolve(copy, id)});
       assert.deepEqual(third.Out.map(item => item.state).sort(), ['advisory_closed', 'corrected']);
       return {...third, L: first.Out};
+    }},
+  // With the key review 3 is reviewed against L = Out1: the unpublished B is not carried in, and the review names it. Its
+  // forms are ones main's rule accepts too (Out3 = L); without the key no receipt of this pull request ever had them.
+  {name: '11. with review_history — an unpublished intermediate review (repair rounds)', reviewHistory: true, vsMain: 'same', assess: ACCEPTED, gate: 'approve', publishes: 'Out',
+    build: async h => {
+      const first = h.sign({review: copy => report(copy, 'A')});
+      const second = h.draft(first.Out, copy => report(copy, 'B', {blocking: true}));
+      const history = h.reconciled(second, first.Out);
+      const id = history.find(item => item.blocking).id;
+      const In = await h.select(first.Out, history);
+      assert.equal(In.warnings.length, 1);
+      assert.ok(In.warnings[0].startsWith(`Local-only finding not on the pull request ledger: ${id} "Fictional finding B" (confirmed)`), In.warnings[0]);
+      const third = h.sign({history: In.findings, review: () => {}});
+      assert.ok(same(third.Out, first.Out), 'review 3 carries Out1 forward');
+      return {...third, L: first.Out};
+    }},
+  // 13. Another machine, or a cleared state directory: `readHistory` finds nothing, so without the key In = [].
+  {name: '13. without review_history — a second machine reviews a pull request that already has a ledger', vsMain: 'same', assess: REFUSED, gate: CHANGED,
+    build: h => {
+      const first = h.sign({review: copy => report(copy, 'A')});
+      const later = h.sign({history: [], review: copy => report(copy, 'B')});
+      return {...later, L: first.Out};
+    }},
+  {name: '13. with review_history — a second machine reviews a pull request that already has a ledger', reviewHistory: true, vsMain: 'better', assess: ACCEPTED, gate: 'approve', publishes: 'Out',
+    build: async h => {
+      const first = h.sign({review: copy => report(copy, 'A')});
+      const In = await h.select(first.Out, []);
+      const later = h.sign({history: In.findings, review: copy => report(copy, 'B')});
+      return {...later, L: first.Out};
+    }},
+  // 14. A receipt whose history was built before the feature (an older CLI, or a review signed before the key was set) carries
+  // the local history it had; CI judges it by the receipt alone, exactly as before this change.
+  {name: '14. no worse: a history built before the feature that equals the ledger', vsMain: 'better', assess: ACCEPTED, gate: 'approve', publishes: 'Out',
+    build: h => {
+      const first = h.sign({review: copy => report(copy, 'A')});
+      const later = h.sign({history: first.Out, review: copy => {report(copy, 'A'); report(copy, 'B');}});
+      return {...later, L: first.Out};
+    }},
+  {name: '14. no worse: a history built before the feature that differs from the ledger', vsMain: 'same', assess: REFUSED, gate: CHANGED,
+    build: h => {
+      const first = h.sign({review: copy => report(copy, 'A')});
+      const later = h.sign({history: [...first.Out, {...FOREIGN}], review: copy => report(copy, 'B')});
+      return {...later, L: first.Out};
     }},
 ];
 
@@ -345,7 +430,7 @@ for (const row of ROWS) {
     // The assessment after the owner's `/approve-intent`, then the gate for the record it produced.
     await fixture(async f => {
       const h = await harness(f, row);
-      const forms = row.build(h);
+      const forms = await row.build(h);
       assert.equal(accepts(forms), row.assess === ACCEPTED, 'the row states the rule');
       assert.equal(mainAccepts(forms) === accepts(forms) ? 'same' : 'better', row.vsMain, 'the row states the comparison with main');
       f.state.comments = [...forms.L === null ? [] : [bot(7101, h.ledger(forms.L))], confirmation(f)];
@@ -371,7 +456,7 @@ for (const row of ROWS) {
     // The write boundary: a record assessed before the ledger was on the pull request meets it at the gate.
     await fixture(async f => {
       const h = await harness(f, row);
-      const forms = row.build(h);
+      const forms = await row.build(h);
       if (forms.L === null) return;
       f.state.comments = [confirmation(f)];
       const assessment = await h.assess();
@@ -391,14 +476,54 @@ for (const row of ROWS) {
   });
 }
 
-test('ledger matrix — no row is worse than main, and the KNOWN rows keep main\'s refusal', () => {
+// Main 80d4cfc's rule and this rule are the gate's; a `reviewHistory` row differs from its pair only in the receipt's In.
+test('ledger matrix — no row is worse than main; without review_history rows 9, 11 and 13 stay refused, with it they are accepted, and row 14 is unchanged', () => {
   assert.ok(ROWS.every(row => ['better', 'same'].includes(row.vsMain)));
-  const known = ROWS.filter(row => row.known);
-  assert.deepEqual(known.map(row => row.name.split(' ')[0]), ['9.', '11.']);
-  for (const row of known) {
-    assert.ok(row.name.includes('KNOWN: closed by PR 2'), row.name);
-    assert.equal(row.vsMain, 'same'); assert.equal(row.assess, REFUSED); assert.equal(row.gate, CHANGED);
+  assert.deepEqual(ROWS.filter(row => /KNOWN/.test(row.name)), [], 'no row is left as a known refusal');
+  for (const number of ['9.', '11.', '13.']) {
+    const pair = ROWS.filter(row => row.name.startsWith(`${number} `));
+    assert.deepEqual(pair.map(row => Boolean(row.reviewHistory)), [false, true], number);
+    const [without, keyed] = pair;
+    assert.ok(without.name.includes('without review_history'), without.name);
+    assert.equal(without.vsMain, 'same'); assert.equal(without.assess, REFUSED); assert.equal(without.gate, CHANGED);
+    assert.ok(keyed.name.includes('with review_history'), keyed.name);
+    assert.equal(keyed.assess, ACCEPTED); assert.equal(keyed.gate, 'approve');
   }
+  // Only those three rows depend on the key; every other row, row 14 included, is the receipt as before.
+  assert.deepEqual(ROWS.filter(row => row.reviewHistory).map(row => row.name.split(' ')[0]), ['9.', '11.', '13.']);
+  const pinned = ROWS.filter(row => row.name.startsWith('14. '));
+  assert.equal(pinned.length, 2);
+  for (const row of pinned) assert.ok(row.name.includes('no worse') && !row.reviewHistory, row.name);
+  assert.deepEqual(pinned.map(row => row.assess), [ACCEPTED, REFUSED]);
+});
+
+// The proof that CI ignores the key: a receipt whose accepted base recipe carries `"review_history": "pull_request"` is
+// assessed and gated exactly as one whose recipe does not, and nothing on the CI side runs gh (a gh on PATH that records any
+// invocation stays silent). Entry points of the recipe outside CI are in review-history-entry-points.test.cjs.
+test('ledger matrix — CI assesses and gates a receipt whose accepted recipe sets review_history exactly as one whose recipe does not', async () => {
+  const {silentGh} = require('../test/gh-recorder.cjs');
+  const plain = {version: 2, base_branch: 'main', readme: 'README.md', repository_policy: '.github/clouseau.md', verification: [['npm', 'test']],
+    coverage: [{format: 'istanbul', report: 'coverage/coverage-final.json', source_directory: 'src'}]};
+  const outcomes = [];
+  await silentGh(async () => {
+    for (const recipe of [plain, {...plain, review_history: 'pull_request'}]) {
+      await fixture(async f => {
+        const h = await harness(f, {recipe});
+        const first = h.sign({review: copy => report(copy, 'A')});
+        const later = h.sign({history: first.Out, review: copy => {report(copy, 'A'); report(copy, 'B');}});
+        const source = later.copy.snapshot.sources[`${later.copy.snapshot.base_sha}:.clouseau-local.json`];
+        assert.deepEqual(JSON.parse(source.content), recipe, 'the receipt carries the accepted recipe');
+        f.state.comments = [bot(7101, h.ledger(first.Out)), confirmation(f)];
+        const assessment = await h.assess();
+        await h.gate(assessment);
+        outcomes.push({decision: assessment.decision, cause: assessment.cause, source: assessment.review_source, approvals: approvals(f),
+          writes: f.state.writes.map(item => item.name), published: stateOf(ledgerWrites(f)[0].args.body).findings});
+      });
+    }
+  });
+  assert.equal(outcomes[0].decision, 'owner_decision');
+  assert.equal(outcomes[0].approvals, 1);
+  assert.deepEqual(outcomes[1], outcomes[0]);
 });
 
 // 12. An earlier blocking finding the later review neither resolves nor re-finds can never stand behind a receipt. Enforced by:

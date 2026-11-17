@@ -77,8 +77,17 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
     const remoteHead = () => git(bare, ['rev-parse', 'refs/heads/feature']).trim();
     const pull = {number: 7, author: 'fixture-author', state: 'open', base: 'main', head: head(), ref: 'feature', repository: 'example/local-fixture', title: 'fix: reject missing input', body: 'Body.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)'};
     const events = [];
+    // The reads of `"review_history": "pull_request"` (review-history.cjs): the origin, the lookup by branch, the ledger.
+    const ledger = {calls: [], comments: []};
     const execute = (program, args, options) => {
       assert.equal(program, 'gh');
+      if (args[1] === '--hostname') {
+        ledger.calls.push(args[5]);
+        if (args[5] === 'repos/example/local-fixture') return JSON.stringify({fork: false});
+        if (args[5] === 'repos/example/local-fixture/pulls?head=example:feature&state=open&per_page=100') return JSON.stringify([{number: pull.number}]);
+        if (args[5] === `repos/example/local-fixture/issues/${pull.number}/comments?per_page=100&page=1`) return JSON.stringify(ledger.comments);
+        throw new Error(`unexpected gh call ${args[5]}`);
+      }
       if (args.includes('PATCH')) {
         pull.body = JSON.parse(options.input).body;
         events.push(`patch:${remoteHead() === pull.head ? 'before-push' : 'after-push'}`);
@@ -94,7 +103,7 @@ async function pullRepository(run, {ciConfig = null, files = {}} = {}) {
       events.push('read');
       return JSON.stringify({...pull, base_sha: git(bare, ['rev-parse', 'refs/heads/main']).trim()});
     };
-    return await run({root, bare, work, other, advance, head, remoteHead, pull, events, execute, commit, write});
+    return await run({root, bare, work, other, advance, head, remoteHead, pull, events, execute, commit, write, ledger});
   } finally {delete process.env.GIT_SSH_COMMAND; fs.rmSync(root, {recursive: true, force: true});}
 }
 
@@ -207,7 +216,7 @@ test('a refresh merges the base (never a rebase), reviews the merge commit, and 
     assert.equal(dependencies.seen.reviews.length, 1);
     assert.equal(dependencies.seen.reviews[0].base, 'origin/main'); assert.equal(dependencies.seen.reviews[0].harness, 'claude');
     assert.deepEqual(dependencies.seen.publishes, [{directory: f.work, receipt: '/receipt.json'}]);
-    assert.deepEqual(dependencies.seen.extras, [{title: 'fix: reject missing input'}], 'the review is given the pull request title, not the merge subject');
+    assert.deepEqual(dependencies.seen.extras, [{title: 'fix: reject missing input', pullRequest: 7}], 'the review is given the pull request title, not the merge subject, and the pull request whose ledger it reads under review_history');
     assert.equal(result.warnings, undefined);
     assert.ok(f.pull.body.includes(MARKER('1'.repeat(40))) && f.pull.body.includes('Generated with'), 'the marker joins the existing body');
     assert.deepEqual(f.events.filter(event => event.startsWith('patch')), ['patch:before-push']);
@@ -472,7 +481,7 @@ test('with the base unmoved a receipt that does not stand is renewed: same head,
     assert.equal(f.head(), before, 'no merge: the head is the pull request head'); assert.equal(f.remoteHead(), before, 'the branch was not pushed');
     assert.equal(dependencies.seen.reviews.length, 1); assert.equal(dependencies.seen.reviews[0].base, 'origin/main');
     assert.deepEqual(dependencies.seen.publishes, [{directory: f.work, receipt: '/receipt.json'}]);
-    assert.deepEqual(dependencies.seen.extras, [{title: 'fix: reject missing input'}]);
+    assert.deepEqual(dependencies.seen.extras, [{title: 'fix: reject missing input', pullRequest: 7}]);
     assert.ok(f.pull.body.includes(MARKER('1'.repeat(40))) && f.pull.body.includes('Generated with'));
     assert.deepEqual(f.events.filter(event => event.startsWith('patch')), ['patch:before-push']);
     // The judgement is taken on what GitHub reports for this pull request and the fetched base.
@@ -717,7 +726,14 @@ test('a version 2 base .clouseau-local.json with every documented optional field
     assert.deepEqual(JSON.parse(fs.readFileSync(second.receipt, 'utf8')).payload.review_reuse, {mode: 'outcome', reused: firstCalls, fresh: 0});
     // `clouseau refresh` reads the same base recipe: a base move is merged, reviewed from the stored answers and published.
     f.advance('docs.md', 'moved\n');
+    // review_history: each review discovered pull request 7 by its branch and read its (empty) ledger.
+    const discovery = ['repos/example/local-fixture', 'repos/example/local-fixture/pulls?head=example:feature&state=open&per_page=100',
+      'repos/example/local-fixture/issues/7/comments?per_page=100&page=1'];
+    assert.deepEqual(f.ledger.calls, [...discovery, ...discovery]);
+    f.ledger.calls.length = 0;
     const refreshed = await main(['refresh', '--pr', '7', '--directory', f.work, '--request-file', request(f.root), '--harness', 'claude'], run);
     assert.equal(refreshed.status, 'refreshed'); assert.equal(refreshed.harness_invocations, 0); assert.equal(f.remoteHead(), f.head());
+    // The refresh's review reads the ledger of the pull request it refreshes: no second discovery.
+    assert.deepEqual(f.ledger.calls, [discovery[2]]);
   }, {ciConfig: config, files: {'.clouseau-local.json': JSON.stringify(local)}});
 });

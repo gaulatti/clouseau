@@ -245,7 +245,7 @@ async function refreshPull(args, {review, publish, standing, installed, state, e
   }
   if (!resuming && !renewal && !merged) merge({directory, remoteBase, branch});
   const result = await review({directory, base: remoteBase, 'request-file': requestFile, harness: args.harness, agent: args.agent,
-    identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine}, {title: pull.title});
+    identity: args.identity, 'additional-checks': args['additional-checks'], engine: args.engine}, {title: pull.title, pullRequest: number});
   // A review continued on a pinned engine runs this very command there, publishes and pushes; its result is the final one.
   if (result.status === 'refreshed') return result;
   const context = {pull_request: number, previous_head_sha: pull.head, pushed: false};

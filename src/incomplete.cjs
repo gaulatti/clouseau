@@ -40,11 +40,12 @@ const NEXT_STEPS = Object.freeze({
     'The review is reassessed when verification completes, or run `gh run rerun {run} --failed --repo {repo}` after the time stated in the reason.'],
   receipt_protected_controls: ['A local receipt cannot stand in for the owner. Ask a maintainer to comment exactly `/approve-intent {head}` on this pull request.',
     'Or remove the protected-file change (for example an AGENTS.md update, which should stay out of an ordinary pull request) and push a new head.'],
-  receipt_history_changed: ['The receipt\'s signed finding history must reconcile to exactly the pull request\'s acceptance ledger, and it does not. ' +
-    'A review of this head with the same local history signs the same history, so reviewing again does not change this.',
-    'If the ledger came from another source (for example the hosted review or a different runner), review on a runner whose history matches it ' +
-    'and publish that receipt (`clouseau publish --directory . --receipt RECEIPT_FILE`).',
-    'Remove the `clouseau-local-review` marker from the pull request description so the CI reviewer reviews this head with the recorded findings, ' +
+  receipt_history_changed: ['The pull request\'s acceptance ledger equals none of the receipt\'s signed input history, that history reconciled with this review, ' +
+    'or its legacy form. Without `"review_history": "pull_request"` a review takes its history from the runner\'s local state, and when that differs ' +
+    'from the ledger (an unpublished intermediate review, another machine, a ledger in the legacy form) it signs a history that cannot match it, so reviewing again does not change this.',
+    'With `"review_history": "pull_request"` in the base branch\'s `.clouseau-local.json`, a new review of this head is reviewed against this pull request\'s ledger ' +
+    'and matches it: publish that receipt (`clouseau publish --directory . --receipt RECEIPT_FILE`) and update the marker.',
+    'Remove the `clouseau-local-review` marker from the pull request description if neither applies, so the CI reviewer reviews this head with the recorded findings, ' +
     'or ask a maintainer to review it.'],
   chunked_record_invalid: ['The signed chunked review record is not consistent with the evidence and protected parameters named in the reason. Run the local Clouseau review again on this exact head (`clouseau review ...`).',
     'Publish it: `clouseau publish --directory . --receipt RECEIPT_FILE`, and update the marker in the pull request description.'],

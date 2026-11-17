@@ -40,7 +40,7 @@ function readLocalConfig(value) {
   coverageParts(value, {allowUnsupported: true});
   // Opt-in: `clouseau review` reads stored reviewer answers, keyed by the verification outcome (review-reuse.cjs).
   if (Object.hasOwn(value, 'review_reuse') && value.review_reuse !== 'outcome') throw new Error('Invalid local-only Clouseau configuration: review_reuse must be "outcome" when set');
-  // Reserved opt-in: `clouseau review` will review against the open pull request's acceptance ledger. No module acts on it yet.
+  // Opt-in: `clouseau review` reviews against the open pull request's acceptance ledger, read through gh (review-history.cjs).
   if (Object.hasOwn(value, 'review_history') && value.review_history !== 'pull_request') {
     throw new Error('Invalid local-only Clouseau configuration: review_history must be "pull_request" when set');
   }

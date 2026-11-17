@@ -300,9 +300,13 @@ test('every declared-coverage cause class names its sentence and numbered steps,
 
 test('receipt_history_changed never sends the author to a re-review that signs the same history', () => {
   const text = body({number: 42, head_sha: SHA_A, cause: 'receipt_history_changed', reason: 'The review findings recorded on the pull request changed after the local receipt was issued.'}, URL);
-  // A review of the same head with the same local history signs the same history, so it cannot clear this hold.
+  // A review against the same local history signs the same history, so a plain re-review cannot clear this hold.
   assert.doesNotMatch(text, /Run the local review again|so the receipt reflects them/);
-  assert.match(text, /signs the same history, so reviewing again does not change this/);
-  assert.match(text, /must reconcile to exactly the pull request's acceptance ledger/);
+  // What is true: the ledger equals none of the forms the gate accepts.
+  assert.match(text, /equals none of the receipt's signed input history, that history reconciled with this review, or its legacy form/);
+  assert.match(text, /signs a history that cannot match it, so reviewing again does not change this/);
+  // The only review that can match: one against the pull request's ledger, under the base's opt-in.
+  assert.match(text, /With `"review_history": "pull_request"` in the base branch's `\.clouseau-local\.json`, a new review of this head is reviewed against this pull request's ledger and matches it/);
+  assert.match(text, /\n3\. Remove the `clouseau-local-review` marker from the pull request description if neither applies/);
   assert.match(text, /or ask a maintainer/);
 });
