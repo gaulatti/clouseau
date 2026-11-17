@@ -45,7 +45,7 @@
     ["src/installation-cli.cjs",0,"c41c8fb92db7a54abc6132630789a057a6cadb4dc69b41a49ffd74bf24ffb583"],
     ["src/installation-github.cjs",0,"5336aebb8678307c07867696bb697673cbdf9044e94b5d5752d3e812c4b98cb3"],
     ["src/integration-plan.cjs",0,"73b0f1212a5bb1c5a58e258d841fe4f3aaa6834f57cf85ff6977174dcb572699"],
-    ["src/istanbul-source.cjs",0,"b6e498b63309a6150adfe7ae4ed37c6fc71b54c8390a2d132f97327f013b2278"],
+    ["src/istanbul-source.cjs",0,"47beecd9f15830c31ea09e8347b2238a30e6b85ca2a01662ca37bdd97167bb64"],
     ["src/local-agent.cjs",0,"0e9535ec9bf0bc37f06b2529446a8a245436eff0ae62a3ff11bee6250a39f721"],
     ["src/local-cli.cjs",0,"d8ea1f5d6ec7f7aa5cedf51882025a2fe7bd4b9fef5189cbe18bda7336023d01"],
     ["src/local-git.cjs",0,"aa92cfc026bb27cf387e2316130b5e1cee94e3d12f4af962bd8236b6960bc66e"],
