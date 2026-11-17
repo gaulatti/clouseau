@@ -98,3 +98,11 @@ test('a statement-free file must still be present in the report and unparseable 
   const report = {...FIXTURE.active_report, [invalid]: {path: invalid, statementMap: {}, s: {}, branchMap: {}, b: {}}};
   assert.throws(() => gate.check(report, root, 'istanbul', base), /Cannot inspect statement-free application source/);
 }));
+
+test('a decorated TypeScript source keeps failing inspection until the decorator path is activated (#261)', () => withRoot((root, base) => {
+  const item = require('../test/fixtures/istanbul-decorated-typescript.json').cases[0];
+  const file = path.join(root, item.filename);
+  fs.writeFileSync(file, item.source);
+  const report = {...FIXTURE.active_report, [file]: {path: file, statementMap: {}, s: {}, branchMap: {}, b: {}}};
+  assert.throws(() => gate.check(report, root, 'istanbul', base), /Cannot inspect statement-free application source/);
+}));

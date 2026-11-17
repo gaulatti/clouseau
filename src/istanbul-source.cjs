@@ -34,18 +34,50 @@ function* runtimeNodes(ast) {
   }
 }
 
-function counterSites(source, extension) {
+// `decorators` (default off, #261): also parse TypeScript's experimental
+// decorator syntax (Babel's `decorators-legacy`, the syntax Nest uses, including
+// parameter decorators) in .ts/.tsx, still as data. A decorator is executed when
+// its class is defined (TypeScript emits `X = __decorate([...], X)`), and every
+// native producer measured for #261 emits statements for a decorated class, so
+// a decorator is a statement site: an empty statement map for a decorated file
+// is still a missing measurement. Runtime code inside decorator arguments is
+// walked like any other expression.
+// Any decorator anywhere in the tree, including inside declarations the runtime
+// projection erases (TypeScript refuses decorators there, but the parser accepts
+// them): the opt-in path never lets syntax it newly parses make a file look
+// counter-free.
+function hasDecorator(ast) {
+  const pending = [ast];
+  while (pending.length) {
+    const node = pending.pop();
+    if (!node || typeof node !== 'object') continue;
+    if (Array.isArray(node)) {
+      pending.push(...node);
+      continue;
+    }
+    if (node.type === 'Decorator') return true;
+    for (const [key, value] of Object.entries(node)) {
+      if (key !== 'loc' && key !== 'comments' && key !== 'tokens') pending.push(value);
+    }
+  }
+  return false;
+}
+
+function counterSites(source, extension, {decorators = false} = {}) {
+  const typescript = extension === '.ts' || extension === '.tsx';
   const plugins = [];
-  if (extension === '.ts' || extension === '.tsx') plugins.push('typescript');
+  if (typescript) plugins.push('typescript');
+  if (typescript && decorators) plugins.push('decorators-legacy');
   if (extension !== '.ts') plugins.push('jsx');
   const ast = parser.parse(source, {sourceType: 'unambiguous', allowReturnOutsideFunction: true,
     allowAwaitOutsideFunction: true, plugins});
-  const result = {statements: false, branches: false};
+  const result = {statements: decorators && typescript && hasDecorator(ast), branches: false};
   for (const node of runtimeNodes(ast)) {
     if (statementSites.has(node.type) ||
         (node.type === 'VariableDeclarator' && node.init) ||
         ((node.type === 'ClassProperty' || node.type === 'ClassPrivateProperty') && node.value) ||
-        (node.type === 'ArrowFunctionExpression' && node.body.type !== 'BlockStatement')) {
+        (node.type === 'ArrowFunctionExpression' && node.body.type !== 'BlockStatement') ||
+        node.type === 'Decorator') {
       result.statements = true;
     }
     if (branchSites.has(node.type)) result.branches = true;

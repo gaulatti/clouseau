@@ -1,0 +1,186 @@
+{
+  "about": "gaulatti/clouseau#261: decorated TypeScript sources (fictional Nest classes) and the native counters real producers emit for them. Nothing was executed except under jest (the V8 runs load the fictional modules); hit counts are irrelevant and not recorded. Every producer measures statements for every decorated file, so the opt-in parser path classifies a decorator as a statement site.",
+  "producers": {
+    "istanbul_ts": {
+      "typescript": "5.9.3",
+      "istanbul-lib-instrument": "6.0.3",
+      "istanbul-lib-source-maps": "5.0.6",
+      "method": "TypeScript transpileModule (CommonJS, ES2021, experimentalDecorators, emitDecoratorMetadata, source map), istanbul-lib-instrument instrumentSync with the input source map, istanbul-lib-source-maps transformCoverage to the original source"
+    },
+    "v8_loaded": {
+      "jest": "30.4.1",
+      "ts-jest": "29.4.9",
+      "v8-to-istanbul": "9.3.0",
+      "method": "jest --coverage --coverageProvider=v8 --coverageReporters=json with the module imported by a spec; tsconfig module commonjs, target ES2023, experimentalDecorators, emitDecoratorMetadata, isolatedModules (the gaulatti/alcantara backend recipe)"
+    },
+    "v8_unloaded": {
+      "jest": "30.4.1",
+      "ts-jest": "29.4.9",
+      "v8-to-istanbul": "9.3.0",
+      "method": "as v8_loaded, with no spec importing the module (collectCoverageFrom only)"
+    }
+  },
+  "cases": [
+    {
+      "filename": "app.module.ts",
+      "kind": "decorators only",
+      "source": "import {Module} from '@nestjs/common';\n@Module({})\nexport class AppModule {}\n",
+      "classification": {
+        "statements": true,
+        "branches": false
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 4,
+          "branches": 0
+        },
+        "v8_loaded": {
+          "statements": 3,
+          "branches": 0
+        },
+        "v8_unloaded": {
+          "statements": 3,
+          "branches": 1
+        }
+      }
+    },
+    {
+      "filename": "feature.module.ts",
+      "kind": "decorators only",
+      "source": "import {Module} from '@nestjs/common';\nimport {FeatureService} from './feature.service';\n@Module({providers: [FeatureService], exports: [FeatureService]})\nexport class FeatureModule {}\n",
+      "classification": {
+        "statements": true,
+        "branches": false
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 5,
+          "branches": 0
+        },
+        "v8_loaded": {
+          "statements": 4,
+          "branches": 0
+        },
+        "v8_unloaded": {
+          "statements": 4,
+          "branches": 1
+        }
+      }
+    },
+    {
+      "filename": "items.controller.ts",
+      "kind": "decorators only",
+      "source": "import {Controller, Get, Param} from '@nestjs/common';\n@Controller('items')\nexport class ItemsController {\n  @Get(':id')\n  find(@Param('id') id: string): void {}\n}\n",
+      "classification": {
+        "statements": true,
+        "branches": false
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 5,
+          "branches": 0
+        },
+        "v8_loaded": {
+          "statements": 6,
+          "branches": 0
+        },
+        "v8_unloaded": {
+          "statements": 6,
+          "branches": 1
+        }
+      }
+    },
+    {
+      "filename": "conditional-imports.module.ts",
+      "kind": "runtime code inside decorator expressions",
+      "source": "import {Module} from '@nestjs/common';\nimport {A} from './a';\n@Module({imports: process.env.FEATURE ? [A] : []})\nexport class ConditionalModule {}\n",
+      "classification": {
+        "statements": true,
+        "branches": true
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 5,
+          "branches": 1
+        },
+        "v8_loaded": {
+          "statements": 4,
+          "branches": 1
+        },
+        "v8_unloaded": {
+          "statements": 4,
+          "branches": 1
+        }
+      }
+    },
+    {
+      "filename": "logical-token.service.ts",
+      "kind": "runtime code inside decorator expressions",
+      "source": "import {Inject, Injectable} from '@nestjs/common';\n@Injectable()\nexport class TokenService {\n  use(@Inject(process.env.TOKEN || 'fallback') value: string): void {}\n}\n",
+      "classification": {
+        "statements": true,
+        "branches": true
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 5,
+          "branches": 1
+        },
+        "v8_loaded": {
+          "statements": 5,
+          "branches": 0
+        },
+        "v8_unloaded": {
+          "statements": 5,
+          "branches": 1
+        }
+      }
+    },
+    {
+      "filename": "factory.module.ts",
+      "kind": "runtime code inside decorator expressions",
+      "source": "import {Module} from '@nestjs/common';\n@Module({providers: [{provide: 'CLOCK', useFactory: () => Date.now()}]})\nexport class FactoryModule {}\n",
+      "classification": {
+        "statements": true,
+        "branches": false
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 5,
+          "branches": 0
+        },
+        "v8_loaded": {
+          "statements": 3,
+          "branches": 0
+        },
+        "v8_unloaded": {
+          "statements": 3,
+          "branches": 1
+        }
+      }
+    },
+    {
+      "filename": "default-options.module.ts",
+      "kind": "runtime code inside decorator expressions",
+      "source": "import {Module} from '@nestjs/common';\nconst build = ({providers = []} = {}) => ({providers});\n@Module(build())\nexport class OptionsModule {}\n",
+      "classification": {
+        "statements": true,
+        "branches": true
+      },
+      "native": {
+        "istanbul_ts": {
+          "statements": 6,
+          "branches": 2
+        },
+        "v8_loaded": {
+          "statements": 4,
+          "branches": 1
+        },
+        "v8_unloaded": {
+          "statements": 4,
+          "branches": 1
+        }
+      }
+    }
+  ]
+}
