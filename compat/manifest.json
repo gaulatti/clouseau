@@ -29,7 +29,7 @@
     ["src/coverage-gate.cjs",0,"4ff0cefe4670f5ff9e2b5c84a704666f47efd8fe13eb9e716d2df42bf208c7ea"],
     ["src/coverage-go.cjs",0,"f099abe76dbc9fa90b3d53820328fb180e9cae974ced725c0f3c962e4decc7a2"],
     ["src/coverage-gooutcomes.cjs",0,"61a5491bde314030ce20f194290c28214faa1b54d5360a35dbb3b9ce7861ceda"],
-    ["src/coverage-istanbul.cjs",0,"6e52cc0f240a4aab8d5290193c85e3aa83bef74d8a5cfbf2ca7a82ef71c3a37c"],
+    ["src/coverage-istanbul.cjs",0,"265cc29b1ba285a262aeead0beccd0f79259c720e2dbe9abf0a21dbad0c16248"],
     ["src/coverage-lcov.cjs",0,"3fadf390ea2fa2f5d10d114fdf10661b9def14fb34e4e4367fdd9328f8a10fd2"],
     ["src/coverage-plan.cjs",0,"c7fe304cbbdcb82b142a5f94ff225405a1267bd32ce703d16fdb70869d8f3017"],
     ["src/coverage-scope.cjs",0,"e9fc9ece17661e5fd62cedff38d61a6150093643a7d62deae0544a7c86732601"],
