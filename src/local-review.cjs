@@ -10,20 +10,22 @@ const {RUBRICS} = require('./acceptance-rubrics.cjs');
 
 const object = properties => ({type: 'object', properties, required: Object.keys(properties), additionalProperties: false});
 const policy = () => fs.readFileSync(path.join(__dirname, '../policy/change-acceptance.md'), 'utf8');
-const reviewContext = Object.freeze({stage: 'local_pre_pr', decision_scope: 'review_reuse_only',
-  verification_source: 'verification', independent_ci_required: true, merge_authority: false});
+const reviewContext = Object.freeze({stage: 'local_pre_pr', decision_scope: 'signed_review_reuse',
+  verification_source: 'verification', ci_verification: 'attested_by_receipt_or_run_in_ci', approval_authority: 'ci_gate',
+  trust_boundary: 'enrolled_workstation_key'});
 const stageInstructions = 'This is a pre-PR local change assessment, not the CI merge gate. ' +
   'A file entry with patch_body=head_source was added whole: its patch holds only the header and its body is exactly that file\'s head source, every line prefixed with +. ' +
   'Run both local AI roles regardless of coverage percentage or availability. ' +
   'The trusted verification source records actual local command outcomes and observed coverage, including failed commands, partial counters and unavailable, invalid or unverified coverage data. ' +
   'Do not infer that a nonzero command failed only because of coverage, or claim unverified execution and counts passed. ' +
   'Coverage percentage or unavailable coverage alone does not force a local quality failure; assess demonstrated behavioral defects, meaningful test evidence and every supplied source normally. ' +
-  'Independent CI tests, exact nonempty 100% coverage, audits, workflow checks and container checks remain mandatory before GitHub approval and merge. ' +
+  'The trusted verification source is also what a signed receipt attests: only when every declared command passed and the coverage gate CI enforces passed on the reviewed head may CI accept the receipt in place of running that declared verification again; otherwise CI runs it before GitHub approval and merge. ' +
+  'Checks the repository did not declare as local commands (for example audits, workflow or container checks) are not attested and run in CI. ' +
   'Their pending execution alone is not missing local review evidence; do not claim they passed. ' +
   'Exact-head owner confirmation for protected CI controls belongs to CI before approval. A local receipt cannot grant that confirmation. ' +
   'Its pending execution alone does not block local reuse review when the implementation preserves that gate; actual unauthorized scope still blocks. ' +
   'Missing material source or behavioral evidence, deceptive tests and unresolved code concerns still prevent a passing local quality verdict. ' +
-  'A passing local decision permits signed AI-quality review reuse only and cannot authorize technical approval or merge.\n';
+  'A passing local decision is signed with the enrolled workstation key. CI accepts it in place of its own AI review only after verifying that signature and the binding of the receipt to this pull request, protected configuration, policy and engine; the CI gate alone decides approval, owner confirmation and merge.\n';
 
 function localEvidence(snapshot) {
   const view = modelEvidence(snapshot);

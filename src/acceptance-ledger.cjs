@@ -111,7 +111,7 @@ function overview(result, snapshot, state) {
     repair_required: ['Repair required', 'The implementation agent fixes the findings and runs verification and review again.'],
     blocked_integrity: ['Test integrity repair required', 'Repair the test or evidence problem before requesting approval.'],
     review_incomplete: ['Review incomplete', 'Investigate the missing or uncertain evidence before requesting approval.'],
-    owner_decision: ['Owner decision required', 'The owner decides the purpose or authority question; all technical checks remain mandatory.'],
+    owner_decision: ['Owner decision required', 'The owner decides the purpose or authority question; every technical check must still pass (in CI, or attested by a valid receipt).'],
   };
   const [title, next] = decisions[result.decision];
   const lines = [MARKER, `## Clouseau — ${title}`];

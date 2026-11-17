@@ -15,10 +15,10 @@ test('every independent local investigation and grade receives the pre-PR bounda
   const result = await localReview({snapshot: f.snapshot, ask: async task => {
     const packet = JSON.parse(task.prompt.slice(task.prompt.lastIndexOf('\n') + 1));
     assert.equal(packet.review_context.stage, 'local_pre_pr');
-    assert.equal(packet.review_context.decision_scope, 'review_reuse_only');
+    assert.equal(packet.review_context.decision_scope, 'signed_review_reuse');
     assert.equal(packet.review_context.verification_source, 'verification');
-    assert.equal(packet.review_context.independent_ci_required, true);
-    assert.equal(packet.review_context.merge_authority, false);
+    assert.equal(packet.review_context.ci_verification, 'attested_by_receipt_or_run_in_ci');
+    assert.equal(packet.review_context.approval_authority, 'ci_gate'); assert.equal(packet.review_context.trust_boundary, 'enrolled_workstation_key');
     if (task.phase === 'investigation') {
       assert.equal(packet.evidence.claims.description, f.snapshot.claims.description);
     }
@@ -47,11 +47,12 @@ test('both local roles and graders receive honest partial or unavailable coverag
       assert.ok(instructions.includes('Run both local AI roles regardless of coverage percentage or availability.'));
       assert.ok(instructions.includes('Do not infer that a nonzero command failed only because of coverage'));
       assert.ok(instructions.includes('Coverage percentage or unavailable coverage alone does not force a local quality failure'));
-      assert.ok(instructions.includes('exact nonempty 100% coverage'));
-      assert.ok(instructions.includes('cannot authorize technical approval or merge'));
-      assert.equal(packet.review_context.decision_scope, 'review_reuse_only');
-      assert.equal(packet.review_context.independent_ci_required, true);
-      assert.equal(packet.review_context.merge_authority, false);
+      assert.ok(instructions.includes('only when every declared command passed and the coverage gate CI enforces passed on the reviewed head may CI accept the receipt'));
+      assert.ok(instructions.includes('the CI gate alone decides approval, owner confirmation and merge'));
+      assert.ok(!instructions.includes('remain mandatory'));
+      assert.equal(packet.review_context.decision_scope, 'signed_review_reuse');
+      assert.equal(packet.review_context.ci_verification, 'attested_by_receipt_or_run_in_ci');
+      assert.equal(packet.review_context.approval_authority, 'ci_gate'); assert.equal(packet.review_context.trust_boundary, 'enrolled_workstation_key');
       if (task.phase === 'investigation') assert.deepEqual(JSON.parse(packet.evidence.sources.verification.content), technical);
       seen.push(`${task.role}:${task.phase}`);
       return f.ask(task);

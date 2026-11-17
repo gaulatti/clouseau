@@ -102,13 +102,15 @@ failed only because of coverage, or claim that failed or unverified execution
 passed. Actual behavioral failures and missing material evidence still require
 investigation and may prevent a passing quality verdict.
 
-A local quality verdict does not authorize GitHub approval or merge. Independent
-CI tests, coverage, audits, workflow and container checks remain mandatory
-downstream conditions; their pending execution alone does not make the local
-assessment incomplete. Never claim those checks ran locally. Signed evidence
-authenticates the local AI assessment for reuse; CI must independently satisfy
-its technical gates before approval or merge, even when it has verified and
-reused that assessment without another AI call.
+A local quality verdict does not by itself authorize GitHub approval or merge;
+the CI gate decides. A signed receipt authenticates the local AI assessment for
+reuse, under the enrolled workstation key, and attests the repository's declared
+verification only when every declared command passed and the coverage gate CI
+enforces passed on the reviewed head. With such a receipt CI may skip that declared
+verification; otherwise CI runs it. Checks that are not declared local commands
+(audits, workflow and container checks) are not attested and run in CI; their
+pending execution alone does not make the local assessment incomplete. Never
+claim those checks ran locally.
 
 For CI approval and merge, all tests and exact nonempty 100% line/branch coverage
 are mandatory. Check test integrity in every review stage: actual production

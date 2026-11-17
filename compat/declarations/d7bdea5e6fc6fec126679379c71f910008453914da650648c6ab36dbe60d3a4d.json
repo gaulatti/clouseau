@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "decision": "incompatible",
+  "changes": [
+    {
+      "path": "policy/change-acceptance.md",
+      "mode": 0,
+      "sha256": "b0d5892957ba8516247e9dd6ab4e60d0f5a64035b37688ab5ecfdc39325c3639"
+    },
+    {
+      "path": "skills/clouseau/SKILL.md",
+      "mode": 0,
+      "sha256": "a3245ad711557701dbe45aba05af8234a1b7a0644037dd5f7c3e9d0ccd37b183"
+    },
+    {
+      "path": "src/acceptance-ledger.cjs",
+      "mode": 0,
+      "sha256": "8ea34622462a5eac30775c0f87f9ec96803e6544099401ef352c56603bf1252a"
+    },
+    {
+      "path": "src/gate-notice.cjs",
+      "mode": 0,
+      "sha256": "1f0d1175db14e4b2254efc2d208b794ec3b6d8fa77fd9e61473fb4bc4518dff2"
+    },
+    {
+      "path": "src/local-cli.cjs",
+      "mode": 0,
+      "sha256": "f996cd3c7cc4eae3c77cd32000cc8198b1992d61372392338f3649f0e06be7b2"
+    },
+    {
+      "path": "src/local-review.cjs",
+      "mode": 0,
+      "sha256": "c80b9915534e718ea0e3c31f35209fa0cd6aa64598a82ca0c28bff681a6430ea"
+    },
+    {
+      "path": "src/policy.cjs",
+      "mode": 0,
+      "sha256": "bf8890e00a2ba4ffff5cb085ee56077cd951c8c386fea0500330490e3c1c3d8c"
+    }
+  ]
+}

@@ -280,9 +280,9 @@ test('installation local quality assessment runs with unavailable real coverage 
   assert.equal(ask.calls(), 2);
   assert.equal(record.technical.coverage.status, 'unavailable');
   assert.equal(record.technical.exact_coverage, null);
-  assert.equal(result.decision_scope, 'review_reuse_only');
-  assert.equal(result.independent_ci_required, true);
-  assert.equal(result.merge_authority, false);
+  assert.equal(result.decision_scope, 'signed_review_reuse');
+  assert.equal(result.ci_verification, 'attested_by_receipt_or_run_in_ci');
+  assert.equal(result.approval_authority, 'ci_gate'); assert.equal(result.trust_boundary, 'enrolled_workstation_key');
   assert.equal(result.ordinary_pr_approval, false);
   assert.equal(result.manual_owner_acceptance_required, true);
   assert.ok(result.receipt, 'a signature authenticates fixture AI quality, not a passing technical gate');

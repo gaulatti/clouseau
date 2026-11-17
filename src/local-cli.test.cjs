@@ -495,9 +495,9 @@ test('partial native coverage and a real failing exact gate still reach both loc
     assert.equal(result.harness_invocations, 2);
     assert.equal(result.local_verification.commands, 'failed');
     assert.equal(result.local_verification.coverage.status, 'below_threshold');
-    assert.equal(result.decision_scope, 'review_reuse_only');
-    assert.equal(result.independent_ci_required, true);
-    assert.equal(result.merge_authority, false);
+    assert.equal(result.decision_scope, 'signed_review_reuse');
+    assert.equal(result.ci_verification, 'attested_by_receipt_or_run_in_ci');
+    assert.equal(result.approval_authority, 'ci_gate'); assert.equal(result.trust_boundary, 'enrolled_workstation_key');
     assert.equal(result.receipt, null, 'unenrolled fixture cannot create an eligible approval signature');
   } finally {fs.rmSync(state, {recursive: true, force: true});}
 }));
@@ -505,11 +505,11 @@ test('partial native coverage and a real failing exact gate still reach both loc
 
 test('quality scope never presents absent historical local verification as a technical pass', () => {
   const summary = reviewStatus();
-  assert.equal(summary.decision_scope, 'review_reuse_only');
+  assert.equal(summary.decision_scope, 'signed_review_reuse');
   assert.equal(summary.local_verification.commands, 'unavailable');
   assert.deepEqual(summary.local_verification.coverage, {status: 'unavailable', passed: false});
-  assert.equal(summary.independent_ci_required, true);
-  assert.equal(summary.merge_authority, false);
+  assert.equal(summary.ci_verification, 'attested_by_receipt_or_run_in_ci');
+  assert.equal(summary.approval_authority, 'ci_gate'); assert.equal(summary.trust_boundary, 'enrolled_workstation_key');
 });
 
 test('a missing source path fails with a structured status instead of a raw git command', () => repository(async f => {

@@ -6,7 +6,7 @@ const {numbered} = require('./receipt-rejection.cjs');
 // the gate stopped. Every one carries a fixed cause class (a key of these tables, never text from the run), one sentence
 // from the gate itself, and numbered steps. `{repo}`, `{run}`, `{head}` and `{number}` are the only values filled in.
 const RERUN = 'Re-run the failed job: `gh run rerun {run} --failed --repo {repo}`.';
-const CONFIRM = 'A maintainer comments exactly `/approve-intent {head}` on this pull request. This confirms intent only; all tests and coverage remain mandatory.';
+const CONFIRM = 'A maintainer comments exactly `/approve-intent {head}` on this pull request. This confirms intent only; tests and coverage must still pass in CI or be attested by a valid receipt.';
 const LATER = 'Wait for the run of the new revision; nothing is wrong with this pull request.';
 
 const INTENT = Object.freeze({
